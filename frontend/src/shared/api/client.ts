@@ -406,6 +406,20 @@ export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocumentDTO[]>
   return data.items
 }
 
+export async function updateKnowledgeDocument(
+  documentId: string,
+  payload: {
+    title?: string
+    doc_type?: string
+    category_id?: string | null
+    tag_ids?: string[]
+    summary?: string
+  },
+): Promise<KnowledgeDocumentDTO> {
+  const { data } = await apiClient.patch<KnowledgeDocumentDTO>(`/knowledge/documents/${documentId}`, payload)
+  return data
+}
+
 export async function createPresignedUpload(payload: {
   filename: string
   content_type: string

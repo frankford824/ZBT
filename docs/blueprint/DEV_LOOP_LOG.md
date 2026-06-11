@@ -831,3 +831,50 @@ curl -X DELETE /api/v1/knowledge/tags/:id
 ### 下一轮建议
 
 继续做文档元数据编辑：标题、分类、标签、摘要的前端表单；或推进模板文件上传/预览和模板使用动作。
+
+## Loop-6 / 文档元数据编辑闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 将已有 `PATCH /knowledge/documents/:id` 接入前端文档库页面。
+2. 支持编辑文档标题、类型、分类、标签和摘要。
+3. 验证文档分类/标签关联写入与恢复路径。
+
+### 代码交付
+
+1. 前端 API client 新增 `updateKnowledgeDocument`。
+2. 文档库页面新增文档编辑 Modal。
+3. 编辑表单支持 title、doc_type、category_id、tag_ids、summary。
+4. 文档更新成功后刷新文档列表、分类统计和知识库统计。
+5. API_SPEC 同步记录文档库页已支持元数据编辑。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd frontend && pnpm build
+git diff --check
+docker compose build frontend
+docker compose up -d frontend backend ai-service
+curl -X PATCH /api/v1/knowledge/documents/:id ...
+```
+
+结果：
+
+1. frontend build 通过；仍有既有大 chunk warning，无失败。
+2. `git diff --check` 通过。
+3. Docker 重新构建并启动 frontend 成功。
+4. 运行时选取文档 `zbt-pgvector-semantic`，临时创建分类和标签后 PATCH 文档成功。
+5. PATCH 返回 title 以 `元数据验证-1781187701` 结尾，category_id 为临时分类，tag_ids 包含临时标签，summary 为 `元数据编辑运行时验证 1781187701`。
+6. 验证后已将文档恢复到原 title、doc_type、category、tags 和 summary，并删除临时分类/标签。
+7. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询临时分类和标签，均返回 0。
+
+### 偏离蓝图
+
+1. 暂未做文档批量编辑。
+2. 文档编辑不直接触发 reprocess/reindex，后续可在分类或标签变化后补 reindex 任务。
+
+### 下一轮建议
+
+推进模板文件上传/预览和模板使用动作，或继续补知识库文档详情页中的 chunk/embedding/references 可视化。

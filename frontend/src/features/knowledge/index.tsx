@@ -32,6 +32,7 @@ import {
   processKnowledgeDocument,
   searchKnowledge,
   updateKnowledgeCategory,
+  updateKnowledgeDocument,
   updateKnowledgeTag,
   uploadToPresignedUrl,
   type KnowledgeCategoryDTO,
@@ -142,6 +143,14 @@ export function KnowledgeDocsPage() {
   const [categoryModalOpen, setCategoryModalOpen] = useState(false)
   const [editingCategory, setEditingCategory] = useState<KnowledgeCategoryDTO | null>(null)
   const [categoryForm] = Form.useForm<{ name: string; description?: string }>()
+  const [editingDocument, setEditingDocument] = useState<KnowledgeDocumentDTO | null>(null)
+  const [documentForm] = Form.useForm<{
+    title: string
+    doc_type: string
+    category_id?: string | null
+    tag_ids: string[]
+    summary?: string
+  }>()
   const documents = useQuery({
     queryKey: ['knowledge-documents'],
     queryFn: fetchKnowledgeDocuments,
@@ -149,6 +158,10 @@ export function KnowledgeDocsPage() {
   const categories = useQuery({
     queryKey: ['knowledge-categories'],
     queryFn: fetchKnowledgeCategories,
+  })
+  const tags = useQuery({
+    queryKey: ['knowledge-tags'],
+    queryFn: fetchKnowledgeTags,
   })
   const refreshKnowledgeLists = async () => {
     await Promise.all([
@@ -183,6 +196,27 @@ export function KnowledgeDocsPage() {
       message.success('分类已删除')
     },
     onError: () => message.error('分类删除失败'),
+  })
+  const updateDocument = useMutation({
+    mutationFn: ({
+      id,
+      values,
+    }: {
+      id: string
+      values: {
+        title?: string
+        doc_type?: string
+        category_id?: string | null
+        tag_ids?: string[]
+        summary?: string
+      }
+    }) => updateKnowledgeDocument(id, values),
+    onSuccess: async () => {
+      await refreshKnowledgeLists()
+      message.success('文档信息已更新')
+      closeDocumentModal()
+    },
+    onError: () => message.error('文档信息更新失败'),
   })
 
   const uploadProps: UploadProps = {
@@ -245,6 +279,36 @@ export function KnowledgeDocsPage() {
       return
     }
     await createCategory.mutateAsync(values)
+  }
+  const openEditDocument = (document: KnowledgeDocumentDTO) => {
+    setEditingDocument(document)
+    documentForm.setFieldsValue({
+      title: document.title,
+      doc_type: document.doc_type,
+      category_id: document.category?.id ?? null,
+      tag_ids: document.tags.map((tag) => tag.id),
+      summary: document.summary,
+    })
+  }
+  const closeDocumentModal = () => {
+    setEditingDocument(null)
+    documentForm.resetFields()
+  }
+  const submitDocument = async () => {
+    if (!editingDocument) {
+      return
+    }
+    const values = await documentForm.validateFields()
+    await updateDocument.mutateAsync({
+      id: editingDocument.id,
+      values: {
+        title: values.title,
+        doc_type: values.doc_type,
+        category_id: values.category_id ?? null,
+        tag_ids: values.tag_ids ?? [],
+        summary: values.summary ?? '',
+      },
+    })
   }
 
   return (
@@ -337,6 +401,13 @@ export function KnowledgeDocsPage() {
                       <a href={`/files/${row.file.id}/preview`}>预览</a>
                       <Button
                         size="small"
+                        icon={<EditOutlined />}
+                        onClick={() => openEditDocument(row)}
+                      >
+                        编辑
+                      </Button>
+                      <Button
+                        size="small"
                         icon={<LinkOutlined />}
                         onClick={() => setReferenceDocument(row)}
                       >
@@ -370,6 +441,55 @@ export function KnowledgeDocsPage() {
         document={referenceDocument}
         onClose={() => setReferenceDocument(null)}
       />
+      <Modal
+        title={editingDocument ? `编辑文档：${editingDocument.title}` : '编辑文档'}
+        open={Boolean(editingDocument)}
+        onCancel={closeDocumentModal}
+        onOk={() => void submitDocument()}
+        confirmLoading={updateDocument.isPending}
+        destroyOnHidden
+      >
+        <Form form={documentForm} layout="vertical">
+          <Form.Item label="文档标题" name="title" rules={[{ required: true, message: '请输入文档标题' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item label="文档类型" name="doc_type" rules={[{ required: true, message: '请选择文档类型' }]}>
+            <Select
+              options={[
+                { value: 'general', label: '通用' },
+                { value: 'pdf', label: 'PDF' },
+                { value: 'word', label: 'Word' },
+                { value: 'spreadsheet', label: '表格' },
+                { value: 'presentation', label: '演示文稿' },
+                { value: 'image', label: '图片' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="分类" name="category_id">
+            <Select
+              allowClear
+              placeholder="未分类"
+              options={(categories.data ?? []).map((category) => ({
+                value: category.id,
+                label: category.name,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item label="标签" name="tag_ids">
+            <Select
+              mode="multiple"
+              placeholder="选择标签"
+              options={(tags.data ?? []).map((tag) => ({
+                value: tag.id,
+                label: tag.name,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item label="摘要" name="summary">
+            <Input.TextArea rows={4} />
+          </Form.Item>
+        </Form>
+      </Modal>
       <Modal
         title={editingCategory ? '编辑分类' : '新建分类'}
         open={categoryModalOpen}
