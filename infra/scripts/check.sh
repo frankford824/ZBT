@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-python3 -m py_compile "$ROOT/infra/scripts/acceptance_tail_check.py"
+python3 -m py_compile \
+  "$ROOT/infra/scripts/acceptance_core_check.py" \
+  "$ROOT/infra/scripts/acceptance_tail_check.py"
 
 cd "$ROOT/frontend"
 pnpm build

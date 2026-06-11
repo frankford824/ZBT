@@ -1996,3 +1996,45 @@ python3 infra/scripts/acceptance_tail_check.py
 ### 偏离蓝图
 
 1. 该脚本是尾部验收脚本，当前只覆盖 x.md 第 39-50 项；完整 1-50 一键黄金链路仍可继续沉淀为独立验收脚本。
+
+## Loop-27 / x.md 核心验收脚本 - 2026-06-11
+
+### 本轮目标
+
+1. 为 x.md 第 1-38 项补充可重复运行的核心验收入口，和 Loop-26 的 39-50 尾段脚本形成完整验收证据。
+2. 核心脚本必须走真实 Docker 运行栈和公开 HTTP API，覆盖 SaaS 底座、标讯、项目、标书、知识库、章节生成、编辑器、导出和合规定位。
+3. `check.sh` 只编译验收脚本，避免普通检查命令反复写入大量运行时验收数据。
+
+### 代码交付
+
+1. 新增 `infra/scripts/acceptance_core_check.py`，使用 Python 标准库检查服务连通并创建独立时间戳验收数据。
+2. 核心验收覆盖 x.md 1-38：前端/后端/AI/Postgres/Redis/MinIO 运行、注册登录、企业租户、成员邀请、角色权限、菜单权限依据、API 权限、多租户隔离、仪表盘、标讯检索/收藏/来源验证、从标讯创建项目、项目状态流转、里程碑/成员/关联标书、合并标/分离标、招标文件上传/解析/确认/大纲生成和编辑、知识文档上传/解析/检索/素材选择、章节生成、采纳/重新生成/手工编辑/diff/版本、source_refs、needs_human_input、三栏编辑器、DOCX/ZIP 导出和合规检查/证据/建议/编辑器定位。
+3. `infra/scripts/check.sh` 同时编译 `acceptance_core_check.py` 和 `acceptance_tail_check.py`。
+4. README 新增核心验收脚本命令、运行条件和覆盖范围说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/acceptance_core_check.py
+./infra/scripts/check.sh
+python3 infra/scripts/acceptance_tail_check.py
+```
+
+结果：
+
+1. `acceptance_core_check.py` 通过，确认 x.md 1-38 项验收完成。
+2. 第 1 项通过：Docker 运行服务包含 ai-service、backend、frontend、minio、postgres、redis，后端和 AI health 均 ok，前端返回应用 HTML。
+3. 第 2-8 项通过：默认管理员登录成功；注册创建新企业租户成功；邀请成员并绑定自定义角色成功；viewer 访问 `/cost-projects` 返回 403；tenant2 访问 tenant1 标书返回 404。
+4. 第 9-16 项通过：仪表盘返回 stats、pending_approvals、notifications；标讯来源验证、检索、收藏通过；从标讯创建项目并流转到 submitted；项目详情包含里程碑、成员和关联标书；合并标和分离标创建成功，分离标包含 tech/business。
+5. 第 17-25 项通过：招标文件上传、解析、确认、大纲生成和大纲编辑通过；知识文档上传、处理、切片检索和标书素材选择通过。
+6. 第 26-31 项通过：章节生成完成，生成章节包含 5 条 source_refs 和 2 条 needs_human_input；采纳、重新生成、手工编辑、版本记录和 diff 均通过；编辑器路由返回前端应用，源码包含三栏编辑器、source_refs 和 needs_human_input 展示。
+7. 第 32-34 项通过：综合 DOCX、技术标 DOCX、商务标 DOCX 和 ZIP 打包导出均完成并返回下载 URL。
+8. 第 35-38 项通过：合规检查完成，生成 5 条 issues，issue 均包含 evidence/suggestion；location 指向 `/bids/f84d83b2-2b27-484e-94e8-e2d0fd54e0f6/editor?chapter=bc319cce-340e-4b7c-bb82-43bfb02f772d&part=combined_body`。
+9. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 测试、AI compileall、Docker compose config、运行中 ai-service 容器内 pytest 均成功；本机 pytest 不可用时按预期跳过。
+10. `acceptance_tail_check.py` 复验通过，确认 x.md 39-50 项在最新代码上仍通过；本次尾段复验创建审批、成本、中标案例、知识库和 AI 日志验收数据均成功。
+
+### 偏离蓝图
+
+1. 当前形成的是两个脚本组合覆盖 1-50，而不是单个黄金链路脚本；这样可以保持每个脚本职责清晰，后续如需 CI 夜间验收可再增加一个聚合入口。
