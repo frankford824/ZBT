@@ -558,3 +558,54 @@ docker compose up -d backend frontend ai-service
 ### 下一轮建议
 
 继续做真实 RAG 检索输入、source_ref 解析到真实 `knowledge_chunks`，或进入 Loop-6 的知识库三子页面、文档预览和 pgvector 语义搜索。
+
+## Loop-5 / RAG 引用解析闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 章节重新生成前从当前租户知识库 chunk 检索可引用素材。
+2. 将真实 chunk/document UUID 传给 Python `/tasks/chapter-generate`。
+3. 生成回调后把 source_refs 解析为真实 `knowledge_references.source_document_id` 与 `chunk_id`。
+4. 修复 `/knowledge/search` 对中文空格关键词组合不命中的问题。
+
+### 代码交付
+
+1. `platform/bid` 新增 `retrieved_knowledge_refs` payload，创建章节生成 task 前按章节标题和正文检索 `knowledge_chunks`，最多传入 5 条真实引用上下文。
+2. `MockProvider.generate_chapter` 优先使用 `retrieved_knowledge_refs` 返回 source_refs；无检索结果时才回退 demo source_ref。
+3. `replaceKnowledgeReferences` 改为验证 chunk 与 document 是否同租户存在，存在时写入真实 `source_document_id`、`chunk_id`，metadata 标记 `resolved=true`、`resolved_by=knowledge_chunk`。
+4. `/knowledge/search` 和章节检索 SQL 支持整句匹配或空格拆分关键词匹配，改善中文查询 `智慧交通 项目理解` 的召回。
+5. AI 测试补充 MockProvider 使用 retrieved refs 的断言；API、RAG、AI_PIPELINE、DATABASE_SCHEMA 文档同步更新。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+python3 -m compileall ai-service/app
+./infra/scripts/check.sh
+docker compose build backend ai-service
+docker compose up -d backend ai-service frontend
+docker compose build backend
+docker compose up -d backend frontend ai-service
+```
+
+结果：
+
+1. backend 测试通过。
+2. AI compileall 通过。
+3. `./infra/scripts/check.sh` 通过。
+4. Docker 重新构建并启动 backend、ai-service 成功；backend `/healthz`、AI `/healthz` 与 `/models/health` 返回 ok。
+5. AI 容器未安装 pytest，`python -m pytest app/tests` 无法运行，错误为 `No module named pytest`；本轮新增测试已通过 compileall。
+6. 运行时创建并处理 text/plain 知识库文档，写入真实 chunk。随后 `/knowledge/search` 查询 `智慧交通 项目理解` 返回 2 条 source_refs。
+7. 章节重新生成 task `cc538d61-788e-41fd-a23b-a418bf14771c` 的 payload 包含 3 条 `retrieved_knowledge_refs`，Python 回调结果返回 3 条 source_refs，版本数从 6 增长到 7。
+8. RLS 验证中 tenant1 对章节 `52000000-0000-4000-8000-000000000001` 的 `knowledge_references` 为 3 条，`source_document_id` 和 `chunk_id` 均为 3，`all_resolved=true`；tenant2 对同一章节引用数为 0。
+
+### 偏离蓝图
+
+1. 本轮补齐了真实 chunk 引用输入与解析落库，但还不是 pgvector 向量召回、RRF 融合或 rerank。
+2. MockProvider 仍负责生成文本；真实 LLM Provider 和章节自检仍待 Loop-7 继续。
+
+### 下一轮建议
+
+进入 Loop-6：完善知识库三子页面、文档预览、标签/分类管理交互、embedding MockProvider 入库和 pgvector 语义搜索；或继续推进章节 diff 的结构化可视化。

@@ -14,7 +14,7 @@
 
 输出 Tiptap JSON、source_refs、self_check、needs_human_input、model metadata、token usage 和 trace_id。
 
-当前一期实现路径：Go 在 `POST /chapters/:chapterId/regenerate` 中预生成外部 task_id，写入 `ai_tasks(resource_type='bid_chapter')`，并将章节状态置为 `generating`。Python `/tasks/chapter-generate` 返回 202 + task_id，在后台执行 ModelRouter；完成后通过 HMAC 回调 Go。Go 根据 `external_task_id` 定位任务，更新任务状态、章节内容、`bid_chapter_versions` 和 `knowledge_references`。前端通过 `GET /ai-tasks/:taskId` 轮询刷新章节，后续再补 SSE。
+当前一期实现路径：Go 在 `POST /chapters/:chapterId/regenerate` 中预生成外部 task_id，检索当前租户 `knowledge_chunks`，将真实 chunk/document 引用写入 `retrieved_knowledge_refs` 后创建 `ai_tasks(resource_type='bid_chapter')`，并将章节状态置为 `generating`。Python `/tasks/chapter-generate` 返回 202 + task_id，在后台执行 ModelRouter；MockProvider 会优先使用 `retrieved_knowledge_refs` 返回 source_refs。完成后通过 HMAC 回调 Go，Go 根据 `external_task_id` 定位任务，更新任务状态、章节内容、`bid_chapter_versions` 和 `knowledge_references`。前端通过 `/bids/:id/generation/stream` 订阅 SSE 进度，并保留 `GET /ai-tasks/:taskId` 轮询兜底。
 
 事实性内容没有引用时必须标记 needs_human_input。
 

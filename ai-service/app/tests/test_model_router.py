@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.gateway.model_router import ModelRouter
-from app.schemas.generation import ChapterGenerateRequest
+from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef
 
 
 def test_model_router_resolves_mock_provider() -> None:
@@ -27,3 +27,28 @@ def test_mock_chapter_generation_has_source_refs() -> None:
 
     assert response.source_refs
     assert response.needs_human_input
+
+
+def test_mock_chapter_generation_prefers_retrieved_refs() -> None:
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    provider = router.get_llm("chapter_generate", tenant_id="tenant-demo")
+    response = provider.generate_chapter(
+        ChapterGenerateRequest(
+            tenant_id="tenant-demo",
+            bid_document_id="bid-demo",
+            bid_part_id="part-tech",
+            chapter_id="chapter-demo",
+            chapter_title="技术方案",
+            retrieved_knowledge_refs=[
+                RetrievedKnowledgeRef(
+                    chunk_id="00000000-0000-4000-8000-00000000c001",
+                    document_id="00000000-0000-4000-8000-00000000d001",
+                    title="真实知识库素材",
+                    content="用于章节生成的真实 chunk",
+                )
+            ],
+        )
+    )
+
+    assert response.source_refs[0].chunk_id == "00000000-0000-4000-8000-00000000c001"
+    assert response.self_check["retrieved_ref_count"] == 1

@@ -48,6 +48,28 @@ class MockProvider:
         return []
 
     def generate_chapter(self, payload: ChapterGenerateRequest) -> ChapterGenerateResponse:
+        refs = [
+            SourceRef(
+                chunk_id=ref.chunk_id,
+                document_id=ref.document_id,
+                title=ref.title,
+                page_start=ref.page_start,
+                page_end=ref.page_end,
+            )
+            for ref in payload.retrieved_knowledge_refs[:5]
+        ]
+        if not refs:
+            refs = [
+                SourceRef(
+                    chunk_id="chunk-demo",
+                    document_id="doc-demo",
+                    title="智慧交通实施案例",
+                    page_start=12,
+                    page_end=15,
+                )
+            ]
+        context_titles = "、".join(ref.title for ref in refs[:3])
+        context_text = f"已引用知识库素材：{context_titles}。" if context_titles else "未检索到可引用知识库素材。"
         return ChapterGenerateResponse(
             trace_id="trace-mock-chapter",
             tiptap_json={
@@ -58,23 +80,22 @@ class MockProvider:
                         "content": [
                             {
                                 "type": "text",
-                                "text": f"{payload.chapter_title} 根据招标要求和知识库素材生成。",
+                                "text": f"{payload.chapter_title} 根据招标要求和知识库素材生成。{context_text}",
                             }
                         ],
                     }
                 ],
             },
-            source_refs=[
-                SourceRef(
-                    chunk_id="chunk-demo",
-                    document_id="doc-demo",
-                    title="智慧交通实施案例",
-                    page_start=12,
-                    page_end=15,
-                )
-            ],
-            self_check={"status": "pass", "notes": ["mock provider validates schema only"]},
+            source_refs=refs,
+            self_check={
+                "status": "pass",
+                "notes": ["mock provider validates schema only"],
+                "retrieved_ref_count": len(payload.retrieved_knowledge_refs),
+            },
             needs_human_input=["企业资质证书编号", "项目经理证书有效期"],
             model_metadata={"provider": self.name, "model": payload.model_hint or "mock-model"},
-            token_usage={"input_tokens": 128, "output_tokens": 256},
+            token_usage={
+                "input_tokens": 128 + sum(self.count_tokens(ref.content) for ref in payload.retrieved_knowledge_refs[:5]),
+                "output_tokens": 256,
+            },
         )

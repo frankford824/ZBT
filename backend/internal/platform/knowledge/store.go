@@ -726,11 +726,21 @@ func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) 
 					end as rank_score
 				from knowledge_chunks kc
 				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
-				where kc.tenant_id = $1
-					and ($2 = ''
-						or to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
-						or kc.title ilike '%' || $2 || '%'
-						or kc.content ilike '%' || $2 || '%')
+					where kc.tenant_id = $1
+						and ($2 = ''
+							or to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
+							or kc.title ilike '%' || $2 || '%'
+							or kc.content ilike '%' || $2 || '%'
+							or exists (
+								select 1
+								from unnest(regexp_split_to_array($2, '\s+')) as term(value)
+								where term.value <> ''
+									and (
+										kc.title ilike '%' || term.value || '%'
+										or kc.content ilike '%' || term.value || '%'
+										or kc.section_path ilike '%' || term.value || '%'
+									)
+							))
 					and ($4 = '' or d.doc_type = $4)
 			)
 			select

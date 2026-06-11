@@ -225,16 +225,28 @@ type aiTaskAccepted struct {
 }
 
 type chapterGenerateRequest struct {
-	TaskID                string   `json:"task_id,omitempty"`
-	TenantID              string   `json:"tenant_id"`
-	BidDocumentID         string   `json:"bid_document_id"`
-	BidPartID             string   `json:"bid_part_id"`
-	ChapterID             string   `json:"chapter_id"`
-	ChapterTitle          string   `json:"chapter_title"`
-	TenderRequirements    []string `json:"tender_requirements"`
-	SelectedKnowledgeRefs []string `json:"selected_knowledge_refs"`
-	CallbackURL           string   `json:"callback_url,omitempty"`
-	ModelHint             *string  `json:"model_hint,omitempty"`
+	TaskID                 string                  `json:"task_id,omitempty"`
+	TenantID               string                  `json:"tenant_id"`
+	BidDocumentID          string                  `json:"bid_document_id"`
+	BidPartID              string                  `json:"bid_part_id"`
+	ChapterID              string                  `json:"chapter_id"`
+	ChapterTitle           string                  `json:"chapter_title"`
+	TenderRequirements     []string                `json:"tender_requirements"`
+	SelectedKnowledgeRefs  []string                `json:"selected_knowledge_refs"`
+	RetrievedKnowledgeRefs []retrievedKnowledgeRef `json:"retrieved_knowledge_refs"`
+	CallbackURL            string                  `json:"callback_url,omitempty"`
+	ModelHint              *string                 `json:"model_hint,omitempty"`
+}
+
+type retrievedKnowledgeRef struct {
+	ChunkID     string  `json:"chunk_id"`
+	DocumentID  string  `json:"document_id"`
+	Title       string  `json:"title"`
+	SectionPath string  `json:"section_path"`
+	Content     string  `json:"content"`
+	PageStart   *int    `json:"page_start"`
+	PageEnd     *int    `json:"page_end"`
+	Score       float64 `json:"score"`
 }
 
 type sourceRef struct {
@@ -585,16 +597,25 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 		if err != nil {
 			return err
 		}
+		knowledgeRefs, err := retrieveKnowledgeRefsForChapter(ctx, tx, tenantID, chapter)
+		if err != nil {
+			return err
+		}
+		selectedRefs := make([]string, 0, len(knowledgeRefs))
+		for _, ref := range knowledgeRefs {
+			selectedRefs = append(selectedRefs, ref.ChunkID)
+		}
 		requestPayload = chapterGenerateRequest{
-			TaskID:                "task-chapter-" + uuid.NewString(),
-			TenantID:              tenantID,
-			BidDocumentID:         chapter.BidDocumentID,
-			BidPartID:             chapter.BidPartID,
-			ChapterID:             chapter.ID,
-			ChapterTitle:          chapter.Title,
-			TenderRequirements:    []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
-			SelectedKnowledgeRefs: []string{},
-			CallbackURL:           s.cfg.AICallbackURL,
+			TaskID:                 "task-chapter-" + uuid.NewString(),
+			TenantID:               tenantID,
+			BidDocumentID:          chapter.BidDocumentID,
+			BidPartID:              chapter.BidPartID,
+			ChapterID:              chapter.ID,
+			ChapterTitle:           chapter.Title,
+			TenderRequirements:     []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
+			SelectedKnowledgeRefs:  selectedRefs,
+			RetrievedKnowledgeRefs: knowledgeRefs,
+			CallbackURL:            s.cfg.AICallbackURL,
 		}
 		payloadJSON, _ := json.Marshal(requestPayload)
 		createdTask, err := scanTask(tx.QueryRow(ctx, `
@@ -1248,6 +1269,79 @@ func chaptersForExport(ctx context.Context, tx pgx.Tx, tenantID, bidID, partID s
 	return chapters, rows.Err()
 }
 
+func retrieveKnowledgeRefsForChapter(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter) ([]retrievedKnowledgeRef, error) {
+	query := strings.TrimSpace(chapter.Title + " " + chapter.PlainText)
+	if len([]rune(query)) > 240 {
+		query = string([]rune(query)[:240])
+	}
+	rows, err := tx.Query(ctx, `
+		with candidates as (
+			select
+				kc.id::text as chunk_id,
+				kc.document_id::text as document_id,
+				coalesce(nullif(kc.title, ''), d.title) as title,
+				kc.section_path,
+				kc.content,
+				kc.page_start,
+				kc.page_end,
+				kc.created_at,
+				case
+					when $2 = '' then false
+					else (
+						to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
+						or kc.title ilike '%' || $2 || '%'
+						or kc.content ilike '%' || $2 || '%'
+						or kc.section_path ilike '%' || $2 || '%'
+						or exists (
+							select 1
+							from unnest(regexp_split_to_array($2, '\s+')) as term(value)
+							where term.value <> ''
+								and (
+									kc.title ilike '%' || term.value || '%'
+									or kc.content ilike '%' || term.value || '%'
+									or kc.section_path ilike '%' || term.value || '%'
+								)
+						)
+					)
+				end as matched,
+				case
+					when $2 = '' then 0
+					else ts_rank(
+						to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')),
+						plainto_tsquery('simple', $2)
+					)
+				end as score
+			from knowledge_chunks kc
+			join knowledge_documents d on d.tenant_id = kc.tenant_id and d.id = kc.document_id
+			where kc.tenant_id = $1
+				and d.parse_status = 'processed'
+				and trim(kc.content) <> ''
+		)
+		select chunk_id, document_id, title, section_path, content, page_start, page_end, score
+		from candidates
+		order by matched desc, score desc, created_at desc
+		limit 5
+	`, tenantID, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	refs := []retrievedKnowledgeRef{}
+	for rows.Next() {
+		var ref retrievedKnowledgeRef
+		if err := rows.Scan(
+			&ref.ChunkID, &ref.DocumentID, &ref.Title, &ref.SectionPath, &ref.Content,
+			&ref.PageStart, &ref.PageEnd, &ref.Score,
+		); err != nil {
+			return nil, err
+		}
+		ref.Content = truncateRunes(strings.TrimSpace(ref.Content), 700)
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
 func partsForZipExport(ctx context.Context, tx pgx.Tx, tenantID, bidID string) ([]Part, error) {
 	parts := []Part{}
 	rows, err := tx.Query(ctx, `
@@ -1344,21 +1438,45 @@ func replaceKnowledgeReferences(ctx context.Context, tx pgx.Tx, tenantID string,
 			},
 		}
 		var sourceDocumentID any
-		if parsed, err := uuid.Parse(ref.DocumentID); err == nil {
-			var exists bool
-			if err := tx.QueryRow(ctx, `
-				select exists(select 1 from knowledge_documents where tenant_id = $1 and id = $2)
-			`, tenantID, parsed.String()).Scan(&exists); err != nil {
+		var chunkID any
+		title := strings.TrimSpace(ref.Title)
+		if parsedChunkID, err := uuid.Parse(ref.ChunkID); err == nil {
+			var resolvedDocumentID, resolvedTitle string
+			err := tx.QueryRow(ctx, `
+				select kc.document_id::text, coalesce(nullif(kc.title, ''), d.title)
+				from knowledge_chunks kc
+				join knowledge_documents d on d.tenant_id = kc.tenant_id and d.id = kc.document_id
+				where kc.tenant_id = $1 and kc.id = $2
+			`, tenantID, parsedChunkID.String()).Scan(&resolvedDocumentID, &resolvedTitle)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			if exists {
-				sourceDocumentID = parsed.String()
+			if err == nil {
+				sourceDocumentID = resolvedDocumentID
+				chunkID = parsedChunkID.String()
 				metadata["source_ref"].(map[string]any)["resolved"] = true
+				metadata["source_ref"].(map[string]any)["resolved_by"] = "knowledge_chunk"
+				if title == "" {
+					title = resolvedTitle
+				}
 			}
 		}
-		var chunkID any
-		if parsed, err := uuid.Parse(ref.ChunkID); err == nil {
-			chunkID = parsed.String()
+		if sourceDocumentID == nil {
+			if parsed, err := uuid.Parse(ref.DocumentID); err == nil {
+				var exists bool
+				if err := tx.QueryRow(ctx, `
+					select exists(select 1 from knowledge_documents where tenant_id = $1 and id = $2)
+				`, tenantID, parsed.String()).Scan(&exists); err != nil {
+					return err
+				}
+				if exists {
+					sourceDocumentID = parsed.String()
+					metadata["source_ref"].(map[string]any)["resolved_by"] = "knowledge_document"
+				}
+			}
+		}
+		if title == "" {
+			title = "知识库引用"
 		}
 		metadataJSON, _ := json.Marshal(metadata)
 		if _, err := tx.Exec(ctx, `
@@ -1366,7 +1484,7 @@ func replaceKnowledgeReferences(ctx context.Context, tx pgx.Tx, tenantID string,
 				tenant_id, source_document_id, bid_document_id, chapter_id, chunk_id, title, metadata
 			)
 			values ($1, $2, $3, $4, $5, $6, $7)
-		`, tenantID, sourceDocumentID, chapter.BidDocumentID, chapter.ID, chunkID, ref.Title, metadataJSON); err != nil {
+		`, tenantID, sourceDocumentID, chapter.BidDocumentID, chapter.ID, chunkID, title, metadataJSON); err != nil {
 			return err
 		}
 	}
@@ -1620,6 +1738,14 @@ func sourceRefsAsAny(refs []sourceRef) []any {
 		})
 	}
 	return result
+}
+
+func truncateRunes(value string, limit int) string {
+	runes := []rune(value)
+	if limit <= 0 || len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func exportFilename(title, partCode, exportType string) string {
