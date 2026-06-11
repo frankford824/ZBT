@@ -9,6 +9,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/audit"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
+	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
@@ -23,8 +24,9 @@ type routeSpec struct {
 }
 
 type server struct {
-	cfg   config.Config
-	store *saas.Store
+	cfg         config.Config
+	store       *saas.Store
+	fileService *platformfile.Service
 }
 
 var routeSpecs = []routeSpec{
@@ -165,11 +167,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store}
+	s := &server{cfg: cfg, store: store, fileService: fileService}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -282,6 +284,11 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
 	group.DELETE("/roles/:id", rbac.Require("team", rbac.LevelFull), s.deleteRole)
 	group.GET("/notifications", s.listNotifications)
+	group.GET("/knowledge/documents", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeDocuments)
+	group.POST("/files/presign-upload", rbac.Require("knowledge", rbac.LevelFull), s.presignFileUpload)
+	group.POST("/files/:id/confirm", rbac.Require("knowledge", rbac.LevelFull), s.confirmFileUpload)
+	group.GET("/files/:id/download-url", rbac.Require("knowledge", rbac.LevelRead), s.fileDownloadURL)
+	group.GET("/files/:id/preview-url", rbac.Require("knowledge", rbac.LevelRead), s.filePreviewURL)
 }
 
 func registerStubs(group *gin.RouterGroup) {
@@ -297,6 +304,11 @@ func registerStubs(group *gin.RouterGroup) {
 		"PATCH /roles/:id":            true,
 		"DELETE /roles/:id":           true,
 		"GET /notifications":          true,
+		"GET /knowledge/documents":    true,
+		"POST /files/presign-upload":  true,
+		"POST /files/:id/confirm":     true,
+		"GET /files/:id/download-url": true,
+		"GET /files/:id/preview-url":  true,
 	}
 	for _, spec := range routeSpecs {
 		if custom[spec.Method+" "+spec.Path] {
@@ -411,6 +423,37 @@ func (s *server) listNotifications(c *gin.Context) {
 	respond(c, gin.H{"items": result}, err)
 }
 
+func (s *server) listKnowledgeDocuments(c *gin.Context) {
+	result, err := s.fileService.ListAssets(c.Request.Context(), tenant.FromContext(c.Request.Context()), "knowledge")
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) presignFileUpload(c *gin.Context) {
+	var req platformfile.PresignUploadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.fileService.PresignUpload(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) confirmFileUpload(c *gin.Context) {
+	result, err := s.fileService.ConfirmUpload(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) fileDownloadURL(c *gin.Context) {
+	result, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), false)
+	respond(c, result, err)
+}
+
+func (s *server) filePreviewURL(c *gin.Context) {
+	result, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), true)
+	respond(c, result, err)
+}
+
 func requiredLevel(spec routeSpec) rbac.Level {
 	if spec.Method == http.MethodGet {
 		return rbac.LevelRead
@@ -434,8 +477,16 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if errors.Is(err, platformfile.ErrInvalidRequest) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if errors.Is(err, platformfile.ErrObjectNotUploaded) || errors.Is(err, platformfile.ErrInvalidObjectState) {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 	if err != nil {

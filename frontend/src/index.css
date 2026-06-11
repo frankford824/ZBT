@@ -168,6 +168,14 @@ a {
   margin-bottom: 12px;
 }
 
+.file-preview-frame {
+  width: 100%;
+  min-height: 640px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+}
+
 @media (max-width: 768px) {
   .content-shell {
     padding: 12px;

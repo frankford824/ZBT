@@ -52,11 +52,17 @@ services:
       REDIS_URL: redis:6379
       AI_SERVICE_URL: http://ai-service:8000
       MINIO_ENDPOINT: minio:9000
+      MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
+      MINIO_ACCESS_KEY: zbt_minio
+      MINIO_SECRET_KEY: zbt_minio_secret
+      MINIO_REGION: us-east-1
       MINIO_BUCKET: zbt-files
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       ai-service:
         condition: service_started

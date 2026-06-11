@@ -8,6 +8,8 @@ tenants、users、tenant_members、tenant_member_roles、roles、permissions、r
 
 迁移连接使用 owner/superuser，业务连接使用非超级 `zbt_app`，否则 PostgreSQL superuser 会绕过 RLS。
 
+`file_assets` 记录 MinIO 对象元数据，`object_key` 固定为 `tenant_id/biz_type/uuid`，`status` 为 pending / ready / failed / deleted。上传链路先由 Go 生成预签名 URL，浏览器 PUT 到私有 bucket 后再 confirm 为 ready。
+
 ## 标讯
 
 tender_sources、tenders、tender_user_states、tender_parse_results。

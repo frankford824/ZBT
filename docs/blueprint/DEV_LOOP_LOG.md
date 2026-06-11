@@ -124,3 +124,58 @@ docker compose exec -T postgres psql 'postgres://zbt_app:zbt_app@localhost:5432/
 ### 下一轮建议
 
 继续 Loop-2 收尾：实现 MinIO bucket 初始化、文件资产创建、预签名上传、confirm、下载/预览 URL，并补文件归属和权限测试。随后进入 Loop-3/4 的真实页面数据和标书主链路。
+
+## Loop-2 文件闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 MinIO bucket 初始化和私有对象存储访问。
+2. 实现 file_assets 创建、预签名上传、confirm、下载和预览 URL。
+3. 将知识库文档页从静态列表改为真实 API 数据。
+4. 验证 object key 租户前缀、RLS 隔离、文件上传权限和跨租户下载不可见。
+
+### 代码交付
+
+1. 新增 `platform/file` 服务，封装 MinIO client、bucket 初始化、file_assets 事务和预签名 URL。
+2. 新增 `00003_file_asset_status.sql`，为 file_assets 增加 status、confirmed_at、object_key 唯一索引和查询索引。
+3. 新增 `00004_fix_module_permission_tenant_ids.sql`，修复历史种子中 tenant2 角色权限 tenant_id 错误；同时修正 00001 新库种子逻辑。
+4. 后端接入 `/files/presign-upload`、`/files/:id/confirm`、`/files/:id/download-url`、`/files/:id/preview-url` 和 `/knowledge/documents` 真实 handler。
+5. 前端文档库页接真实文件列表，上传流程为：请求预签名 URL -> PUT MinIO -> confirm -> 刷新列表。
+6. 文件预览页通过 Go 鉴权后获取 inline 预签名 URL。
+7. Docker Compose 为 backend 增加 MinIO 健康依赖、访问密钥、region 和 public endpoint 配置。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+./infra/scripts/check.sh
+docker compose build backend frontend
+docker compose up -d backend frontend
+curl -X POST /api/v1/files/presign-upload ...
+curl -X PUT "<presigned-url>" --data-binary @/tmp/zbt-minio-check.txt
+curl -X POST /api/v1/files/<id>/confirm
+curl /api/v1/files/<id>/download-url
+docker compose exec -T postgres psql 'postgres://zbt_app:zbt_app@localhost:5432/zbt?sslmode=disable' ...
+```
+
+结果：
+
+1. `./infra/scripts/check.sh` 通过。
+2. backend 自动执行到 goose version 4。
+3. MinIO 上传 PUT 返回 200，confirm 后文件状态为 ready，size_bytes 为 23。
+4. 下载预签名 URL 返回内容 `zbt minio runtime check`。
+5. viewer 调用 `/files/presign-upload` 返回 403。
+6. tenant2 管理员具有 knowledge full，但访问 tenant1 文件 `/download-url` 返回 404。
+7. RLS 下 tenant1 可见 object_key：`00000000-0000-4000-8000-000000000001/knowledge/6bcabfc8-4d92-4b79-a6b9-6858ac261afb`；tenant2 对同一 file_id 可见数量为 0。
+
+### 偏离蓝图
+
+1. 文件解析、OCR、切片、embedding 和 knowledge_documents 业务表尚未落地，本轮只完成文件资产与对象存储闭环。
+2. 浏览器端上传依赖 MinIO CORS，当前通过 curl 验证了预签名 URL；后续进入文档解析前应补 Playwright 上传冒烟。
+
+### 下一轮建议
+
+进入 Loop-3：围绕知识库文档处理流水线落地 knowledge_documents、分类/标签、解析任务创建，以及 Go -> Python AI 服务任务编排和回调验签。

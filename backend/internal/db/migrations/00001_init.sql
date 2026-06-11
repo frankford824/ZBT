@@ -217,7 +217,7 @@ insert into roles (id, tenant_id, code, name) values
 on conflict (tenant_id, code) do update set name = excluded.name, updated_at = now();
 
 insert into module_permissions (tenant_id, role_id, module, level)
-select '00000000-0000-4000-8000-000000000001'::uuid, role_id, module, level
+select r.tenant_id, matrix.role_id, matrix.module, matrix.level
 from (values
 ('20000000-0000-4000-8000-000000000001'::uuid, 'dashboard', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'tender', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'bid', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'compliance', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'project', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'cost', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'knowledge', 'full'), ('20000000-0000-4000-8000-000000000001'::uuid, 'team', 'full'),
 ('20000000-0000-4000-8000-000000000002'::uuid, 'dashboard', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'tender', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'bid', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'compliance', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'project', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'cost', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'knowledge', 'full'), ('20000000-0000-4000-8000-000000000002'::uuid, 'team', 'full'),
@@ -227,6 +227,7 @@ from (values
 ('20000000-0000-4000-8000-000000000006'::uuid, 'dashboard', 'read'), ('20000000-0000-4000-8000-000000000006'::uuid, 'tender', 'read'), ('20000000-0000-4000-8000-000000000006'::uuid, 'bid', 'read'), ('20000000-0000-4000-8000-000000000006'::uuid, 'compliance', 'read'), ('20000000-0000-4000-8000-000000000006'::uuid, 'project', 'read'), ('20000000-0000-4000-8000-000000000006'::uuid, 'cost', 'none'), ('20000000-0000-4000-8000-000000000006'::uuid, 'knowledge', 'read'), ('20000000-0000-4000-8000-000000000006'::uuid, 'team', 'none'),
 ('20000000-0000-4000-8000-000000000007'::uuid, 'dashboard', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'tender', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'bid', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'compliance', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'project', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'cost', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'knowledge', 'full'), ('20000000-0000-4000-8000-000000000007'::uuid, 'team', 'full')
 ) as matrix(role_id, module, level)
+join roles r on r.id = matrix.role_id
 on conflict do nothing;
 
 insert into tenant_members (id, tenant_id, user_id, status) values

@@ -37,3 +37,11 @@ POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、
 ## Cost / Approval / Notification / File
 
 覆盖 x.md 第 14 节列出的成本、审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出、合规和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底。
+
+文件接口一期已落地：
+
+- POST /files/presign-upload：创建待确认 file_asset 并返回 MinIO PUT 预签名 URL。
+- POST /files/:id/confirm：校验 MinIO 对象存在后把文件状态置为 ready。
+- GET /files/:id/download-url：鉴权和租户校验后返回 attachment 预签名 URL。
+- GET /files/:id/preview-url：鉴权和租户校验后返回 inline 预签名 URL。
+- GET /knowledge/documents：返回当前租户知识库文件资产列表。

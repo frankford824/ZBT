@@ -9,6 +9,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/db/migrations"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformdb "github.com/frankford824/ZBT/backend/internal/platform/db"
+	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -32,7 +33,12 @@ func main() {
 	}
 	defer pool.Close()
 
-	router := api.NewRouter(cfg, saas.NewStore(pool))
+	fileService, err := platformfile.NewService(ctx, cfg, pool)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	router := api.NewRouter(cfg, saas.NewStore(pool), fileService)
 
 	log.Printf("zbt backend listening on %s", cfg.HTTPAddr)
 	if err := router.Run(cfg.HTTPAddr); err != nil {

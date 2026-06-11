@@ -4,9 +4,20 @@ import {
   FileSearchOutlined,
   TagsOutlined,
 } from '@ant-design/icons'
-import { Button, Card, Col, Input, List, Row, Space, Table, Tag, Tree, Upload } from 'antd'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { App as AntApp, Button, Card, Col, Input, List, Row, Space, Table, Tag, Tree, Upload } from 'antd'
+import type { UploadProps } from 'antd'
 import { useParams } from 'react-router-dom'
+import {
+  confirmFileUpload,
+  createPresignedUpload,
+  fetchFileURL,
+  fetchKnowledgeDocuments,
+  uploadToPresignedUrl,
+  type FileAssetDTO,
+} from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
+import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 
 const docs = [
   { id: 'file-demo', name: 'CMMI 资质证书.pdf', category: '资质证书', size: '2.5M', refs: 12 },
@@ -50,6 +61,41 @@ export function KnowledgeHomePage() {
 }
 
 export function KnowledgeDocsPage() {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const documents = useQuery({
+    queryKey: ['knowledge-documents'],
+    queryFn: fetchKnowledgeDocuments,
+  })
+
+  const uploadProps: UploadProps = {
+    multiple: false,
+    showUploadList: false,
+    customRequest: async ({ file, onError, onSuccess }) => {
+      const uploadFile = file as File
+      try {
+        const presigned = await createPresignedUpload({
+          filename: uploadFile.name,
+          content_type: uploadFile.type || 'application/octet-stream',
+          size_bytes: uploadFile.size,
+        })
+        await uploadToPresignedUrl(presigned, uploadFile)
+        await confirmFileUpload(presigned.file.id)
+        await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] })
+        message.success('上传完成')
+        onSuccess?.(presigned.file)
+      } catch (error) {
+        message.error('上传失败')
+        onError?.(error as Error)
+      }
+    },
+  }
+
+  const openFile = async (fileId: string, mode: 'download' | 'preview') => {
+    const result = await fetchFileURL(fileId, mode)
+    window.open(result.url, '_blank', 'noopener,noreferrer')
+  }
+
   return (
     <PageFrame
       module="知识库"
@@ -84,24 +130,41 @@ export function KnowledgeDocsPage() {
         </Col>
         <Col xs={24} xl={18}>
           <Space direction="vertical" className="full-width">
-            <Upload.Dragger beforeUpload={() => false}>
+            <Upload.Dragger {...uploadProps}>
               <CloudUploadOutlined />
               <p>拖拽上传 PDF、Word、Excel、PPT、图片或压缩包</p>
             </Upload.Dragger>
-            <Table
+            {documents.isLoading ? <LoadingBlock /> : null}
+            {documents.isError ? <ErrorBlock /> : null}
+            {!documents.isLoading && !documents.isError && documents.data?.length === 0 ? (
+              <EmptyBlock />
+            ) : null}
+            <Table<FileAssetDTO>
               rowKey="id"
-              dataSource={docs}
+              loading={documents.isLoading}
+              dataSource={documents.data ?? []}
               columns={[
-                { title: '文档名', dataIndex: 'name' },
-                { title: '分类', dataIndex: 'category' },
-                { title: '大小', dataIndex: 'size' },
-                { title: '引用', dataIndex: 'refs' },
+                { title: '文档名', dataIndex: 'filename' },
+                { title: '分类', dataIndex: 'biz_type', render: categoryLabel },
+                { title: '大小', dataIndex: 'size_bytes', render: formatBytes },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  render: (status: FileAssetDTO['status']) => (
+                    <Tag color={status === 'ready' ? 'green' : 'orange'}>{statusLabel(status)}</Tag>
+                  ),
+                },
                 {
                   title: '操作',
                   render: (_, row) => (
                     <Space>
                       <a href={`/files/${row.id}/preview`}>预览</a>
-                      <Button size="small" icon={<DownloadOutlined />}>
+                      <Button
+                        size="small"
+                        icon={<DownloadOutlined />}
+                        disabled={row.status !== 'ready'}
+                        onClick={() => void openFile(row.id, 'download')}
+                      >
                         下载
                       </Button>
                     </Space>
@@ -194,20 +257,66 @@ export function KnowledgeTagsPage() {
 
 export function FilePreviewPage() {
   const { fileId } = useParams()
+  const preview = useQuery({
+    queryKey: ['file-preview', fileId],
+    queryFn: () => fetchFileURL(fileId!, 'preview'),
+    enabled: Boolean(fileId),
+  })
+  const openDownload = async () => {
+    if (!fileId) {
+      return
+    }
+    const result = await fetchFileURL(fileId, 'download')
+    window.open(result.url, '_blank', 'noopener,noreferrer')
+  }
+
   return (
     <PageFrame
       module="知识库"
-      title="文件预览"
+      title={preview.data?.file.filename ?? '文件预览'}
       subtitle={fileId}
       tags={['/files/:fileId/preview']}
-      actions={[<Button key="download" icon={<DownloadOutlined />}>下载</Button>]}
+      actions={[
+        <Button key="download" icon={<DownloadOutlined />} onClick={() => void openDownload()}>
+          下载
+        </Button>,
+      ]}
     >
-      <Card>
-        <FileSearchOutlined className="preview-icon" />
-        <p>在线预览区。后续由 Go 鉴权后返回预览 URL，bucket 不公开。</p>
-        <Tag color="purple">AI 摘要</Tag>
-        <Tag color="blue">被哪些标书引用</Tag>
-      </Card>
+      {preview.isLoading ? <LoadingBlock /> : null}
+      {preview.isError ? <ErrorBlock /> : null}
+      {preview.data ? (
+        <Card>
+          <FileSearchOutlined className="preview-icon" />
+          <iframe title={preview.data.file.filename} src={preview.data.url} className="file-preview-frame" />
+        </Card>
+      ) : null}
     </PageFrame>
   )
+}
+
+function categoryLabel(bizType: string) {
+  if (bizType === 'knowledge') {
+    return '知识库'
+  }
+  return bizType
+}
+
+function statusLabel(status: FileAssetDTO['status']) {
+  const labels: Record<FileAssetDTO['status'], string> = {
+    pending: '待确认',
+    ready: '可用',
+    failed: '失败',
+    deleted: '已删除',
+  }
+  return labels[status]
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) {
+    return `${value} B`
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`
+  }
+  return `${(value / 1024 / 1024).toFixed(1)} MB`
 }

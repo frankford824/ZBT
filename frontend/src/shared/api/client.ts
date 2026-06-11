@@ -45,6 +45,32 @@ export type NotificationDTO = {
   read_at: string | null
 }
 
+export type FileAssetDTO = {
+  id: string
+  biz_type: string
+  biz_id: string | null
+  filename: string
+  content_type: string
+  size_bytes: number
+  status: 'pending' | 'ready' | 'failed' | 'deleted'
+  created_at: string
+  updated_at: string
+}
+
+export type PresignUploadDTO = {
+  file: FileAssetDTO
+  upload_url: string
+  method: 'PUT'
+  headers: Record<string, string>
+  expires_at: string
+}
+
+export type PresignedFileUrlDTO = {
+  file: FileAssetDTO
+  url: string
+  expires_at: string
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -76,6 +102,48 @@ export async function fetchRoles(): Promise<RoleDTO[]> {
 export async function fetchNotifications(): Promise<NotificationDTO[]> {
   const { data } = await apiClient.get<{ items: NotificationDTO[] }>('/notifications')
   return data.items
+}
+
+export async function fetchKnowledgeDocuments(): Promise<FileAssetDTO[]> {
+  const { data } = await apiClient.get<{ items: FileAssetDTO[] }>('/knowledge/documents')
+  return data.items
+}
+
+export async function createPresignedUpload(payload: {
+  filename: string
+  content_type: string
+  size_bytes: number
+  biz_type?: string
+  biz_id?: string
+}): Promise<PresignUploadDTO> {
+  const { data } = await apiClient.post<PresignUploadDTO>('/files/presign-upload', {
+    biz_type: 'knowledge',
+    ...payload,
+  })
+  return data
+}
+
+export async function uploadToPresignedUrl(
+  upload: PresignUploadDTO,
+  file: File,
+): Promise<void> {
+  await axios.put(upload.upload_url, file, {
+    headers: upload.headers,
+  })
+}
+
+export async function confirmFileUpload(fileId: string): Promise<FileAssetDTO> {
+  const { data } = await apiClient.post<FileAssetDTO>(`/files/${fileId}/confirm`)
+  return data
+}
+
+export async function fetchFileURL(
+  fileId: string,
+  mode: 'download' | 'preview',
+): Promise<PresignedFileUrlDTO> {
+  const endpoint = mode === 'preview' ? 'preview-url' : 'download-url'
+  const { data } = await apiClient.get<PresignedFileUrlDTO>(`/files/${fileId}/${endpoint}`)
+  return data
 }
 
 export type PlatformStats = {

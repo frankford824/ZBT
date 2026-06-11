@@ -48,6 +48,8 @@ curl http://localhost:8000/models/health
 
 后端启动会自动执行嵌入式 goose 迁移。迁移连接使用 `MIGRATION_DATABASE_URL`，业务连接使用非超级账号 `DATABASE_URL=postgres://zbt_app:zbt_app@postgres:5432/zbt?sslmode=disable`，用于确保 RLS 在应用查询中真实生效。
 
+文件上传通过 Go 后端获取 MinIO 预签名 URL。开发环境中 `MINIO_ENDPOINT=minio:9000` 用于容器内访问，`MINIO_PUBLIC_ENDPOINT=127.0.0.1:9000` 用于浏览器直连预签名 URL，bucket 仍保持私有。
+
 ## 开发约束
 
 1. 不删除 8 大模块，不少于 V2.4 的 14 个页面。
