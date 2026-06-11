@@ -45,14 +45,17 @@ import {
   fetchBidExport,
   fetchBidExports,
   fetchBidParts,
+  fetchBidTemplates,
   fetchBids,
   fetchChapterVersions,
   regenerateChapter,
   updateChapterContent,
+  useBidTemplate,
   type BidChapterDTO,
   type BidDocumentDTO,
   type BidExportDTO,
   type BidGenerationSnapshotDTO,
+  type BidTemplateDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
@@ -247,6 +250,33 @@ export function BidListPage() {
 }
 
 export function BidTemplatesPage() {
+  const navigate = useNavigate()
+  const { message } = AntApp.useApp()
+  const templates = useQuery({
+    queryKey: ['bid-templates'],
+    queryFn: fetchBidTemplates,
+  })
+  const mutation = useMutation({
+    mutationFn: useBidTemplate,
+    onSuccess: ({ bid }) => {
+      message.success('已按模板创建标书')
+      navigate(`/bids/${bid.id}/wizard?step=1`)
+    },
+    onError: () => message.error('模板使用失败'),
+  })
+
+  const renderSections = (template: BidTemplateDTO) => {
+    const sections = template.content.sections
+    if (!Array.isArray(sections)) {
+      return null
+    }
+    return sections.slice(0, 4).map((section) => (
+      <Tag key={String(section)} color="geekblue">
+        {String(section)}
+      </Tag>
+    ))
+  }
+
   return (
     <PageFrame
       module="标书生成"
@@ -254,19 +284,53 @@ export function BidTemplatesPage() {
       subtitle="行业分类、预览和使用"
       tags={['page-generate-templates', '/bids/templates']}
     >
-      <Row gutter={[16, 16]}>
-        {['IT信息化综合标', '政府采购商务标', '工程建设技术标', '我的实施方案模板'].map((name, index) => (
-          <Col xs={24} md={12} xl={6} key={name}>
-            <Card title={name} actions={[<Link to="/bids/new">使用</Link>, <a>预览</a>]}>
-              <Space direction="vertical">
-                <Tag color="blue">{index === 3 ? '我的模板' : '行业模板'}</Tag>
-                <Typography.Text type="secondary">使用 {120 - index * 17} 次</Typography.Text>
-                <Typography.Text>评分 {4.8 - index * 0.2}</Typography.Text>
-              </Space>
-            </Card>
-          </Col>
-        ))}
-      </Row>
+      {templates.isLoading && <LoadingBlock />}
+      {templates.isError && <ErrorBlock />}
+      {!templates.isLoading && !templates.isError && (templates.data?.length ?? 0) === 0 && <EmptyBlock />}
+      {!templates.isLoading && !templates.isError && Boolean(templates.data?.length) && (
+        <Row gutter={[16, 16]}>
+          {templates.data?.map((template) => (
+            <Col xs={24} md={12} xl={6} key={template.id}>
+              <Card
+                title={template.name}
+                actions={[
+                  <Button
+                    key="use"
+                    type="link"
+                    loading={mutation.isPending && mutation.variables?.templateId === template.id}
+                    onClick={() =>
+                      mutation.mutate({
+                        templateId: template.id,
+                        title: `${template.name}生成标书`,
+                      })
+                    }
+                  >
+                    使用模板
+                  </Button>,
+                  <Link key="blank" to="/bids/new">
+                    新建空白
+                  </Link>,
+                ]}
+              >
+                <Space direction="vertical" size={8}>
+                  <Space wrap>
+                    <Tag color={template.bid_type === 'combined' ? 'green' : 'blue'}>
+                      {template.bid_type === 'combined' ? '综合标' : template.bid_type === 'separated' ? '分册标' : '自定义'}
+                    </Tag>
+                    <Tag>{template.category}</Tag>
+                    <Typography.Text type="secondary">{template.version}</Typography.Text>
+                  </Space>
+                  <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }}>
+                    {template.description}
+                  </Typography.Paragraph>
+                  <Space wrap>{renderSections(template)}</Space>
+                  <Typography.Text type="secondary">使用 {template.usage_count} 次</Typography.Text>
+                </Space>
+              </Card>
+            </Col>
+          ))}
+        </Row>
+      )}
     </PageFrame>
   )
 }

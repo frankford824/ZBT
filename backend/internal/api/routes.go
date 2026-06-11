@@ -316,6 +316,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/knowledge/templates", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeTemplates)
 	group.POST("/knowledge/templates", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeTemplate)
 	group.GET("/knowledge/stats", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeStats)
+	group.GET("/bid-templates", rbac.Require("bid", rbac.LevelRead), s.listBidTemplates)
+	group.POST("/bid-templates/:templateId/use", rbac.Require("bid", rbac.LevelFull), s.useBidTemplate)
 	group.GET("/bids", rbac.Require("bid", rbac.LevelRead), s.listBids)
 	group.POST("/bids", rbac.Require("bid", rbac.LevelFull), s.createBid)
 	group.GET("/bids/:id", rbac.Require("bid", rbac.LevelRead), s.getBid)
@@ -371,6 +373,8 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /knowledge/templates":                true,
 		"POST /knowledge/templates":               true,
 		"GET /knowledge/stats":                    true,
+		"GET /bid-templates":                      true,
+		"POST /bid-templates/:templateId/use":     true,
 		"GET /bids":                               true,
 		"POST /bids":                              true,
 		"GET /bids/:id":                           true,
@@ -683,6 +687,23 @@ func (s *server) createKnowledgeTemplate(c *gin.Context) {
 func (s *server) knowledgeStats(c *gin.Context) {
 	result, err := s.knowledgeStore.Stats(c.Request.Context(), tenant.FromContext(c.Request.Context()))
 	respond(c, result, err)
+}
+
+func (s *server) listBidTemplates(c *gin.Context) {
+	result, err := s.bidStore.ListTemplates(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) useBidTemplate(c *gin.Context) {
+	var req bid.UseTemplateRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	result, err := s.bidStore.UseTemplate(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("templateId"), req)
+	respondStatus(c, http.StatusCreated, result, err)
 }
 
 func (s *server) listBids(c *gin.Context) {

@@ -45,6 +45,20 @@ type Document struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type BidTemplate struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	BidType     string         `json:"bid_type"`
+	Category    string         `json:"category"`
+	Description string         `json:"description"`
+	Version     string         `json:"version"`
+	Content     map[string]any `json:"content"`
+	UsageCount  int            `json:"usage_count"`
+	Status      string         `json:"status"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+}
+
 type Part struct {
 	ID            string         `json:"id"`
 	BidDocumentID string         `json:"bid_document_id"`
@@ -173,6 +187,16 @@ type CreateDocumentRequest struct {
 	BidType     string `json:"bid_type"`
 }
 
+type UseTemplateRequest struct {
+	Title       string `json:"title"`
+	ProjectName string `json:"project_name"`
+}
+
+type UseTemplateResult struct {
+	Template BidTemplate `json:"template"`
+	Bid      Document    `json:"bid"`
+}
+
 type CreateExportRequest struct {
 	ExportType string `json:"export_type"`
 	PartCode   string `json:"part_code"`
@@ -275,6 +299,92 @@ func NewStore(cfg config.Config, pool *pgxpool.Pool) *Store {
 			Timeout: 20 * time.Second,
 		},
 	}
+}
+
+func (s *Store) ListTemplates(ctx context.Context, tenantID string) ([]BidTemplate, error) {
+	templates := []BidTemplate{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			select id::text, name, bid_type, category, description, version, content, usage_count, status, created_at, updated_at
+			from bid_templates
+			where tenant_id = $1 and status = 'active'
+			order by usage_count desc, created_at desc
+		`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			template, err := scanBidTemplate(rows)
+			if err != nil {
+				return err
+			}
+			templates = append(templates, template)
+		}
+		return rows.Err()
+	})
+	return templates, err
+}
+
+func (s *Store) UseTemplate(ctx context.Context, tenantID, templateID string, req UseTemplateRequest) (UseTemplateResult, error) {
+	templateID = strings.TrimSpace(templateID)
+	if _, err := uuid.Parse(templateID); err != nil {
+		return UseTemplateResult{}, ErrInvalidRequest
+	}
+
+	var template BidTemplate
+	var bidID string
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		found, err := scanBidTemplate(tx.QueryRow(ctx, `
+			select id::text, name, bid_type, category, description, version, content, usage_count, status, created_at, updated_at
+			from bid_templates
+			where tenant_id = $1 and id = $2 and status = 'active'
+		`, tenantID, templateID))
+		if err != nil {
+			return err
+		}
+		template = found
+
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			title = strings.TrimSpace(req.ProjectName)
+		}
+		if title == "" {
+			title = template.Name
+		}
+		bidType := normalizeBidType(template.BidType)
+		if err := tx.QueryRow(ctx, `
+			insert into bid_documents (tenant_id, title, bid_type, status)
+			values ($1, $2, $3, 'draft')
+			returning id::text
+		`, tenantID, title, bidType).Scan(&bidID); err != nil {
+			return err
+		}
+		if err := createDefaultParts(ctx, tx, tenantID, bidID, bidType); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_templates
+			set usage_count = usage_count + 1, updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, templateID); err != nil {
+			return err
+		}
+		template.UsageCount++
+		template.UpdatedAt = time.Now()
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UseTemplateResult{}, ErrNotFound
+	}
+	if err != nil {
+		return UseTemplateResult{}, err
+	}
+	document, err := s.GetDocument(ctx, tenantID, bidID)
+	if err != nil {
+		return UseTemplateResult{}, err
+	}
+	return UseTemplateResult{Template: template, Bid: document}, nil
 }
 
 func (s *Store) ListDocuments(ctx context.Context, tenantID string) ([]Document, error) {
@@ -1560,6 +1670,20 @@ func scanDocument(row scanner) (Document, error) {
 		document.ProjectID = &projectID.String
 	}
 	return document, err
+}
+
+func scanBidTemplate(row scanner) (BidTemplate, error) {
+	var template BidTemplate
+	var contentRaw []byte
+	err := row.Scan(
+		&template.ID, &template.Name, &template.BidType, &template.Category, &template.Description,
+		&template.Version, &contentRaw, &template.UsageCount, &template.Status, &template.CreatedAt, &template.UpdatedAt,
+	)
+	template.Content = map[string]any{}
+	if len(contentRaw) > 0 {
+		_ = json.Unmarshal(contentRaw, &template.Content)
+	}
+	return template, err
 }
 
 func scanPart(row scanner) (Part, error) {

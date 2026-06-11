@@ -28,6 +28,8 @@ bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation
 
 `bid_exports` 关联 `file_assets` 保存导出产物，status 为 queued / running / done / failed / cancelled。当前最小实现支持 docx 导出，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
 
+`bid_templates` 保存租户内标书模板库，包含 name、bid_type、category、description、version、content、usage_count 和 status。当前前端 `/bids/templates` 已接入列表和使用动作；使用模板会创建 draft 标书、初始化默认分册章节，并递增模板 usage_count。
+
 `bid_chapter_versions` 保存章节保存、采纳和 AI 重新生成后的版本快照，包含 content、plain_text、source_refs、needs_human_input、model_metadata 和 token_usage。章节生成引用真实 `knowledge_chunks` 时，`knowledge_references` 同时写入 `source_document_id` 和 `chunk_id`，metadata 中标记 `resolved=true`；`knowledge_references.source_document_id` 仍允许为空，用于记录 AI 返回但暂未解析到真实知识库文档的 source_ref。
 
 ## 知识库

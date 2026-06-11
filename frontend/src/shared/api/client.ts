@@ -240,6 +240,25 @@ export type BidDocumentDTO = {
   updated_at: string
 }
 
+export type BidTemplateDTO = {
+  id: string
+  name: string
+  bid_type: 'combined' | 'separated' | 'custom'
+  category: string
+  description: string
+  version: string
+  content: Record<string, unknown>
+  usage_count: number
+  status: 'active' | 'archived'
+  created_at: string
+  updated_at: string
+}
+
+export type UseBidTemplateDTO = {
+  template: BidTemplateDTO
+  bid: BidDocumentDTO
+}
+
 export type BidPartDTO = {
   id: string
   bid_document_id: string
@@ -500,6 +519,23 @@ export async function createKnowledgeTemplate(payload: {
 export async function fetchBids(): Promise<BidDocumentDTO[]> {
   const { data } = await apiClient.get<{ items: BidDocumentDTO[] }>('/bids')
   return data.items
+}
+
+export async function fetchBidTemplates(): Promise<BidTemplateDTO[]> {
+  const { data } = await apiClient.get<{ items: BidTemplateDTO[] }>('/bid-templates')
+  return data.items
+}
+
+export async function useBidTemplate(payload: {
+  templateId: string
+  title?: string
+  project_name?: string
+}): Promise<UseBidTemplateDTO> {
+  const { data } = await apiClient.post<UseBidTemplateDTO>(`/bid-templates/${payload.templateId}/use`, {
+    title: payload.title,
+    project_name: payload.project_name,
+  })
+  return data
 }
 
 export async function createBid(payload: {

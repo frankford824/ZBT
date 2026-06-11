@@ -878,3 +878,50 @@ curl -X PATCH /api/v1/knowledge/documents/:id ...
 ### 下一轮建议
 
 推进模板文件上传/预览和模板使用动作，或继续补知识库文档详情页中的 chunk/embedding/references 可视化。
+
+## Loop-6 / 标书模板库真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/bids/templates` 从静态卡片改为真实模板库数据。
+2. 落地 `GET /bid-templates` 和 `POST /bid-templates/:templateId/use`。
+3. 新增 `bid_templates` 表、租户 RLS 和默认模板种子。
+
+### 代码交付
+
+1. 新增迁移 `00011_bid_templates.sql`，创建 `bid_templates`，包含 name、bid_type、category、description、version、content、usage_count、status，并启用 FORCE RLS。
+2. 后端 bid store 新增 `ListTemplates` 和 `UseTemplate`，使用模板时同一事务创建 draft 标书、默认分册章节并递增模板使用次数。
+3. API 路由新增真实 `GET /bid-templates` 和 `POST /bid-templates/:templateId/use` handler，替换原 stub。
+4. 前端 API client 新增标书模板 DTO、模板列表和使用模板调用。
+5. 标书模板页展示真实分类、版本、描述、章节标签和使用次数，点击“使用模板”后进入新建标书向导。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+curl -X GET /api/v1/bid-templates ...
+curl -X POST /api/v1/bid-templates/:templateId/use ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker 重新构建并启动 backend/frontend 成功。
+5. 运行时 `GET /bid-templates` 返回 4 个租户模板。
+6. 运行时使用模板 `综合项目投标模板` 创建标书 `模板使用验证-1781188837`，返回 bid_id `6f7c80f5-b9e4-44c8-9631-479c7e4caab5`，bid_type 为 `combined`。
+7. 模板 `usage_count` 从 158 增加到 159，`GET /bids` 可查到新建标书。
+8. goose 迁移版本为 11。
+9. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询验证标书返回 0，tenant1 返回 1。
+
+### 偏离蓝图
+
+1. 当前模板使用动作先创建默认分册和章节，尚未按模板 content 动态生成完整大纲。
+2. 模板预览、上传 docx 模板文件和模板编辑仍待后续实现。
