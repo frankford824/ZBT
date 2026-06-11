@@ -52,6 +52,8 @@ knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document
 
 compliance_checks、compliance_issues、compliance_rules、compliance_reports、compliance_fix_logs。
 
+`compliance_rules` 保存租户内规则库，包含 code、name、category、level(L1-L4)、severity(pass/warn/fail_candidate/fail)、description、enabled 和 metadata。`compliance_checks` 保存检查任务、关联标书、状态、结果、得分、层级配置和 task_id。`compliance_issues` 保存规则命中的问题、证据、建议、位置和处理状态(open/fixed/ignored/confirmed_fail)。`compliance_fix_logs` 记录 autofix、ignore、confirm_fail 等动作审计。`compliance_reports` 保存报告生成摘要和检查元数据。当前迁移为每个租户种子化签章完整性、投标有效期、服务响应承诺、目录页码和评分优化规则，并启用 FORCE RLS。
+
 ## 成本
 
 cost_projects、cost_items、cost_reports。

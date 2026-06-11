@@ -1089,3 +1089,63 @@ curl -X POST /api/v1/cost-projects/:id/report ...
 1. `ai-advice` 当前是规则化建议占位，尚未接入 Python AI 服务异步任务。
 2. `report` 当前生成数据库报告摘要，尚未导出 docx/pdf 文件资产。
 3. 成本项目删除和成本报告列表接口尚未展开，后续可随成本模块深化补齐。
+
+## Loop-10 / 合规检查真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/compliance` 和 `/compliance/:checkId` 从静态页面/stub 推进到真实租户数据。
+2. 落地合规规则库、检查任务、问题、修复日志和报告摘要。
+3. 支持 pass / warn / fail_candidate / fail 严重度，其中语义类问题先进入 fail_candidate，再由人工确认 fail。
+
+### 代码交付
+
+1. 新增迁移 `00015_compliance_foundation.sql`，创建 `compliance_rules`、`compliance_checks`、`compliance_issues`、`compliance_reports`、`compliance_fix_logs`，启用 FORCE RLS，并为每个租户写入 5 条默认规则。
+2. 新增 `platform/compliance` store，包含检查列表/创建/详情、问题列表、SSE 快照、autofix、ignore、confirm-fail、报告生成和规则 CRUD。
+3. API 路由新增真实 Compliance handlers，替换 `/compliance/checks`、`/compliance/issues`、`/compliance/rules` 相关 stub。
+4. 前端 API client 新增 Compliance DTO 和接口方法。
+5. 合规检查页改为真实检查历史、规则库、新增规则和开始检查；检查详情页接入问题分组、状态动作和报告生成。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X GET /api/v1/compliance/rules ...
+curl -X POST /api/v1/compliance/checks ...
+curl -X GET /api/v1/compliance/checks/:id/issues ...
+curl -X POST /api/v1/compliance/issues/:id/confirm-fail ...
+curl -X POST /api/v1/compliance/issues/:id/ignore ...
+curl -X POST /api/v1/compliance/issues/:id/autofix ...
+curl -X POST /api/v1/compliance/checks/:id/report ...
+curl -N /api/v1/compliance/checks/:id/stream ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker backend/frontend 构建成功，backend/frontend/ai-service 启动成功。
+5. `./infra/scripts/check.sh` 通过。
+6. 运行时 `GET /compliance/rules` 返回 5 条默认规则。
+7. 运行时创建检查 `16c99267-9831-45d7-82ae-3c5b9b17fabd`，初始结果为 `fail`，score 为 33，问题数为 4。
+8. 运行时将 fail_candidate 问题人工确认后返回 `confirmed_fail:fail`。
+9. 运行时忽略 warn 问题后返回 `ignored:warn`。
+10. 运行时一键修复 fail 问题后返回 `fixed:fail`，检查回算结果为 `fail`，score 为 50。
+11. 运行时报告 `1cacd276-e2ed-4925-b859-6be9ee422c2a` 生成成功，summary 为 `合规得分 50，结果 fail，问题 4 项`。
+12. 运行时 SSE 返回 `event: compliance`。
+13. goose 迁移版本为 15。
+14. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询新建检查、问题和报告均返回 0，tenant1 分别返回 1、4、1。
+
+### 偏离蓝图
+
+1. 合规检查当前同步生成数据库快照并返回 202，尚未接入 Python AI 服务异步任务。
+2. `autofix` 当前记录修复动作并回算状态，尚未接入编辑器自动定位和内容改写。
+3. `report` 当前生成数据库报告摘要，尚未导出 docx/pdf 文件资产。

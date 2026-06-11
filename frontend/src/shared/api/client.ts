@@ -275,6 +275,71 @@ export type CostReportDTO = {
   updated_at: string
 }
 
+export type ComplianceSeverity = 'pass' | 'warn' | 'fail_candidate' | 'fail'
+export type ComplianceIssueStatus = 'open' | 'fixed' | 'ignored' | 'confirmed_fail'
+
+export type ComplianceCheckDTO = {
+  id: string
+  bid_document_id: string | null
+  bid_title: string
+  name: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  result_status: ComplianceSeverity
+  score: number
+  config: Record<string, unknown>
+  task_id: string | null
+  issue_count: number
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ComplianceIssueDTO = {
+  id: string
+  check_id: string
+  rule_id: string | null
+  category: string
+  severity: ComplianceSeverity
+  status: ComplianceIssueStatus
+  title: string
+  evidence: string
+  suggestion: string
+  location: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ComplianceRuleDTO = {
+  id: string
+  code: string
+  name: string
+  category: string
+  level: 'L1' | 'L2' | 'L3' | 'L4'
+  severity: ComplianceSeverity
+  description: string
+  enabled: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ComplianceReportDTO = {
+  id: string
+  check_id: string
+  status: 'queued' | 'generated' | 'failed'
+  summary: string
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type ComplianceSnapshotDTO = {
+  check: ComplianceCheckDTO
+  issues: ComplianceIssueDTO[]
+  updated_at: string
+}
+
 export type CreateBidFromTenderDTO = {
   tender: TenderDTO
   bid: BidDocumentDTO
@@ -709,6 +774,90 @@ export async function createCostAdvice(costProjectId: string): Promise<CostAnaly
 export async function createCostReport(costProjectId: string): Promise<CostReportDTO> {
   const { data } = await apiClient.post<CostReportDTO>(`/cost-projects/${costProjectId}/report`)
   return data
+}
+
+export async function fetchComplianceChecks(): Promise<ComplianceCheckDTO[]> {
+  const { data } = await apiClient.get<{ items: ComplianceCheckDTO[] }>('/compliance/checks')
+  return data.items
+}
+
+export async function createComplianceCheck(payload: {
+  name?: string
+  bid_document_id?: string
+  levels?: string[]
+}): Promise<ComplianceSnapshotDTO> {
+  const { data } = await apiClient.post<ComplianceSnapshotDTO>('/compliance/checks', payload)
+  return data
+}
+
+export async function fetchComplianceCheck(checkId: string): Promise<ComplianceCheckDTO> {
+  const { data } = await apiClient.get<ComplianceCheckDTO>(`/compliance/checks/${checkId}`)
+  return data
+}
+
+export async function fetchComplianceIssues(checkId: string): Promise<ComplianceIssueDTO[]> {
+  const { data } = await apiClient.get<{ items: ComplianceIssueDTO[] }>(`/compliance/checks/${checkId}/issues`)
+  return data.items
+}
+
+export async function autofixComplianceIssue(issueId: string): Promise<ComplianceIssueDTO> {
+  const { data } = await apiClient.post<ComplianceIssueDTO>(`/compliance/issues/${issueId}/autofix`)
+  return data
+}
+
+export async function ignoreComplianceIssue(issueId: string): Promise<ComplianceIssueDTO> {
+  const { data } = await apiClient.post<ComplianceIssueDTO>(`/compliance/issues/${issueId}/ignore`)
+  return data
+}
+
+export async function confirmFailComplianceIssue(issueId: string): Promise<ComplianceIssueDTO> {
+  const { data } = await apiClient.post<ComplianceIssueDTO>(`/compliance/issues/${issueId}/confirm-fail`)
+  return data
+}
+
+export async function createComplianceReport(checkId: string): Promise<ComplianceReportDTO> {
+  const { data } = await apiClient.post<ComplianceReportDTO>(`/compliance/checks/${checkId}/report`)
+  return data
+}
+
+export async function fetchComplianceRules(): Promise<ComplianceRuleDTO[]> {
+  const { data } = await apiClient.get<{ items: ComplianceRuleDTO[] }>('/compliance/rules')
+  return data.items
+}
+
+export async function createComplianceRule(payload: {
+  code: string
+  name: string
+  category: string
+  level: ComplianceRuleDTO['level']
+  severity: ComplianceSeverity
+  description?: string
+  enabled?: boolean
+  metadata?: Record<string, unknown>
+}): Promise<ComplianceRuleDTO> {
+  const { data } = await apiClient.post<ComplianceRuleDTO>('/compliance/rules', payload)
+  return data
+}
+
+export async function updateComplianceRule(
+  ruleId: string,
+  payload: {
+    code: string
+    name: string
+    category: string
+    level: ComplianceRuleDTO['level']
+    severity: ComplianceSeverity
+    description?: string
+    enabled?: boolean
+    metadata?: Record<string, unknown>
+  },
+): Promise<ComplianceRuleDTO> {
+  const { data } = await apiClient.patch<ComplianceRuleDTO>(`/compliance/rules/${ruleId}`, payload)
+  return data
+}
+
+export async function deleteComplianceRule(ruleId: string): Promise<void> {
+  await apiClient.delete(`/compliance/rules/${ruleId}`)
 }
 
 export async function fetchKnowledgeCategories(): Promise<KnowledgeCategoryDTO[]> {

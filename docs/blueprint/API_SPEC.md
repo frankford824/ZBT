@@ -44,6 +44,8 @@ GET /knowledge、GET /knowledge/categories、POST /knowledge/categories、PATCH 
 
 POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、GET /compliance/checks/:id/issues、GET /compliance/checks/:id/stream、POST /compliance/issues/:id/autofix、POST /compliance/issues/:id/ignore、POST /compliance/issues/:id/confirm-fail、POST /compliance/checks/:id/report、GET /compliance/rules、POST /compliance/rules、PATCH /compliance/rules/:id、DELETE /compliance/rules/:id。
 
+合规一期已落地 `compliance_rules`、`compliance_checks`、`compliance_issues`、`compliance_reports`、`compliance_fix_logs` RLS 表。`POST /compliance/checks` 按 L1-L4 选中层级创建检查，返回检查快照和问题列表；规则严重度支持 pass、warn、fail_candidate、fail，其中 LLM/语义类规则默认只能产出 fail_candidate，确定 fail 由规则或人工确认产生。`POST /compliance/issues/:id/autofix` / `ignore` / `confirm-fail` 会写修复日志并回算检查结果；`GET /compliance/checks/:id/stream` 返回 compliance SSE 快照；`POST /compliance/checks/:id/report` 生成报告摘要。前端 `/compliance` 和 `/compliance/:checkId` 已接入真实检查历史、规则库、问题处理和报告动作。
+
 ## Cost
 
 GET /cost-projects、POST /cost-projects、GET /cost-projects/:id、PATCH /cost-projects/:id、GET /cost-projects/:id/items、POST /cost-projects/:id/items、PATCH /cost-items/:id、DELETE /cost-items/:id、GET /cost-projects/:id/analysis、POST /cost-projects/:id/ai-advice、POST /cost-projects/:id/report。
@@ -52,7 +54,7 @@ GET /cost-projects、POST /cost-projects、GET /cost-projects/:id、PATCH /cost-
 
 ## Approval / Notification / File
 
-覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出、合规和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底。
+覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底；合规检查当前返回 202 + 检查快照，后续异步化时复用同一 SSE 事件结构。
 
 文件接口一期已落地：
 

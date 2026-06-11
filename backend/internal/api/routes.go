@@ -15,6 +15,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/audit"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/bid"
+	platformcompliance "github.com/frankford824/ZBT/backend/internal/platform/compliance"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformcost "github.com/frankford824/ZBT/backend/internal/platform/cost"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
@@ -35,14 +36,15 @@ type routeSpec struct {
 }
 
 type server struct {
-	cfg            config.Config
-	store          *saas.Store
-	fileService    *platformfile.Service
-	knowledgeStore *knowledge.Store
-	bidStore       *bid.Store
-	tenderStore    *platformtender.Store
-	projectStore   *platformproject.Store
-	costStore      *platformcost.Store
+	cfg             config.Config
+	store           *saas.Store
+	fileService     *platformfile.Service
+	knowledgeStore  *knowledge.Store
+	bidStore        *bid.Store
+	tenderStore     *platformtender.Store
+	projectStore    *platformproject.Store
+	costStore       *platformcost.Store
+	complianceStore *platformcompliance.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -184,11 +186,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -331,6 +333,19 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/cost-projects/:id/analysis", rbac.Require("cost", rbac.LevelRead), s.costAnalysis)
 	group.POST("/cost-projects/:id/ai-advice", rbac.Require("cost", rbac.LevelFull), s.costAdvice)
 	group.POST("/cost-projects/:id/report", rbac.Require("cost", rbac.LevelFull), s.createCostReport)
+	group.POST("/compliance/checks", rbac.Require("compliance", rbac.LevelFull), s.createComplianceCheck)
+	group.GET("/compliance/checks", rbac.Require("compliance", rbac.LevelRead), s.listComplianceChecks)
+	group.GET("/compliance/checks/:id", rbac.Require("compliance", rbac.LevelRead), s.getComplianceCheck)
+	group.GET("/compliance/checks/:id/issues", rbac.Require("compliance", rbac.LevelRead), s.listComplianceIssues)
+	group.GET("/compliance/checks/:id/stream", rbac.Require("compliance", rbac.LevelRead), s.streamComplianceCheck)
+	group.POST("/compliance/issues/:id/autofix", rbac.Require("compliance", rbac.LevelFull), s.autofixComplianceIssue)
+	group.POST("/compliance/issues/:id/ignore", rbac.Require("compliance", rbac.LevelFull), s.ignoreComplianceIssue)
+	group.POST("/compliance/issues/:id/confirm-fail", rbac.Require("compliance", rbac.LevelFull), s.confirmFailComplianceIssue)
+	group.POST("/compliance/checks/:id/report", rbac.Require("compliance", rbac.LevelFull), s.createComplianceReport)
+	group.GET("/compliance/rules", rbac.Require("compliance", rbac.LevelRead), s.listComplianceRules)
+	group.POST("/compliance/rules", rbac.Require("compliance", rbac.LevelFull), s.createComplianceRule)
+	group.PATCH("/compliance/rules/:id", rbac.Require("compliance", rbac.LevelFull), s.updateComplianceRule)
+	group.DELETE("/compliance/rules/:id", rbac.Require("compliance", rbac.LevelFull), s.deleteComplianceRule)
 	group.GET("/tenant", rbac.Require("team", rbac.LevelRead), s.getTenant)
 	group.PATCH("/tenant", rbac.Require("team", rbac.LevelFull), s.updateTenant)
 	group.GET("/tenant/members", rbac.Require("team", rbac.LevelRead), s.listMembers)
@@ -435,6 +450,19 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /cost-projects/:id/analysis":              true,
 		"POST /cost-projects/:id/ai-advice":            true,
 		"POST /cost-projects/:id/report":               true,
+		"POST /compliance/checks":                      true,
+		"GET /compliance/checks":                       true,
+		"GET /compliance/checks/:id":                   true,
+		"GET /compliance/checks/:id/issues":            true,
+		"GET /compliance/checks/:id/stream":            true,
+		"POST /compliance/issues/:id/autofix":          true,
+		"POST /compliance/issues/:id/ignore":           true,
+		"POST /compliance/issues/:id/confirm-fail":     true,
+		"POST /compliance/checks/:id/report":           true,
+		"GET /compliance/rules":                        true,
+		"POST /compliance/rules":                       true,
+		"PATCH /compliance/rules/:id":                  true,
+		"DELETE /compliance/rules/:id":                 true,
 		"GET /knowledge/categories":                    true,
 		"POST /knowledge/categories":                   true,
 		"PATCH /knowledge/categories/:id":              true,
@@ -818,6 +846,104 @@ func (s *server) costAdvice(c *gin.Context) {
 func (s *server) createCostReport(c *gin.Context) {
 	result, err := s.costStore.CreateReport(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) createComplianceCheck(c *gin.Context) {
+	var req platformcompliance.CreateCheckRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.complianceStore.CreateCheck(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) listComplianceChecks(c *gin.Context) {
+	result, err := s.complianceStore.ListChecks(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) getComplianceCheck(c *gin.Context) {
+	result, err := s.complianceStore.GetCheck(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) listComplianceIssues(c *gin.Context) {
+	result, err := s.complianceStore.ListIssues(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) streamComplianceCheck(c *gin.Context) {
+	result, err := s.complianceStore.Snapshot(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		return
+	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	_ = writeSSE(c, flusher, "compliance", result)
+}
+
+func (s *server) autofixComplianceIssue(c *gin.Context) {
+	result, err := s.complianceStore.AutofixIssue(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) ignoreComplianceIssue(c *gin.Context) {
+	result, err := s.complianceStore.IgnoreIssue(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) confirmFailComplianceIssue(c *gin.Context) {
+	result, err := s.complianceStore.ConfirmFailIssue(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) createComplianceReport(c *gin.Context) {
+	result, err := s.complianceStore.CreateReport(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) listComplianceRules(c *gin.Context) {
+	result, err := s.complianceStore.ListRules(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createComplianceRule(c *gin.Context) {
+	var req platformcompliance.CreateRuleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.complianceStore.CreateRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateComplianceRule(c *gin.Context) {
+	var req platformcompliance.UpdateRuleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.complianceStore.UpdateRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteComplianceRule(c *gin.Context) {
+	err := s.complianceStore.DeleteRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (s *server) getTenant(c *gin.Context) {
@@ -1392,11 +1518,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
