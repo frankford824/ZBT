@@ -13,6 +13,7 @@ import (
 
 	"github.com/frankford824/ZBT/backend/internal/platform/audit"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
+	"github.com/frankford824/ZBT/backend/internal/platform/bid"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
@@ -34,6 +35,7 @@ type server struct {
 	store          *saas.Store
 	fileService    *platformfile.Service
 	knowledgeStore *knowledge.Store
+	bidStore       *bid.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -107,6 +109,7 @@ var routeSpecs = []routeSpec{
 	{"PUT", "/chapters/:chapterId/content", "bid", false},
 	{"POST", "/chapters/:chapterId/ai-action", "bid", true},
 	{"POST", "/bids/:id/exports", "bid", true},
+	{"GET", "/bids/:id/exports", "bid", false},
 	{"GET", "/bid-exports/:exportId", "bid", false},
 	{"GET", "/bid-templates", "bid", false},
 	{"POST", "/bid-templates/:templateId/use", "bid", false},
@@ -174,11 +177,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -310,6 +313,14 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/knowledge/documents/:id/references", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeDocumentReferences)
 	group.POST("/knowledge/search", rbac.Require("knowledge", rbac.LevelRead), s.searchKnowledge)
 	group.GET("/knowledge/stats", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeStats)
+	group.GET("/bids", rbac.Require("bid", rbac.LevelRead), s.listBids)
+	group.POST("/bids", rbac.Require("bid", rbac.LevelFull), s.createBid)
+	group.GET("/bids/:id", rbac.Require("bid", rbac.LevelRead), s.getBid)
+	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
+	group.GET("/bids/:id/chapters", rbac.Require("bid", rbac.LevelRead), s.listBidChapters)
+	group.POST("/bids/:id/exports", rbac.Require("bid", rbac.LevelFull), s.createBidExport)
+	group.GET("/bids/:id/exports", rbac.Require("bid", rbac.LevelRead), s.listBidExports)
+	group.GET("/bid-exports/:exportId", rbac.Require("bid", rbac.LevelRead), s.getBidExport)
 	group.POST("/files/presign-upload", rbac.Require("knowledge", rbac.LevelFull), s.presignFileUpload)
 	group.POST("/files/:id/confirm", rbac.Require("knowledge", rbac.LevelFull), s.confirmFileUpload)
 	group.GET("/files/:id/download-url", rbac.Require("knowledge", rbac.LevelRead), s.fileDownloadURL)
@@ -348,6 +359,14 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /knowledge/documents/:id/references": true,
 		"POST /knowledge/search":                  true,
 		"GET /knowledge/stats":                    true,
+		"GET /bids":                               true,
+		"POST /bids":                              true,
+		"GET /bids/:id":                           true,
+		"GET /bids/:id/parts":                     true,
+		"GET /bids/:id/chapters":                  true,
+		"POST /bids/:id/exports":                  true,
+		"GET /bids/:id/exports":                   true,
+		"GET /bid-exports/:exportId":              true,
 		"POST /files/presign-upload":              true,
 		"POST /files/:id/confirm":                 true,
 		"GET /files/:id/download-url":             true,
@@ -631,6 +650,70 @@ func (s *server) knowledgeStats(c *gin.Context) {
 	respond(c, result, err)
 }
 
+func (s *server) listBids(c *gin.Context) {
+	result, err := s.bidStore.ListDocuments(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createBid(c *gin.Context) {
+	var req bid.CreateDocumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.bidStore.CreateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) getBid(c *gin.Context) {
+	result, err := s.bidStore.GetDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) listBidParts(c *gin.Context) {
+	result, err := s.bidStore.ListParts(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) listBidChapters(c *gin.Context) {
+	result, err := s.bidStore.ListChapters(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createBidExport(c *gin.Context) {
+	var req bid.CreateExportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.CreateExport(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) listBidExports(c *gin.Context) {
+	result, err := s.bidStore.ListExports(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) getBidExport(c *gin.Context) {
+	result, err := s.bidStore.GetExport(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("exportId"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	payload := gin.H{"export": result}
+	if result.Status == "done" && result.FileAssetID != nil {
+		download, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), *result.FileAssetID, false)
+		if err != nil {
+			respond(c, nil, err)
+			return
+		}
+		payload["download"] = download
+	}
+	respond(c, payload, nil)
+}
+
 func (s *server) presignFileUpload(c *gin.Context) {
 	var req platformfile.PresignUploadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -686,8 +769,27 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	result, err := s.knowledgeStore.ApplyCallback(c.Request.Context(), payload)
-	respond(c, result, err)
+	task, err := s.knowledgeStore.GetTaskByExternalID(c.Request.Context(), payload.TenantID, payload.TaskID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	switch task.ResourceType {
+	case "knowledge_document":
+		result, err := s.knowledgeStore.ApplyCallback(c.Request.Context(), payload)
+		respond(c, result, err)
+	case "bid_export":
+		result, err := s.bidStore.ApplyCallback(c.Request.Context(), bid.CallbackPayload{
+			TenantID:     payload.TenantID,
+			TaskID:       payload.TaskID,
+			Status:       payload.Status,
+			Result:       payload.Result,
+			ErrorMessage: payload.ErrorMessage,
+		})
+		respond(c, result, err)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported callback resource type"})
+	}
 }
 
 func (s *server) verifyCallbackSignature(timestampHeader, signatureHeader string, body []byte) bool {
@@ -732,11 +834,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

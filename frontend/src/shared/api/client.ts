@@ -167,6 +167,55 @@ export type KnowledgeSearchResponseDTO = {
   source_refs: KnowledgeSourceRefDTO[]
 }
 
+export type BidDocumentDTO = {
+  id: string
+  project_id: string | null
+  project_name: string
+  title: string
+  bid_type: 'combined' | 'separated' | 'custom'
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type BidPartDTO = {
+  id: string
+  bid_document_id: string
+  code: 'combined_body' | 'tech' | 'business' | 'boq' | 'attachment'
+  title: string
+  sort_order: number
+  status: string
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type BidExportDTO = {
+  id: string
+  bid_document_id: string
+  bid_part_id: string | null
+  export_type: 'docx' | 'pdf' | 'zip'
+  part_code: string
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  file_asset_id: string | null
+  filename: string
+  metadata: Record<string, unknown>
+  error_message: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type CreateBidExportDTO = {
+  export: BidExportDTO
+  task: AITaskDTO
+}
+
+export type BidExportDetailDTO = {
+  export: BidExportDTO
+  download?: PresignedFileUrlDTO
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -259,6 +308,48 @@ export async function searchKnowledge(payload: {
   doc_type?: string
 }): Promise<KnowledgeSearchResponseDTO> {
   const { data } = await apiClient.post<KnowledgeSearchResponseDTO>('/knowledge/search', payload)
+  return data
+}
+
+export async function fetchBids(): Promise<BidDocumentDTO[]> {
+  const { data } = await apiClient.get<{ items: BidDocumentDTO[] }>('/bids')
+  return data.items
+}
+
+export async function createBid(payload: {
+  title: string
+  project_name?: string
+  bid_type: 'combined' | 'separated' | 'custom'
+}): Promise<BidDocumentDTO> {
+  const { data } = await apiClient.post<BidDocumentDTO>('/bids', payload)
+  return data
+}
+
+export async function fetchBid(bidId: string): Promise<BidDocumentDTO> {
+  const { data } = await apiClient.get<BidDocumentDTO>(`/bids/${bidId}`)
+  return data
+}
+
+export async function fetchBidParts(bidId: string): Promise<BidPartDTO[]> {
+  const { data } = await apiClient.get<{ items: BidPartDTO[] }>(`/bids/${bidId}/parts`)
+  return data.items
+}
+
+export async function fetchBidExports(bidId: string): Promise<BidExportDTO[]> {
+  const { data } = await apiClient.get<{ items: BidExportDTO[] }>(`/bids/${bidId}/exports`)
+  return data.items
+}
+
+export async function createBidExport(
+  bidId: string,
+  payload: { export_type: 'docx'; part_code: string },
+): Promise<CreateBidExportDTO> {
+  const { data } = await apiClient.post<CreateBidExportDTO>(`/bids/${bidId}/exports`, payload)
+  return data
+}
+
+export async function fetchBidExport(exportId: string): Promise<BidExportDetailDTO> {
+  const { data } = await apiClient.get<BidExportDetailDTO>(`/bid-exports/${exportId}`)
   return data
 }
 

@@ -13,8 +13,10 @@ from fastapi import BackgroundTasks, FastAPI
 from minio import Minio
 
 from app.gateway.model_router import ModelRouter
+from app.pipelines.export.docx_exporter import export_bid_docx
 from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
+from app.schemas.export import DocxExportRequest
 from app.schemas.generation import ChapterGenerateRequest, ChapterGenerateResponse
 from app.schemas.knowledge import KnowledgeProcessRequest
 
@@ -122,6 +124,55 @@ async def chapter_generate(payload: ChapterGenerateRequest) -> ChapterGenerateRe
 
 
 @app.post("/tasks/export/docx", response_model=TaskAccepted, status_code=202)
-async def export_docx() -> TaskAccepted:
-    route = router.resolve("document_export", tenant_id="tenant-demo")
-    return TaskAccepted(task_id="task-export-docx-demo", status="queued", route=route.model_dump())
+async def export_docx(
+    payload: DocxExportRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
+    route = router.resolve("document_export", tenant_id=payload.tenant_id)
+    task_suffix = payload.export_id.replace("-", "")[:12]
+    task_id = f"task-export-{task_suffix}"
+    background_tasks.add_task(process_docx_export, task_id, payload)
+    return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
+
+
+def process_docx_export(task_id: str, payload: DocxExportRequest) -> None:
+    output_path = Path("/tmp") / payload.filename
+    try:
+        export_bid_docx(payload.bid_title, payload.part_title, payload.chapters, output_path)
+        client = minio_client()
+        client.fput_object(
+            os.getenv("MINIO_BUCKET", "zbt-files"),
+            payload.object_key,
+            str(output_path),
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "done",
+            "result": {
+                "export_id": payload.export_id,
+                "bid_id": payload.bid_id,
+                "filename": payload.filename,
+                "object_key": payload.object_key,
+                "part_code": payload.part_code,
+                "chapter_count": len(payload.chapters),
+                "size_bytes": output_path.stat().st_size,
+                "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            },
+        }
+    except Exception as exc:  # pragma: no cover - defensive task boundary
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": str(exc),
+            "result": {"error": str(exc), "export_id": payload.export_id},
+        }
+    finally:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    if payload.callback_url:
+        post_callback(payload.callback_url, callback_payload)

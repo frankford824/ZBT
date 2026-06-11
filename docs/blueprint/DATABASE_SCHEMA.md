@@ -26,6 +26,8 @@ bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation
 
 标书类型：combined、separated、custom。bid_parts 支持 combined_body、tech、business、boq、attachment。
 
+`bid_exports` 关联 `file_assets` 保存导出产物，status 为 queued / running / done / failed / cancelled。当前最小实现支持 docx 导出，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
+
 ## 知识库
 
 knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document_tags、knowledge_chunks、knowledge_references、document_templates。

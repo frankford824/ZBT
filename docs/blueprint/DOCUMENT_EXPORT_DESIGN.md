@@ -4,6 +4,8 @@
 
 Tiptap JSON -> 中间文档结构 -> docxtpl / python-docx -> docx -> MinIO 保存 -> bid_exports 记录 -> 前端下载。
 
+当前实现状态：已完成分离标书技术标 / 商务标的最小 docx 导出闭环。Go 创建 bid_exports、ai_tasks 和待确认 file_asset，Python `/tasks/export/docx` 后台生成 docx 并上传 MinIO，HMAC 回调后 Go 更新导出状态，前端第 7 步可创建导出任务并下载完成文件。
+
 增强链路：
 
 1. 排版模板。

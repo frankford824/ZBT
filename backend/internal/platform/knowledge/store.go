@@ -547,6 +547,28 @@ func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (Task, err
 	return task, err
 }
 
+func (s *Store) GetTaskByExternalID(ctx context.Context, tenantID, externalTaskID string) (Task, error) {
+	var task Task
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		found, err := scanTask(tx.QueryRow(ctx, `
+			select id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+			from ai_tasks
+			where tenant_id = $1 and external_task_id = $2
+		`, tenantID, externalTaskID))
+		if err != nil {
+			return err
+		}
+		task = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrNotFound
+	}
+	return task, err
+}
+
 func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Task, error) {
 	status := normalizeTaskStatus(payload.Status)
 	if status == "" || payload.TenantID == "" || payload.TaskID == "" {
