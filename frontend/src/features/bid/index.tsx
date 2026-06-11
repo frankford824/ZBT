@@ -49,6 +49,7 @@ import {
   fetchBids,
   fetchChapterVersions,
   regenerateChapter,
+  submitBidForApproval,
   updateChapterContent,
   useBidTemplate,
   type BidChapterDTO,
@@ -195,9 +196,19 @@ export function BidNewPage() {
 }
 
 export function BidListPage() {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
   const bids = useQuery({
     queryKey: ['bids'],
     queryFn: fetchBids,
+  })
+  const approvalMutation = useMutation({
+    mutationFn: submitBidForApproval,
+    onSuccess: async () => {
+      message.success('已提交审批')
+      await queryClient.invalidateQueries({ queryKey: ['bids'] })
+    },
+    onError: () => message.error('提交审批失败'),
   })
   if (bids.isLoading) return <LoadingBlock />
   if (bids.isError) return <ErrorBlock />
@@ -239,6 +250,15 @@ export function BidListPage() {
                 <Space>
                   <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link>
                   <Link to={`/bids/${row.id}/editor`}>编辑</Link>
+                  <Button
+                    type="link"
+                    size="small"
+                    disabled={row.status === 'in_review' || row.status === 'approved'}
+                    loading={approvalMutation.isPending && approvalMutation.variables === row.id}
+                    onClick={() => approvalMutation.mutate(row.id)}
+                  >
+                    提交审批
+                  </Button>
                 </Space>
               ),
             },

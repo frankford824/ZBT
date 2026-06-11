@@ -1149,3 +1149,65 @@ curl -N /api/v1/compliance/checks/:id/stream ...
 1. 合规检查当前同步生成数据库快照并返回 202，尚未接入 Python AI 服务异步任务。
 2. `autofix` 当前记录修复动作并回算状态，尚未接入编辑器自动定位和内容改写。
 3. `report` 当前生成数据库报告摘要，尚未导出 docx/pdf 文件资产。
+
+## Loop-11 / 审批与通知真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将团队协作中的审批链、审批实例和通知从 stub/静态内容推进到真实租户数据。
+2. 落地标书提交审批、审批通过、审批驳回和状态回写。
+3. 补齐通知已读和通知 SSE 快照接口。
+
+### 代码交付
+
+1. 新增迁移 `00016_approval_foundation.sql`，创建 `approval_chains`、`approval_instances`、`approval_actions`、`comments`，启用 FORCE RLS，并为每个租户写入默认标书审批链。
+2. 新增 `platform/approval` store，包含审批链 CRUD、标书提交审批、审批列表/详情、审批通过和审批驳回。
+3. API 路由新增真实 Approval handlers，替换 `/approval-chains`、`/approvals`、`/bids/:id/submit-for-approval` 相关 stub。
+4. 通知 store 新增 `POST /notifications/read`，API 新增 `GET /notifications/stream` SSE 快照。
+5. 前端 API client 新增 Approval DTO 和接口方法；`/team` 接入真实审批链、审批实例、审批动作、通知列表和已读动作；`/bids` 增加提交审批入口。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X GET /api/v1/approval-chains ...
+curl -X POST /api/v1/approval-chains ...
+curl -X PATCH /api/v1/approval-chains/:id ...
+curl -X DELETE /api/v1/approval-chains/:id ...
+curl -X POST /api/v1/bids/:id/submit-for-approval ...
+curl -X POST /api/v1/approvals/:id/approve ...
+curl -X POST /api/v1/approvals/:id/reject ...
+curl -X POST /api/v1/notifications/read ...
+curl -N /api/v1/notifications/stream ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker backend/frontend 构建成功，backend/frontend/ai-service 启动成功。
+5. `./infra/scripts/check.sh` 通过。
+6. 运行时 `GET /approval-chains` 初始返回 1 条默认审批链，默认链 id 为 `cf00605e-1fe8-4f56-8057-284dd333ac3e`。
+7. 运行时创建临时审批链 `e02d066e-0fe4-4117-8403-8cacbf9e8006`，PATCH 后名称为 `临时验证审批链-已更新`，DELETE 返回 204。
+8. 运行时创建标书 `e342164c-8f63-4c4d-b25c-e6a937344e88` 并提交审批，审批实例 `c4f80a1b-34fb-49a6-9191-e7669c9bc089` 初始状态为 `pending`。
+9. 第一次 approve 后实例仍为 `pending` 且 current_step 为 2；第二次 approve 后实例为 `approved`，标书状态为 `approved`，动作数为 3。
+10. 运行时创建标书 `172d0cda-24ee-4c0a-bc0b-a9857a07a495` 并提交审批，随后 reject，审批实例 `959474f4-51c4-40e4-8661-bd314cbbce00` 为 `rejected`，标书状态回到 `editing`。
+11. 运行时 `GET /approvals` 返回 2 条审批实例。
+12. 运行时通知列表返回 5 条，`POST /notifications/read` 标记 5 条已读。
+13. 运行时通知 SSE 返回 `event: notifications`。
+14. goose 迁移版本为 16。
+15. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询默认审批链、审批实例和审批动作均返回 0，tenant1 分别返回 1、2、3。
+
+### 偏离蓝图
+
+1. 审批链 steps 当前以 JSON 保存，尚未拆成独立审批级表和拖拽排序 API。
+2. 审批人校验当前依赖模块权限，尚未按当前审批级角色强约束执行人。
+3. 通知 SSE 当前返回快照事件，尚未接入 Redis pub/sub 实时增量推送。

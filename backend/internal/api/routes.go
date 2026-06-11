@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	platformapproval "github.com/frankford824/ZBT/backend/internal/platform/approval"
 	"github.com/frankford824/ZBT/backend/internal/platform/audit"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/bid"
@@ -45,6 +46,7 @@ type server struct {
 	projectStore    *platformproject.Store
 	costStore       *platformcost.Store
 	complianceStore *platformcompliance.Store
+	approvalStore   *platformapproval.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -186,11 +188,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -392,11 +394,22 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/bids/:id/exports", rbac.Require("bid", rbac.LevelFull), s.createBidExport)
 	group.GET("/bids/:id/exports", rbac.Require("bid", rbac.LevelRead), s.listBidExports)
 	group.GET("/bid-exports/:exportId", rbac.Require("bid", rbac.LevelRead), s.getBidExport)
+	group.POST("/bids/:id/submit-for-approval", rbac.Require("bid", rbac.LevelFull), s.submitBidForApproval)
 	group.POST("/files/presign-upload", rbac.Require("knowledge", rbac.LevelFull), s.presignFileUpload)
 	group.POST("/files/:id/confirm", rbac.Require("knowledge", rbac.LevelFull), s.confirmFileUpload)
 	group.GET("/files/:id/download-url", rbac.Require("knowledge", rbac.LevelRead), s.fileDownloadURL)
 	group.GET("/files/:id/preview-url", rbac.Require("knowledge", rbac.LevelRead), s.filePreviewURL)
 	group.GET("/ai-tasks/:taskId", rbac.Require("dashboard", rbac.LevelRead), s.getAITask)
+	group.GET("/approval-chains", rbac.Require("team", rbac.LevelRead), s.listApprovalChains)
+	group.POST("/approval-chains", rbac.Require("team", rbac.LevelFull), s.createApprovalChain)
+	group.PATCH("/approval-chains/:id", rbac.Require("team", rbac.LevelFull), s.updateApprovalChain)
+	group.DELETE("/approval-chains/:id", rbac.Require("team", rbac.LevelFull), s.deleteApprovalChain)
+	group.GET("/approvals", rbac.Require("team", rbac.LevelRead), s.listApprovals)
+	group.GET("/approvals/:id", rbac.Require("team", rbac.LevelRead), s.getApproval)
+	group.POST("/approvals/:id/approve", rbac.Require("team", rbac.LevelFull), s.approveApproval)
+	group.POST("/approvals/:id/reject", rbac.Require("team", rbac.LevelFull), s.rejectApproval)
+	group.POST("/notifications/read", s.markNotificationsRead)
+	group.GET("/notifications/stream", s.streamNotifications)
 }
 
 func registerStubs(group *gin.RouterGroup) {
@@ -500,11 +513,22 @@ func registerStubs(group *gin.RouterGroup) {
 		"POST /bids/:id/exports":                       true,
 		"GET /bids/:id/exports":                        true,
 		"GET /bid-exports/:exportId":                   true,
+		"POST /bids/:id/submit-for-approval":           true,
 		"POST /files/presign-upload":                   true,
 		"POST /files/:id/confirm":                      true,
 		"GET /files/:id/download-url":                  true,
 		"GET /files/:id/preview-url":                   true,
 		"GET /ai-tasks/:taskId":                        true,
+		"GET /approval-chains":                         true,
+		"POST /approval-chains":                        true,
+		"PATCH /approval-chains/:id":                   true,
+		"DELETE /approval-chains/:id":                  true,
+		"GET /approvals":                               true,
+		"GET /approvals/:id":                           true,
+		"POST /approvals/:id/approve":                  true,
+		"POST /approvals/:id/reject":                   true,
+		"POST /notifications/read":                     true,
+		"GET /notifications/stream":                    true,
 	}
 	for _, spec := range routeSpecs {
 		if custom[spec.Method+" "+spec.Path] {
@@ -1029,6 +1053,41 @@ func (s *server) listNotifications(c *gin.Context) {
 	respond(c, gin.H{"items": result}, err)
 }
 
+func (s *server) markNotificationsRead(c *gin.Context) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	userID, _ := c.Get("user_id")
+	updated, err := s.store.MarkNotificationsRead(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req.IDs)
+	respond(c, gin.H{"updated": updated}, err)
+}
+
+func (s *server) streamNotifications(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.store.ListNotifications(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		return
+	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+	_ = writeSSE(c, flusher, "notifications", gin.H{"items": result, "updated_at": time.Now()})
+}
+
 func (s *server) listKnowledgeCategories(c *gin.Context) {
 	result, err := s.knowledgeStore.ListCategories(c.Request.Context(), tenant.FromContext(c.Request.Context()))
 	respond(c, gin.H{"items": result}, err)
@@ -1380,6 +1439,82 @@ func (s *server) getBidExport(c *gin.Context) {
 	respond(c, payload, nil)
 }
 
+func (s *server) submitBidForApproval(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.approvalStore.SubmitBid(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) listApprovalChains(c *gin.Context) {
+	result, err := s.approvalStore.ListChains(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createApprovalChain(c *gin.Context) {
+	var req platformapproval.CreateChainRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.approvalStore.CreateChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateApprovalChain(c *gin.Context) {
+	var req platformapproval.UpdateChainRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.approvalStore.UpdateChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteApprovalChain(c *gin.Context) {
+	err := s.approvalStore.DeleteChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) listApprovals(c *gin.Context) {
+	result, err := s.approvalStore.ListInstances(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Query("status"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) getApproval(c *gin.Context) {
+	result, err := s.approvalStore.GetInstance(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) approveApproval(c *gin.Context) {
+	var req platformapproval.DecisionRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.approvalStore.Approve(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) rejectApproval(c *gin.Context) {
+	var req platformapproval.DecisionRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.approvalStore.Reject(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
 func (s *server) presignFileUpload(c *gin.Context) {
 	var req platformfile.PresignUploadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1518,11 +1653,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

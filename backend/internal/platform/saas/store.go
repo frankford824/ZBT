@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/jackc/pgx/v5"
@@ -50,10 +51,11 @@ type Session struct {
 }
 
 type Notification struct {
-	ID     string  `json:"id"`
-	Title  string  `json:"title"`
-	Body   string  `json:"body"`
-	ReadAt *string `json:"read_at"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	ReadAt    *string   `json:"read_at"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -353,7 +355,7 @@ func (s *Store) ListNotifications(ctx context.Context, tenantID, userID string) 
 	notifications := []Notification{}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			select id::text, title, body, read_at::text
+			select id::text, title, body, read_at::text, created_at
 			from notifications
 			where tenant_id = $1 and (user_id is null or user_id = $2)
 			order by created_at desc
@@ -365,7 +367,7 @@ func (s *Store) ListNotifications(ctx context.Context, tenantID, userID string) 
 		defer rows.Close()
 		for rows.Next() {
 			var notification Notification
-			if err := rows.Scan(&notification.ID, &notification.Title, &notification.Body, &notification.ReadAt); err != nil {
+			if err := rows.Scan(&notification.ID, &notification.Title, &notification.Body, &notification.ReadAt, &notification.CreatedAt); err != nil {
 				return err
 			}
 			notifications = append(notifications, notification)
@@ -373,6 +375,36 @@ func (s *Store) ListNotifications(ctx context.Context, tenantID, userID string) 
 		return rows.Err()
 	})
 	return notifications, err
+}
+
+func (s *Store) MarkNotificationsRead(ctx context.Context, tenantID, userID string, ids []string) (int64, error) {
+	var affected int64
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if len(ids) == 0 {
+			tag, err := tx.Exec(ctx, `
+				update notifications
+				set read_at = coalesce(read_at, now()), updated_at = now()
+				where tenant_id = $1 and (user_id is null or user_id = $2) and read_at is null
+			`, tenantID, userID)
+			if err != nil {
+				return err
+			}
+			affected = tag.RowsAffected()
+			return nil
+		} else {
+			tag, err := tx.Exec(ctx, `
+				update notifications
+				set read_at = coalesce(read_at, now()), updated_at = now()
+				where tenant_id = $1 and (user_id is null or user_id = $2) and id::text = any($3)
+			`, tenantID, userID, ids)
+			if err != nil {
+				return err
+			}
+			affected = tag.RowsAffected()
+			return nil
+		}
+	})
+	return affected, err
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {

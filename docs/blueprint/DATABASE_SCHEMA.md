@@ -63,3 +63,5 @@ cost_projects、cost_items、cost_reports。
 ## 团队协作
 
 approval_chains、approval_instances、approval_actions、comments、notifications。
+
+`approval_chains` 保存租户内审批流程配置，当前 resource_type 为 bid，steps JSON 保存级次、审批角色、指定用户、是否必选和条件说明。`approval_instances` 保存每次标书提交审批的实例、当前级次、状态、提交人和审批链快照，避免链配置变更影响在途审批。`approval_actions` 保存 submit、approve、reject、cancel 动作和审批意见。`comments` 预留资源级评论与 @ 提醒入口。审批动作会复用 `notifications` 向提交人或当前审批角色写站内通知；当前前端 `/team` 已接入真实审批链、审批实例和通知已读。

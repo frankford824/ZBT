@@ -43,6 +43,62 @@ export type NotificationDTO = {
   title: string
   body: string
   read_at: string | null
+  created_at: string
+}
+
+export type ApprovalStepDTO = {
+  order: number
+  name: string
+  role_code: string
+  user_id?: string
+  required: boolean
+  condition: string
+}
+
+export type ApprovalChainDTO = {
+  id: string
+  name: string
+  description: string
+  resource_type: 'bid'
+  steps: ApprovalStepDTO[]
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type ApprovalInstanceDTO = {
+  id: string
+  chain_id: string | null
+  bid_document_id: string | null
+  bid_title: string
+  title: string
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled'
+  current_step: number
+  submitted_by: string | null
+  submitted_by_name: string
+  snapshot: ApprovalStepDTO[]
+  action_count: number
+  started_at: string
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ApprovalActionDTO = {
+  id: string
+  instance_id: string
+  actor_user_id: string | null
+  actor_name: string
+  action: 'submit' | 'approve' | 'reject' | 'cancel'
+  step_order: number
+  comment: string
+  created_at: string
+  updated_at: string
+}
+
+export type ApprovalDetailDTO = {
+  instance: ApprovalInstanceDTO
+  actions: ApprovalActionDTO[]
 }
 
 export type FileAssetDTO = {
@@ -574,6 +630,76 @@ export async function fetchRoles(): Promise<RoleDTO[]> {
 export async function fetchNotifications(): Promise<NotificationDTO[]> {
   const { data } = await apiClient.get<{ items: NotificationDTO[] }>('/notifications')
   return data.items
+}
+
+export async function markNotificationsRead(ids?: string[]): Promise<{ updated: number }> {
+  const { data } = await apiClient.post<{ updated: number }>('/notifications/read', { ids: ids ?? [] })
+  return data
+}
+
+export async function fetchApprovalChains(): Promise<ApprovalChainDTO[]> {
+  const { data } = await apiClient.get<{ items: ApprovalChainDTO[] }>('/approval-chains')
+  return data.items
+}
+
+export async function createApprovalChain(payload: {
+  name: string
+  description?: string
+  resource_type?: 'bid'
+  steps: ApprovalStepDTO[]
+  enabled: boolean
+}): Promise<ApprovalChainDTO> {
+  const { data } = await apiClient.post<ApprovalChainDTO>('/approval-chains', {
+    resource_type: 'bid',
+    ...payload,
+  })
+  return data
+}
+
+export async function updateApprovalChain(
+  chainId: string,
+  payload: {
+    name: string
+    description?: string
+    resource_type?: 'bid'
+    steps: ApprovalStepDTO[]
+    enabled: boolean
+  },
+): Promise<ApprovalChainDTO> {
+  const { data } = await apiClient.patch<ApprovalChainDTO>(`/approval-chains/${chainId}`, {
+    resource_type: 'bid',
+    ...payload,
+  })
+  return data
+}
+
+export async function deleteApprovalChain(chainId: string): Promise<void> {
+  await apiClient.delete(`/approval-chains/${chainId}`)
+}
+
+export async function submitBidForApproval(bidId: string): Promise<ApprovalDetailDTO> {
+  const { data } = await apiClient.post<ApprovalDetailDTO>(`/bids/${bidId}/submit-for-approval`)
+  return data
+}
+
+export async function fetchApprovals(params?: { status?: string }): Promise<ApprovalInstanceDTO[]> {
+  const { data } = await apiClient.get<{ items: ApprovalInstanceDTO[] }>('/approvals', { params })
+  return data.items
+}
+
+export async function fetchApproval(approvalId: string): Promise<ApprovalDetailDTO> {
+  const { data } = await apiClient.get<ApprovalDetailDTO>(`/approvals/${approvalId}`)
+  return data
+}
+
+export async function approveApproval(approvalId: string, comment?: string): Promise<ApprovalDetailDTO> {
+  const { data } = await apiClient.post<ApprovalDetailDTO>(`/approvals/${approvalId}/approve`, { comment })
+  return data
+}
+
+export async function rejectApproval(approvalId: string, comment?: string): Promise<ApprovalDetailDTO> {
+  const { data } = await apiClient.post<ApprovalDetailDTO>(`/approvals/${approvalId}/reject`, { comment })
+  return data
 }
 
 export async function fetchTenders(params?: {

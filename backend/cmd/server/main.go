@@ -7,6 +7,7 @@ import (
 
 	"github.com/frankford824/ZBT/backend/internal/api"
 	"github.com/frankford824/ZBT/backend/internal/db/migrations"
+	"github.com/frankford824/ZBT/backend/internal/platform/approval"
 	"github.com/frankford824/ZBT/backend/internal/platform/bid"
 	"github.com/frankford824/ZBT/backend/internal/platform/compliance"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
@@ -44,7 +45,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(pool), compliance.NewStore(pool))
+	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(pool), compliance.NewStore(pool), approval.NewStore(pool))
 
 	log.Printf("zbt backend listening on %s", cfg.HTTPAddr)
 	if err := router.Run(cfg.HTTPAddr); err != nil {
