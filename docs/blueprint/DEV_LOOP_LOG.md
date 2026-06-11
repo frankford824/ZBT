@@ -64,3 +64,63 @@ PY
 ### 下一轮建议
 
 Loop-2 应优先把 SaaS 底座从骨架推进到可用：执行数据库迁移、补齐真实登录/租户/角色/成员 API、让前端从 API 获取真实当前用户与权限，再进入标讯解析和项目创建链路。
+
+## Loop-2 - 2026-06-11
+
+### 本轮目标
+
+1. 将 SaaS 底座从 stub 推进到真实数据库 API。
+2. 落地 JWT 登录、当前用户、当前租户、成员、角色、通知接口。
+3. 将 RBAC 中间件改为读取数据库模块权限。
+4. 使用非超级应用账号验证 RLS，避免 owner/superuser 绕过。
+5. 前端登录页和团队页接入真实 API。
+
+### 代码交付
+
+1. 后端启动时通过嵌入 goose migration 自动执行迁移。
+2. 新增 `zbt_app` 非超级应用账号；迁移使用 owner 连接，业务查询使用 app 连接。
+3. 新增 `tenant_member_roles`、模块权限唯一约束、RLS helper、FORCE RLS、6 个预置角色和 demo 成员种子。
+4. 新增最小 HS256 JWT 签发/解析和单元测试。
+5. `/api/v1/auth/login`、`/me`、`/tenant`、`/tenant/members`、`/roles`、`/notifications` 改为真实 DB 响应。
+6. 非 GET stub 统一要求 full 权限，GET 要求 read 权限。
+7. 前端登录页调用真实登录接口，Zustand/localStorage 保存 token、租户、用户和权限。
+8. 前端请求拦截器自动携带 Bearer token 和 X-Tenant-ID。
+9. 团队页成员、角色、通知读取真实 API；邀请成员调用后端创建成员。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+./infra/scripts/check.sh
+docker compose build backend frontend
+docker compose up -d backend frontend
+curl -sS -X POST http://127.0.0.1:5173/api/v1/auth/login ...
+curl -sS http://127.0.0.1:5173/api/v1/me -H "Authorization: Bearer <admin>"
+curl -sS http://127.0.0.1:5173/api/v1/roles -H "Authorization: Bearer <admin>"
+curl -sS http://127.0.0.1:5173/api/v1/tenant/members -H "Authorization: Bearer <admin>"
+curl -sS http://127.0.0.1:5173/api/v1/cost-projects -H "Authorization: Bearer <viewer>"
+docker compose exec -T postgres psql 'postgres://zbt_app:zbt_app@localhost:5432/zbt?sslmode=disable' ...
+```
+
+结果：
+
+1. `./infra/scripts/check.sh` 通过。
+2. backend 自动执行到 goose version 2。
+3. `zbt_app` 存在且 `rolsuper=false`。
+4. admin 登录返回 JWT，`/me` 返回真实 user、tenant、role、permissions。
+5. admin 读取角色数 6、成员数 4。
+6. viewer 访问 `/api/v1/cost-projects` 返回 403。
+7. 使用 `zbt_app` 验证 RLS：tenant1 角色数 6，tenant2 角色数 1，未设置租户时角色数 0。
+
+### 偏离蓝图
+
+1. JWT refresh token 尚未实现，本轮只实现 8 小时 access token。
+2. MinIO 预签名上传下载仍是下一步重点；当前只完成 DB 表和权限边界。
+3. 文件越权下载测试尚未覆盖，因为真实 presign API 尚未落地。
+
+### 下一轮建议
+
+继续 Loop-2 收尾：实现 MinIO bucket 初始化、文件资产创建、预签名上传、confirm、下载/预览 URL，并补文件归属和权限测试。随后进入 Loop-3/4 的真实页面数据和标书主链路。

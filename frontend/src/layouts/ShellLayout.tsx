@@ -97,7 +97,7 @@ export function ShellLayout() {
               <div>
                 <Typography.Text strong>{tenant.name}</Typography.Text>
                 <Typography.Text type="secondary" className="tenant-id">
-                  tenant-demo
+                  {tenant.id}
                 </Typography.Text>
               </div>
             </Space>

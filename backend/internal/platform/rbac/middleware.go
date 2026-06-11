@@ -25,9 +25,12 @@ var demoPermissions = map[string]Level{
 	"team":       LevelFull,
 }
 
+const ContextPermissionsKey = "module_permissions"
+
 func Require(module string, level Level) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if allows(demoPermissions[module], level) {
+		permissions := PermissionsFromContext(c)
+		if allows(permissions[module], level) {
 			c.Next()
 			return
 		}
@@ -51,4 +54,13 @@ func DemoPermissions() map[string]Level {
 		copied[key] = value
 	}
 	return copied
+}
+
+func PermissionsFromContext(c *gin.Context) map[string]Level {
+	if value, exists := c.Get(ContextPermissionsKey); exists {
+		if permissions, ok := value.(map[string]Level); ok {
+			return permissions
+		}
+	}
+	return map[string]Level{}
 }

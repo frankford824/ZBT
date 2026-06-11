@@ -12,12 +12,17 @@ type contextKey string
 const (
 	ContextKey      contextKey = "tenant_id"
 	Header                     = "X-Tenant-ID"
-	DefaultTenantID            = "tenant-demo"
+	DefaultTenantID            = "00000000-0000-4000-8000-000000000001"
 )
 
 func Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := c.GetHeader(Header)
+		if value, exists := c.Get("tenant_id"); exists {
+			if current, ok := value.(string); ok && current != "" {
+				tenantID = current
+			}
+		}
 		if tenantID == "" {
 			tenantID = DefaultTenantID
 		}

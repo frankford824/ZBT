@@ -1,7 +1,26 @@
 import { Button, Card, Col, Form, Input, Row, Select, Table, Tabs, Tag, Timeline } from 'antd'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PageFrame } from '../../shared/components/PageFrame'
+import { fetchMembers, fetchNotifications, fetchRoles, inviteMember } from '../../shared/api/client'
+import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 
 export function TeamPage() {
+  const queryClient = useQueryClient()
+  const membersQuery = useQuery({ queryKey: ['team', 'members'], queryFn: fetchMembers })
+  const rolesQuery = useQuery({ queryKey: ['team', 'roles'], queryFn: fetchRoles })
+  const notificationsQuery = useQuery({
+    queryKey: ['team', 'notifications'],
+    queryFn: fetchNotifications,
+  })
+  const inviteMutation = useMutation({
+    mutationFn: inviteMember,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['team', 'members'] })
+    },
+  })
+  const roleOptions =
+    rolesQuery.data?.map((role) => ({ value: role.code, label: role.name })) ?? []
+
   return (
     <PageFrame
       module="企业管理"
@@ -15,21 +34,31 @@ export function TeamPage() {
           {
             key: 'members',
             label: '成员',
-            children: (
+            children: membersQuery.isLoading ? (
+              <LoadingBlock />
+            ) : membersQuery.isError ? (
+              <ErrorBlock />
+            ) : membersQuery.data?.length ? (
               <Table
-                rowKey="name"
-                rowSelection={{}}
-                dataSource={[
-                  { name: '陈思远', role: '企业管理员', modules: '全部' },
-                  { name: '林悦', role: '项目经理', modules: '投标准备、投标管控' },
-                  { name: '赵宁', role: '投标专员', modules: '标书、合规、知识库只读' },
-                ]}
+                rowKey="id"
+                dataSource={membersQuery.data}
                 columns={[
-                  { title: '姓名', dataIndex: 'name' },
-                  { title: '角色', dataIndex: 'role' },
-                  { title: '模块权限', dataIndex: 'modules' },
+                  { title: '姓名', dataIndex: ['user', 'name'] },
+                  { title: '邮箱', dataIndex: ['user', 'email'] },
+                  {
+                    title: '角色',
+                    render: (_, record) =>
+                      record.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>),
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    render: (status) => <Tag color={status === 'active' ? 'green' : 'orange'}>{status}</Tag>,
+                  },
                 ]}
               />
+            ) : (
+              <EmptyBlock />
             ),
           },
           {
@@ -38,14 +67,23 @@ export function TeamPage() {
             children: (
               <Row gutter={16}>
                 <Col xs={24} xl={10}>
-                  <Card title="审批链配置">
-                    <Form layout="vertical">
-                      <Form.Item label="第一级">
-                        <Select defaultValue="部门主管" options={['部门主管', '技术负责人', '总经理'].map((value) => ({ value }))} />
+                  <Card title="邀请成员">
+                    <Form
+                      layout="vertical"
+                      onFinish={(values) => inviteMutation.mutate(values)}
+                    >
+                      <Form.Item label="姓名" name="name" rules={[{ required: true }]}>
+                        <Input placeholder="新成员姓名" />
                       </Form.Item>
-                      <Form.Item label="金额阈值">
-                        <Input defaultValue="1000000" />
+                      <Form.Item label="邮箱" name="email" rules={[{ required: true }]}>
+                        <Input placeholder="member@example.com" />
                       </Form.Item>
+                      <Form.Item label="角色" name="role_code" initialValue="viewer">
+                        <Select options={roleOptions} loading={rolesQuery.isLoading} />
+                      </Form.Item>
+                      <Button htmlType="submit" type="primary" loading={inviteMutation.isPending}>
+                        发送邀请
+                      </Button>
                     </Form>
                   </Card>
                 </Col>
@@ -79,11 +117,17 @@ export function TeamPage() {
           {
             key: 'notifications',
             label: '通知',
-            children: (
+            children: notificationsQuery.isLoading ? (
+              <LoadingBlock />
+            ) : notificationsQuery.isError ? (
+              <ErrorBlock />
+            ) : (
               <Card>
-                <Tag color="orange">资质即将到期</Tag>
-                <Tag color="blue">审批待处理</Tag>
-                <Tag color="green">合规检查完成</Tag>
+                {notificationsQuery.data?.map((item) => (
+                  <Tag key={item.id} color={item.read_at ? 'default' : 'blue'}>
+                    {item.title}
+                  </Tag>
+                ))}
               </Card>
             ),
           },

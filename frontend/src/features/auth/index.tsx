@@ -1,29 +1,49 @@
 import { LoginOutlined } from '@ant-design/icons'
-import { Button, Form, Input, Space, Typography } from 'antd'
+import { Alert, Button, Form, Input, Space, Typography } from 'antd'
+import { useMutation } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
+import { login } from '../../shared/api/client'
 
 export function LoginPage() {
   const navigate = useNavigate()
-  const loginAsDemo = useSessionStore((state) => state.loginAsDemo)
+  const setSession = useSessionStore((state) => state.setSession)
+  const mutation = useMutation({
+    mutationFn: login,
+    onSuccess: (payload) => {
+      setSession(payload)
+      navigate('/dashboard')
+    },
+  })
 
   return (
     <Space direction="vertical" size={20} className="auth-stack">
       <Typography.Paragraph>企业投标团队工作入口</Typography.Paragraph>
+      {mutation.isError ? <Alert type="error" showIcon message="账号或密码错误" /> : null}
       <Form
         layout="vertical"
-        onFinish={() => {
-          loginAsDemo()
-          navigate('/dashboard')
-        }}
+        onFinish={(values) => mutation.mutate(values)}
       >
-        <Form.Item label="账号" name="account" initialValue="admin@zbt.local">
+        <Form.Item label="账号" name="email" initialValue="admin@zbt.local">
           <Input />
         </Form.Item>
         <Form.Item label="密码" name="password" initialValue="demo-password">
           <Input.Password />
         </Form.Item>
-        <Button type="primary" htmlType="submit" block icon={<LoginOutlined />}>
+        <Form.Item
+          label="租户 ID"
+          name="tenant_id"
+          initialValue="00000000-0000-4000-8000-000000000001"
+        >
+          <Input />
+        </Form.Item>
+        <Button
+          type="primary"
+          htmlType="submit"
+          block
+          icon={<LoginOutlined />}
+          loading={mutation.isPending}
+        >
           登录
         </Button>
       </Form>

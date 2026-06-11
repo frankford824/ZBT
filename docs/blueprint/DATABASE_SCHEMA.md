@@ -4,7 +4,9 @@
 
 ## SaaS 底座
 
-tenants、users、tenant_members、roles、permissions、role_permissions、module_permissions、audit_logs、notifications、file_assets、ai_call_logs。
+tenants、users、tenant_members、tenant_member_roles、roles、permissions、role_permissions、module_permissions、audit_logs、notifications、file_assets、ai_call_logs。
+
+迁移连接使用 owner/superuser，业务连接使用非超级 `zbt_app`，否则 PostgreSQL superuser 会绕过 RLS。
 
 ## 标讯
 

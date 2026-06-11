@@ -1,0 +1,432 @@
+package saas
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var ErrNotFound = errors.New("not found")
+
+type Store struct {
+	pool *pgxpool.Pool
+}
+
+type Tenant struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type User struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+type Role struct {
+	ID          string                `json:"id"`
+	Code        string                `json:"code"`
+	Name        string                `json:"name"`
+	Permissions map[string]rbac.Level `json:"permissions"`
+}
+
+type Member struct {
+	ID     string `json:"id"`
+	User   User   `json:"user"`
+	Status string `json:"status"`
+	Roles  []Role `json:"roles"`
+}
+
+type Session struct {
+	User        User                  `json:"user"`
+	Tenant      Tenant                `json:"tenant"`
+	Role        Role                  `json:"role"`
+	Permissions map[string]rbac.Level `json:"permissions"`
+}
+
+type Notification struct {
+	ID     string  `json:"id"`
+	Title  string  `json:"title"`
+	Body   string  `json:"body"`
+	ReadAt *string `json:"read_at"`
+}
+
+func NewStore(pool *pgxpool.Pool) *Store {
+	return &Store{pool: pool}
+}
+
+func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Session, error) {
+	var session Session
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+			select
+				u.id::text, u.email, u.name,
+				t.id::text, t.name,
+				r.id::text, r.code, r.name
+			from users u
+			join tenant_members tm on tm.user_id = u.id
+			join tenants t on t.id = tm.tenant_id
+			join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
+			join roles r on r.id = tmr.role_id and r.tenant_id = tm.tenant_id
+			where tm.tenant_id = $1
+				and tm.status = 'active'
+				and lower(u.email) = lower($2)
+				and u.password_hash = crypt($3, u.password_hash)
+			order by r.code
+			limit 1
+		`, tenantID, email, password).Scan(
+			&session.User.ID, &session.User.Email, &session.User.Name,
+			&session.Tenant.ID, &session.Tenant.Name,
+			&session.Role.ID, &session.Role.Code, &session.Role.Name,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		permissions, err := loadRolePermissions(ctx, tx, session.Role.ID)
+		if err != nil {
+			return err
+		}
+		session.Permissions = permissions
+		session.Role.Permissions = permissions
+		return nil
+	})
+	return session, err
+}
+
+func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID string) (Session, error) {
+	var session Session
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+			select
+				u.id::text, u.email, u.name,
+				t.id::text, t.name,
+				r.id::text, r.code, r.name
+			from users u
+			join tenant_members tm on tm.user_id = u.id
+			join tenants t on t.id = tm.tenant_id
+			join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
+			join roles r on r.id = tmr.role_id and r.tenant_id = tm.tenant_id
+			where tm.tenant_id = $1
+				and u.id = $2
+				and r.id = $3
+				and tm.status = 'active'
+			limit 1
+		`, tenantID, userID, roleID).Scan(
+			&session.User.ID, &session.User.Email, &session.User.Name,
+			&session.Tenant.ID, &session.Tenant.Name,
+			&session.Role.ID, &session.Role.Code, &session.Role.Name,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		permissions, err := loadRolePermissions(ctx, tx, session.Role.ID)
+		if err != nil {
+			return err
+		}
+		session.Permissions = permissions
+		session.Role.Permissions = permissions
+		return nil
+	})
+	return session, err
+}
+
+func (s *Store) GetTenant(ctx context.Context, tenantID string) (Tenant, error) {
+	var tenant Tenant
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `select id::text, name from tenants where id = $1`, tenantID).Scan(&tenant.ID, &tenant.Name)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Tenant{}, ErrNotFound
+	}
+	return tenant, err
+}
+
+func (s *Store) UpdateTenant(ctx context.Context, tenantID, name string) (Tenant, error) {
+	var tenant Tenant
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			update tenants
+			set name = $2, updated_at = now()
+			where id = $1
+			returning id::text, name
+		`, tenantID, name).Scan(&tenant.ID, &tenant.Name)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Tenant{}, ErrNotFound
+	}
+	return tenant, err
+}
+
+func (s *Store) ListMembers(ctx context.Context, tenantID string) ([]Member, error) {
+	var members []Member
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			select
+				tm.id::text, u.id::text, u.email, u.name, tm.status,
+				r.id::text, r.code, r.name
+			from tenant_members tm
+			join users u on u.id = tm.user_id
+			left join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
+			left join roles r on r.id = tmr.role_id and r.tenant_id = tm.tenant_id
+			where tm.tenant_id = $1
+			order by u.name, r.code
+		`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+
+		byID := map[string]*Member{}
+		for rows.Next() {
+			var memberID, userID, email, name, status string
+			var roleID, roleCode, roleName *string
+			if err := rows.Scan(&memberID, &userID, &email, &name, &status, &roleID, &roleCode, &roleName); err != nil {
+				return err
+			}
+			member, ok := byID[memberID]
+			if !ok {
+				members = append(members, Member{
+					ID:     memberID,
+					User:   User{ID: userID, Email: email, Name: name},
+					Status: status,
+					Roles:  []Role{},
+				})
+				member = &members[len(members)-1]
+				byID[memberID] = member
+			}
+			if roleID != nil {
+				member.Roles = append(member.Roles, Role{ID: *roleID, Code: *roleCode, Name: *roleName})
+			}
+		}
+		return rows.Err()
+	})
+	return members, err
+}
+
+func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCode string) (Member, error) {
+	if roleCode == "" {
+		roleCode = "viewer"
+	}
+	var member Member
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var role Role
+		if err := tx.QueryRow(ctx, `select id::text, code, name from roles where tenant_id = $1 and code = $2`, tenantID, roleCode).Scan(&role.ID, &role.Code, &role.Name); err != nil {
+			return err
+		}
+		var user User
+		if err := tx.QueryRow(ctx, `
+			insert into users (email, name, password_hash)
+			values ($1, $2, crypt('demo-password', gen_salt('bf')))
+			on conflict (email) do update set name = excluded.name, updated_at = now()
+			returning id::text, email, name
+		`, email, name).Scan(&user.ID, &user.Email, &user.Name); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `
+			insert into tenant_members (tenant_id, user_id, status)
+			values ($1, $2, 'active')
+			on conflict (tenant_id, user_id) do update set status = 'active', updated_at = now()
+			returning id::text, status
+		`, tenantID, user.ID).Scan(&member.ID, &member.Status); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into tenant_member_roles (tenant_id, tenant_member_id, role_id)
+			values ($1, $2, $3)
+			on conflict do nothing
+		`, tenantID, member.ID, role.ID); err != nil {
+			return err
+		}
+		member.User = user
+		member.Roles = []Role{role}
+		return nil
+	})
+	return member, err
+}
+
+func (s *Store) ListRoles(ctx context.Context, tenantID string) ([]Role, error) {
+	roles := []Role{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			select
+				r.id::text, r.code, r.name,
+				coalesce(jsonb_object_agg(mp.module, mp.level) filter (where mp.module is not null), '{}'::jsonb)
+			from roles r
+			left join module_permissions mp on mp.role_id = r.id and mp.tenant_id = r.tenant_id
+			where r.tenant_id = $1
+			group by r.id, r.code, r.name
+			order by r.code
+		`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			role := Role{Permissions: map[string]rbac.Level{}}
+			var raw []byte
+			if err := rows.Scan(&role.ID, &role.Code, &role.Name, &raw); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(raw, &role.Permissions); err != nil {
+				return err
+			}
+			roles = append(roles, role)
+		}
+		return rows.Err()
+	})
+	return roles, err
+}
+
+func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, permissions map[string]rbac.Level) (Role, error) {
+	var role Role
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			insert into roles (tenant_id, code, name)
+			values ($1, $2, $3)
+			returning id::text, code, name
+		`, tenantID, code, name).Scan(&role.ID, &role.Code, &role.Name); err != nil {
+			return err
+		}
+		if err := replaceModulePermissions(ctx, tx, tenantID, role.ID, permissions); err != nil {
+			return err
+		}
+		role.Permissions = permissions
+		return nil
+	})
+	return role, err
+}
+
+func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, permissions map[string]rbac.Level) (Role, error) {
+	var role Role
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			update roles
+			set name = coalesce(nullif($3, ''), name), updated_at = now()
+			where tenant_id = $1 and id = $2
+			returning id::text, code, name
+		`, tenantID, roleID, name).Scan(&role.ID, &role.Code, &role.Name); err != nil {
+			return err
+		}
+		if permissions != nil {
+			if err := replaceModulePermissions(ctx, tx, tenantID, role.ID, permissions); err != nil {
+				return err
+			}
+		}
+		loaded, err := loadRolePermissions(ctx, tx, role.ID)
+		if err != nil {
+			return err
+		}
+		role.Permissions = loaded
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Role{}, ErrNotFound
+	}
+	return role, err
+}
+
+func (s *Store) DeleteRole(ctx context.Context, tenantID, roleID string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `delete from roles where tenant_id = $1 and id = $2`, tenantID, roleID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
+func (s *Store) ListNotifications(ctx context.Context, tenantID, userID string) ([]Notification, error) {
+	notifications := []Notification{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			select id::text, title, body, read_at::text
+			from notifications
+			where tenant_id = $1 and (user_id is null or user_id = $2)
+			order by created_at desc
+			limit 50
+		`, tenantID, userID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var notification Notification
+			if err := rows.Scan(&notification.ID, &notification.Title, &notification.Body, &notification.ReadAt); err != nil {
+				return err
+			}
+			notifications = append(notifications, notification)
+		}
+		return rows.Err()
+	})
+	return notifications, err
+}
+
+func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `select set_config('app.tenant_id', $1, true)`, tenantID); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func loadRolePermissions(ctx context.Context, tx pgx.Tx, roleID string) (map[string]rbac.Level, error) {
+	rows, err := tx.Query(ctx, `select module, level from module_permissions where role_id = $1`, roleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	permissions := map[string]rbac.Level{}
+	for rows.Next() {
+		var module string
+		var level rbac.Level
+		if err := rows.Scan(&module, &level); err != nil {
+			return nil, err
+		}
+		permissions[module] = level
+	}
+	return permissions, rows.Err()
+}
+
+func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID string, permissions map[string]rbac.Level) error {
+	if _, err := tx.Exec(ctx, `delete from module_permissions where tenant_id = $1 and role_id = $2`, tenantID, roleID); err != nil {
+		return err
+	}
+	for module, level := range permissions {
+		if !validLevel(level) {
+			return fmt.Errorf("invalid permission level %q for module %s", level, module)
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into module_permissions (tenant_id, role_id, module, level)
+			values ($1, $2, $3, $4)
+		`, tenantID, roleID, module, level); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validLevel(level rbac.Level) bool {
+	return level == rbac.LevelNone || level == rbac.LevelRead || level == rbac.LevelFull
+}

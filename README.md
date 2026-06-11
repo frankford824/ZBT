@@ -39,6 +39,15 @@ curl http://localhost:8000/models/health
 
 说明：AI 镜像内置 LibreOffice Writer 和 WenQuanYi 中文字体，用于后续 Word/PDF/ZIP 导出链路验证。
 
+默认登录账号均使用密码 `demo-password`：
+
+- `admin@zbt.local`：企业管理员，全部模块 full。
+- `pm@zbt.local`：项目经理，成本和团队无权限。
+- `bidder@zbt.local`：投标专员，标书/合规 full。
+- `viewer@zbt.local`：查看者，成本和团队无权限。
+
+后端启动会自动执行嵌入式 goose 迁移。迁移连接使用 `MIGRATION_DATABASE_URL`，业务连接使用非超级账号 `DATABASE_URL=postgres://zbt_app:zbt_app@postgres:5432/zbt?sslmode=disable`，用于确保 RLS 在应用查询中真实生效。
+
 ## 开发约束
 
 1. 不删除 8 大模块，不少于 V2.4 的 14 个页面。

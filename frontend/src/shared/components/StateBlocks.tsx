@@ -51,3 +51,32 @@ export function StateBlocks({ permission = true }: StateBlocksProps) {
     </Row>
   )
 }
+
+export function LoadingBlock() {
+  return (
+    <div className="state-tile">
+      <Spin indicator={<LoadingOutlined spin />} />
+      <Typography.Text>加载中</Typography.Text>
+    </div>
+  )
+}
+
+export function EmptyBlock() {
+  return (
+    <div className="state-tile">
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
+    </div>
+  )
+}
+
+export function ErrorBlock() {
+  return (
+    <Alert
+      type="error"
+      showIcon
+      icon={<ExclamationCircleOutlined />}
+      message="请求失败"
+      description="请稍后重试或联系管理员"
+    />
+  )
+}

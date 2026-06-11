@@ -12,6 +12,6 @@ func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 }
 
 func WithTenant(ctx context.Context, tx pgx.Tx, tenantID string) error {
-	_, err := tx.Exec(ctx, "set local app.tenant_id = $1", tenantID)
+	_, err := tx.Exec(ctx, "select set_config('app.tenant_id', $1, true)", tenantID)
 	return err
 }
