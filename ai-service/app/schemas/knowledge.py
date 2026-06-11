@@ -41,3 +41,31 @@ class KnowledgeEmbeddingResponse(BaseModel):
     dimensions: int
     embeddings: list[list[float]]
     route: dict[str, object]
+
+
+class KnowledgeRerankDocument(BaseModel):
+    id: str
+    title: str
+    content: str
+    section_path: str = ""
+    score: float = 0.0
+
+
+class KnowledgeRerankRequest(BaseModel):
+    tenant_id: str
+    query: str
+    documents: list[KnowledgeRerankDocument] = Field(min_length=1, max_length=60)
+    top_k: int = Field(default=8, ge=1, le=20)
+
+
+class KnowledgeRerankResult(BaseModel):
+    id: str
+    index: int
+    score: float
+
+
+class KnowledgeRerankResponse(BaseModel):
+    provider: str
+    model: str
+    results: list[KnowledgeRerankResult]
+    route: dict[str, object]

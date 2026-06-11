@@ -47,7 +47,19 @@ class MockProvider:
         return 1024
 
     def rerank(self, query: str, documents: list[str]) -> list[int]:
-        return list(range(len(documents)))
+        query_tokens = set(_embedding_tokens(query))
+        if not query_tokens:
+            return list(range(len(documents)))
+        normalized_query = query.lower().strip()
+        scored: list[tuple[float, int]] = []
+        for index, document in enumerate(documents):
+            document_tokens = set(_embedding_tokens(document))
+            overlap = len(query_tokens & document_tokens)
+            coverage = overlap / max(len(query_tokens), 1)
+            density = overlap / max(len(document_tokens), 1)
+            phrase_bonus = 1.0 if normalized_query and normalized_query in document.lower() else 0.0
+            scored.append((phrase_bonus + coverage + density, index))
+        return [index for _, index in sorted(scored, key=lambda item: (-item[0], item[1]))]
 
     def parse_pdf(self, object_key: str) -> dict[str, object]:
         return {"object_key": object_key, "pages": [], "ocr_required": False}

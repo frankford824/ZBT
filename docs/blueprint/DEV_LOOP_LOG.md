@@ -1807,3 +1807,53 @@ curl -X GET /api/v1/files/:fileId/preview-url
 ### 偏离蓝图
 
 1. 本轮回流案例的 chunk 先写入文本检索字段，embedding 为空；关键词/全文检索可立即召回。后续如需语义向量召回，可复用现有知识库处理或新增 generated case embedding 任务。
+
+## Loop-23 / RAG RRF 融合与 RerankProvider - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md RAG 设计中“pgvector Top K + 全文 Top K -> RRF 融合 -> RerankProvider 精排”的排序链路。
+2. 知识库搜索不再只做简单加权排序，RerankProvider 必须经过 Python AI 服务 ModelRouter。
+3. rerank 调用需写入 `ai_call_logs`，并保持租户隔离。
+
+### 代码交付
+
+1. Go Knowledge Store 的 `POST /knowledge/search` 改为先取向量候选和关键词候选，再用 RRF 合并候选；query 为空时保留 recent fallback。
+2. Go 后端新增 `/rerank/knowledge` 调用、rerank 请求/响应结构、candidate fanout、候选截断和 rerank 结果应用逻辑；AI 服务不可用时回退 RRF 结果。
+3. Python AI 服务新增 `KnowledgeRerankRequest/Response` schema 和 `/rerank/knowledge` endpoint，通过 `knowledge_rerank` 路由获取 RerankProvider。
+4. ModelRouter 新增 `get_rerank`，MockProvider 的 rerank 从原始顺序占位改为基于 query/document token overlap 的确定性排序。
+5. Go 单元测试覆盖 candidate fanout、rerank 应用和 Unicode 截断；Python 测试文件补充 Mock rerank 排序覆盖。
+6. RAG 设计和模型网关文档同步更新当前状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/platform/knowledge/store_test.go && GOTOOLCHAIN=local go test ./...
+cd ai-service && python3 -m compileall app
+cd ai-service && python3 -m pytest app/tests
+docker compose build backend ai-service
+docker compose up -d backend ai-service
+curl -X POST http://127.0.0.1:8000/rerank/knowledge
+./infra/scripts/check.sh
+curl -X POST /api/v1/knowledge/search
+curl -X GET /api/v1/ai-call-logs
+```
+
+结果：
+
+1. backend Go 测试通过，`knowledge` 包新增测试通过。
+2. ai-service `python3 -m compileall app` 通过。
+3. 本机 Python 缺少 pytest 依赖，`python3 -m pytest app/tests` 返回 `No module named pytest`；容器镜像依赖安装成功，后续由 Docker 与 check 脚本覆盖。
+4. Docker backend/ai-service 构建成功，并启动成功。
+5. 直接调用 `POST http://127.0.0.1:8000/rerank/knowledge` 返回 provider=`mock`、model=`configurable-rerank-model`，相关文档排第一。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时 tenant1/admin 调用 `/knowledge/search`，query=`智慧交通 项目实施`，返回 3 条结果，首条 score=`1`，证明已应用 rerank 分数。
+8. `GET /ai-call-logs` 可查到 `knowledge_rerank` 日志，provider=`mock`、model=`configurable-rerank-model`、status=`done`。
+9. tenant2/other 通过 API 查询 `ai-call-logs` 时看不到 tenant1 的 rerank 日志。
+10. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询 `knowledge_rerank` 日志数量为 1；设置 tenant2 RLS 上下文查询数量为 0。
+
+### 偏离蓝图
+
+1. RerankProvider 当前仍为 MockProvider；调用入口、ModelRouter 路由、Go 端 rerank 调用、ai_call_logs 和租户隔离已落地，后续可替换 Cohere/Jina/Local BGE reranker。

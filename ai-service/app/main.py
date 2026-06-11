@@ -24,6 +24,9 @@ from app.schemas.knowledge import (
     KnowledgeEmbeddingRequest,
     KnowledgeEmbeddingResponse,
     KnowledgeProcessRequest,
+    KnowledgeRerankRequest,
+    KnowledgeRerankResponse,
+    KnowledgeRerankResult,
 )
 
 CONFIG_PATH = Path(__file__).parent / "config" / "model_routing.yaml"
@@ -79,6 +82,50 @@ async def knowledge_embeddings(payload: KnowledgeEmbeddingRequest) -> KnowledgeE
         model=route.model,
         dimensions=provider.get_dimensions(),
         embeddings=embeddings,
+        route=route.model_dump(),
+    )
+
+
+@app.post("/rerank/knowledge", response_model=KnowledgeRerankResponse)
+async def knowledge_rerank(payload: KnowledgeRerankRequest) -> KnowledgeRerankResponse:
+    route = router.resolve("knowledge_rerank", tenant_id=payload.tenant_id)
+    provider = router.get_rerank("knowledge_rerank", tenant_id=payload.tenant_id)
+    document_texts = [
+        f"{document.title}\n{document.section_path}\n{document.content}" for document in payload.documents
+    ]
+    ordered_indexes = provider.rerank(payload.query, document_texts)
+    seen: set[int] = set()
+    results: list[KnowledgeRerankResult] = []
+    for index in ordered_indexes:
+        if index < 0 or index >= len(payload.documents) or index in seen:
+            continue
+        seen.add(index)
+        document = payload.documents[index]
+        results.append(
+            KnowledgeRerankResult(
+                id=document.id,
+                index=index,
+                score=1.0 / (len(results) + 1),
+            )
+        )
+        if len(results) >= payload.top_k:
+            break
+    for index, document in enumerate(payload.documents):
+        if len(results) >= payload.top_k:
+            break
+        if index in seen:
+            continue
+        results.append(
+            KnowledgeRerankResult(
+                id=document.id,
+                index=index,
+                score=1.0 / (len(results) + 1),
+            )
+        )
+    return KnowledgeRerankResponse(
+        provider=provider.name,
+        model=route.model,
+        results=results,
         route=route.model_dump(),
     )
 

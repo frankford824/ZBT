@@ -31,3 +31,44 @@ func TestVectorLiteralFromEmbeddingRejectsInvalidValues(t *testing.T) {
 		t.Fatal("expected non-finite value error")
 	}
 }
+
+func TestSearchCandidateLimit(t *testing.T) {
+	if got := searchCandidateLimit(1); got != 30 {
+		t.Fatalf("small limits should still retrieve 30 candidates, got %d", got)
+	}
+	if got := searchCandidateLimit(8); got != 32 {
+		t.Fatalf("expected 4x candidate fanout, got %d", got)
+	}
+	if got := searchCandidateLimit(20); got != 60 {
+		t.Fatalf("candidate fanout should cap at 60, got %d", got)
+	}
+}
+
+func TestApplyKnowledgeRerankUsesProviderOrderAndFillsRemainder(t *testing.T) {
+	candidates := []SearchResult{
+		{ChunkID: "chunk-a", Title: "A", Score: 0.01},
+		{ChunkID: "chunk-b", Title: "B", Score: 0.02},
+		{ChunkID: "chunk-c", Title: "C", Score: 0.03},
+	}
+
+	reranked := applyKnowledgeRerank(candidates, []rerankResult{
+		{ID: "chunk-c", Score: 1},
+		{ID: "missing", Score: 0.9},
+	}, 3)
+
+	if len(reranked) != 3 {
+		t.Fatalf("expected rerank to fill remainder, got %d", len(reranked))
+	}
+	if reranked[0].ChunkID != "chunk-c" || reranked[0].Score != 1 {
+		t.Fatalf("expected provider winner first with rerank score, got %+v", reranked[0])
+	}
+	if reranked[1].ChunkID != "chunk-a" || reranked[2].ChunkID != "chunk-b" {
+		t.Fatalf("expected original order for remainder, got %s then %s", reranked[1].ChunkID, reranked[2].ChunkID)
+	}
+}
+
+func TestTruncateForRerankPreservesRuneBoundaries(t *testing.T) {
+	if got := truncateForRerank("智慧交通ABC", 4); got != "智慧交通" {
+		t.Fatalf("unexpected truncation: %q", got)
+	}
+}

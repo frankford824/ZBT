@@ -69,3 +69,19 @@ def test_mock_embedding_is_deterministic_and_semantic_enough_for_pgvector_smoke(
     assert len(query) == 1024
     assert query == provider.embed_text("智慧交通 项目理解")
     assert _dot(query, related) > _dot(query, unrelated)
+
+
+def test_mock_rerank_prefers_query_overlap() -> None:
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    provider = router.get_rerank("knowledge_rerank", tenant_id="tenant-demo")
+
+    order = provider.rerank(
+        "智慧交通 项目实施",
+        [
+            "财务审计报表与资产折旧说明",
+            "智慧交通平台项目实施方案与里程碑计划",
+            "公司人员资质证书清单",
+        ],
+    )
+
+    assert order[0] == 1

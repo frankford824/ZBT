@@ -211,6 +211,34 @@ type embeddingResponse struct {
 	Route      map[string]any `json:"route"`
 }
 
+type rerankDocument struct {
+	ID          string  `json:"id"`
+	Title       string  `json:"title"`
+	Content     string  `json:"content"`
+	SectionPath string  `json:"section_path"`
+	Score       float64 `json:"score"`
+}
+
+type rerankRequest struct {
+	TenantID  string           `json:"tenant_id"`
+	Query     string           `json:"query"`
+	Documents []rerankDocument `json:"documents"`
+	TopK      int              `json:"top_k"`
+}
+
+type rerankResult struct {
+	ID    string  `json:"id"`
+	Index int     `json:"index"`
+	Score float64 `json:"score"`
+}
+
+type rerankResponse struct {
+	Provider string         `json:"provider"`
+	Model    string         `json:"model"`
+	Results  []rerankResult `json:"results"`
+	Route    map[string]any `json:"route"`
+}
+
 func NewStore(cfg config.Config, pool *pgxpool.Pool, aiLogger *aicall.Store) *Store {
 	return &Store{
 		pool:     pool,
@@ -865,6 +893,7 @@ func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchR
 	if limit <= 0 || limit > 20 {
 		limit = 8
 	}
+	candidateLimit := searchCandidateLimit(limit)
 	queryEmbedding := ""
 	if query != "" {
 		if response, err := s.embedKnowledgeTexts(ctx, tenantID, userID, []string{query}); err == nil && len(response.Embeddings) > 0 {
@@ -880,16 +909,21 @@ func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchR
 		rows, err := tx.Query(ctx, `
 			with query_vector as (
 				select nullif($5, '')::vector as embedding
-			), ranked as (
+			), vector_hits as (
 				select
 					kc.id::text as chunk_id,
-					kc.document_id::text,
-					kc.title,
-					kc.content,
-					kc.section_path,
-					kc.page_start,
-					kc.page_end,
-					kc.metadata,
+					row_number() over (order by kc.embedding <=> qv.embedding, kc.created_at desc) as rank
+				from knowledge_chunks kc
+				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
+				cross join query_vector qv
+				where kc.tenant_id = $1
+					and qv.embedding is not null
+					and kc.embedding is not null
+					and ($4 = '' or d.doc_type = $4)
+				limit $3
+			), keyword_scored as (
+				select
+					kc.id::text as chunk_id,
 					kc.created_at,
 					case
 						when $2 = '' then 0
@@ -919,31 +953,73 @@ func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchR
 						) then 0.2
 						else 0
 					end
-					+ case
-						when qv.embedding is not null and kc.embedding is not null then greatest(0, 1 - (kc.embedding <=> qv.embedding))
-						else 0
-					end as score
+					as score
 				from knowledge_chunks kc
 				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
-				cross join query_vector qv
-					where kc.tenant_id = $1
-						and ($2 = ''
-							or to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
-							or kc.title ilike '%' || $2 || '%'
-							or kc.content ilike '%' || $2 || '%'
-							or exists (
-								select 1
-								from unnest(regexp_split_to_array($2, '\s+')) as term(value)
-								where term.value <> ''
-									and (
-										kc.title ilike '%' || term.value || '%'
-										or kc.content ilike '%' || term.value || '%'
-										or kc.section_path ilike '%' || term.value || '%'
-									)
-							)
-							or (qv.embedding is not null and kc.embedding is not null)
+				where kc.tenant_id = $1
+					and $2 <> ''
+					and (
+						to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
+						or kc.title ilike '%' || $2 || '%'
+						or kc.content ilike '%' || $2 || '%'
+						or exists (
+							select 1
+							from unnest(regexp_split_to_array($2, '\s+')) as term(value)
+							where term.value <> ''
+								and (
+									kc.title ilike '%' || term.value || '%'
+									or kc.content ilike '%' || term.value || '%'
+									or kc.section_path ilike '%' || term.value || '%'
+								)
 						)
+					)
 					and ($4 = '' or d.doc_type = $4)
+			), keyword_hits as (
+				select
+					chunk_id,
+					row_number() over (order by score desc, created_at desc) as rank
+				from keyword_scored
+				where score > 0
+				limit $3
+			), recent_hits as (
+				select
+					kc.id::text as chunk_id,
+					row_number() over (order by kc.created_at desc) as rank
+				from knowledge_chunks kc
+				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
+				where kc.tenant_id = $1
+					and $2 = ''
+					and ($4 = '' or d.doc_type = $4)
+				limit $3
+			), fused as (
+				select chunk_id, sum(rrf_score) as score
+				from (
+					select chunk_id, 1.0 / (60 + rank) as rrf_score from vector_hits
+					union all
+					select chunk_id, 1.0 / (60 + rank) as rrf_score from keyword_hits
+					union all
+					select chunk_id, 1.0 / (60 + rank) as rrf_score from recent_hits
+				) hits
+				group by chunk_id
+			), ranked as (
+				select
+					kc.id::text as chunk_id,
+					kc.document_id::text,
+					kc.title,
+					kc.content,
+					kc.section_path,
+					kc.page_start,
+					kc.page_end,
+					kc.metadata,
+					kc.created_at,
+					f.score
+				from fused f
+				join knowledge_chunks kc on kc.id::text = f.chunk_id
+				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
+				where kc.tenant_id = $1
+					and ($4 = '' or d.doc_type = $4)
+				order by f.score desc, kc.created_at desc
+				limit $3
 			)
 			select
 				r.chunk_id, r.document_id, r.title, r.content, r.section_path,
@@ -972,7 +1048,7 @@ func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchR
 				d.id, fa.id, c.id
 			order by r.score desc, r.created_at desc
 			limit $3
-		`, tenantID, query, limit, strings.TrimSpace(req.DocType), queryEmbedding)
+		`, tenantID, query, candidateLimit, strings.TrimSpace(req.DocType), queryEmbedding)
 		if err != nil {
 			return err
 		}
@@ -986,7 +1062,19 @@ func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchR
 		}
 		return rows.Err()
 	})
-	return results, err
+	if err != nil {
+		return nil, err
+	}
+	if query != "" && len(results) > 1 {
+		reranked, err := s.rerankKnowledgeResults(ctx, tenantID, userID, query, results, limit)
+		if err == nil && len(reranked) > 0 {
+			return reranked, nil
+		}
+		if err != nil && strings.Contains(err.Error(), "record ai call log") {
+			return nil, err
+		}
+	}
+	return limitSearchResults(results, limit), nil
 }
 
 func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]any) (aiTaskAccepted, error) {
@@ -1078,6 +1166,145 @@ func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string
 		}
 	}
 	return decoded, nil
+}
+
+func (s *Store) rerankKnowledgeResults(ctx context.Context, tenantID, userID, query string, candidates []SearchResult, limit int) ([]SearchResult, error) {
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	startedAt := time.Now()
+	documents := make([]rerankDocument, 0, len(candidates))
+	for _, candidate := range candidates {
+		documents = append(documents, rerankDocument{
+			ID:          candidate.ChunkID,
+			Title:       candidate.Title,
+			Content:     truncateForRerank(candidate.Content, 2400),
+			SectionPath: candidate.SectionPath,
+			Score:       candidate.Score,
+		})
+	}
+	body, err := json.Marshal(rerankRequest{
+		TenantID:  tenantID,
+		Query:     query,
+		Documents: documents,
+		TopK:      limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/rerank/knowledge"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("ai service rerank returned %s", resp.Status)
+	}
+	var decoded rerankResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return nil, err
+	}
+	if s.aiLogger != nil {
+		if _, err := s.aiLogger.Record(ctx, aicall.RecordInput{
+			TenantID:     tenantID,
+			UserID:       userID,
+			TraceID:      fmt.Sprintf("knowledge-rerank-%d", time.Now().UnixNano()),
+			TaskType:     "knowledge_rerank",
+			Provider:     decoded.Provider,
+			Model:        decoded.Model,
+			InputTokens:  estimateTokens(query) + estimateTokensForRerank(documents),
+			OutputTokens: len(decoded.Results),
+			LatencyMS:    int(time.Since(startedAt).Milliseconds()),
+			Status:       "done",
+			BizRef: map[string]any{
+				"endpoint":        "/rerank/knowledge",
+				"candidate_count": len(documents),
+				"result_count":    len(decoded.Results),
+			},
+		}); err != nil {
+			return nil, fmt.Errorf("record ai call log: %w", err)
+		}
+	}
+	return applyKnowledgeRerank(candidates, decoded.Results, limit), nil
+}
+
+func searchCandidateLimit(limit int) int {
+	candidateLimit := limit * 4
+	if candidateLimit < 30 {
+		candidateLimit = 30
+	}
+	if candidateLimit > 60 {
+		candidateLimit = 60
+	}
+	return candidateLimit
+}
+
+func limitSearchResults(results []SearchResult, limit int) []SearchResult {
+	if limit <= 0 || len(results) <= limit {
+		return results
+	}
+	return results[:limit]
+}
+
+func applyKnowledgeRerank(candidates []SearchResult, ranks []rerankResult, limit int) []SearchResult {
+	if len(candidates) == 0 {
+		return nil
+	}
+	byChunkID := make(map[string]SearchResult, len(candidates))
+	for _, candidate := range candidates {
+		byChunkID[candidate.ChunkID] = candidate
+	}
+	used := make(map[string]bool, len(candidates))
+	reranked := make([]SearchResult, 0, min(limit, len(candidates)))
+	for _, rank := range ranks {
+		candidate, ok := byChunkID[rank.ID]
+		if !ok || used[rank.ID] {
+			continue
+		}
+		candidate.Score = rank.Score
+		reranked = append(reranked, candidate)
+		used[rank.ID] = true
+		if len(reranked) >= limit {
+			return reranked
+		}
+	}
+	for _, candidate := range candidates {
+		if used[candidate.ChunkID] {
+			continue
+		}
+		reranked = append(reranked, candidate)
+		if len(reranked) >= limit {
+			break
+		}
+	}
+	return reranked
+}
+
+func truncateForRerank(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return string(runes[:maxRunes])
+}
+
+func estimateTokensForRerank(documents []rerankDocument) int {
+	total := 0
+	for _, document := range documents {
+		total += estimateTokens(document.Title)
+		total += estimateTokens(document.SectionPath)
+		total += estimateTokens(document.Content)
+	}
+	return total
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
