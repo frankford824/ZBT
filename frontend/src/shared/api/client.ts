@@ -1228,22 +1228,44 @@ export async function fetchFileURL(
   return data
 }
 
-export type PlatformStats = {
-  activeProjects: number
-  monthlyBids: number
-  compliancePassRate: number
-  winRate: number
-  pendingTasks: number
-  knowledgeDocs: number
+export type PlatformSummaryDTO = {
+  stats: {
+    active_projects: number
+    monthly_bids: number
+    compliance_pass_rate: number
+    win_rate: number
+    pending_tasks: number
+    knowledge_docs: number
+  }
+  trends: Array<{ month: string; bids: number; win_rate: number }>
+  recommended_tenders: Array<{
+    id: string
+    title: string
+    region: string
+    purchaser: string
+    match_score: number
+    deadline: string | null
+  }>
+  recent_projects: Array<{
+    id: string
+    name: string
+    status: ProjectDTO['status']
+    owner_name: string
+    due_date: string | null
+    updated_at: string
+  }>
+  pending_approvals: Array<{
+    id: string
+    title: string
+    bid_title: string
+    current_step: number
+    created_at: string
+  }>
+  notifications: NotificationDTO[]
+  generated_at: string
 }
 
-export async function fetchPlatformStats(): Promise<PlatformStats> {
-  return {
-    activeProjects: 18,
-    monthlyBids: 34,
-    compliancePassRate: 92,
-    winRate: 38,
-    pendingTasks: 11,
-    knowledgeDocs: 426,
-  }
+export async function fetchPlatformSummary(): Promise<PlatformSummaryDTO> {
+  const { data } = await apiClient.get<PlatformSummaryDTO>('/dashboard/summary')
+  return data
 }

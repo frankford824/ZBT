@@ -4,7 +4,9 @@
 
 ## 基础
 
-GET /healthz，GET /api/v1/meta/routes。
+GET /healthz，GET /api/v1/meta/routes，GET /api/v1/dashboard/summary。
+
+工作台一期已落地 `GET /dashboard/summary`，从当前租户实时聚合项目、标书、合规、成本、知识库、审批和通知数据，返回核心统计、6 个月趋势、推荐标讯、最近项目、待审批和通知快照。前端 `/dashboard` 已从静态数字切换到真实 summary API。
 
 ## Auth
 

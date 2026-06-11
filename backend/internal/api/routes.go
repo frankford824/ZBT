@@ -19,6 +19,7 @@ import (
 	platformcompliance "github.com/frankford824/ZBT/backend/internal/platform/compliance"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformcost "github.com/frankford824/ZBT/backend/internal/platform/cost"
+	platformdashboard "github.com/frankford824/ZBT/backend/internal/platform/dashboard"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	platformproject "github.com/frankford824/ZBT/backend/internal/platform/project"
@@ -47,11 +48,13 @@ type server struct {
 	costStore       *platformcost.Store
 	complianceStore *platformcompliance.Store
 	approvalStore   *platformapproval.Store
+	dashboardStore  *platformdashboard.Store
 }
 
 var routeSpecs = []routeSpec{
 	{"GET", "/me", "dashboard", false},
 	{"GET", "/meta/routes", "dashboard", false},
+	{"GET", "/dashboard/summary", "dashboard", false},
 	{"GET", "/tenant", "team", false},
 	{"PATCH", "/tenant", "team", false},
 	{"GET", "/tenant/members", "team", false},
@@ -188,11 +191,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -211,6 +214,7 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 	api.GET("/meta/routes", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"routes": routeSpecs, "ai_service_url": cfg.AIServiceURL})
 	})
+	api.GET("/dashboard/summary", rbac.Require("dashboard", rbac.LevelRead), s.dashboardSummary)
 	s.registerSaaSRoutes(api)
 	registerStubs(api)
 	return router
@@ -294,6 +298,12 @@ func (s *server) authenticate() gin.HandlerFunc {
 func (s *server) currentUser(c *gin.Context) {
 	session, _ := c.Get("session")
 	c.JSON(http.StatusOK, session)
+}
+
+func (s *server) dashboardSummary(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.dashboardStore.Summary(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string))
+	respond(c, result, err)
 }
 
 func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
@@ -416,6 +426,7 @@ func registerStubs(group *gin.RouterGroup) {
 	custom := map[string]bool{
 		"GET /me":                                      true,
 		"GET /meta/routes":                             true,
+		"GET /dashboard/summary":                       true,
 		"GET /tenant":                                  true,
 		"PATCH /tenant":                                true,
 		"GET /tenant/members":                          true,

@@ -1211,3 +1211,53 @@ curl -N /api/v1/notifications/stream ...
 1. 审批链 steps 当前以 JSON 保存，尚未拆成独立审批级表和拖拽排序 API。
 2. 审批人校验当前依赖模块权限，尚未按当前审批级角色强约束执行人。
 3. 通知 SSE 当前返回快照事件，尚未接入 Redis pub/sub 实时增量推送。
+
+## Loop-12 / 工作台真实聚合 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/dashboard` 从静态统计卡片推进到真实租户聚合数据。
+2. 落地工作台 summary API，集中返回统计、趋势、推荐标讯、最近项目、待审批和通知快照。
+3. 验证 summary API 在不同租户下只返回当前租户数据。
+
+### 代码交付
+
+1. 新增 `platform/dashboard` store，使用当前租户上下文聚合项目、标书、合规、审批、AI 任务、知识库、标讯和通知数据。
+2. API 新增 `GET /api/v1/dashboard/summary`，纳入 `routeSpecs` 和 RBAC `dashboard:read` 控制。
+3. 后端启动流程注入 `dashboard.NewStore(pool)`。
+4. 前端 API client 新增 `PlatformSummaryDTO` 和 `fetchPlatformSummary`。
+5. `/dashboard` 页面改为消费真实 summary API，展示真实统计、6 个月趋势、推荐标讯、待审批、通知和最近项目。
+6. API 文档补充 dashboard summary 契约说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X GET /api/v1/dashboard/summary ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker backend/frontend 构建成功，backend/frontend/ai-service 启动成功。
+5. `./infra/scripts/check.sh` 通过。
+6. 运行时 tenant1/admin `GET /dashboard/summary` 返回 active_projects=2、monthly_bids=5、knowledge_docs=5、trends=6、recommended_tenders=3、recent_projects=4、notifications=5。
+7. 运行时 tenant1/admin top recommended tender 为 `某市智慧交通综合治理平台建设项目`。
+8. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询 projects=4、bid_documents=5、tenders=3、notifications=7。
+9. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询 projects=0、bid_documents=0、tenders=3、notifications=0。
+10. 运行时 tenant2/other `GET /dashboard/summary` 返回 active_projects=0、monthly_bids=0、recommended_tenders=3、notifications=0。
+
+### 偏离蓝图
+
+1. 工作台 summary 当前是只读聚合快照，尚未接入 Redis 或 WebSocket 实时增量刷新。
+2. 趋势图当前聚合标书数量和项目中标率，尚未加入成本偏差、风险热度等深度经营指标。
+3. 待办当前聚合审批、严重合规问题和 AI 任务数量，尚未拆分成可单项跳转的任务中心。
