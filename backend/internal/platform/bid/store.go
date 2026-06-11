@@ -72,6 +72,26 @@ type Chapter struct {
 	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
+type ChapterVersion struct {
+	ID              string         `json:"id"`
+	ChapterID       string         `json:"chapter_id"`
+	BidDocumentID   string         `json:"bid_document_id"`
+	BidPartID       string         `json:"bid_part_id"`
+	VersionNo       int            `json:"version_no"`
+	Title           string         `json:"title"`
+	Content         map[string]any `json:"content"`
+	PlainText       string         `json:"plain_text"`
+	Status          string         `json:"status"`
+	SourceRefs      []any          `json:"source_refs"`
+	NeedsHumanInput []string       `json:"needs_human_input"`
+	ChangeReason    string         `json:"change_reason"`
+	ModelMetadata   map[string]any `json:"model_metadata"`
+	TokenUsage      map[string]int `json:"token_usage"`
+	CreatedBy       *string        `json:"created_by"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+}
+
 type Export struct {
 	ID            string         `json:"id"`
 	BidDocumentID string         `json:"bid_document_id"`
@@ -116,6 +136,23 @@ type CreateExportRequest struct {
 	PartCode   string `json:"part_code"`
 }
 
+type UpdateChapterContentRequest struct {
+	Title     string         `json:"title"`
+	Content   map[string]any `json:"content"`
+	PlainText string         `json:"plain_text"`
+}
+
+type ChapterRegenerateResponse struct {
+	Chapter    Chapter        `json:"chapter"`
+	Version    ChapterVersion `json:"version"`
+	Generation map[string]any `json:"generation"`
+}
+
+type ChapterDiff struct {
+	Current  Chapter         `json:"current"`
+	Previous *ChapterVersion `json:"previous"`
+}
+
 type CreateExportResponse struct {
 	Export Export `json:"export"`
 	Task   Task   `json:"task"`
@@ -144,6 +181,35 @@ type aiTaskAccepted struct {
 	TaskID string         `json:"task_id"`
 	Status string         `json:"status"`
 	Route  map[string]any `json:"route"`
+}
+
+type chapterGenerateRequest struct {
+	TenantID              string   `json:"tenant_id"`
+	BidDocumentID         string   `json:"bid_document_id"`
+	BidPartID             string   `json:"bid_part_id"`
+	ChapterID             string   `json:"chapter_id"`
+	ChapterTitle          string   `json:"chapter_title"`
+	TenderRequirements    []string `json:"tender_requirements"`
+	SelectedKnowledgeRefs []string `json:"selected_knowledge_refs"`
+	ModelHint             *string  `json:"model_hint,omitempty"`
+}
+
+type sourceRef struct {
+	ChunkID    string `json:"chunk_id"`
+	DocumentID string `json:"document_id"`
+	Title      string `json:"title"`
+	PageStart  *int   `json:"page_start"`
+	PageEnd    *int   `json:"page_end"`
+}
+
+type chapterGenerateResponse struct {
+	TraceID         string         `json:"trace_id"`
+	TiptapJSON      map[string]any `json:"tiptap_json"`
+	SourceRefs      []sourceRef    `json:"source_refs"`
+	SelfCheck       map[string]any `json:"self_check"`
+	NeedsHumanInput []string       `json:"needs_human_input"`
+	ModelMetadata   map[string]any `json:"model_metadata"`
+	TokenUsage      map[string]int `json:"token_usage"`
 }
 
 func NewStore(cfg config.Config, pool *pgxpool.Pool) *Store {
@@ -281,6 +347,231 @@ func (s *Store) ListChapters(ctx context.Context, tenantID, bidID string) ([]Cha
 		return rows.Err()
 	})
 	return chapters, err
+}
+
+func (s *Store) UpdateChapterContent(ctx context.Context, tenantID, userID, chapterID string, req UpdateChapterContentRequest) (ChapterVersion, error) {
+	var version ChapterVersion
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		title := strings.TrimSpace(req.Title)
+		if title == "" {
+			title = chapter.Title
+		}
+		content := req.Content
+		plainText := strings.TrimSpace(req.PlainText)
+		if content == nil {
+			content = tiptapFromPlainText(plainText)
+		}
+		if plainText == "" {
+			plainText = plainTextFromTiptap(content)
+		}
+		if plainText == "" {
+			return ErrInvalidRequest
+		}
+		contentJSON, _ := json.Marshal(content)
+		if _, err := tx.Exec(ctx, `
+			update bid_chapters
+			set title = $3,
+				content = $4,
+				plain_text = $5,
+				status = 'edited',
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapterID, title, contentJSON, plainText); err != nil {
+			return err
+		}
+		updated, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		created, err := insertChapterVersion(ctx, tx, tenantID, userID, updated, "manual_edit", nil, nil)
+		if err != nil {
+			return err
+		}
+		version = created
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterVersion{}, ErrNotFound
+	}
+	return version, err
+}
+
+func (s *Store) AcceptChapter(ctx context.Context, tenantID, userID, chapterID string) (ChapterVersion, error) {
+	var version ChapterVersion
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update bid_chapters
+			set status = 'accepted', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapterID); err != nil {
+			return err
+		}
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		created, err := insertChapterVersion(ctx, tx, tenantID, userID, chapter, "accepted", nil, nil)
+		if err != nil {
+			return err
+		}
+		version = created
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterVersion{}, ErrNotFound
+	}
+	return version, err
+}
+
+func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapterID string) (ChapterRegenerateResponse, error) {
+	var result ChapterRegenerateResponse
+	var requestPayload chapterGenerateRequest
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		requestPayload = chapterGenerateRequest{
+			TenantID:              tenantID,
+			BidDocumentID:         chapter.BidDocumentID,
+			BidPartID:             chapter.BidPartID,
+			ChapterID:             chapter.ID,
+			ChapterTitle:          chapter.Title,
+			TenderRequirements:    []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
+			SelectedKnowledgeRefs: []string{},
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterRegenerateResponse{}, ErrNotFound
+	}
+	if err != nil {
+		return ChapterRegenerateResponse{}, err
+	}
+
+	generation, err := s.submitChapterGenerate(ctx, requestPayload)
+	if err != nil {
+		return ChapterRegenerateResponse{}, err
+	}
+
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		sourceRefs := sourceRefsAsAny(generation.SourceRefs)
+		content := generation.TiptapJSON
+		plainText := plainTextFromTiptap(content)
+		if plainText == "" {
+			plainText = chapter.PlainText
+		}
+		contentJSON, _ := json.Marshal(content)
+		sourceRefsJSON, _ := json.Marshal(sourceRefs)
+		needsHumanInputJSON, _ := json.Marshal(generation.NeedsHumanInput)
+		if _, err := tx.Exec(ctx, `
+			update bid_chapters
+			set content = $3,
+				plain_text = $4,
+				status = 'generated',
+				source_refs = $5,
+				needs_human_input = $6,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapterID, contentJSON, plainText, sourceRefsJSON, needsHumanInputJSON); err != nil {
+			return err
+		}
+		updated, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		version, err := insertChapterVersion(ctx, tx, tenantID, userID, updated, "ai_regenerate", generation.ModelMetadata, generation.TokenUsage)
+		if err != nil {
+			return err
+		}
+		if err := replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID); err != nil {
+			return err
+		}
+		result = ChapterRegenerateResponse{
+			Chapter: updated,
+			Version: version,
+			Generation: map[string]any{
+				"trace_id":          generation.TraceID,
+				"self_check":        generation.SelfCheck,
+				"model_metadata":    generation.ModelMetadata,
+				"token_usage":       generation.TokenUsage,
+				"source_refs":       sourceRefs,
+				"needs_human_input": generation.NeedsHumanInput,
+			},
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterRegenerateResponse{}, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) ListChapterVersions(ctx context.Context, tenantID, chapterID string) ([]ChapterVersion, error) {
+	versions := []ChapterVersion{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			select id::text, chapter_id::text, bid_document_id::text, bid_part_id::text,
+				version_no, title, content, plain_text, status, source_refs, needs_human_input,
+				change_reason, model_metadata, token_usage, created_by::text, created_at, updated_at
+			from bid_chapter_versions
+			where tenant_id = $1 and chapter_id = $2
+			order by version_no desc
+		`, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			version, err := scanChapterVersion(rows)
+			if err != nil {
+				return err
+			}
+			versions = append(versions, version)
+		}
+		return rows.Err()
+	})
+	return versions, err
+}
+
+func (s *Store) ChapterDiff(ctx context.Context, tenantID, chapterID string) (ChapterDiff, error) {
+	var diff ChapterDiff
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		diff.Current = chapter
+		version, err := scanChapterVersion(tx.QueryRow(ctx, `
+			select id::text, chapter_id::text, bid_document_id::text, bid_part_id::text,
+				version_no, title, content, plain_text, status, source_refs, needs_human_input,
+				change_reason, model_metadata, token_usage, created_by::text, created_at, updated_at
+			from bid_chapter_versions
+			where tenant_id = $1 and chapter_id = $2
+			order by version_no desc
+			offset 1 limit 1
+		`, tenantID, chapterID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		diff.Previous = &version
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterDiff{}, ErrNotFound
+	}
+	return diff, err
 }
 
 func (s *Store) ListExports(ctx context.Context, tenantID, bidID string) ([]Export, error) {
@@ -623,6 +914,44 @@ func (s *Store) submitDocumentExport(ctx context.Context, exportType string, pay
 	return accepted, nil
 }
 
+func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenerateRequest) (chapterGenerateResponse, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return chapterGenerateResponse{}, err
+	}
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/chapter-generate"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return chapterGenerateResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return chapterGenerateResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return chapterGenerateResponse{}, fmt.Errorf("ai service returned %s", resp.Status)
+	}
+	var result chapterGenerateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return chapterGenerateResponse{}, err
+	}
+	if result.TiptapJSON == nil || result.TraceID == "" {
+		return chapterGenerateResponse{}, ErrInvalidRequest
+	}
+	return result, nil
+}
+
+func chapterByID(ctx context.Context, tx pgx.Tx, tenantID, chapterID string) (Chapter, error) {
+	return scanChapter(tx.QueryRow(ctx, `
+		select id::text, bid_document_id::text, bid_part_id::text, title, content, plain_text,
+			status, sort_order, source_refs, needs_human_input, created_at, updated_at
+		from bid_chapters
+		where tenant_id = $1 and id = $2
+	`, tenantID, chapterID))
+}
+
 func bidForExport(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (Document, error) {
 	return scanDocument(tx.QueryRow(ctx, `
 		select bd.id::text, bd.project_id::text, coalesce(p.name, ''),
@@ -697,6 +1026,96 @@ func exportChapters(chapters []Chapter) []exportChapterPayload {
 		})
 	}
 	return payload
+}
+
+func insertChapterVersion(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	userID string,
+	chapter Chapter,
+	changeReason string,
+	modelMetadata map[string]any,
+	tokenUsage map[string]int,
+) (ChapterVersion, error) {
+	if modelMetadata == nil {
+		modelMetadata = map[string]any{}
+	}
+	if tokenUsage == nil {
+		tokenUsage = map[string]int{}
+	}
+	contentJSON, _ := json.Marshal(chapter.Content)
+	sourceRefsJSON, _ := json.Marshal(chapter.SourceRefs)
+	needsHumanInputJSON, _ := json.Marshal(chapter.NeedsHumanInput)
+	modelMetadataJSON, _ := json.Marshal(modelMetadata)
+	tokenUsageJSON, _ := json.Marshal(tokenUsage)
+	return scanChapterVersion(tx.QueryRow(ctx, `
+		insert into bid_chapter_versions (
+			tenant_id, chapter_id, bid_document_id, bid_part_id, version_no,
+			title, content, plain_text, status, source_refs, needs_human_input,
+			change_reason, model_metadata, token_usage, created_by
+		)
+		values (
+			$1, $2, $3, $4,
+			coalesce((select max(version_no) + 1 from bid_chapter_versions where tenant_id = $1 and chapter_id = $2), 1),
+			$5, $6, $7, $8, $9, $10, $11, $12, $13, nullif($14, '')::uuid
+		)
+		returning id::text, chapter_id::text, bid_document_id::text, bid_part_id::text,
+			version_no, title, content, plain_text, status, source_refs, needs_human_input,
+			change_reason, model_metadata, token_usage, created_by::text, created_at, updated_at
+	`, tenantID, chapter.ID, chapter.BidDocumentID, chapter.BidPartID, chapter.Title,
+		contentJSON, chapter.PlainText, chapter.Status, sourceRefsJSON, needsHumanInputJSON,
+		changeReason, modelMetadataJSON, tokenUsageJSON, userID))
+}
+
+func replaceKnowledgeReferences(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter, refs []sourceRef, traceID string) error {
+	if _, err := tx.Exec(ctx, `
+		delete from knowledge_references
+		where tenant_id = $1 and bid_document_id = $2 and chapter_id = $3
+	`, tenantID, chapter.BidDocumentID, chapter.ID); err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		metadata := map[string]any{
+			"source_ref": map[string]any{
+				"chunk_id":      ref.ChunkID,
+				"document_id":   ref.DocumentID,
+				"title":         ref.Title,
+				"page_start":    ref.PageStart,
+				"page_end":      ref.PageEnd,
+				"trace_id":      traceID,
+				"resolved":      false,
+				"chapter_title": chapter.Title,
+			},
+		}
+		var sourceDocumentID any
+		if parsed, err := uuid.Parse(ref.DocumentID); err == nil {
+			var exists bool
+			if err := tx.QueryRow(ctx, `
+				select exists(select 1 from knowledge_documents where tenant_id = $1 and id = $2)
+			`, tenantID, parsed.String()).Scan(&exists); err != nil {
+				return err
+			}
+			if exists {
+				sourceDocumentID = parsed.String()
+				metadata["source_ref"].(map[string]any)["resolved"] = true
+			}
+		}
+		var chunkID any
+		if parsed, err := uuid.Parse(ref.ChunkID); err == nil {
+			chunkID = parsed.String()
+		}
+		metadataJSON, _ := json.Marshal(metadata)
+		if _, err := tx.Exec(ctx, `
+			insert into knowledge_references (
+				tenant_id, source_document_id, bid_document_id, chapter_id, chunk_id, title, metadata
+			)
+			values ($1, $2, $3, $4, $5, $6, $7)
+		`, tenantID, sourceDocumentID, chapter.BidDocumentID, chapter.ID, chunkID, ref.Title, metadataJSON); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func createDefaultParts(ctx context.Context, tx pgx.Tx, tenantID, bidID, bidType string) error {
@@ -801,6 +1220,32 @@ func scanChapter(row scanner) (Chapter, error) {
 	return chapter, err
 }
 
+func scanChapterVersion(row scanner) (ChapterVersion, error) {
+	var version ChapterVersion
+	var contentRaw, sourceRefsRaw, needsHumanInputRaw, modelMetadataRaw, tokenUsageRaw []byte
+	var createdBy sql.NullString
+	err := row.Scan(
+		&version.ID, &version.ChapterID, &version.BidDocumentID, &version.BidPartID,
+		&version.VersionNo, &version.Title, &contentRaw, &version.PlainText, &version.Status,
+		&sourceRefsRaw, &needsHumanInputRaw, &version.ChangeReason, &modelMetadataRaw, &tokenUsageRaw,
+		&createdBy, &version.CreatedAt, &version.UpdatedAt,
+	)
+	if createdBy.Valid {
+		version.CreatedBy = &createdBy.String
+	}
+	version.Content = map[string]any{}
+	version.SourceRefs = []any{}
+	version.NeedsHumanInput = []string{}
+	version.ModelMetadata = map[string]any{}
+	version.TokenUsage = map[string]int{}
+	_ = json.Unmarshal(contentRaw, &version.Content)
+	_ = json.Unmarshal(sourceRefsRaw, &version.SourceRefs)
+	_ = json.Unmarshal(needsHumanInputRaw, &version.NeedsHumanInput)
+	_ = json.Unmarshal(modelMetadataRaw, &version.ModelMetadata)
+	_ = json.Unmarshal(tokenUsageRaw, &version.TokenUsage)
+	return version, err
+}
+
 func scanExport(row scanner) (Export, error) {
 	var export Export
 	var bidPartID, fileAssetID, errorMessage sql.NullString
@@ -857,6 +1302,69 @@ func scanTask(row scanner) (Task, error) {
 	_ = json.Unmarshal(routeRaw, &task.Route)
 	_ = json.Unmarshal(resultRaw, &task.Result)
 	return task, err
+}
+
+func tiptapFromPlainText(text string) map[string]any {
+	paragraphs := []any{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		paragraphs = append(paragraphs, map[string]any{
+			"type": "paragraph",
+			"content": []any{
+				map[string]any{"type": "text", "text": line},
+			},
+		})
+	}
+	if len(paragraphs) == 0 {
+		paragraphs = append(paragraphs, map[string]any{
+			"type": "paragraph",
+			"content": []any{
+				map[string]any{"type": "text", "text": "请补充本章节内容。"},
+			},
+		})
+	}
+	return map[string]any{"type": "doc", "content": paragraphs}
+}
+
+func plainTextFromTiptap(content map[string]any) string {
+	lines := []string{}
+	collectText(content, &lines)
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func collectText(value any, lines *[]string) {
+	switch typed := value.(type) {
+	case map[string]any:
+		if text, ok := typed["text"].(string); ok && strings.TrimSpace(text) != "" {
+			*lines = append(*lines, strings.TrimSpace(text))
+		}
+		if children, ok := typed["content"].([]any); ok {
+			for _, child := range children {
+				collectText(child, lines)
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			collectText(child, lines)
+		}
+	}
+}
+
+func sourceRefsAsAny(refs []sourceRef) []any {
+	result := make([]any, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, map[string]any{
+			"chunk_id":    ref.ChunkID,
+			"document_id": ref.DocumentID,
+			"title":       ref.Title,
+			"page_start":  ref.PageStart,
+			"page_end":    ref.PageEnd,
+		})
+	}
+	return result
 }
 
 func exportFilename(title, partCode, exportType string) string {

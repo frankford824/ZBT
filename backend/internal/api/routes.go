@@ -318,6 +318,12 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/bids/:id", rbac.Require("bid", rbac.LevelRead), s.getBid)
 	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
 	group.GET("/bids/:id/chapters", rbac.Require("bid", rbac.LevelRead), s.listBidChapters)
+	group.PATCH("/chapters/:chapterId", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
+	group.POST("/chapters/:chapterId/accept", rbac.Require("bid", rbac.LevelFull), s.acceptChapter)
+	group.POST("/chapters/:chapterId/regenerate", rbac.Require("bid", rbac.LevelFull), s.regenerateChapter)
+	group.GET("/chapters/:chapterId/versions", rbac.Require("bid", rbac.LevelRead), s.listChapterVersions)
+	group.GET("/chapters/:chapterId/diff", rbac.Require("bid", rbac.LevelRead), s.chapterDiff)
+	group.PUT("/chapters/:chapterId/content", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
 	group.POST("/bids/:id/exports", rbac.Require("bid", rbac.LevelFull), s.createBidExport)
 	group.GET("/bids/:id/exports", rbac.Require("bid", rbac.LevelRead), s.listBidExports)
 	group.GET("/bid-exports/:exportId", rbac.Require("bid", rbac.LevelRead), s.getBidExport)
@@ -364,6 +370,12 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /bids/:id":                           true,
 		"GET /bids/:id/parts":                     true,
 		"GET /bids/:id/chapters":                  true,
+		"PATCH /chapters/:chapterId":              true,
+		"POST /chapters/:chapterId/accept":        true,
+		"POST /chapters/:chapterId/regenerate":    true,
+		"GET /chapters/:chapterId/versions":       true,
+		"GET /chapters/:chapterId/diff":           true,
+		"PUT /chapters/:chapterId/content":        true,
 		"POST /bids/:id/exports":                  true,
 		"GET /bids/:id/exports":                   true,
 		"GET /bid-exports/:exportId":              true,
@@ -678,6 +690,39 @@ func (s *server) listBidParts(c *gin.Context) {
 func (s *server) listBidChapters(c *gin.Context) {
 	result, err := s.bidStore.ListChapters(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) updateChapterContent(c *gin.Context) {
+	var req bid.UpdateChapterContentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.UpdateChapterContent(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("chapterId"), req)
+	respond(c, result, err)
+}
+
+func (s *server) acceptChapter(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.AcceptChapter(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("chapterId"))
+	respond(c, result, err)
+}
+
+func (s *server) regenerateChapter(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.RegenerateChapter(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("chapterId"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) listChapterVersions(c *gin.Context) {
+	result, err := s.bidStore.ListChapterVersions(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("chapterId"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) chapterDiff(c *gin.Context) {
+	result, err := s.bidStore.ChapterDiff(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("chapterId"))
+	respond(c, result, err)
 }
 
 func (s *server) createBidExport(c *gin.Context) {

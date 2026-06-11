@@ -1,8 +1,11 @@
 import {
+  CheckOutlined,
   DiffOutlined,
   DownloadOutlined,
   FileZipOutlined,
   PlusOutlined,
+  SaveOutlined,
+  SyncOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -28,17 +31,24 @@ import {
   App as AntApp,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import {
+  acceptChapter,
   createBid,
   createBidExport,
+  fetchBidChapters,
   fetchBid,
   fetchBidExport,
   fetchBidExports,
   fetchBidParts,
   fetchBids,
+  fetchChapterVersions,
+  regenerateChapter,
+  updateChapterContent,
+  type BidChapterDTO,
   type BidDocumentDTO,
   type BidExportDTO,
 } from '../../shared/api/client'
@@ -427,58 +437,190 @@ function exportStatusTag(value: BidExportDTO['status']) {
 }
 
 export function BidEditorPage() {
-  const { bidId } = useParams()
+  const { bidId = '' } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const partParam = searchParams.get('part') ?? ''
+  const chapterParam = searchParams.get('chapter') ?? ''
+  const bid = useQuery({
+    queryKey: ['bid', bidId],
+    queryFn: () => fetchBid(bidId),
+    enabled: Boolean(bidId),
+  })
+  const parts = useQuery({
+    queryKey: ['bid-parts', bidId],
+    queryFn: () => fetchBidParts(bidId),
+    enabled: Boolean(bidId),
+  })
+  const chapters = useQuery({
+    queryKey: ['bid-chapters', bidId],
+    queryFn: () => fetchBidChapters(bidId),
+    enabled: Boolean(bidId),
+  })
+  const activePart = (parts.data ?? []).find((part) => part.code === partParam)
+  const visibleChapters = (chapters.data ?? []).filter((chapter) => !activePart || chapter.bid_part_id === activePart.id)
+  const currentChapter = visibleChapters.find((chapter) => chapter.id === chapterParam) ?? visibleChapters[0]
+  const versions = useQuery({
+    queryKey: ['chapter-versions', currentChapter?.id],
+    queryFn: () => fetchChapterVersions(currentChapter?.id ?? ''),
+    enabled: Boolean(currentChapter?.id),
+  })
   const editor = useEditor({
     extensions: [StarterKit],
-    content:
-      '<h2>第四章 技术方案</h2><p>本章节基于企业知识库引用素材生成，事实性内容需要保留 source_refs。</p>',
+    content: '<p>请选择章节</p>',
   })
+  useEffect(() => {
+    if (!editor || !currentChapter) return
+    editor.commands.setContent(contentForEditor(currentChapter))
+  }, [editor, currentChapter?.id, currentChapter?.updated_at])
+
+  const invalidateChapterState = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
+      queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter?.id] }),
+    ])
+  }
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      updateChapterContent(currentChapter?.id ?? '', {
+        title: currentChapter?.title,
+        content: editor?.getJSON() as Record<string, unknown>,
+        plain_text: editor?.getText() ?? '',
+      }),
+    onSuccess: async () => {
+      message.success('章节已保存')
+      await invalidateChapterState()
+    },
+    onError: () => message.error('保存章节失败'),
+  })
+  const acceptMutation = useMutation({
+    mutationFn: () => acceptChapter(currentChapter?.id ?? ''),
+    onSuccess: async () => {
+      message.success('章节已采纳')
+      await invalidateChapterState()
+    },
+    onError: () => message.error('采纳章节失败'),
+  })
+  const regenerateMutation = useMutation({
+    mutationFn: () => regenerateChapter(currentChapter?.id ?? ''),
+    onSuccess: async () => {
+      message.success('AI 重新生成完成')
+      await invalidateChapterState()
+    },
+    onError: () => message.error('AI 重新生成失败'),
+  })
+
+  if (bid.isLoading || parts.isLoading || chapters.isLoading) return <LoadingBlock />
+  if (bid.isError || parts.isError || chapters.isError) return <ErrorBlock />
 
   return (
     <PageFrame
       module="标书生成"
       title="标书编辑器"
-      subtitle={bidId}
+      subtitle={bid.data?.title ?? bidId}
       tags={['/bids/:bidId/editor', 'Tiptap']}
       actions={[
-        <Button key="diff" icon={<DiffOutlined />}>
-          查看差异
+        <Button key="save" type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} disabled={!currentChapter} onClick={() => saveMutation.mutate()}>
+          保存
         </Button>,
-        <Button key="export" type="primary" icon={<DownloadOutlined />}>
-          导出 docx
+        <Button key="accept" icon={<CheckOutlined />} loading={acceptMutation.isPending} disabled={!currentChapter} onClick={() => acceptMutation.mutate()}>
+          采纳
+        </Button>,
+        <Button key="regen" icon={<SyncOutlined />} loading={regenerateMutation.isPending} disabled={!currentChapter} onClick={() => regenerateMutation.mutate()}>
+          重新生成
+        </Button>,
+        <Button key="export" icon={<DownloadOutlined />}>
+          <Link to={`/bids/${bidId}/wizard?step=7`}>导出</Link>
         </Button>,
       ]}
     >
       <Row gutter={16}>
         <Col xs={24} xl={5}>
           <Card title="章节大纲">
-            <Timeline
-              items={[
-                { color: 'green', children: '一、项目理解' },
-                { color: 'green', children: '二、总体架构' },
-                { color: 'blue', children: '三、实施方案' },
-                { color: 'orange', children: '四、运维服务' },
-              ]}
-            />
+            {visibleChapters.length ? (
+              <Timeline
+                items={visibleChapters.map((chapter) => ({
+                  color: chapter.id === currentChapter?.id ? 'blue' : chapter.status === 'accepted' ? 'green' : 'gray',
+                  children: (
+                    <Button
+                      type="link"
+                      onClick={() => setSearchParams({ ...(partParam ? { part: partParam } : {}), chapter: chapter.id })}
+                    >
+                      {chapter.title}
+                    </Button>
+                  ),
+                }))}
+              />
+            ) : (
+              <EmptyBlock />
+            )}
           </Card>
         </Col>
         <Col xs={24} xl={13}>
-          <Card title="内容编辑">
+          <Card
+            title={currentChapter?.title ?? '内容编辑'}
+            extra={currentChapter ? <Tag color={chapterStatusColor(currentChapter.status)}>{currentChapter.status}</Tag> : null}
+          >
             <EditorContent editor={editor} className="editor-surface" />
+          </Card>
+          <Card title="版本记录" className="mt-16">
+            <Table
+              size="small"
+              rowKey="id"
+              pagination={false}
+              loading={versions.isLoading}
+              locale={{ emptyText: <EmptyBlock /> }}
+              dataSource={versions.data ?? []}
+              columns={[
+                { title: '版本', dataIndex: 'version_no', render: (value) => `v${value}` },
+                { title: '原因', dataIndex: 'change_reason' },
+                { title: '状态', dataIndex: 'status', render: (value) => <Tag>{value}</Tag> },
+                { title: '时间', dataIndex: 'created_at', render: (value) => new Date(value).toLocaleString() },
+              ]}
+            />
           </Card>
         </Col>
         <Col xs={24} xl={6}>
           <Card title="AI 助手">
             <Space direction="vertical">
-              <Tag color="purple">source_refs: 5</Tag>
-              <Tag color="orange">needs_human_input: 2</Tag>
-              <Button>优化文字</Button>
-              <Button>查找类似案例</Button>
-              <Button>检查当前章节</Button>
+              <Tag color="purple">source_refs: {currentChapter?.source_refs.length ?? 0}</Tag>
+              <Tag color="orange">needs_human_input: {currentChapter?.needs_human_input.length ?? 0}</Tag>
+              {(currentChapter?.needs_human_input ?? []).map((item) => (
+                <Typography.Text key={item} type="warning">
+                  {item}
+                </Typography.Text>
+              ))}
+              <Button icon={<SyncOutlined />} loading={regenerateMutation.isPending} disabled={!currentChapter} onClick={() => regenerateMutation.mutate()}>
+                查找素材并重新生成
+              </Button>
+              <Button icon={<DiffOutlined />} disabled={!currentChapter}>
+                查看版本差异
+              </Button>
             </Space>
           </Card>
         </Col>
       </Row>
     </PageFrame>
   )
+}
+
+function contentForEditor(chapter: BidChapterDTO) {
+  if (chapter.content?.type === 'doc') return chapter.content
+  return {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: chapter.plain_text || '请补充本章节内容。' }],
+      },
+    ],
+  }
+}
+
+function chapterStatusColor(status: BidChapterDTO['status']) {
+  if (status === 'accepted') return 'green'
+  if (status === 'edited') return 'orange'
+  if (status === 'generated') return 'blue'
+  return 'default'
 }

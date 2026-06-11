@@ -398,3 +398,58 @@ docker compose up -d backend frontend ai-service
 ### 下一轮建议
 
 继续推进标书主链路：章节编辑保存、章节版本、逐章生成任务、生成结果 source_refs 落库，以及编辑器按技术标/商务标分别进入和保存。
+
+## Loop-5 章节编辑与版本闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 将章节保存、采纳、版本查询和重新生成从 stub 推进为真实 API。
+2. 保存和采纳章节时写入 `bid_chapter_versions`。
+3. 重新生成章节时通过 Python `/tasks/chapter-generate` 走 ModelRouter，回写 Tiptap JSON、source_refs 和 needs_human_input。
+4. 将生成返回的 source_refs 写入 `knowledge_references`，无法解析到真实知识库文档的引用保留 metadata 并标记 unresolved。
+5. 前端标书编辑器读取真实 chapters，支持保存、采纳、重新生成和版本列表。
+
+### 代码交付
+
+1. 新增 `00008_bid_chapter_versions.sql`，创建 `bid_chapter_versions` 并启用 FORCE RLS；同时允许 `knowledge_references.source_document_id` 为空，用于记录未解析 source_ref。
+2. `platform/bid` 新增章节保存、采纳、重新生成、版本列表和 diff 方法。
+3. 后端将 `PUT /chapters/:chapterId/content`、`PATCH /chapters/:chapterId`、`POST /chapters/:chapterId/accept`、`POST /chapters/:chapterId/regenerate`、`GET /chapters/:chapterId/versions`、`GET /chapters/:chapterId/diff` 从 stub 切到真实 handler。
+4. 章节重新生成调用 Python `/tasks/chapter-generate`，并将返回的 `trace_id`、`source_refs`、`needs_human_input`、`model_metadata`、`token_usage` 写入章节和版本。
+5. 前端编辑器页读取真实 bid、parts、chapters；当前章节内容载入 Tiptap；保存、采纳、重新生成后刷新章节和版本列表。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+docker compose build backend frontend
+docker compose up -d backend frontend
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/models/health
+```
+
+结果：
+
+1. backend 测试通过，frontend build 通过。
+2. backend 自动执行到 goose version 8。
+3. AI `/healthz` 与 `/models/health` 返回 ok。
+4. 端到端章节验证使用 bid `50000000-0000-4000-8000-000000000001`、chapter `52000000-0000-4000-8000-000000000001`。
+5. `PUT /chapters/:chapterId/content` 生成 manual_edit 版本 v1。
+6. `POST /chapters/:chapterId/accept` 生成 accepted 版本 v2。
+7. `POST /chapters/:chapterId/regenerate` 返回 202，章节状态更新为 generated，生成 ai_regenerate 版本 v3，trace_id 为 `trace-mock-chapter`。
+8. 重新生成后的章节包含 1 条 source_ref，并返回 needs_human_input：`企业资质证书编号`、`项目经理证书有效期`。
+9. `GET /chapters/:chapterId/versions` 返回 3 条版本，`GET /chapters/:chapterId/diff` 返回 current 和 previous。
+10. tenant2 调用同一章节 regenerate 返回 404。
+11. RLS 验证中 tenant1 对该章节版本可见数量为 3、knowledge_references 为 1；tenant2 两者均为 0。
+
+### 偏离蓝图
+
+1. 重新生成目前是同步调用 Python `/tasks/chapter-generate` 后立即落库，尚未改成异步 ai_tasks + SSE 进度。
+2. source_ref 来自 MockProvider，当前落库为 unresolved；后续需要接真实 RAG 检索，使 source_document_id/chunk_id 可解析到 knowledge_documents/knowledge_chunks。
+3. diff 目前返回 current 和 previous 快照，尚未做结构化逐段差异。
+
+### 下一轮建议
+
+继续补章节生成任务异步化、真实 RAG 检索输入、source_ref 解析为真实知识库 chunk，以及 bid_chapter_versions 的可视化差异。

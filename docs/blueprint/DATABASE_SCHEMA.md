@@ -28,6 +28,8 @@ bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation
 
 `bid_exports` 关联 `file_assets` 保存导出产物，status 为 queued / running / done / failed / cancelled。当前最小实现支持 docx 导出，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
 
+`bid_chapter_versions` 保存章节保存、采纳和 AI 重新生成后的版本快照，包含 content、plain_text、source_refs、needs_human_input、model_metadata 和 token_usage。`knowledge_references.source_document_id` 允许为空，用于记录 AI 返回但暂未解析到真实知识库文档的 source_ref，metadata 中保留原始引用和 resolved 标记。
+
 ## 知识库
 
 knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document_tags、knowledge_chunks、knowledge_references、document_templates。

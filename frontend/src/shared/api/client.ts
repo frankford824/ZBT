@@ -190,6 +190,41 @@ export type BidPartDTO = {
   updated_at: string
 }
 
+export type BidChapterDTO = {
+  id: string
+  bid_document_id: string
+  bid_part_id: string
+  title: string
+  content: Record<string, unknown>
+  plain_text: string
+  status: 'pending' | 'generating' | 'generated' | 'accepted' | 'edited' | 'needs_fix'
+  sort_order: number
+  source_refs: unknown[]
+  needs_human_input: string[]
+  created_at: string
+  updated_at: string
+}
+
+export type BidChapterVersionDTO = {
+  id: string
+  chapter_id: string
+  bid_document_id: string
+  bid_part_id: string
+  version_no: number
+  title: string
+  content: Record<string, unknown>
+  plain_text: string
+  status: string
+  source_refs: unknown[]
+  needs_human_input: string[]
+  change_reason: string
+  model_metadata: Record<string, unknown>
+  token_usage: Record<string, number>
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export type BidExportDTO = {
   id: string
   bid_document_id: string
@@ -214,6 +249,12 @@ export type CreateBidExportDTO = {
 export type BidExportDetailDTO = {
   export: BidExportDTO
   download?: PresignedFileUrlDTO
+}
+
+export type ChapterRegenerateDTO = {
+  chapter: BidChapterDTO
+  version: BidChapterVersionDTO
+  generation: Record<string, unknown>
 }
 
 export async function login(payload: {
@@ -332,6 +373,34 @@ export async function fetchBid(bidId: string): Promise<BidDocumentDTO> {
 
 export async function fetchBidParts(bidId: string): Promise<BidPartDTO[]> {
   const { data } = await apiClient.get<{ items: BidPartDTO[] }>(`/bids/${bidId}/parts`)
+  return data.items
+}
+
+export async function fetchBidChapters(bidId: string): Promise<BidChapterDTO[]> {
+  const { data } = await apiClient.get<{ items: BidChapterDTO[] }>(`/bids/${bidId}/chapters`)
+  return data.items
+}
+
+export async function updateChapterContent(
+  chapterId: string,
+  payload: { title?: string; content?: Record<string, unknown>; plain_text?: string },
+): Promise<BidChapterVersionDTO> {
+  const { data } = await apiClient.put<BidChapterVersionDTO>(`/chapters/${chapterId}/content`, payload)
+  return data
+}
+
+export async function acceptChapter(chapterId: string): Promise<BidChapterVersionDTO> {
+  const { data } = await apiClient.post<BidChapterVersionDTO>(`/chapters/${chapterId}/accept`)
+  return data
+}
+
+export async function regenerateChapter(chapterId: string): Promise<ChapterRegenerateDTO> {
+  const { data } = await apiClient.post<ChapterRegenerateDTO>(`/chapters/${chapterId}/regenerate`)
+  return data
+}
+
+export async function fetchChapterVersions(chapterId: string): Promise<BidChapterVersionDTO[]> {
+  const { data } = await apiClient.get<{ items: BidChapterVersionDTO[] }>(`/chapters/${chapterId}/versions`)
   return data.items
 }
 
