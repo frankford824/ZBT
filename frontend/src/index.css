@@ -176,6 +176,12 @@ a {
   background: #fff;
 }
 
+.knowledge-snippet {
+  max-width: 520px;
+  color: #4b5563;
+  line-height: 1.6;
+}
+
 @media (max-width: 768px) {
   .content-shell {
     padding: 12px;

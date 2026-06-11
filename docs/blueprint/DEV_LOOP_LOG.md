@@ -238,3 +238,57 @@ curl /api/v1/knowledge/documents/<id>
 ### 下一轮建议
 
 继续 Loop-3：实现最小文档解析和 chunk 入库，将 text/plain / PDF / Word 的文本抽取结果写入 `knowledge_chunks`，再接入 `/knowledge/search` 的关键词检索与 source_refs 返回。
+
+## Loop-3 最小解析与检索 - 2026-06-11
+
+### 本轮目标
+
+1. Python 后台任务从 MinIO 读取知识库文件，完成 text/plain、PDF 和 Word 的最小文本抽取。
+2. AI 回调携带切片结果，Go 验签后写入 knowledge_chunks。
+3. 将 `POST /knowledge/search` 从占位接口推进为真实租户内检索。
+4. 前端知识库首页接入搜索结果展示，返回 chunk 和 source_refs 信息。
+
+### 代码交付
+
+1. 新增 `00006_knowledge_chunk_search.sql`，补充 knowledge_chunks 文档维度索引、创建时间索引和 PostgreSQL 全文检索 GIN 索引。
+2. Python AI 服务新增 MinIO SDK 依赖和文档解析模块，支持 text/plain、PDF、Word 的最小抽取、摘要和约 1200 字符切片。
+3. `/tasks/knowledge-process` 改为启动后台任务，读取 MinIO 对象后通过 HMAC 回调 Go。
+4. Go 回调处理新增 chunks 替换写入逻辑，任务完成时更新文档状态并重建该文档切片。
+5. 后端实现 `/knowledge/search`，按租户过滤 knowledge_chunks，返回搜索 items 和 source_refs。
+6. 前端知识库首页接入真实搜索框、结果列表、文档标题、section_path、chunk_id 和内容摘要。
+7. Docker Compose 为 ai-service 补齐 MinIO endpoint、bucket 和访问密钥环境变量。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd ai-service && python3 -m compileall app
+cd frontend && pnpm build
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/models/health
+```
+
+结果：
+
+1. backend 测试通过，AI compileall 通过，frontend build 通过。
+2. backend 自动执行到 goose version 6。
+3. AI `/healthz` 与 `/models/health` 返回 ok。
+4. 端到端上传测试中，MinIO 预签名 PUT 返回 200。
+5. Python 后台任务自动完成解析并回调，ai_task 状态为 done，knowledge_document 状态为 processed。
+6. 搜索 `alpha_search_token` 返回 1 个 item 和 1 个 source_ref。
+7. 返回 chunk id 为 `38e95835-a216-4a97-8e40-69ab3af935c5`，source_ref document id 为 `ba2fd5f8-e886-470e-8969-797854804e63`。
+8. RLS 验证中，tenant1 对该文档可见 chunk 数为 1，tenant2 对同一 chunk 可见数量为 0。
+
+### 偏离蓝图
+
+1. 当前检索仍是 PostgreSQL 关键词检索，不是向量召回、RRF 融合和 rerank。
+2. PDF 和 Word 只完成最小文本抽取，尚未处理表格、版式、图片、扫描件 OCR 和复杂结构。
+3. 本轮返回 source_refs，但还没有将生成引用写入 knowledge_references。
+
+### 下一轮建议
+
+继续补 MockEmbeddingProvider、pgvector embedding 入库、混合检索、knowledge_references，以及生成链路的 source_refs 解析和落库。

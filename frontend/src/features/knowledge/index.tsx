@@ -8,6 +8,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { App as AntApp, Button, Card, Col, Input, List, Row, Space, Statistic, Table, Tag, Tree, Upload } from 'antd'
 import type { UploadProps } from 'antd'
+import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   confirmFileUpload,
@@ -18,7 +19,9 @@ import {
   fetchKnowledgeStats,
   fetchKnowledgeTags,
   processKnowledgeDocument,
+  searchKnowledge,
   uploadToPresignedUrl,
+  type KnowledgeSearchResponseDTO,
   type KnowledgeDocumentDTO,
   type KnowledgeTagDTO,
 } from '../../shared/api/client'
@@ -26,11 +29,28 @@ import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 
 export function KnowledgeHomePage() {
+  const { message } = AntApp.useApp()
+  const [searchResult, setSearchResult] = useState<KnowledgeSearchResponseDTO | null>(null)
+  const [searching, setSearching] = useState(false)
   const stats = useQuery({
     queryKey: ['knowledge-stats'],
     queryFn: fetchKnowledgeStats,
   })
   const categories = Object.entries(stats.data?.category_counts ?? {})
+  const runSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResult(null)
+      return
+    }
+    setSearching(true)
+    try {
+      setSearchResult(await searchKnowledge({ query, limit: 8 }))
+    } catch {
+      message.error('搜索失败')
+    } finally {
+      setSearching(false)
+    }
+  }
 
   return (
     <PageFrame
@@ -40,7 +60,12 @@ export function KnowledgeHomePage() {
       tags={['page-knowledge', '/knowledge']}
     >
       <Space direction="vertical" size={16} className="full-width">
-        <Input.Search placeholder="语义搜索企业资质、案例、技术方案" enterButton="搜索" />
+        <Input.Search
+          placeholder="搜索企业资质、案例、技术方案"
+          enterButton="搜索"
+          loading={searching}
+          onSearch={(value) => void runSearch(value)}
+        />
         <Row gutter={[16, 16]}>
           {[
             ['总文档', stats.data?.document_count ?? 0],
@@ -66,6 +91,29 @@ export function KnowledgeHomePage() {
             )}
           />
         </Card>
+        {searchResult ? (
+          <Card title="搜索结果">
+            <List
+              dataSource={searchResult.items}
+              locale={{ emptyText: '暂无命中' }}
+              renderItem={(item) => (
+                <List.Item
+                  actions={[
+                    <Tag key="ref" color="blue">
+                      {item.source_ref.chunk_id.slice(0, 8)}
+                    </Tag>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={item.title}
+                    description={`${item.document.title} / ${item.section_path}`}
+                  />
+                  <div className="knowledge-snippet">{item.content.slice(0, 180)}</div>
+                </List.Item>
+              )}
+            />
+          </Card>
+        ) : null}
       </Space>
     </PageFrame>
   )

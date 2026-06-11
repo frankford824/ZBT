@@ -308,6 +308,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/knowledge/documents/:id/process", rbac.Require("knowledge", rbac.LevelFull), s.processKnowledgeDocument)
 	group.GET("/knowledge/documents/:id/preview", rbac.Require("knowledge", rbac.LevelRead), s.previewKnowledgeDocument)
 	group.GET("/knowledge/documents/:id/references", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeDocumentReferences)
+	group.POST("/knowledge/search", rbac.Require("knowledge", rbac.LevelRead), s.searchKnowledge)
 	group.GET("/knowledge/stats", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeStats)
 	group.POST("/files/presign-upload", rbac.Require("knowledge", rbac.LevelFull), s.presignFileUpload)
 	group.POST("/files/:id/confirm", rbac.Require("knowledge", rbac.LevelFull), s.confirmFileUpload)
@@ -345,6 +346,7 @@ func registerStubs(group *gin.RouterGroup) {
 		"POST /knowledge/documents/:id/process":   true,
 		"GET /knowledge/documents/:id/preview":    true,
 		"GET /knowledge/documents/:id/references": true,
+		"POST /knowledge/search":                  true,
 		"GET /knowledge/stats":                    true,
 		"POST /files/presign-upload":              true,
 		"POST /files/:id/confirm":                 true,
@@ -604,6 +606,24 @@ func (s *server) previewKnowledgeDocument(c *gin.Context) {
 
 func (s *server) knowledgeDocumentReferences(c *gin.Context) {
 	respond(c, gin.H{"items": []gin.H{}}, nil)
+}
+
+func (s *server) searchKnowledge(c *gin.Context) {
+	var req knowledge.SearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	results, err := s.knowledgeStore.Search(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	sourceRefs := make([]knowledge.SourceRef, 0, len(results))
+	for _, result := range results {
+		sourceRefs = append(sourceRefs, result.SourceRef)
+	}
+	respond(c, gin.H{"items": results, "source_refs": sourceRefs}, nil)
 }
 
 func (s *server) knowledgeStats(c *gin.Context) {

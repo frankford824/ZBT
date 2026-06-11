@@ -109,9 +109,48 @@ type CallbackPayload struct {
 	TaskID         string         `json:"task_id"`
 	Status         string         `json:"status"`
 	Result         map[string]any `json:"result"`
+	Chunks         []ChunkInput   `json:"chunks"`
 	ErrorMessage   string         `json:"error_message"`
 	ProcessedTitle string         `json:"processed_title"`
 	Summary        string         `json:"summary"`
+}
+
+type ChunkInput struct {
+	Title       string         `json:"title"`
+	Content     string         `json:"content"`
+	SectionPath string         `json:"section_path"`
+	PageStart   *int           `json:"page_start"`
+	PageEnd     *int           `json:"page_end"`
+	Metadata    map[string]any `json:"metadata"`
+}
+
+type SearchRequest struct {
+	Query   string `json:"query"`
+	Limit   int    `json:"limit"`
+	DocType string `json:"doc_type"`
+}
+
+type SourceRef struct {
+	ChunkID    string `json:"chunk_id"`
+	DocumentID string `json:"document_id"`
+	Title      string `json:"title"`
+	PageStart  *int   `json:"page_start"`
+	PageEnd    *int   `json:"page_end"`
+}
+
+type SearchResult struct {
+	ChunkID     string         `json:"chunk_id"`
+	DocumentID  string         `json:"document_id"`
+	Document    Document       `json:"document"`
+	Title       string         `json:"title"`
+	Content     string         `json:"content"`
+	SectionPath string         `json:"section_path"`
+	PageStart   *int           `json:"page_start"`
+	PageEnd     *int           `json:"page_end"`
+	Metadata    map[string]any `json:"metadata"`
+	Score       float64        `json:"score"`
+	SourceRef   SourceRef      `json:"source_ref"`
+	CreatedAt   time.Time      `json:"created_at"`
 }
 
 type aiTaskAccepted struct {
@@ -557,6 +596,11 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 		`, payload.TenantID, task.ResourceID, parseStatus, payload.ProcessedTitle, summary); err != nil {
 			return err
 		}
+		if status == "done" {
+			if err := replaceChunks(ctx, tx, payload.TenantID, task.ResourceID, payload.Chunks); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -631,6 +675,86 @@ func (s *Store) Stats(ctx context.Context, tenantID string) (Stats, error) {
 	return stats, err
 }
 
+func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) ([]SearchResult, error) {
+	query := strings.TrimSpace(req.Query)
+	limit := req.Limit
+	if limit <= 0 || limit > 20 {
+		limit = 8
+	}
+	results := []SearchResult{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			with ranked as (
+				select
+					kc.id::text as chunk_id,
+					kc.document_id::text,
+					kc.title,
+					kc.content,
+					kc.section_path,
+					kc.page_start,
+					kc.page_end,
+					kc.metadata,
+					kc.created_at,
+					case
+						when $2 = '' then 0
+						else ts_rank(
+							to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')),
+							plainto_tsquery('simple', $2)
+						)
+					end as rank_score
+				from knowledge_chunks kc
+				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
+				where kc.tenant_id = $1
+					and ($2 = ''
+						or to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
+						or kc.title ilike '%' || $2 || '%'
+						or kc.content ilike '%' || $2 || '%')
+					and ($4 = '' or d.doc_type = $4)
+			)
+			select
+				r.chunk_id, r.document_id, r.title, r.content, r.section_path,
+				r.page_start, r.page_end, r.metadata, r.rank_score, r.created_at,
+				d.id::text, d.title, d.doc_type, d.parse_status, d.summary, d.metadata,
+				d.processed_at, d.created_at, d.updated_at,
+				fa.id::text, fa.filename, fa.content_type, fa.size_bytes, fa.status,
+				c.id::text, c.name, c.description, c.parent_id::text, c.created_at, c.updated_at,
+				coalesce(jsonb_agg(
+					jsonb_build_object(
+						'id', t.id::text,
+						'name', t.name,
+						'color', t.color,
+						'created_at', t.created_at,
+						'updated_at', t.updated_at
+					)
+				) filter (where t.id is not null), '[]'::jsonb)
+			from ranked r
+			join knowledge_documents d on d.id::text = r.document_id
+			join file_assets fa on fa.id = d.file_asset_id and fa.tenant_id = d.tenant_id
+			left join knowledge_categories c on c.id = d.category_id and c.tenant_id = d.tenant_id
+			left join knowledge_document_tags kdt on kdt.document_id = d.id and kdt.tenant_id = d.tenant_id
+			left join knowledge_tags t on t.id = kdt.tag_id and t.tenant_id = d.tenant_id
+			group by r.chunk_id, r.document_id, r.title, r.content, r.section_path,
+				r.page_start, r.page_end, r.metadata, r.rank_score, r.created_at,
+				d.id, fa.id, c.id
+			order by r.rank_score desc, r.created_at desc
+			limit $3
+		`, tenantID, query, limit, strings.TrimSpace(req.DocType))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			result, err := scanSearchResult(rows)
+			if err != nil {
+				return err
+			}
+			results = append(results, result)
+		}
+		return rows.Err()
+	})
+	return results, err
+}
+
 func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]any) (aiTaskAccepted, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -679,6 +803,42 @@ func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx)
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func replaceChunks(ctx context.Context, tx pgx.Tx, tenantID, documentID string, chunks []ChunkInput) error {
+	if _, err := tx.Exec(ctx, `delete from knowledge_chunks where tenant_id = $1 and document_id = $2`, tenantID, documentID); err != nil {
+		return err
+	}
+	for index, chunk := range chunks {
+		content := strings.TrimSpace(chunk.Content)
+		if content == "" {
+			continue
+		}
+		title := strings.TrimSpace(chunk.Title)
+		if title == "" {
+			title = fmt.Sprintf("chunk-%03d", index+1)
+		}
+		sectionPath := strings.TrimSpace(chunk.SectionPath)
+		if sectionPath == "" {
+			sectionPath = title
+		}
+		metadata := chunk.Metadata
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		metadata["chunk_index"] = index
+		metadataJSON, _ := json.Marshal(metadata)
+		if _, err := tx.Exec(ctx, `
+			insert into knowledge_chunks (
+				tenant_id, document_id, title, content, section_path,
+				page_start, page_end, metadata
+			)
+			values ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, tenantID, documentID, title, content, sectionPath, chunk.PageStart, chunk.PageEnd, metadataJSON); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func documentSelectSQL(suffix string) string {
@@ -805,6 +965,72 @@ func scanTask(row scanner) (Task, error) {
 	_ = json.Unmarshal(routeRaw, &task.Route)
 	_ = json.Unmarshal(resultRaw, &task.Result)
 	return task, nil
+}
+
+func scanSearchResult(row scanner) (SearchResult, error) {
+	var result SearchResult
+	var pageStart, pageEnd sql.NullInt32
+	var metadataRaw []byte
+	var document Document
+	var documentMetadataRaw, tagsRaw []byte
+	var processedAt sql.NullTime
+	var categoryID, categoryName, categoryDescription, categoryParentID sql.NullString
+	var categoryCreatedAt, categoryUpdatedAt sql.NullTime
+	err := row.Scan(
+		&result.ChunkID, &result.DocumentID, &result.Title, &result.Content, &result.SectionPath,
+		&pageStart, &pageEnd, &metadataRaw, &result.Score, &result.CreatedAt,
+		&document.ID, &document.Title, &document.DocType, &document.ParseStatus, &document.Summary, &documentMetadataRaw,
+		&processedAt, &document.CreatedAt, &document.UpdatedAt,
+		&document.File.ID, &document.File.Filename, &document.File.ContentType, &document.File.SizeBytes, &document.File.Status,
+		&categoryID, &categoryName, &categoryDescription, &categoryParentID, &categoryCreatedAt, &categoryUpdatedAt,
+		&tagsRaw,
+	)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	if pageStart.Valid {
+		value := int(pageStart.Int32)
+		result.PageStart = &value
+	}
+	if pageEnd.Valid {
+		value := int(pageEnd.Int32)
+		result.PageEnd = &value
+	}
+	result.Metadata = map[string]any{}
+	_ = json.Unmarshal(metadataRaw, &result.Metadata)
+	document.Metadata = map[string]any{}
+	_ = json.Unmarshal(documentMetadataRaw, &document.Metadata)
+	if processedAt.Valid {
+		document.ProcessedAt = &processedAt.Time
+	}
+	if categoryID.Valid {
+		category := Category{
+			ID:          categoryID.String,
+			Name:        categoryName.String,
+			Description: categoryDescription.String,
+		}
+		if categoryParentID.Valid {
+			category.ParentID = &categoryParentID.String
+		}
+		if categoryCreatedAt.Valid {
+			category.CreatedAt = categoryCreatedAt.Time
+		}
+		if categoryUpdatedAt.Valid {
+			category.UpdatedAt = categoryUpdatedAt.Time
+		}
+		document.Category = &category
+	}
+	document.Tags = []Tag{}
+	_ = json.Unmarshal(tagsRaw, &document.Tags)
+	result.Document = document
+	result.SourceRef = SourceRef{
+		ChunkID:    result.ChunkID,
+		DocumentID: result.DocumentID,
+		Title:      result.Title,
+		PageStart:  result.PageStart,
+		PageEnd:    result.PageEnd,
+	}
+	return result, nil
 }
 
 func inferDocType(filename, contentType string) string {

@@ -4,7 +4,7 @@
 
 上传文件后，Go 保存 file_asset 和 MinIO object，创建任务。Python 按文件类型处理：PDF 使用 PyMuPDF，Word 使用 python-docx，Excel 使用 openpyxl，PPT 使用 python-pptx，旧格式通过 LibreOffice 转换，图片和扫描 PDF 走 OCRProvider。
 
-当前一期实现路径：前端通过 Go 获取 MinIO 预签名 URL，上传后调用 confirm；Go 将 ready 的 file_asset 转成 knowledge_document。用户点击处理后，Go 创建 ai_tasks，调用 Python AI 服务 `/tasks/knowledge-process`，Python 通过 ModelRouter 选择处理路线并返回外部 task_id。Python 完成后的结果必须通过 HMAC 签名回调 Go，Go 验签后更新 ai_tasks 与 knowledge_documents.parse_status。
+当前一期实现路径：前端通过 Go 获取 MinIO 预签名 URL，上传后调用 confirm；Go 将 ready 的 file_asset 转成 knowledge_document。用户点击处理后，Go 创建 ai_tasks，调用 Python AI 服务 `/tasks/knowledge-process`，Python 通过 ModelRouter 选择处理路线并返回外部 task_id。Python 后台任务读取 MinIO 对象，已支持 text/plain、PDF 和 Word 的最小文本抽取与切片；完成后通过 HMAC 签名回调 Go，Go 验签后更新 ai_tasks、knowledge_documents.parse_status，并将切片写入 knowledge_chunks。
 
 输出统一中间文档模型，随后清洗、结构感知切片、embedding、写入 knowledge_chunks 和 pgvector。
 

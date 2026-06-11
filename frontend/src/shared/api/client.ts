@@ -139,6 +139,34 @@ export type AITaskDTO = {
   updated_at: string
 }
 
+export type KnowledgeSourceRefDTO = {
+  chunk_id: string
+  document_id: string
+  title: string
+  page_start: number | null
+  page_end: number | null
+}
+
+export type KnowledgeSearchResultDTO = {
+  chunk_id: string
+  document_id: string
+  document: KnowledgeDocumentDTO
+  title: string
+  content: string
+  section_path: string
+  page_start: number | null
+  page_end: number | null
+  metadata: Record<string, unknown>
+  score: number
+  source_ref: KnowledgeSourceRefDTO
+  created_at: string
+}
+
+export type KnowledgeSearchResponseDTO = {
+  items: KnowledgeSearchResultDTO[]
+  source_refs: KnowledgeSourceRefDTO[]
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -222,6 +250,15 @@ export async function processKnowledgeDocument(documentId: string): Promise<AITa
 
 export async function fetchKnowledgeStats(): Promise<KnowledgeStatsDTO> {
   const { data } = await apiClient.get<KnowledgeStatsDTO>('/knowledge/stats')
+  return data
+}
+
+export async function searchKnowledge(payload: {
+  query: string
+  limit?: number
+  doc_type?: string
+}): Promise<KnowledgeSearchResponseDTO> {
+  const { data } = await apiClient.post<KnowledgeSearchResponseDTO>('/knowledge/search', payload)
   return data
 }
 

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib import request
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
+from minio import Minio
 
 from app.gateway.model_router import ModelRouter
+from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.generation import ChapterGenerateRequest, ChapterGenerateResponse
 from app.schemas.knowledge import KnowledgeProcessRequest
@@ -14,6 +22,15 @@ CONFIG_PATH = Path(__file__).parent / "config" / "model_routing.yaml"
 
 app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0")
 router = ModelRouter.from_yaml(CONFIG_PATH)
+
+
+def minio_client() -> Minio:
+    return Minio(
+        os.getenv("MINIO_ENDPOINT", "minio:9000"),
+        access_key=os.getenv("MINIO_ACCESS_KEY", "zbt_minio"),
+        secret_key=os.getenv("MINIO_SECRET_KEY", "zbt_minio_secret"),
+        secure=os.getenv("MINIO_USE_SSL", "").lower() in {"1", "true", "yes"},
+    )
 
 
 @app.get("/healthz", response_model=HealthResponse)
@@ -33,10 +50,69 @@ async def tender_parse() -> TaskAccepted:
 
 
 @app.post("/tasks/knowledge-process", response_model=TaskAccepted, status_code=202)
-async def knowledge_process(payload: KnowledgeProcessRequest) -> TaskAccepted:
+async def knowledge_process(
+    payload: KnowledgeProcessRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
     route = router.resolve("knowledge_process", tenant_id=payload.tenant_id)
     task_suffix = payload.document_id.replace("-", "")[:12]
-    return TaskAccepted(task_id=f"task-knowledge-{task_suffix}", status="queued", route=route.model_dump())
+    task_id = f"task-knowledge-{task_suffix}"
+    background_tasks.add_task(process_knowledge_document, task_id, payload)
+    return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
+
+
+def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -> None:
+    try:
+        client = minio_client()
+        response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), payload.object_key)
+        try:
+            content = response.read()
+        finally:
+            response.close()
+            response.release_conn()
+        parsed = parse_document(payload, content)
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "done",
+            "processed_title": parsed.processed_title,
+            "summary": parsed.summary,
+            "chunks": [chunk.model_dump() for chunk in parsed.chunks],
+            "result": {
+                "summary": parsed.summary,
+                "metadata": parsed.metadata,
+                "chunk_count": len(parsed.chunks),
+            },
+        }
+    except Exception as exc:  # pragma: no cover - defensive task boundary
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": str(exc),
+            "result": {"error": str(exc)},
+        }
+    if payload.callback_url:
+        post_callback(payload.callback_url, callback_payload)
+
+
+def post_callback(callback_url: str, payload: dict[str, object]) -> None:
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    timestamp = str(int(time.time()))
+    secret = os.getenv("AI_SERVICE_HMAC_SECRET", "")
+    signature = hmac.new(secret.encode("utf-8"), timestamp.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
+    req = request.Request(
+        callback_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-ZBT-Timestamp": timestamp,
+            "X-ZBT-Signature": signature,
+        },
+    )
+    with request.urlopen(req, timeout=10) as response:
+        response.read()
 
 
 @app.post("/tasks/chapter-generate", response_model=ChapterGenerateResponse)

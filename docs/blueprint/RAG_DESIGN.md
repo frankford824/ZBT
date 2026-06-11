@@ -15,3 +15,5 @@
 9. 落库 knowledge_references。
 
 生成内容使用类似 {{ref:chunk_id}} 的中间标记，落库时解析为 source_refs。
+
+当前实现状态：text/plain、PDF 和 Word 已具备最小文本抽取、切片和 knowledge_chunks 入库能力，`POST /knowledge/search` 已提供租户内关键词检索并返回 source_refs。向量 embedding、pgvector 召回、RRF、rerank、knowledge_references 落库和生成链路引用解析仍待实现。
