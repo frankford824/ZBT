@@ -978,3 +978,58 @@ curl -X POST /api/v1/tender-sources/:id/verify ...
 1. 标讯自动抓取、Cookie 登录和自定义 CSS 选择器抓取仍按蓝图放到二期。
 2. `tender_parse_results` 仅落表预留，尚未接入招标文件解析任务。
 3. 从标讯生成标书当前创建 combined draft 标书，尚未把标讯解析结果写入标书大纲。
+
+## Loop-8 / 项目管理真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/projects` 和 `/projects/:projectId` 从静态页面/stub 推进到真实租户数据。
+2. 落地项目状态流转、里程碑、成员、活动日志和中标后创建成本项目。
+3. 让标讯创建出来的项目能在项目管理页继续推进。
+
+### 代码交付
+
+1. 新增迁移 `00013_project_foundation.sql`，创建 `project_milestones`、`project_members`、`project_logs`、最小 `cost_projects`，启用 FORCE RLS，并为既有示例项目补 owner、里程碑和日志。
+2. 新增 `platform/project` store，包含项目列表/详情/创建/更新/删除、状态流转、里程碑 CRUD、成员添加/删除、活动列表和成本项目创建。
+3. API 路由新增真实 Project handlers，替换项目列表、详情、状态流转、里程碑、成员、活动和 create-cost-project 相关 stub。
+4. 前端 API client 新增 Project、Milestone、Activity、CostProject DTO 和接口方法。
+5. 项目管理页改为真实看板/列表；项目详情页接入真实状态推进、标记中标、里程碑创建、活动时间线和成本项目创建。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+curl -X GET /api/v1/projects ...
+curl -X POST /api/v1/projects ...
+curl -X POST /api/v1/projects/:id/transition ...
+curl -X POST /api/v1/projects/:id/milestones ...
+curl -X POST /api/v1/projects/:id/members ...
+curl -X POST /api/v1/projects/:id/create-cost-project ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker 重新构建并启动 backend/frontend 成功。
+5. 运行时 `GET /projects` 初始返回 2 个项目。
+6. 运行时创建项目 `项目管理验证-1781193173`，project_id 为 `d88a694e-0563-46ee-80d7-9ebffb26c5b3`，状态为 `opportunity`。
+7. 运行时新增里程碑 `39bc021e-1d79-4367-8429-e16705bb1aa6`，随后列表返回 1 条。
+8. 运行时添加项目成员 `df18c636-866c-4cfa-9c1d-b63c48b77f23`。
+9. 运行时状态流转到 `bidding`，再标记为 `closed:won`。
+10. 运行时创建成本项目 `ec5e3981-fa40-4223-98d2-a59f97c8200e`，活动列表返回 6 条。
+11. goose 迁移版本为 13。
+12. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询新建项目、里程碑、成员和成本项目均返回 0，tenant1 分别返回 1、1、2、1。
+
+### 偏离蓝图
+
+1. 成本项目目前仅落地最小 `cost_projects` 表和创建动作，成本项、分析、AI 建议和报告仍待成本模块继续实现。
+2. 项目成员当前通过 API 支持添加/删除，前端详情页本轮只展示负责人，未做成员管理面板。
+3. 项目删除在存在关联标书时仍会受外键约束保护，后续可补归档/软删除策略。

@@ -22,6 +22,8 @@ projects、project_milestones、project_members、project_logs。
 
 项目状态：opportunity -> bidding -> compliance_review -> submitted -> closed。closed.result 为 won / lost / pending。
 
+`project_milestones` 保存项目计划节点、状态、计划日期、完成时间、排序和备注。`project_members` 保存项目成员及 owner/member 等角色。`project_logs` 保存项目创建、状态流转、里程碑和成员变更活动。`cost_projects` 当前保存从中标项目创建的最小成本项目，后续成本模块会继续扩展成本项、分析和报告。
+
 ## 标书
 
 bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation_jobs、bid_generation_steps、bid_exports、bid_templates。

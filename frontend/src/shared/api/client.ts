@@ -184,6 +184,53 @@ export type TenderProjectDTO = {
   updated_at: string
 }
 
+export type ProjectDTO = {
+  id: string
+  name: string
+  status: 'opportunity' | 'bidding' | 'compliance_review' | 'submitted' | 'closed'
+  result: 'won' | 'lost' | 'pending' | null
+  owner_id: string | null
+  owner_name: string
+  bid_count: number
+  milestone_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectMilestoneDTO = {
+  id: string
+  project_id: string
+  title: string
+  status: 'pending' | 'done'
+  due_date: string | null
+  completed_at: string | null
+  sort_order: number
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectActivityDTO = {
+  id: string
+  project_id: string
+  actor_user_id: string | null
+  actor_name: string
+  action: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export type CostProjectDTO = {
+  id: string
+  project_id: string
+  name: string
+  status: 'draft' | 'active' | 'closed'
+  budget_amount: number | null
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 export type CreateBidFromTenderDTO = {
   tender: TenderDTO
   bid: BidDocumentDTO
@@ -479,6 +526,77 @@ export async function createTenderSource(payload: {
 export async function verifyTenderSource(sourceId: string): Promise<TenderSourceDTO> {
   const { data } = await apiClient.post<TenderSourceDTO>(`/tender-sources/${sourceId}/verify`)
   return data
+}
+
+export async function fetchProjects(params?: { status?: string }): Promise<ProjectDTO[]> {
+  const { data } = await apiClient.get<{ items: ProjectDTO[] }>('/projects', { params })
+  return data.items
+}
+
+export async function createProject(payload: {
+  name: string
+  status?: ProjectDTO['status']
+  result?: ProjectDTO['result']
+}): Promise<ProjectDTO> {
+  const { data } = await apiClient.post<ProjectDTO>('/projects', payload)
+  return data
+}
+
+export async function fetchProject(projectId: string): Promise<ProjectDTO> {
+  const { data } = await apiClient.get<ProjectDTO>(`/projects/${projectId}`)
+  return data
+}
+
+export async function updateProject(
+  projectId: string,
+  payload: Partial<Pick<ProjectDTO, 'name' | 'status' | 'result'>>,
+): Promise<ProjectDTO> {
+  const { data } = await apiClient.patch<ProjectDTO>(`/projects/${projectId}`, payload)
+  return data
+}
+
+export async function transitionProject(
+  projectId: string,
+  payload: { status: ProjectDTO['status']; result?: ProjectDTO['result'] },
+): Promise<ProjectDTO> {
+  const { data } = await apiClient.post<ProjectDTO>(`/projects/${projectId}/transition`, payload)
+  return data
+}
+
+export async function fetchProjectMilestones(projectId: string): Promise<ProjectMilestoneDTO[]> {
+  const { data } = await apiClient.get<{ items: ProjectMilestoneDTO[] }>(`/projects/${projectId}/milestones`)
+  return data.items
+}
+
+export async function createProjectMilestone(
+  projectId: string,
+  payload: { title: string; status?: ProjectMilestoneDTO['status']; due_date?: string; sort_order?: number; note?: string },
+): Promise<ProjectMilestoneDTO> {
+  const { data } = await apiClient.post<ProjectMilestoneDTO>(`/projects/${projectId}/milestones`, payload)
+  return data
+}
+
+export async function updateProjectMilestone(
+  projectId: string,
+  milestoneId: string,
+  payload: { title: string; status?: ProjectMilestoneDTO['status']; due_date?: string; sort_order?: number; note?: string },
+): Promise<ProjectMilestoneDTO> {
+  const { data } = await apiClient.patch<ProjectMilestoneDTO>(`/projects/${projectId}/milestones/${milestoneId}`, payload)
+  return data
+}
+
+export async function deleteProjectMilestone(projectId: string, milestoneId: string): Promise<void> {
+  await apiClient.delete(`/projects/${projectId}/milestones/${milestoneId}`)
+}
+
+export async function createCostProject(projectId: string): Promise<CostProjectDTO> {
+  const { data } = await apiClient.post<CostProjectDTO>(`/projects/${projectId}/create-cost-project`)
+  return data
+}
+
+export async function fetchProjectActivities(projectId: string): Promise<ProjectActivityDTO[]> {
+  const { data } = await apiClient.get<{ items: ProjectActivityDTO[] }>(`/projects/${projectId}/activities`)
+  return data.items
 }
 
 export async function fetchKnowledgeCategories(): Promise<KnowledgeCategoryDTO[]> {

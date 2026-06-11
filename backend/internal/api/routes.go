@@ -18,6 +18,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
+	platformproject "github.com/frankford824/ZBT/backend/internal/platform/project"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
@@ -39,6 +40,7 @@ type server struct {
 	knowledgeStore *knowledge.Store
 	bidStore       *bid.Store
 	tenderStore    *platformtender.Store
+	projectStore   *platformproject.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -180,11 +182,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -302,6 +304,20 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.updateTenderSource)
 	group.DELETE("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.deleteTenderSource)
 	group.POST("/tender-sources/:id/verify", rbac.Require("tender", rbac.LevelFull), s.verifyTenderSource)
+	group.GET("/projects", rbac.Require("project", rbac.LevelRead), s.listProjects)
+	group.POST("/projects", rbac.Require("project", rbac.LevelFull), s.createProject)
+	group.GET("/projects/:id", rbac.Require("project", rbac.LevelRead), s.getProject)
+	group.PATCH("/projects/:id", rbac.Require("project", rbac.LevelFull), s.updateProject)
+	group.DELETE("/projects/:id", rbac.Require("project", rbac.LevelFull), s.deleteProject)
+	group.POST("/projects/:id/transition", rbac.Require("project", rbac.LevelFull), s.transitionProject)
+	group.GET("/projects/:id/milestones", rbac.Require("project", rbac.LevelRead), s.listProjectMilestones)
+	group.POST("/projects/:id/milestones", rbac.Require("project", rbac.LevelFull), s.createProjectMilestone)
+	group.PATCH("/projects/:id/milestones/:milestoneId", rbac.Require("project", rbac.LevelFull), s.updateProjectMilestone)
+	group.DELETE("/projects/:id/milestones/:milestoneId", rbac.Require("project", rbac.LevelFull), s.deleteProjectMilestone)
+	group.POST("/projects/:id/members", rbac.Require("project", rbac.LevelFull), s.addProjectMember)
+	group.DELETE("/projects/:id/members/:memberId", rbac.Require("project", rbac.LevelFull), s.deleteProjectMember)
+	group.POST("/projects/:id/create-cost-project", rbac.Require("project", rbac.LevelFull), s.createCostProjectFromProject)
+	group.GET("/projects/:id/activities", rbac.Require("project", rbac.LevelRead), s.projectActivities)
 	group.GET("/tenant", rbac.Require("team", rbac.LevelRead), s.getTenant)
 	group.PATCH("/tenant", rbac.Require("team", rbac.LevelFull), s.updateTenant)
 	group.GET("/tenant/members", rbac.Require("team", rbac.LevelRead), s.listMembers)
@@ -357,72 +373,86 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 
 func registerStubs(group *gin.RouterGroup) {
 	custom := map[string]bool{
-		"GET /me":                                 true,
-		"GET /meta/routes":                        true,
-		"GET /tenant":                             true,
-		"PATCH /tenant":                           true,
-		"GET /tenant/members":                     true,
-		"POST /tenant/members/invite":             true,
-		"GET /roles":                              true,
-		"POST /roles":                             true,
-		"PATCH /roles/:id":                        true,
-		"DELETE /roles/:id":                       true,
-		"GET /notifications":                      true,
-		"GET /tenders":                            true,
-		"POST /tenders":                           true,
-		"GET /tenders/:id":                        true,
-		"PATCH /tenders/:id":                      true,
-		"POST /tenders/:id/favorite":              true,
-		"DELETE /tenders/:id/favorite":            true,
-		"POST /tenders/:id/create-project":        true,
-		"POST /tenders/:id/create-bid":            true,
-		"GET /tender-sources":                     true,
-		"POST /tender-sources":                    true,
-		"PATCH /tender-sources/:id":               true,
-		"DELETE /tender-sources/:id":              true,
-		"POST /tender-sources/:id/verify":         true,
-		"GET /knowledge/categories":               true,
-		"POST /knowledge/categories":              true,
-		"PATCH /knowledge/categories/:id":         true,
-		"DELETE /knowledge/categories/:id":        true,
-		"GET /knowledge/tags":                     true,
-		"POST /knowledge/tags":                    true,
-		"PATCH /knowledge/tags/:id":               true,
-		"DELETE /knowledge/tags/:id":              true,
-		"GET /knowledge/documents":                true,
-		"POST /knowledge/documents":               true,
-		"GET /knowledge/documents/:id":            true,
-		"PATCH /knowledge/documents/:id":          true,
-		"DELETE /knowledge/documents/:id":         true,
-		"POST /knowledge/documents/:id/process":   true,
-		"GET /knowledge/documents/:id/preview":    true,
-		"GET /knowledge/documents/:id/references": true,
-		"POST /knowledge/search":                  true,
-		"GET /knowledge/templates":                true,
-		"POST /knowledge/templates":               true,
-		"GET /knowledge/stats":                    true,
-		"GET /bid-templates":                      true,
-		"POST /bid-templates/:templateId/use":     true,
-		"GET /bids":                               true,
-		"POST /bids":                              true,
-		"GET /bids/:id":                           true,
-		"GET /bids/:id/parts":                     true,
-		"GET /bids/:id/generation/stream":         true,
-		"GET /bids/:id/chapters":                  true,
-		"PATCH /chapters/:chapterId":              true,
-		"POST /chapters/:chapterId/accept":        true,
-		"POST /chapters/:chapterId/regenerate":    true,
-		"GET /chapters/:chapterId/versions":       true,
-		"GET /chapters/:chapterId/diff":           true,
-		"PUT /chapters/:chapterId/content":        true,
-		"POST /bids/:id/exports":                  true,
-		"GET /bids/:id/exports":                   true,
-		"GET /bid-exports/:exportId":              true,
-		"POST /files/presign-upload":              true,
-		"POST /files/:id/confirm":                 true,
-		"GET /files/:id/download-url":             true,
-		"GET /files/:id/preview-url":              true,
-		"GET /ai-tasks/:taskId":                   true,
+		"GET /me":                                      true,
+		"GET /meta/routes":                             true,
+		"GET /tenant":                                  true,
+		"PATCH /tenant":                                true,
+		"GET /tenant/members":                          true,
+		"POST /tenant/members/invite":                  true,
+		"GET /roles":                                   true,
+		"POST /roles":                                  true,
+		"PATCH /roles/:id":                             true,
+		"DELETE /roles/:id":                            true,
+		"GET /notifications":                           true,
+		"GET /tenders":                                 true,
+		"POST /tenders":                                true,
+		"GET /tenders/:id":                             true,
+		"PATCH /tenders/:id":                           true,
+		"POST /tenders/:id/favorite":                   true,
+		"DELETE /tenders/:id/favorite":                 true,
+		"POST /tenders/:id/create-project":             true,
+		"POST /tenders/:id/create-bid":                 true,
+		"GET /tender-sources":                          true,
+		"POST /tender-sources":                         true,
+		"PATCH /tender-sources/:id":                    true,
+		"DELETE /tender-sources/:id":                   true,
+		"POST /tender-sources/:id/verify":              true,
+		"GET /projects":                                true,
+		"POST /projects":                               true,
+		"GET /projects/:id":                            true,
+		"PATCH /projects/:id":                          true,
+		"DELETE /projects/:id":                         true,
+		"POST /projects/:id/transition":                true,
+		"GET /projects/:id/milestones":                 true,
+		"POST /projects/:id/milestones":                true,
+		"PATCH /projects/:id/milestones/:milestoneId":  true,
+		"DELETE /projects/:id/milestones/:milestoneId": true,
+		"POST /projects/:id/members":                   true,
+		"DELETE /projects/:id/members/:memberId":       true,
+		"POST /projects/:id/create-cost-project":       true,
+		"GET /projects/:id/activities":                 true,
+		"GET /knowledge/categories":                    true,
+		"POST /knowledge/categories":                   true,
+		"PATCH /knowledge/categories/:id":              true,
+		"DELETE /knowledge/categories/:id":             true,
+		"GET /knowledge/tags":                          true,
+		"POST /knowledge/tags":                         true,
+		"PATCH /knowledge/tags/:id":                    true,
+		"DELETE /knowledge/tags/:id":                   true,
+		"GET /knowledge/documents":                     true,
+		"POST /knowledge/documents":                    true,
+		"GET /knowledge/documents/:id":                 true,
+		"PATCH /knowledge/documents/:id":               true,
+		"DELETE /knowledge/documents/:id":              true,
+		"POST /knowledge/documents/:id/process":        true,
+		"GET /knowledge/documents/:id/preview":         true,
+		"GET /knowledge/documents/:id/references":      true,
+		"POST /knowledge/search":                       true,
+		"GET /knowledge/templates":                     true,
+		"POST /knowledge/templates":                    true,
+		"GET /knowledge/stats":                         true,
+		"GET /bid-templates":                           true,
+		"POST /bid-templates/:templateId/use":          true,
+		"GET /bids":                                    true,
+		"POST /bids":                                   true,
+		"GET /bids/:id":                                true,
+		"GET /bids/:id/parts":                          true,
+		"GET /bids/:id/generation/stream":              true,
+		"GET /bids/:id/chapters":                       true,
+		"PATCH /chapters/:chapterId":                   true,
+		"POST /chapters/:chapterId/accept":             true,
+		"POST /chapters/:chapterId/regenerate":         true,
+		"GET /chapters/:chapterId/versions":            true,
+		"GET /chapters/:chapterId/diff":                true,
+		"PUT /chapters/:chapterId/content":             true,
+		"POST /bids/:id/exports":                       true,
+		"GET /bids/:id/exports":                        true,
+		"GET /bid-exports/:exportId":                   true,
+		"POST /files/presign-upload":                   true,
+		"POST /files/:id/confirm":                      true,
+		"GET /files/:id/download-url":                  true,
+		"GET /files/:id/preview-url":                   true,
+		"GET /ai-tasks/:taskId":                        true,
 	}
 	for _, spec := range routeSpecs {
 		if custom[spec.Method+" "+spec.Path] {
@@ -564,6 +594,127 @@ func (s *server) deleteTenderSource(c *gin.Context) {
 func (s *server) verifyTenderSource(c *gin.Context) {
 	result, err := s.tenderStore.VerifySource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, result, err)
+}
+
+func (s *server) listProjects(c *gin.Context) {
+	result, err := s.projectStore.List(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Query("status"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createProject(c *gin.Context) {
+	var req platformproject.CreateProjectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.Create(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) getProject(c *gin.Context) {
+	result, err := s.projectStore.Get(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) updateProject(c *gin.Context) {
+	var req platformproject.UpdateProjectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.Update(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteProject(c *gin.Context) {
+	err := s.projectStore.Delete(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) transitionProject(c *gin.Context) {
+	var req platformproject.TransitionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.Transition(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) listProjectMilestones(c *gin.Context) {
+	result, err := s.projectStore.ListMilestones(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createProjectMilestone(c *gin.Context) {
+	var req platformproject.CreateMilestoneRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.CreateMilestone(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateProjectMilestone(c *gin.Context) {
+	var req platformproject.UpdateMilestoneRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.UpdateMilestone(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), c.Param("milestoneId"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteProjectMilestone(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	err := s.projectStore.DeleteMilestone(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), c.Param("milestoneId"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) addProjectMember(c *gin.Context) {
+	var req platformproject.AddMemberRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.AddMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) deleteProjectMember(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	err := s.projectStore.DeleteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), c.Param("memberId"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) createCostProjectFromProject(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.projectStore.CreateCostProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) projectActivities(c *gin.Context) {
+	result, err := s.projectStore.ListActivities(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
 }
 
 func (s *server) getTenant(c *gin.Context) {
@@ -1138,11 +1289,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
