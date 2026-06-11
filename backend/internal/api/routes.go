@@ -639,7 +639,8 @@ func (s *server) previewKnowledgeDocument(c *gin.Context) {
 }
 
 func (s *server) knowledgeDocumentReferences(c *gin.Context) {
-	respond(c, gin.H{"items": []gin.H{}}, nil)
+	result, err := s.knowledgeStore.DocumentReferences(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
 }
 
 func (s *server) searchKnowledge(c *gin.Context) {

@@ -203,6 +203,19 @@ export type KnowledgeSearchResponseDTO = {
   source_refs: KnowledgeSourceRefDTO[]
 }
 
+export type KnowledgeDocumentReferenceDTO = {
+  id: string
+  source_document_id: string
+  bid_document_id: string | null
+  bid_title: string
+  chapter_id: string | null
+  chapter_title: string
+  chunk_id: string | null
+  title: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export type BidDocumentDTO = {
   id: string
   project_id: string | null
@@ -390,6 +403,15 @@ export async function searchKnowledge(payload: {
 }): Promise<KnowledgeSearchResponseDTO> {
   const { data } = await apiClient.post<KnowledgeSearchResponseDTO>('/knowledge/search', payload)
   return data
+}
+
+export async function fetchKnowledgeDocumentReferences(
+  documentId: string,
+): Promise<KnowledgeDocumentReferenceDTO[]> {
+  const { data } = await apiClient.get<{ items: KnowledgeDocumentReferenceDTO[] }>(
+    `/knowledge/documents/${documentId}/references`,
+  )
+  return data.items
 }
 
 export async function fetchBids(): Promise<BidDocumentDTO[]> {

@@ -672,3 +672,51 @@ git diff --check
 ### 下一轮建议
 
 继续 Loop-6：完善知识库三子页面、文档预览、标签/分类管理交互；或进入检索增强的下一步，实现 RRF + RerankProvider 与历史 chunk embedding reindex。
+
+## Loop-6 / 文档引用追踪闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 将 `GET /knowledge/documents/:id/references` 从空实现切换为真实反向引用查询。
+2. 在知识库文档库页面提供可操作的引用追踪入口。
+3. 验证引用追踪仍受租户 RLS 隔离。
+
+### 代码交付
+
+1. `platform/knowledge` 新增 `DocumentReference` DTO 和 `DocumentReferences` 查询，先验证文档属于当前租户，再从 `knowledge_references` 反查 bid、chapter、chunk 和 metadata。
+2. API handler `knowledgeDocumentReferences` 返回真实 `{items}`。
+3. 前端 API client 新增 `KnowledgeDocumentReferenceDTO` 与 `fetchKnowledgeDocumentReferences`。
+4. 文档库页面操作列新增“引用”按钮，打开抽屉展示引用标书、章节、chunk、解析状态和引用时间。
+5. API_SPEC、DATABASE_SCHEMA 和 DEV_LOOP_LOG 同步更新。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/api/routes.go
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+curl http://127.0.0.1:8080/healthz
+curl /api/v1/knowledge/documents/363729dc-65fb-4778-9a81-31f8489fe7ab/references
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. Docker 重新构建并启动 backend/frontend 成功；backend `/healthz` 返回 ok。
+4. 新引用 API 对文档 `363729dc-65fb-4778-9a81-31f8489fe7ab` 返回 1 条引用。
+5. 返回内容包含 `bid_title=智慧交通平台分离标书`、`chapter_title=一、项目理解`、`chunk_id_present=true`、`resolved=true`。
+6. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询同一 `source_document_id` 的 `knowledge_references` 返回 0。
+
+### 偏离蓝图
+
+1. 引用抽屉目前展示引用记录，不做跳转到章节定位；后续可接 `/bids/:bidId/editor?chapter=...`。
+2. 文档引用只覆盖已解析到真实 `source_document_id` 的记录，unresolved 引用仍只能在章节版本 source_refs 中查看。
+
+### 下一轮建议
+
+继续完善知识库三子页面：标签/分类管理表单、文档元数据编辑、模板库真实 API，或推进章节引用到编辑器定位。

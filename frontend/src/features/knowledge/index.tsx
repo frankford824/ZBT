@@ -2,11 +2,12 @@ import {
   CloudUploadOutlined,
   DownloadOutlined,
   FileSearchOutlined,
+  LinkOutlined,
   PlayCircleOutlined,
   TagsOutlined,
 } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App as AntApp, Button, Card, Col, Input, List, Row, Space, Statistic, Table, Tag, Tree, Upload } from 'antd'
+import { App as AntApp, Button, Card, Col, Drawer, Input, List, Row, Space, Statistic, Table, Tag, Tree, Upload } from 'antd'
 import type { UploadProps } from 'antd'
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
@@ -15,12 +16,14 @@ import {
   createPresignedUpload,
   fetchFileURL,
   fetchKnowledgeCategories,
+  fetchKnowledgeDocumentReferences,
   fetchKnowledgeDocuments,
   fetchKnowledgeStats,
   fetchKnowledgeTags,
   processKnowledgeDocument,
   searchKnowledge,
   uploadToPresignedUrl,
+  type KnowledgeDocumentReferenceDTO,
   type KnowledgeSearchResponseDTO,
   type KnowledgeDocumentDTO,
   type KnowledgeTagDTO,
@@ -122,6 +125,7 @@ export function KnowledgeHomePage() {
 export function KnowledgeDocsPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const [referenceDocument, setReferenceDocument] = useState<KnowledgeDocumentDTO | null>(null)
   const documents = useQuery({
     queryKey: ['knowledge-documents'],
     queryFn: fetchKnowledgeDocuments,
@@ -243,6 +247,13 @@ export function KnowledgeDocsPage() {
                       <a href={`/files/${row.file.id}/preview`}>预览</a>
                       <Button
                         size="small"
+                        icon={<LinkOutlined />}
+                        onClick={() => setReferenceDocument(row)}
+                      >
+                        引用
+                      </Button>
+                      <Button
+                        size="small"
                         icon={<PlayCircleOutlined />}
                         disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
                         onClick={() => void startProcess(row.id)}
@@ -265,7 +276,75 @@ export function KnowledgeDocsPage() {
           </Space>
         </Col>
       </Row>
+      <DocumentReferenceDrawer
+        document={referenceDocument}
+        onClose={() => setReferenceDocument(null)}
+      />
     </PageFrame>
+  )
+}
+
+function DocumentReferenceDrawer({
+  document,
+  onClose,
+}: {
+  document: KnowledgeDocumentDTO | null
+  onClose: () => void
+}) {
+  const references = useQuery({
+    queryKey: ['knowledge-document-references', document?.id],
+    queryFn: () => fetchKnowledgeDocumentReferences(document!.id),
+    enabled: Boolean(document),
+  })
+
+  return (
+    <Drawer
+      width={720}
+      title={document ? `${document.title} 的引用追踪` : '引用追踪'}
+      open={Boolean(document)}
+      onClose={onClose}
+      destroyOnHidden
+    >
+      {references.isLoading ? <LoadingBlock /> : null}
+      {references.isError ? <ErrorBlock /> : null}
+      {!references.isLoading && !references.isError && references.data?.length === 0 ? (
+        <EmptyBlock />
+      ) : null}
+      <Table<KnowledgeDocumentReferenceDTO>
+        rowKey="id"
+        loading={references.isLoading}
+        dataSource={references.data ?? []}
+        pagination={false}
+        columns={[
+          {
+            title: '标书',
+            render: (_, row) => row.bid_title || '未关联标书',
+          },
+          {
+            title: '章节',
+            render: (_, row) => row.chapter_title || row.title,
+          },
+          {
+            title: 'Chunk',
+            render: (_, row) => row.chunk_id ? <Tag color="blue">{row.chunk_id.slice(0, 8)}</Tag> : <Tag>未解析</Tag>,
+          },
+          {
+            title: '来源状态',
+            render: (_, row) => {
+              const sourceRef = row.metadata.source_ref as { resolved?: boolean; resolved_by?: string } | undefined
+              if (sourceRef?.resolved) {
+                return <Tag color="green">{sourceRef.resolved_by ?? 'resolved'}</Tag>
+              }
+              return <Tag color="orange">待确认</Tag>
+            },
+          },
+          {
+            title: '引用时间',
+            render: (_, row) => new Date(row.created_at).toLocaleString(),
+          },
+        ]}
+      />
+    </Drawer>
   )
 }
 

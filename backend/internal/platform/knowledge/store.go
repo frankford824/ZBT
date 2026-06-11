@@ -156,6 +156,19 @@ type SearchResult struct {
 	CreatedAt   time.Time      `json:"created_at"`
 }
 
+type DocumentReference struct {
+	ID               string         `json:"id"`
+	SourceDocumentID string         `json:"source_document_id"`
+	BidDocumentID    *string        `json:"bid_document_id"`
+	BidTitle         string         `json:"bid_title"`
+	ChapterID        *string        `json:"chapter_id"`
+	ChapterTitle     string         `json:"chapter_title"`
+	ChunkID          *string        `json:"chunk_id"`
+	Title            string         `json:"title"`
+	Metadata         map[string]any `json:"metadata"`
+	CreatedAt        time.Time      `json:"created_at"`
+}
+
 type aiTaskAccepted struct {
 	TaskID string         `json:"task_id"`
 	Status string         `json:"status"`
@@ -479,6 +492,53 @@ func (s *Store) DeleteDocument(ctx context.Context, tenantID, id string) error {
 		}
 		return nil
 	})
+}
+
+func (s *Store) DocumentReferences(ctx context.Context, tenantID, id string) ([]DocumentReference, error) {
+	references := []DocumentReference{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			select exists(select 1 from knowledge_documents where tenant_id = $1 and id = $2)
+		`, tenantID, id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+		rows, err := tx.Query(ctx, `
+			select
+				kr.id::text,
+				kr.source_document_id::text,
+				kr.bid_document_id::text,
+				coalesce(bd.title, ''),
+				kr.chapter_id::text,
+				coalesce(bc.title, ''),
+				kr.chunk_id::text,
+				kr.title,
+				kr.metadata,
+				kr.created_at
+			from knowledge_references kr
+			left join bid_documents bd on bd.tenant_id = kr.tenant_id and bd.id = kr.bid_document_id
+			left join bid_chapters bc on bc.tenant_id = kr.tenant_id and bc.id = kr.chapter_id
+			where kr.tenant_id = $1 and kr.source_document_id = $2
+			order by kr.created_at desc
+			limit 100
+		`, tenantID, id)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			reference, err := scanDocumentReference(rows)
+			if err != nil {
+				return err
+			}
+			references = append(references, reference)
+		}
+		return rows.Err()
+	})
+	return references, err
 }
 
 func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string) (Task, error) {
@@ -1179,6 +1239,39 @@ func scanSearchResult(row scanner) (SearchResult, error) {
 		PageEnd:    result.PageEnd,
 	}
 	return result, nil
+}
+
+func scanDocumentReference(row scanner) (DocumentReference, error) {
+	var reference DocumentReference
+	var bidDocumentID, chapterID, chunkID sql.NullString
+	var metadataRaw []byte
+	err := row.Scan(
+		&reference.ID,
+		&reference.SourceDocumentID,
+		&bidDocumentID,
+		&reference.BidTitle,
+		&chapterID,
+		&reference.ChapterTitle,
+		&chunkID,
+		&reference.Title,
+		&metadataRaw,
+		&reference.CreatedAt,
+	)
+	if err != nil {
+		return DocumentReference{}, err
+	}
+	if bidDocumentID.Valid {
+		reference.BidDocumentID = &bidDocumentID.String
+	}
+	if chapterID.Valid {
+		reference.ChapterID = &chapterID.String
+	}
+	if chunkID.Valid {
+		reference.ChunkID = &chunkID.String
+	}
+	reference.Metadata = map[string]any{}
+	_ = json.Unmarshal(metadataRaw, &reference.Metadata)
+	return reference, nil
 }
 
 func inferDocType(filename, contentType string) string {
