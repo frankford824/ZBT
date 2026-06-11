@@ -743,6 +743,22 @@ export async function inviteMember(payload: {
   return data
 }
 
+export async function updateMember(
+  memberId: string,
+  payload: {
+    name?: string
+    status?: 'active' | 'invited' | 'disabled'
+    role_codes?: string[]
+  },
+): Promise<MemberDTO> {
+  const { data } = await apiClient.patch<MemberDTO>(`/tenant/members/${memberId}`, payload)
+  return data
+}
+
+export async function deleteMember(memberId: string): Promise<void> {
+  await apiClient.delete(`/tenant/members/${memberId}`)
+}
+
 export async function fetchRoles(): Promise<RoleDTO[]> {
   const { data } = await apiClient.get<{ items: RoleDTO[] }>('/roles')
   return data.items

@@ -365,6 +365,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/tenant", rbac.Require("team", rbac.LevelFull), s.updateTenant)
 	group.GET("/tenant/members", rbac.Require("team", rbac.LevelRead), s.listMembers)
 	group.POST("/tenant/members/invite", rbac.Require("team", rbac.LevelFull), s.inviteMember)
+	group.PATCH("/tenant/members/:id", rbac.Require("team", rbac.LevelFull), s.updateMember)
+	group.DELETE("/tenant/members/:id", rbac.Require("team", rbac.LevelFull), s.deleteMember)
 	group.GET("/roles", rbac.Require("team", rbac.LevelRead), s.listRoles)
 	group.POST("/roles", rbac.Require("team", rbac.LevelFull), s.createRole)
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
@@ -451,6 +453,8 @@ func registerStubs(group *gin.RouterGroup) {
 		"PATCH /tenant":                                true,
 		"GET /tenant/members":                          true,
 		"POST /tenant/members/invite":                  true,
+		"PATCH /tenant/members/:id":                    true,
+		"DELETE /tenant/members/:id":                   true,
 		"GET /roles":                                   true,
 		"POST /roles":                                  true,
 		"PATCH /roles/:id":                             true,
@@ -1052,6 +1056,25 @@ func (s *server) inviteMember(c *gin.Context) {
 	}
 	result, err := s.store.InviteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Email, req.Name, req.RoleCode)
 	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateMember(c *gin.Context) {
+	var req saas.UpdateMemberRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.store.UpdateMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteMember(c *gin.Context) {
+	err := s.store.DeleteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (s *server) listRoles(c *gin.Context) {
@@ -1842,7 +1865,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) {
+	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

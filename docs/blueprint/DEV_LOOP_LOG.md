@@ -1533,3 +1533,55 @@ curl -X GET /api/v1/chapters/:chapterId/versions
 ### 偏离蓝图
 
 1. 本轮仍使用 MockProvider 作为无 API Key 环境下的模型提供方，但调用入口、路由选择、Pydantic 校验和 HMAC 回调均经过 Python AI 服务 ModelRouter。
+
+## Loop-18 / 团队成员管理真实接口 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 `PATCH /tenant/members/:id` 和 `DELETE /tenant/members/:id`，避免团队成员管理仍落入 stub。
+2. 前端团队页成员 Tab 支持编辑成员状态、角色和禁用成员。
+3. 继续验证多租户隔离，确保 tenant2 不能枚举或修改 tenant1 成员。
+
+### 代码交付
+
+1. SaaS Store 新增 `UpdateMemberRequest`、`UpdateMember` 和 `DeleteMember`。
+2. `PATCH /tenant/members/:id` 支持更新姓名、状态 active/invited/disabled 和角色集合。
+3. `DELETE /tenant/members/:id` 采用软禁用语义，将成员状态置为 disabled，保留历史审批、审计和角色引用。
+4. API 路由新增真实成员更新/禁用 handler，并从 stub 注册表移除。
+5. 前端 API client 新增 `updateMember` 和 `deleteMember`。
+6. `/team?tab=members` 增加成员设置弹窗、角色多选、状态选择和禁用操作。
+7. API 蓝图同步更新成员管理接口状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/saas/store.go internal/api/routes.go && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend
+./infra/scripts/check.sh
+curl -X POST /api/v1/tenant/members/invite
+curl -X PATCH /api/v1/tenant/members/:id
+curl -X DELETE /api/v1/tenant/members/:id
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker backend/frontend 构建成功，并启动成功。
+5. `./infra/scripts/check.sh` 通过。
+6. 运行时邀请临时成员 `7c54e554-a31f-412f-aca5-a2200ca19423`，邮箱 `member-20260611131119@zbt.local`，初始 status=`active`，role=`viewer`。
+7. `PATCH /tenant/members/:id` 将姓名改为“临时成员已更新”、status=`active`、role=`bid_specialist`，接口返回更新后的成员快照。
+8. tenant2/other 调用 tenant1 成员 `PATCH /tenant/members/:id` 返回 404。
+9. `DELETE /tenant/members/:id` 返回 204，回查成员 status=`disabled`，角色仍保留为 `bid_specialist`。
+10. 禁用成员再次登录返回 401。
+11. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询该成员 disabled 记录数量为 1、角色记录数量为 1；tenant2 RLS 上下文两者均为 0。
+
+### 偏离蓝图
+
+1. `DELETE /tenant/members/:id` 采用软禁用而非物理删除，以避免破坏审批、审计和历史项目成员引用；禁用后登录链路已验证会被拒绝。

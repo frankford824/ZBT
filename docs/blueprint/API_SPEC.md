@@ -16,6 +16,8 @@ POST /auth/register、POST /auth/login、POST /auth/refresh、POST /auth/logout�
 
 GET /tenant、PATCH /tenant、GET /tenant/members、POST /tenant/members/invite、PATCH /tenant/members/:id、DELETE /tenant/members/:id、GET /roles、POST /roles、PATCH /roles/:id、DELETE /roles/:id。
 
+团队成员管理已补齐 `PATCH /tenant/members/:id` 和 `DELETE /tenant/members/:id`。PATCH 支持更新成员姓名、状态 active/invited/disabled 和角色集合；DELETE 采用软禁用，将 `tenant_members.status` 置为 disabled，保留历史审批、审计和角色引用。前端 `/team?tab=members` 已接入成员编辑和禁用操作。
+
 AI 调用审计已落地 `GET /ai-call-logs`，返回当前租户内的模型调用记录，包含 task_type、provider、model、token_usage、latency_ms、status、error_message 和业务资源引用。`/team?tab=logs` 已从审批时间线切换为真实 AI 调用日志表。
 
 ## Tender

@@ -1,4 +1,4 @@
-import { CheckOutlined, CloseOutlined, DeleteOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons'
+import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   App as AntApp,
@@ -22,6 +22,7 @@ import {
   approveApproval,
   createApprovalChain,
   deleteApprovalChain,
+  deleteMember,
   fetchAICallLogs,
   fetchApprovalChains,
   fetchApprovals,
@@ -31,9 +32,11 @@ import {
   inviteMember,
   markNotificationsRead,
   rejectApproval,
+  updateMember,
   updateApprovalChain,
   type ApprovalChainDTO,
   type ApprovalStepDTO,
+  type MemberDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
@@ -42,9 +45,9 @@ function statusTag(status: string) {
   const color =
     status === 'approved' || status === 'done'
       ? 'green'
-      : status === 'rejected' || status === 'failed'
+      : status === 'rejected' || status === 'failed' || status === 'disabled'
         ? 'red'
-        : status === 'pending' || status === 'running' || status === 'queued'
+        : status === 'pending' || status === 'running' || status === 'queued' || status === 'invited'
           ? 'blue'
           : 'default'
   const label: Record<string, string> = {
@@ -57,6 +60,8 @@ function statusTag(status: string) {
     running: '运行中',
     queued: '排队中',
     active: '正常',
+    invited: '已邀请',
+    disabled: '已禁用',
   }
   return <Tag color={color}>{label[status] || status}</Tag>
 }
@@ -84,8 +89,11 @@ export function TeamPage() {
   const queryClient = useQueryClient()
   const [inviteOpen, setInviteOpen] = useState(false)
   const [chainOpen, setChainOpen] = useState(false)
+  const [memberOpen, setMemberOpen] = useState(false)
+  const [editingMember, setEditingMember] = useState<MemberDTO | null>(null)
   const [inviteForm] = Form.useForm()
   const [chainForm] = Form.useForm()
+  const [memberForm] = Form.useForm()
 
   const membersQuery = useQuery({ queryKey: ['team', 'members'], queryFn: fetchMembers })
   const rolesQuery = useQuery({ queryKey: ['team', 'roles'], queryFn: fetchRoles })
@@ -105,6 +113,30 @@ export function TeamPage() {
       message.success('成员已邀请')
     },
     onError: () => message.error('邀请成员失败'),
+  })
+
+  const updateMemberMutation = useMutation({
+    mutationFn: (values: { name?: string; status?: 'active' | 'invited' | 'disabled'; role_codes?: string[] }) => {
+      if (!editingMember) throw new Error('missing member')
+      return updateMember(editingMember.id, values)
+    },
+    onSuccess: () => {
+      setMemberOpen(false)
+      setEditingMember(null)
+      memberForm.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['team', 'members'] })
+      message.success('成员已更新')
+    },
+    onError: () => message.error('成员更新失败'),
+  })
+
+  const deleteMemberMutation = useMutation({
+    mutationFn: deleteMember,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['team', 'members'] })
+      message.success('成员已禁用')
+    },
+    onError: () => message.error('成员禁用失败'),
   })
 
   const createChainMutation = useMutation({
@@ -190,6 +222,16 @@ export function TeamPage() {
     })
   }
 
+  const openMemberEditor = (member: MemberDTO) => {
+    setEditingMember(member)
+    memberForm.setFieldsValue({
+      name: member.user.name,
+      status: member.status,
+      role_codes: member.roles.map((role) => role.code),
+    })
+    setMemberOpen(true)
+  }
+
   return (
     <PageFrame
       module="企业管理"
@@ -226,6 +268,21 @@ export function TeamPage() {
                     render: (_, record) => record.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>),
                   },
                   { title: '状态', dataIndex: 'status', render: statusTag },
+                  {
+                    title: '操作',
+                    render: (_, record) => (
+                      <Space>
+                        <Button size="small" icon={<EditOutlined />} onClick={() => openMemberEditor(record)}>
+                          编辑
+                        </Button>
+                        <Popconfirm title="禁用该成员" onConfirm={() => deleteMemberMutation.mutate(record.id)}>
+                          <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMemberMutation.isPending}>
+                            禁用
+                          </Button>
+                        </Popconfirm>
+                      </Space>
+                    ),
+                  },
                 ]}
               />
             ) : (
@@ -398,6 +455,34 @@ export function TeamPage() {
           </Form.Item>
           <Form.Item label="角色" name="role_code">
             <Select options={roleOptions} loading={rolesQuery.isLoading} />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        open={memberOpen}
+        title="成员设置"
+        onCancel={() => {
+          setMemberOpen(false)
+          setEditingMember(null)
+        }}
+        onOk={memberForm.submit}
+        confirmLoading={updateMemberMutation.isPending}
+      >
+        <Form form={memberForm} layout="vertical" onFinish={updateMemberMutation.mutate}>
+          <Form.Item label="姓名" name="name" rules={[{ required: true, message: '姓名必填' }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item label="状态" name="status" rules={[{ required: true, message: '状态必填' }]}>
+            <Select
+              options={[
+                { value: 'active', label: '正常' },
+                { value: 'invited', label: '已邀请' },
+                { value: 'disabled', label: '已禁用' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="角色" name="role_codes" rules={[{ required: true, message: '至少选择一个角色' }]}>
+            <Select mode="multiple" options={roleOptions} loading={rolesQuery.isLoading} />
           </Form.Item>
         </Form>
       </Modal>

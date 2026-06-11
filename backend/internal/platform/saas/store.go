@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
@@ -12,7 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound       = errors.New("not found")
+	ErrInvalidRequest = errors.New("invalid request")
+)
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -41,6 +45,13 @@ type Member struct {
 	User   User   `json:"user"`
 	Status string `json:"status"`
 	Roles  []Role `json:"roles"`
+}
+
+type UpdateMemberRequest struct {
+	Name      string   `json:"name"`
+	Status    string   `json:"status"`
+	RoleCode  string   `json:"role_code"`
+	RoleCodes []string `json:"role_codes"`
 }
 
 type Session struct {
@@ -257,6 +268,108 @@ func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCod
 	return member, err
 }
 
+func (s *Store) UpdateMember(ctx context.Context, tenantID, memberID string, req UpdateMemberRequest) (Member, error) {
+	var member Member
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var userID string
+		if err := tx.QueryRow(ctx, `
+			select user_id::text
+			from tenant_members
+			where tenant_id = $1 and id = $2
+		`, tenantID, memberID).Scan(&userID); err != nil {
+			return err
+		}
+		if name := strings.TrimSpace(req.Name); name != "" {
+			if _, err := tx.Exec(ctx, `
+				update users
+				set name = $2, updated_at = now()
+				where id = $1
+			`, userID, name); err != nil {
+				return err
+			}
+		}
+		if status := normalizeMemberStatus(req.Status); status != "" {
+			if _, err := tx.Exec(ctx, `
+				update tenant_members
+				set status = $3, updated_at = now()
+				where tenant_id = $1 and id = $2
+			`, tenantID, memberID, status); err != nil {
+				return err
+			}
+		} else if strings.TrimSpace(req.Status) != "" {
+			return ErrInvalidRequest
+		}
+		roleCodes := normalizeRoleCodes(req.RoleCodes, req.RoleCode)
+		if req.RoleCodes != nil || strings.TrimSpace(req.RoleCode) != "" {
+			if len(roleCodes) == 0 {
+				return ErrInvalidRequest
+			}
+			rows, err := tx.Query(ctx, `
+				select id::text, code, name
+				from roles
+				where tenant_id = $1 and code = any($2)
+			`, tenantID, roleCodes)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			roles := []Role{}
+			for rows.Next() {
+				var role Role
+				if err := rows.Scan(&role.ID, &role.Code, &role.Name); err != nil {
+					return err
+				}
+				roles = append(roles, role)
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			if len(roles) != len(roleCodes) {
+				return ErrInvalidRequest
+			}
+			if _, err := tx.Exec(ctx, `delete from tenant_member_roles where tenant_id = $1 and tenant_member_id = $2`, tenantID, memberID); err != nil {
+				return err
+			}
+			for _, role := range roles {
+				if _, err := tx.Exec(ctx, `
+					insert into tenant_member_roles (tenant_id, tenant_member_id, role_id)
+					values ($1, $2, $3)
+					on conflict do nothing
+				`, tenantID, memberID, role.ID); err != nil {
+					return err
+				}
+			}
+		}
+		loaded, err := memberByID(ctx, tx, tenantID, memberID)
+		if err != nil {
+			return err
+		}
+		member = loaded
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, ErrNotFound
+	}
+	return member, err
+}
+
+func (s *Store) DeleteMember(ctx context.Context, tenantID, memberID string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update tenant_members
+			set status = 'disabled', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, memberID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+}
+
 func (s *Store) ListRoles(ctx context.Context, tenantID string) ([]Role, error) {
 	roles := []Role{}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -461,4 +574,73 @@ func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID s
 
 func validLevel(level rbac.Level) bool {
 	return level == rbac.LevelNone || level == rbac.LevelRead || level == rbac.LevelFull
+}
+
+func memberByID(ctx context.Context, tx pgx.Tx, tenantID, memberID string) (Member, error) {
+	rows, err := tx.Query(ctx, `
+		select
+			tm.id::text, u.id::text, u.email, u.name, tm.status,
+			r.id::text, r.code, r.name
+		from tenant_members tm
+		join users u on u.id = tm.user_id
+		left join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
+		left join roles r on r.id = tmr.role_id and r.tenant_id = tm.tenant_id
+		where tm.tenant_id = $1 and tm.id = $2
+		order by r.code
+	`, tenantID, memberID)
+	if err != nil {
+		return Member{}, err
+	}
+	defer rows.Close()
+	var member *Member
+	for rows.Next() {
+		var memberID, userID, email, name, status string
+		var roleID, roleCode, roleName *string
+		if err := rows.Scan(&memberID, &userID, &email, &name, &status, &roleID, &roleCode, &roleName); err != nil {
+			return Member{}, err
+		}
+		if member == nil {
+			member = &Member{
+				ID:     memberID,
+				User:   User{ID: userID, Email: email, Name: name},
+				Status: status,
+				Roles:  []Role{},
+			}
+		}
+		if roleID != nil {
+			member.Roles = append(member.Roles, Role{ID: *roleID, Code: *roleCode, Name: *roleName})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return Member{}, err
+	}
+	if member == nil {
+		return Member{}, pgx.ErrNoRows
+	}
+	return *member, nil
+}
+
+func normalizeMemberStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "active", "invited", "disabled":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeRoleCodes(values []string, single string) []string {
+	seen := map[string]bool{}
+	codes := []string{}
+	for _, value := range append(values, single) {
+		code := strings.TrimSpace(value)
+		if code == "" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		codes = append(codes, code)
+	}
+	return codes
 }
