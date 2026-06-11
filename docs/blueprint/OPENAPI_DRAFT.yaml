@@ -1,0 +1,33 @@
+openapi: 3.1.0
+info:
+  title: ZhiBiaoTong API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+paths:
+  /healthz:
+    get:
+      summary: Backend health check
+      responses:
+        "200":
+          description: OK
+  /me:
+    get:
+      summary: Current user, tenant, roles, and permissions
+      responses:
+        "200":
+          description: Current session context
+  /meta/routes:
+    get:
+      summary: Route and module manifest for frontend bootstrapping
+      responses:
+        "200":
+          description: Platform manifest
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+security:
+  - bearerAuth: []
