@@ -93,6 +93,7 @@ var routeSpecs = []routeSpec{
 	{"POST", "/projects/:id/members", "project", false},
 	{"DELETE", "/projects/:id/members/:memberId", "project", false},
 	{"POST", "/projects/:id/create-cost-project", "project", false},
+	{"POST", "/projects/:id/archive-case", "project", false},
 	{"GET", "/projects/:id/activities", "project", false},
 	{"GET", "/bids", "bid", false},
 	{"POST", "/bids", "bid", false},
@@ -382,6 +383,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/projects/:id/members", rbac.Require("project", rbac.LevelFull), s.addProjectMember)
 	group.DELETE("/projects/:id/members/:memberId", rbac.Require("project", rbac.LevelFull), s.deleteProjectMember)
 	group.POST("/projects/:id/create-cost-project", rbac.Require("project", rbac.LevelFull), s.createCostProjectFromProject)
+	group.POST("/projects/:id/archive-case", rbac.Require("project", rbac.LevelFull), rbac.Require("knowledge", rbac.LevelFull), s.archiveProjectCase)
 	group.GET("/projects/:id/activities", rbac.Require("project", rbac.LevelRead), s.projectActivities)
 	group.GET("/cost-projects", rbac.Require("cost", rbac.LevelRead), s.listCostProjects)
 	group.POST("/cost-projects", rbac.Require("cost", rbac.LevelFull), s.createCostProject)
@@ -535,6 +537,7 @@ func registerStubs(group *gin.RouterGroup) {
 		"POST /projects/:id/members":                   true,
 		"DELETE /projects/:id/members/:memberId":       true,
 		"POST /projects/:id/create-cost-project":       true,
+		"POST /projects/:id/archive-case":              true,
 		"GET /projects/:id/activities":                 true,
 		"GET /cost-projects":                           true,
 		"POST /cost-projects":                          true,
@@ -890,6 +893,29 @@ func (s *server) createCostProjectFromProject(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	result, err := s.projectStore.CreateCostProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
 	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) archiveProjectCase(c *gin.Context) {
+	tenantID := tenant.FromContext(c.Request.Context())
+	userID, _ := c.Get("user_id")
+	draft, err := s.projectStore.BuildWonCaseDraft(c.Request.Context(), tenantID, c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	fileAsset, err := s.fileService.CreateGeneratedAsset(c.Request.Context(), tenantID, userID.(string), platformfile.GeneratedAssetRequest{
+		Filename:    draft.Filename,
+		ContentType: "text/markdown; charset=utf-8",
+		Content:     []byte(draft.Content),
+		BizType:     "knowledge_case",
+		BizID:       c.Param("id"),
+	})
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	result, err := s.projectStore.ArchiveWonCase(c.Request.Context(), tenantID, userID.(string), c.Param("id"), fileAsset.ID, draft)
+	respondStatus(c, http.StatusCreated, gin.H{"case": result, "file": fileAsset}, err)
 }
 
 func (s *server) projectActivities(c *gin.Context) {

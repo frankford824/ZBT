@@ -85,6 +85,25 @@ type CostProject struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
+type WonCaseDraft struct {
+	ProjectID string         `json:"project_id"`
+	Title     string         `json:"title"`
+	Filename  string         `json:"filename"`
+	Summary   string         `json:"summary"`
+	Content   string         `json:"content"`
+	Metadata  map[string]any `json:"metadata"`
+}
+
+type ArchivedKnowledgeCase struct {
+	ProjectID  string    `json:"project_id"`
+	DocumentID string    `json:"document_id"`
+	FileID     string    `json:"file_id"`
+	ChunkID    string    `json:"chunk_id"`
+	Title      string    `json:"title"`
+	Summary    string    `json:"summary"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type CreateProjectRequest struct {
 	Name   string  `json:"name"`
 	Status string  `json:"status"`
@@ -595,6 +614,178 @@ func (s *Store) CreateCostProject(ctx context.Context, tenantID, userID, project
 	return cost, err
 }
 
+func (s *Store) BuildWonCaseDraft(ctx context.Context, tenantID, projectID string) (WonCaseDraft, error) {
+	if err := validateUUID(projectID); err != nil {
+		return WonCaseDraft{}, err
+	}
+	var draft WonCaseDraft
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		project, err := scanProject(tx.QueryRow(ctx, projectSelectSQL()+` where p.tenant_id = $1 and p.id = $2`, tenantID, projectID))
+		if err != nil {
+			return err
+		}
+		if project.Status != "closed" || project.Result == nil || *project.Result != "won" {
+			return ErrInvalidRequest
+		}
+		bids, err := projectBidSummaries(ctx, tx, tenantID, projectID)
+		if err != nil {
+			return err
+		}
+		milestones, err := projectMilestoneSummaries(ctx, tx, tenantID, projectID)
+		if err != nil {
+			return err
+		}
+		cost, err := projectCostSummary(ctx, tx, tenantID, projectID)
+		if err != nil {
+			return err
+		}
+		summary := fmt.Sprintf("%s 已中标，沉淀为项目案例。关联标书 %d 份，里程碑 %d 个。", project.Name, len(bids), len(milestones))
+		if cost != "" {
+			summary += " " + cost
+		}
+		content := buildWonCaseContent(project, bids, milestones, cost)
+		draft = WonCaseDraft{
+			ProjectID: project.ID,
+			Title:     project.Name + "中标案例",
+			Filename:  project.Name + "-中标案例.md",
+			Summary:   summary,
+			Content:   content,
+			Metadata: map[string]any{
+				"source":            "project_won_case",
+				"source_project_id": project.ID,
+				"project_status":    project.Status,
+				"project_result":    "won",
+				"bid_count":         len(bids),
+				"milestone_count":   len(milestones),
+			},
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WonCaseDraft{}, ErrNotFound
+	}
+	return draft, err
+}
+
+func (s *Store) ArchiveWonCase(ctx context.Context, tenantID, userID, projectID, fileID string, draft WonCaseDraft) (ArchivedKnowledgeCase, error) {
+	if err := validateUUID(projectID); err != nil {
+		return ArchivedKnowledgeCase{}, err
+	}
+	if err := validateUUID(fileID); err != nil {
+		return ArchivedKnowledgeCase{}, err
+	}
+	var result ArchivedKnowledgeCase
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var projectStatus string
+		var projectResult sql.NullString
+		if err := tx.QueryRow(ctx, `select status, result from projects where tenant_id = $1 and id = $2`, tenantID, projectID).Scan(&projectStatus, &projectResult); err != nil {
+			return err
+		}
+		if projectStatus != "closed" || !projectResult.Valid || projectResult.String != "won" {
+			return ErrInvalidRequest
+		}
+		var fileReady bool
+		if err := tx.QueryRow(ctx, `
+			select exists(select 1 from file_assets where tenant_id = $1 and id = $2 and status = 'ready')
+		`, tenantID, fileID).Scan(&fileReady); err != nil {
+			return err
+		}
+		if !fileReady {
+			return pgx.ErrNoRows
+		}
+		categoryID, err := ensureKnowledgeCategory(ctx, tx, tenantID, "项目案例", "历史项目、中标案例和复用业绩")
+		if err != nil {
+			return err
+		}
+		tagID, err := ensureKnowledgeTag(ctx, tx, tenantID, "中标案例", "green")
+		if err != nil {
+			return err
+		}
+		metadata := draft.Metadata
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		metadata["source_project_id"] = projectID
+		metadata["source_file_id"] = fileID
+		metadataJSON, _ := json.Marshal(metadata)
+		var documentID string
+		var createdAt time.Time
+		if err := tx.QueryRow(ctx, `
+			insert into knowledge_documents (
+				tenant_id, file_asset_id, category_id, title, doc_type,
+				parse_status, summary, metadata, processed_at
+			)
+			values ($1, $2, $3, $4, 'won_case', 'processed', $5, $6, now())
+			on conflict (tenant_id, file_asset_id)
+			do update set
+				category_id = excluded.category_id,
+				title = excluded.title,
+				doc_type = excluded.doc_type,
+				parse_status = 'processed',
+				summary = excluded.summary,
+				metadata = excluded.metadata,
+				processed_at = now(),
+				updated_at = now()
+			returning id::text, created_at
+		`, tenantID, fileID, categoryID, draft.Title, draft.Summary, metadataJSON).Scan(&documentID, &createdAt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from knowledge_document_tags where tenant_id = $1 and document_id = $2`, tenantID, documentID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into knowledge_document_tags (tenant_id, document_id, tag_id)
+			values ($1, $2, $3)
+			on conflict (tenant_id, document_id, tag_id) do nothing
+		`, tenantID, documentID, tagID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from knowledge_chunks where tenant_id = $1 and document_id = $2`, tenantID, documentID); err != nil {
+			return err
+		}
+		chunkMetadata := map[string]any{
+			"source":            "project_won_case",
+			"source_project_id": projectID,
+			"source_file_id":    fileID,
+			"chunk_index":       0,
+			"doc_type":          "won_case",
+		}
+		chunkMetadataJSON, _ := json.Marshal(chunkMetadata)
+		var chunkID string
+		if err := tx.QueryRow(ctx, `
+			insert into knowledge_chunks (
+				tenant_id, document_id, title, content, section_path,
+				page_start, page_end, metadata
+			)
+			values ($1, $2, $3, $4, $5, 1, 1, $6)
+			returning id::text
+		`, tenantID, documentID, draft.Title, draft.Content, "项目案例 / "+draft.Title, chunkMetadataJSON).Scan(&chunkID); err != nil {
+			return err
+		}
+		if err := insertLog(ctx, tx, tenantID, projectID, userID, "project.knowledge_case_archived", map[string]any{
+			"document_id": documentID,
+			"file_id":     fileID,
+			"chunk_id":    chunkID,
+		}); err != nil {
+			return err
+		}
+		result = ArchivedKnowledgeCase{
+			ProjectID:  projectID,
+			DocumentID: documentID,
+			FileID:     fileID,
+			ChunkID:    chunkID,
+			Title:      draft.Title,
+			Summary:    draft.Summary,
+			CreatedAt:  createdAt,
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ArchivedKnowledgeCase{}, ErrNotFound
+	}
+	return result, err
+}
+
 func (s *Store) getMilestone(ctx context.Context, tenantID, projectID, milestoneID string) (Milestone, error) {
 	var milestone Milestone
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -653,6 +844,19 @@ func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx)
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+type bidSummary struct {
+	Title   string
+	BidType string
+	Status  string
+}
+
+type milestoneSummary struct {
+	Title   string
+	Status  string
+	DueDate string
+	Note    string
 }
 
 func projectSelectSQL() string {
@@ -738,6 +942,162 @@ func scanActivity(row scanner) (Activity, error) {
 		_ = json.Unmarshal(metadataRaw, &activity.Metadata)
 	}
 	return activity, err
+}
+
+func projectBidSummaries(ctx context.Context, tx pgx.Tx, tenantID, projectID string) ([]bidSummary, error) {
+	rows, err := tx.Query(ctx, `
+		select title, bid_type, status
+		from bid_documents
+		where tenant_id = $1 and project_id = $2 and status <> 'archived'
+		order by created_at
+	`, tenantID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []bidSummary{}
+	for rows.Next() {
+		var item bidSummary
+		if err := rows.Scan(&item.Title, &item.BidType, &item.Status); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func projectMilestoneSummaries(ctx context.Context, tx pgx.Tx, tenantID, projectID string) ([]milestoneSummary, error) {
+	rows, err := tx.Query(ctx, `
+		select title, status, coalesce(due_date::text, ''), note
+		from project_milestones
+		where tenant_id = $1 and project_id = $2
+		order by sort_order, due_date nulls last, created_at
+	`, tenantID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []milestoneSummary{}
+	for rows.Next() {
+		var item milestoneSummary
+		if err := rows.Scan(&item.Title, &item.Status, &item.DueDate, &item.Note); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func projectCostSummary(ctx context.Context, tx pgx.Tx, tenantID, projectID string) (string, error) {
+	var budget, actual, margin float64
+	var exists bool
+	err := tx.QueryRow(ctx, `
+		select true,
+			coalesce(sum(ci.budget_amount), 0)::float8,
+			coalesce(sum(ci.actual_amount), 0)::float8,
+			case when coalesce(sum(ci.budget_amount), 0) = 0 then 0
+				else round(((coalesce(sum(ci.budget_amount), 0) - coalesce(sum(ci.actual_amount), 0)) / sum(ci.budget_amount) * 100)::numeric, 2)::float8
+			end
+		from cost_projects cp
+		left join cost_items ci on ci.tenant_id = cp.tenant_id and ci.cost_project_id = cp.id
+		where cp.tenant_id = $1 and cp.project_id = $2
+		group by cp.id
+		limit 1
+	`, tenantID, projectID).Scan(&exists, &budget, &actual, &margin)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", nil
+	}
+	return fmt.Sprintf("成本预算 %.2f，实际 %.2f，利润率 %.2f%%。", budget, actual, margin), nil
+}
+
+func buildWonCaseContent(project Project, bids []bidSummary, milestones []milestoneSummary, cost string) string {
+	var builder strings.Builder
+	builder.WriteString("# ")
+	builder.WriteString(project.Name)
+	builder.WriteString("中标案例\n\n")
+	builder.WriteString("## 项目概况\n")
+	builder.WriteString(project.Name)
+	builder.WriteString(" 已完成投标并确认中标，可作为后续投标复用案例。")
+	if project.OwnerName != "" {
+		builder.WriteString(" 项目负责人：")
+		builder.WriteString(project.OwnerName)
+		builder.WriteString("。")
+	}
+	builder.WriteString("\n\n## 标书沉淀\n")
+	if len(bids) == 0 {
+		builder.WriteString("- 暂无关联标书记录。\n")
+	} else {
+		for _, bid := range bids {
+			builder.WriteString("- ")
+			builder.WriteString(bid.Title)
+			builder.WriteString("，类型 ")
+			builder.WriteString(bid.BidType)
+			builder.WriteString("，状态 ")
+			builder.WriteString(bid.Status)
+			builder.WriteString("。\n")
+		}
+	}
+	builder.WriteString("\n## 里程碑\n")
+	if len(milestones) == 0 {
+		builder.WriteString("- 暂无里程碑记录。\n")
+	} else {
+		for _, milestone := range milestones {
+			builder.WriteString("- ")
+			builder.WriteString(milestone.Title)
+			builder.WriteString("，状态 ")
+			builder.WriteString(milestone.Status)
+			if milestone.DueDate != "" {
+				builder.WriteString("，计划日期 ")
+				builder.WriteString(milestone.DueDate)
+			}
+			if milestone.Note != "" {
+				builder.WriteString("，备注：")
+				builder.WriteString(milestone.Note)
+			}
+			builder.WriteString("。\n")
+		}
+	}
+	builder.WriteString("\n## 成本复盘\n")
+	if cost == "" {
+		builder.WriteString("暂无成本项目复盘数据。\n")
+	} else {
+		builder.WriteString(cost)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\n## 可复用要点\n")
+	builder.WriteString("- 项目投标链路、标书内容和里程碑可作为同类项目编制参考。\n")
+	builder.WriteString("- 涉及企业资质、人员证书、金额和日期时仍需按最新事实人工核对。\n")
+	return builder.String()
+}
+
+func ensureKnowledgeCategory(ctx context.Context, tx pgx.Tx, tenantID, name, description string) (string, error) {
+	var id string
+	err := tx.QueryRow(ctx, `
+		insert into knowledge_categories (tenant_id, name, description)
+		values ($1, $2, $3)
+		on conflict (tenant_id, name)
+		do update set description = excluded.description, updated_at = now()
+		returning id::text
+	`, tenantID, name, description).Scan(&id)
+	return id, err
+}
+
+func ensureKnowledgeTag(ctx context.Context, tx pgx.Tx, tenantID, name, color string) (string, error) {
+	var id string
+	err := tx.QueryRow(ctx, `
+		insert into knowledge_tags (tenant_id, name, color)
+		values ($1, $2, $3)
+		on conflict (tenant_id, name)
+		do update set color = excluded.color, updated_at = now()
+		returning id::text
+	`, tenantID, name, color).Scan(&id)
+	return id, err
 }
 
 func ensureProject(ctx context.Context, tx pgx.Tx, tenantID, projectID string) error {

@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
+  archiveProjectCase,
   createCostProject,
   createProject,
   createProjectMilestone,
@@ -221,6 +222,15 @@ export function ProjectDetailPage() {
     },
     onError: () => message.error('仅中标项目可创建成本项目'),
   })
+  const archiveCaseMutation = useMutation({
+    mutationFn: () => archiveProjectCase(projectId),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] })
+      message.success(`${result.case.title}已回流知识库`)
+      navigate('/knowledge/docs')
+    },
+    onError: () => message.error('仅中标项目可回流知识库'),
+  })
 
   if (project.isLoading) return <LoadingBlock />
   if (project.isError) return <ErrorBlock />
@@ -250,6 +260,9 @@ export function ProjectDetailPage() {
         </Button>,
         <Button key="milestone" onClick={() => setOpen(true)}>
           新增里程碑
+        </Button>,
+        <Button key="archive-case" disabled={!canCreateCost} loading={archiveCaseMutation.isPending} onClick={() => archiveCaseMutation.mutate()}>
+          回流知识库
         </Button>,
         <Button key="cost" type="primary" disabled={!canCreateCost} loading={costMutation.isPending} onClick={() => costMutation.mutate()}>
           创建成本项目

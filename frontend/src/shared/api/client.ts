@@ -295,6 +295,21 @@ export type ProjectActivityDTO = {
   created_at: string
 }
 
+export type ProjectKnowledgeCaseDTO = {
+  project_id: string
+  document_id: string
+  file_id: string
+  chunk_id: string
+  title: string
+  summary: string
+  created_at: string
+}
+
+export type ArchiveProjectCaseDTO = {
+  case: ProjectKnowledgeCaseDTO
+  file: FileAssetDTO
+}
+
 export type CostProjectDTO = {
   id: string
   project_id: string
@@ -988,6 +1003,11 @@ export async function deleteProjectMilestone(projectId: string, milestoneId: str
 
 export async function createCostProject(projectId: string): Promise<CostProjectDTO> {
   const { data } = await apiClient.post<CostProjectDTO>(`/projects/${projectId}/create-cost-project`)
+  return data
+}
+
+export async function archiveProjectCase(projectId: string): Promise<ArchiveProjectCaseDTO> {
+  const { data } = await apiClient.post<ArchiveProjectCaseDTO>(`/projects/${projectId}/archive-case`)
   return data
 }
 

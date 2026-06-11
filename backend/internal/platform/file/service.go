@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -68,6 +69,14 @@ type PresignedURLResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+type GeneratedAssetRequest struct {
+	Filename    string
+	ContentType string
+	Content     []byte
+	BizType     string
+	BizID       string
+}
+
 func NewService(ctx context.Context, cfg config.Config, pool *pgxpool.Pool) (*Service, error) {
 	internal, err := newClient(cfg.MinIOEndpoint, cfg)
 	if err != nil {
@@ -95,6 +104,18 @@ func NewService(ctx context.Context, cfg config.Config, pool *pgxpool.Pool) (*Se
 
 func ObjectKey(tenantID, bizType string) string {
 	return fmt.Sprintf("%s/%s/%s", tenantID, bizType, uuid.NewString())
+}
+
+func GeneratedObjectKey(tenantID, bizType, bizID string) string {
+	bizType = sanitizeSegment(bizType)
+	if bizType == "" {
+		bizType = "generated"
+	}
+	bizID = strings.TrimSpace(bizID)
+	if bizID == "" {
+		return ObjectKey(tenantID, bizType)
+	}
+	return fmt.Sprintf("%s/%s/%s", tenantID, bizType, bizID)
 }
 
 func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, req PresignUploadRequest) (PresignUploadResponse, error) {
@@ -149,6 +170,58 @@ func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, re
 		Headers:   map[string]string{"Content-Type": contentType},
 		ExpiresAt: time.Now().Add(presignTTL).UTC(),
 	}, nil
+}
+
+func (s *Service) CreateGeneratedAsset(ctx context.Context, tenantID, userID string, req GeneratedAssetRequest) (Asset, error) {
+	bizType := sanitizeSegment(req.BizType)
+	if bizType == "" {
+		bizType = "generated"
+	}
+	filename := sanitizeFilename(req.Filename)
+	if filename == "" || len(req.Content) == 0 {
+		return Asset{}, ErrInvalidRequest
+	}
+	contentType := strings.TrimSpace(req.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	objectKey := GeneratedObjectKey(tenantID, bizType, req.BizID)
+	if _, err := s.internal.PutObject(ctx, s.bucket, objectKey, bytes.NewReader(req.Content), int64(len(req.Content)), minio.PutObjectOptions{ContentType: contentType}); err != nil {
+		return Asset{}, err
+	}
+	var asset Asset
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		created, err := scanAsset(tx.QueryRow(ctx, `
+			insert into file_assets (
+				tenant_id, owner_user_id, biz_type, biz_id,
+				object_key, filename, content_type, size_bytes, status, confirmed_at
+			)
+			values ($1, $2, $3, nullif($4, '')::uuid, $5, $6, $7, $8, 'ready', now())
+			on conflict (object_key)
+			do update set
+				owner_user_id = excluded.owner_user_id,
+				biz_type = excluded.biz_type,
+				biz_id = excluded.biz_id,
+				filename = excluded.filename,
+				content_type = excluded.content_type,
+				size_bytes = excluded.size_bytes,
+				status = 'ready',
+				confirmed_at = now(),
+				updated_at = now()
+			returning
+				id::text, biz_type, coalesce(biz_id::text, ''), object_key,
+				filename, content_type, size_bytes, status, created_at, updated_at
+		`, tenantID, userID, bizType, req.BizID, objectKey, filename, contentType, int64(len(req.Content))))
+		if err != nil {
+			return err
+		}
+		asset = created
+		return nil
+	})
+	if err != nil {
+		return Asset{}, err
+	}
+	return asset, nil
 }
 
 func (s *Service) ConfirmUpload(ctx context.Context, tenantID, fileID string) (Asset, error) {

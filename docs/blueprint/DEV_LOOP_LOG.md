@@ -1754,3 +1754,56 @@ curl -X GET /api/v1/ai-call-logs
 ### 偏离蓝图
 
 1. 本轮仍使用 MockProvider 作为无 API Key 环境下的成本建议模型提供方，但调用入口、路由选择、Pydantic 校验、HMAC 回调和 ai_call_logs 均已经过 Python AI 服务 ModelRouter。
+
+## Loop-22 / 中标案例回流知识库 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 最终验收项“中标案例可回流知识库”。
+2. closed + won 项目可一键沉淀为知识库案例文档，并立即参与知识库检索。
+3. 回流链路必须经过真实 file_assets、knowledge_documents、knowledge_chunks 和项目活动日志，并保持租户隔离。
+
+### 代码交付
+
+1. File Service 新增 `CreateGeneratedAsset`，支持后端生成 Markdown 内容并写入 MinIO，按 `knowledge_case/:projectId` 生成稳定 object_key，重复回流会更新同一 file_asset。
+2. Project Store 新增 `BuildWonCaseDraft` 和 `ArchiveWonCase`，仅允许 `status=closed` 且 `result=won` 的项目回流，汇总项目概况、关联标书、里程碑和成本复盘。
+3. `POST /projects/:id/archive-case` 新增项目 + 知识库双权限校验，生成 ready 文件资产，写入 `doc_type=won_case`、`parse_status=processed` 的知识库文档，确保分类“项目案例”和标签“中标案例”，并写入可搜索 chunk。
+4. 项目详情页新增“回流知识库”操作，回流成功后提示并跳转知识库文档页。
+5. API 蓝图同步补充 Project 和 Knowledge 中的回流接口说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+docker compose build backend frontend
+docker compose up -d backend frontend
+./infra/scripts/check.sh
+curl -X POST /api/v1/projects
+curl -X POST /api/v1/projects/:id/milestones
+curl -X POST /api/v1/projects/:id/transition
+curl -X POST /api/v1/projects/:id/archive-case
+curl -X GET /api/v1/knowledge/documents
+curl -X POST /api/v1/knowledge/search
+curl -X GET /api/v1/files/:fileId/preview-url
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. Docker backend/frontend 构建成功，并启动成功。
+4. `./infra/scripts/check.sh` 通过。
+5. 运行时创建项目 `387d2def-ceb2-4737-a14a-3d6a0638b65e`，项目名 `自动验收中标案例-20260611144210`，添加里程碑后流转为 `closed/won`。
+6. `POST /projects/:id/archive-case` 返回 document `014f91b6-a823-4abc-995b-4cb014952fef`、file `c3a99299-5aae-45bd-b469-8ccfdc23f110`、chunk `9305ddb6-fad3-40d5-bc8e-f8eb4df4ed06`，file.status=`ready`。
+7. `GET /knowledge/documents` 可查到该 `doc_type=won_case`、`parse_status=processed` 文档。
+8. `POST /knowledge/search` 使用项目名和 `doc_type=won_case` 可召回该 document。
+9. `GET /files/:fileId/preview-url` 返回有效预览 URL，长度 850。
+10. tenant2/other 调用 tenant1 项目 `POST /projects/:id/archive-case` 返回 404。
+11. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询 document/chunk/file/project_log 数量均为 1；设置 tenant2 RLS 上下文查询同一批 ID 数量均为 0。
+
+### 偏离蓝图
+
+1. 本轮回流案例的 chunk 先写入文本检索字段，embedding 为空；关键词/全文检索可立即召回。后续如需语义向量召回，可复用现有知识库处理或新增 generated case embedding 任务。
