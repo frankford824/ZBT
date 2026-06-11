@@ -23,7 +23,10 @@ var (
 	ErrInvalidRequest = errors.New("invalid bid request")
 )
 
-const docxContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+const (
+	docxContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	zipContentType  = "application/zip"
+)
 
 type Store struct {
 	pool   *pgxpool.Pool
@@ -129,6 +132,12 @@ type CallbackPayload struct {
 type exportChapterPayload struct {
 	Title     string `json:"title"`
 	PlainText string `json:"plain_text"`
+}
+
+type exportPartPayload struct {
+	Code     string                 `json:"code"`
+	Title    string                 `json:"title"`
+	Chapters []exportChapterPayload `json:"chapters"`
 }
 
 type aiTaskAccepted struct {
@@ -324,9 +333,12 @@ func (s *Store) GetExport(ctx context.Context, tenantID, exportID string) (Expor
 
 func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string, req CreateExportRequest) (CreateExportResponse, error) {
 	exportType := normalizeExportType(req.ExportType)
-	partCode := normalizePartCode(req.PartCode)
-	if exportType != "docx" {
+	if exportType == "" {
 		return CreateExportResponse{}, ErrInvalidRequest
+	}
+	partCode := normalizePartCode(req.PartCode)
+	if exportType == "zip" {
+		partCode = "all"
 	}
 
 	var export Export
@@ -337,40 +349,67 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		if err != nil {
 			return err
 		}
-		part, err := partForExport(ctx, tx, tenantID, bidID, partCode)
-		if err != nil {
-			return err
-		}
-		chapters, err := chaptersForExport(ctx, tx, tenantID, bidID, part.ID)
-		if err != nil {
-			return err
-		}
-		if len(chapters) == 0 {
-			return ErrInvalidRequest
-		}
 
 		exportID := uuid.NewString()
 		fileID := uuid.NewString()
-		filename := exportFilename(document.Title, part.Code, exportType)
+		filename := exportFilename(document.Title, partCode, exportType)
 		objectKey := platformfile.ObjectKey(tenantID, "bid_export")
-		chapterPayload := make([]exportChapterPayload, 0, len(chapters))
-		for _, chapter := range chapters {
-			chapterPayload = append(chapterPayload, exportChapterPayload{
-				Title:     chapter.Title,
-				PlainText: chapter.PlainText,
-			})
-		}
+		var bidPartID any
 		payload = map[string]any{
 			"tenant_id":    tenantID,
 			"export_id":    exportID,
 			"bid_id":       bidID,
 			"bid_title":    document.Title,
-			"part_code":    part.Code,
-			"part_title":   part.Title,
+			"export_type":  exportType,
 			"filename":     filename,
 			"object_key":   objectKey,
-			"chapters":     chapterPayload,
 			"callback_url": s.cfg.AICallbackURL,
+		}
+		if exportType == "docx" {
+			part, err := partForExport(ctx, tx, tenantID, bidID, partCode)
+			if err != nil {
+				return err
+			}
+			chapters, err := chaptersForExport(ctx, tx, tenantID, bidID, part.ID)
+			if err != nil {
+				return err
+			}
+			if len(chapters) == 0 {
+				return ErrInvalidRequest
+			}
+			bidPartID = part.ID
+			payload["part_code"] = part.Code
+			payload["part_title"] = part.Title
+			payload["chapters"] = exportChapters(chapters)
+		} else {
+			parts, err := partsForZipExport(ctx, tx, tenantID, bidID)
+			if err != nil {
+				return err
+			}
+			if len(parts) < 2 {
+				return ErrInvalidRequest
+			}
+			partPayload := make([]exportPartPayload, 0, len(parts))
+			for _, part := range parts {
+				chapters, err := chaptersForExport(ctx, tx, tenantID, bidID, part.ID)
+				if err != nil {
+					return err
+				}
+				if len(chapters) == 0 {
+					continue
+				}
+				partPayload = append(partPayload, exportPartPayload{
+					Code:     part.Code,
+					Title:    part.Title,
+					Chapters: exportChapters(chapters),
+				})
+			}
+			if len(partPayload) < 2 {
+				return ErrInvalidRequest
+			}
+			payload["part_code"] = "all"
+			payload["part_title"] = "投标文件全套"
+			payload["parts"] = partPayload
 		}
 		payloadJSON, _ := json.Marshal(payload)
 		if _, err := tx.Exec(ctx, `
@@ -379,7 +418,7 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 				object_key, filename, content_type, size_bytes, status
 			)
 			values ($1, $2, $3, 'bid_export', $4, $5, $6, $7, 0, 'pending')
-		`, fileID, tenantID, userID, exportID, objectKey, filename, docxContentType); err != nil {
+		`, fileID, tenantID, userID, exportID, objectKey, filename, contentTypeForExport(exportType)); err != nil {
 			return err
 		}
 		createdExport, err := scanExport(tx.QueryRow(ctx, `
@@ -390,7 +429,7 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 			values ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, '{}')
 			returning id::text, bid_document_id::text, bid_part_id::text, export_type, part_code, status,
 				file_asset_id::text, filename, metadata, error_message, completed_at, created_at, updated_at
-		`, exportID, tenantID, bidID, part.ID, exportType, part.Code, fileID, filename))
+		`, exportID, tenantID, bidID, bidPartID, exportType, partCode, fileID, filename))
 		if err != nil {
 			return err
 		}
@@ -418,7 +457,7 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		return CreateExportResponse{}, err
 	}
 
-	accepted, err := s.submitDocxExport(ctx, payload)
+	accepted, err := s.submitDocumentExport(ctx, exportType, payload)
 	if err != nil {
 		_ = s.markExportFailed(ctx, tenantID, export.ID, task.ID, err.Error())
 		return CreateExportResponse{}, err
@@ -461,6 +500,13 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			if value, ok := payload.Result["size_bytes"].(float64); ok {
 				sizeBytes = int64(value)
 			}
+			contentType := ""
+			if value, ok := payload.Result["content_type"].(string); ok {
+				contentType = strings.TrimSpace(value)
+			}
+			if contentType == "" {
+				contentType = docxContentType
+			}
 			if _, err := tx.Exec(ctx, `
 				update file_assets
 				set status = 'ready',
@@ -470,7 +516,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					updated_at = now()
 				where tenant_id = $1
 					and id = (select file_asset_id from bid_exports where tenant_id = $1 and id = $2)
-			`, payload.TenantID, task.ResourceID, sizeBytes, docxContentType); err != nil {
+			`, payload.TenantID, task.ResourceID, sizeBytes, contentType); err != nil {
 				return err
 			}
 		}
@@ -542,12 +588,12 @@ func (s *Store) markExportFailed(ctx context.Context, tenantID, exportID, taskID
 	})
 }
 
-func (s *Store) submitDocxExport(ctx context.Context, payload map[string]any) (aiTaskAccepted, error) {
+func (s *Store) submitDocumentExport(ctx context.Context, exportType string, payload map[string]any) (aiTaskAccepted, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return aiTaskAccepted{}, err
 	}
-	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/export/docx"
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/export/" + exportType
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return aiTaskAccepted{}, err
@@ -616,6 +662,41 @@ func chaptersForExport(ctx context.Context, tx pgx.Tx, tenantID, bidID, partID s
 		chapters = append(chapters, chapter)
 	}
 	return chapters, rows.Err()
+}
+
+func partsForZipExport(ctx context.Context, tx pgx.Tx, tenantID, bidID string) ([]Part, error) {
+	parts := []Part{}
+	rows, err := tx.Query(ctx, `
+		select id::text, bid_document_id::text, code, title, sort_order, status, metadata, created_at, updated_at
+		from bid_parts
+		where tenant_id = $1
+			and bid_document_id = $2
+			and code in ('combined_body', 'tech', 'business')
+		order by sort_order, created_at
+	`, tenantID, bidID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		part, err := scanPart(rows)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, part)
+	}
+	return parts, rows.Err()
+}
+
+func exportChapters(chapters []Chapter) []exportChapterPayload {
+	payload := make([]exportChapterPayload, 0, len(chapters))
+	for _, chapter := range chapters {
+		payload = append(payload, exportChapterPayload{
+			Title:     chapter.Title,
+			PlainText: chapter.PlainText,
+		})
+	}
+	return payload
 }
 
 func createDefaultParts(ctx context.Context, tx pgx.Tx, tenantID, bidID, bidType string) error {
@@ -785,6 +866,7 @@ func exportFilename(title, partCode, exportType string) string {
 		"business":      "商务标",
 		"boq":           "工程量清单",
 		"attachment":    "附件",
+		"all":           "投标文件全套",
 	}[partCode]
 	if label == "" {
 		label = partCode
@@ -813,10 +895,12 @@ func normalizeBidType(value string) string {
 
 func normalizeExportType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "pdf", "zip":
+	case "":
+		return "docx"
+	case "docx", "zip":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
-		return "docx"
+		return ""
 	}
 }
 
@@ -827,6 +911,13 @@ func normalizePartCode(value string) string {
 	default:
 		return "combined_body"
 	}
+}
+
+func contentTypeForExport(exportType string) string {
+	if exportType == "zip" {
+		return zipContentType
+	}
+	return docxContentType
 }
 
 func normalizeTaskStatus(status string) string {

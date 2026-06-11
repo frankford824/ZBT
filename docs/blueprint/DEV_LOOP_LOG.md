@@ -346,3 +346,55 @@ docker compose up -d backend frontend ai-service
 ### 下一轮建议
 
 继续推进标书主链路：实现章节编辑保存、章节版本、逐章生成任务和 source_refs 落库；或补 ZIP 打包使分离标书技术标/商务标导出链路更完整。
+
+## Loop-4 ZIP 打包闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 `x.md` 中分离标书必须支持投标文件全套 ZIP 打包的要求。
+2. ZIP 打包沿用 Go 编排、Python 导出、MinIO 私有存储、HMAC 回调和 Go 落库链路。
+3. 前端第 7 步导出页启用“打包全套 ZIP”操作。
+4. 验证 ZIP 至少包含技术标和商务标两个 docx，并保持租户隔离。
+
+### 代码交付
+
+1. Go `platform/bid` 的 `CreateExport` 支持 `export_type=zip`，自动汇总 `tech` 和 `business` parts 及其 chapters。
+2. ZIP 导出创建 `bid_exports.export_type='zip'`、待确认 `file_assets.content_type='application/zip'`，并通过 `ai_tasks` 调用 Python `/tasks/export/zip`。
+3. Python AI 服务新增 `/tasks/export/zip`，复用 docx 导出器为每个 part 生成 docx，再写入 ZIP 包并上传 MinIO。
+4. HMAC 回调结果包含 export_type、part_count、chapter_count、size_bytes 和 content_type，Go 回调后将 file_asset 标记为 ready。
+5. 前端标书向导第 7 步启用 ZIP 打包按钮，导出历史中显示“全套 ZIP”，完成后使用同一下载入口。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd ai-service && python3 -m compileall app
+cd frontend && pnpm build
+git diff --check
+./infra/scripts/check.sh
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+```
+
+结果：
+
+1. backend 测试通过，AI compileall 通过，frontend build 通过，`./infra/scripts/check.sh` 通过。
+2. backend 启动确认 goose current version 7，AI `/healthz` 与 `/models/health` 返回 ok。
+3. 端到端 ZIP 导出使用 bid `50000000-0000-4000-8000-000000000001`。
+4. `POST /bids/:id/exports` 创建 ZIP 导出 `fabe0dfc-8ca5-4743-8b10-d66dbe5681a4`，本地任务 `abb29f62-b6ab-4fcc-9143-81f6c4d8a49d`，外部任务 `task-export-fabe0dfc8ca5`。
+5. Python 后台任务完成后，`GET /bid-exports/:exportId` 返回 status `done` 和下载 URL。
+6. 下载文件名为 `智慧交通平台分离标书-投标文件全套.zip`，大小 69066 bytes，ZIP 内包含 `01-技术标.docx` 和 `02-商务标.docx`，两个条目均为 docx ZIP 包格式。
+7. tenant2 访问 tenant1 ZIP 导出详情返回 404。
+8. RLS 验证中，tenant1 对该 ZIP export 可见数量为 1，关联 file_asset 状态为 ready、content_type 为 `application/zip`、size_bytes 为 69066；tenant2 对同一 export 可见数量为 0。
+
+### 偏离蓝图
+
+1. ZIP 目前只打包生成出的 docx 文件，尚未包含附件、工程量清单、电子标特殊格式或导出清单 manifest。
+2. PDF 转换、封面、页眉页脚、目录和模板排版仍待增强。
+3. 章节仍是最小样例内容，尚未接入逐章生成、版本对比、采纳/重新生成和 source_refs 落库。
+
+### 下一轮建议
+
+继续推进标书主链路：章节编辑保存、章节版本、逐章生成任务、生成结果 source_refs 落库，以及编辑器按技术标/商务标分别进入和保存。

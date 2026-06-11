@@ -286,7 +286,7 @@ export function BidWizardPage() {
     },
   })
   const exportMutation = useMutation({
-    mutationFn: (partCode: string) => createBidExport(bidId, { export_type: 'docx', part_code: partCode }),
+    mutationFn: (payload: { export_type: 'docx' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
     onSuccess: async () => {
       message.success('导出任务已创建')
       await queryClient.invalidateQueries({ queryKey: ['bid-exports', bidId] })
@@ -357,13 +357,18 @@ export function BidWizardPage() {
                     key={part.id}
                     icon={<DownloadOutlined />}
                     loading={exportMutation.isPending}
-                    onClick={() => exportMutation.mutate(part.code)}
+                    onClick={() => exportMutation.mutate({ export_type: 'docx', part_code: part.code })}
                   >
                     导出{part.title}.docx
                   </Button>
                 ))}
-                <Button icon={<FileZipOutlined />} disabled>
-                  打包 ZIP
+                <Button
+                  icon={<FileZipOutlined />}
+                  loading={exportMutation.isPending}
+                  disabled={exportableParts.length < 2}
+                  onClick={() => exportMutation.mutate({ export_type: 'zip', part_code: 'all' })}
+                >
+                  打包全套 ZIP
                 </Button>
               </Space>
               <Table
@@ -374,7 +379,11 @@ export function BidWizardPage() {
                 dataSource={exportsQuery.data ?? []}
                 columns={[
                   { title: '文件名', dataIndex: 'filename' },
-                  { title: '类型', dataIndex: 'part_code', render: partCodeLabel },
+                  {
+                    title: '类型',
+                    dataIndex: 'part_code',
+                    render: (value: string, row: BidExportDTO) => partCodeLabel(row.export_type === 'zip' ? 'all' : value),
+                  },
                   { title: '状态', dataIndex: 'status', render: exportStatusTag },
                   {
                     title: '操作',
@@ -409,7 +418,7 @@ function bidStatusLabel(value: string) {
 }
 
 function partCodeLabel(value: string) {
-  return { combined_body: '综合标书', tech: '技术标', business: '商务标' }[value] ?? value
+  return { combined_body: '综合标书', tech: '技术标', business: '商务标', all: '全套 ZIP' }[value] ?? value
 }
 
 function exportStatusTag(value: BidExportDTO['status']) {

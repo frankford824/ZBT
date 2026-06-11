@@ -26,7 +26,7 @@ GET /projects、POST /projects、GET /projects/:id、PATCH /projects/:id、DELET
 
 GET /bids、POST /bids、GET /bids/:id、PATCH /bids/:id、DELETE /bids/:id、POST /bids/:id/upload-tender-file、POST /bids/:id/parse-tender、GET /bids/:id/parse-result、PUT /bids/:id/parse-result、POST /bids/:id/outline/generate、GET /bids/:id/parts、GET /bids/:id/parts/:partId/outline、PUT /bids/:id/parts/:partId/outline、GET /bids/:id/material-selection、PUT /bids/:id/material-selection、POST /bids/:id/generate、GET /bids/:id/generation-jobs、GET /generation-jobs/:jobId、POST /generation-jobs/:jobId/pause、POST /generation-jobs/:jobId/resume、POST /generation-jobs/:jobId/cancel、GET /bids/:id/generation/stream、GET /bids/:id/chapters、PATCH /chapters/:chapterId、POST /chapters/:chapterId/accept、POST /chapters/:chapterId/regenerate、GET /chapters/:chapterId/versions、GET /chapters/:chapterId/diff、PUT /chapters/:chapterId/content、POST /chapters/:chapterId/ai-action、POST /bids/:id/exports、GET /bids/:id/exports、GET /bid-exports/:exportId、GET /bid-templates、POST /bid-templates/:templateId/use。
 
-标书一期已落地最小 bid_documents、bid_parts、bid_chapters、bid_exports 数据闭环。`POST /bids/:id/exports` 创建 docx 导出任务，Go 写入 ai_tasks 和待确认 file_asset 后调用 Python `/tasks/export/docx`；Python 生成 docx 并上传 MinIO，再通过 HMAC 回调 Go，Go 将 bid_exports 和 file_assets 标记为 ready/done。`GET /bid-exports/:exportId` 在导出完成后返回下载预签名 URL。
+标书一期已落地最小 bid_documents、bid_parts、bid_chapters、bid_exports 数据闭环。`POST /bids/:id/exports` 支持 `export_type=docx` 或 `zip`。docx 导出时 Go 写入 ai_tasks 和待确认 file_asset 后调用 Python `/tasks/export/docx`；ZIP 打包时 Go 汇总技术标/商务标内容后调用 Python `/tasks/export/zip`。Python 生成文件并上传 MinIO，再通过 HMAC 回调 Go，Go 将 bid_exports 和 file_assets 标记为 ready/done。`GET /bid-exports/:exportId` 在导出完成后返回下载预签名 URL。
 
 ## Knowledge
 

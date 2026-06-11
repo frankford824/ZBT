@@ -342,7 +342,7 @@ export async function fetchBidExports(bidId: string): Promise<BidExportDTO[]> {
 
 export async function createBidExport(
   bidId: string,
-  payload: { export_type: 'docx'; part_code: string },
+  payload: { export_type: 'docx' | 'zip'; part_code: string },
 ): Promise<CreateBidExportDTO> {
   const { data } = await apiClient.post<CreateBidExportDTO>(`/bids/${bidId}/exports`, payload)
   return data
