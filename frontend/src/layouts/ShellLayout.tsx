@@ -10,6 +10,7 @@ import type { MenuProps } from 'antd'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSessionStore } from '../app/store/session'
 import { navGroups, type NavItem } from '../routes/routeManifest'
+import { logoutSession } from '../shared/api/client'
 import { permissionAllows } from '../shared/permissions/permissions'
 
 const { Header, Sider, Content } = Layout
@@ -62,6 +63,15 @@ export function ShellLayout() {
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     const target = allNavItems.find((item) => item.key === key)
     if (target) navigate(target.path)
+  }
+
+  const handleLogout = async () => {
+    try {
+      await logoutSession()
+    } finally {
+      logout()
+      navigate('/login')
+    }
   }
 
   return (
@@ -117,7 +127,7 @@ export function ShellLayout() {
                       key: 'logout',
                       icon: <LogoutOutlined />,
                       label: '退出登录',
-                      onClick: logout,
+                      onClick: handleLogout,
                     },
                   ],
                 }}

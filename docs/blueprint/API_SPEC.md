@@ -12,6 +12,8 @@ GET /healthz，GET /api/v1/meta/routes，GET /api/v1/dashboard/summary。
 
 POST /auth/register、POST /auth/login、POST /auth/refresh、POST /auth/logout、GET /me。
 
+注册与租户创建已落地 `POST /auth/register`。该接口创建新 tenant、管理员 user、默认角色矩阵、tenant_member、tenant_member_roles 和欢迎通知，并直接返回与 login 相同的 JWT session。默认角色包括 company_admin、department_admin、project_manager、bid_specialist 和 viewer，模块权限通过 `module_permissions` 落库；`POST /auth/refresh` 基于当前 Bearer token 重新签发 session，`POST /auth/logout` 在 stateless JWT 模式下返回成功并由前端清理本地 session。
+
 ## Tenant / Team
 
 GET /tenant、PATCH /tenant、GET /tenant/members、POST /tenant/members/invite、PATCH /tenant/members/:id、DELETE /tenant/members/:id、GET /roles、POST /roles、PATCH /roles/:id、DELETE /roles/:id。

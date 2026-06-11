@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -61,6 +62,13 @@ type Session struct {
 	Permissions map[string]rbac.Level `json:"permissions"`
 }
 
+type RegisterRequest struct {
+	TenantName string `json:"tenant_name"`
+	AdminName  string `json:"admin_name"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+}
+
 type Notification struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
@@ -71,6 +79,77 @@ type Notification struct {
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, error) {
+	tenantName := strings.TrimSpace(req.TenantName)
+	adminName := strings.TrimSpace(req.AdminName)
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	password := strings.TrimSpace(req.Password)
+	if tenantName == "" || adminName == "" || email == "" || len(password) < 8 {
+		return Session{}, ErrInvalidRequest
+	}
+	tenantID := uuid.NewString()
+	var session Session
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `select exists(select 1 from users where lower(email) = lower($1))`, email).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return ErrInvalidRequest
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into tenants (id, name)
+			values ($1, $2)
+		`, tenantID, tenantName); err != nil {
+			return err
+		}
+		roleID, err := seedDefaultRoles(ctx, tx, tenantID)
+		if err != nil {
+			return err
+		}
+		var user User
+		if err := tx.QueryRow(ctx, `
+			insert into users (email, name, password_hash)
+			values ($1, $2, crypt($3, gen_salt('bf')))
+			returning id::text, email, name
+		`, email, adminName, password).Scan(&user.ID, &user.Email, &user.Name); err != nil {
+			return err
+		}
+		var memberID string
+		if err := tx.QueryRow(ctx, `
+			insert into tenant_members (tenant_id, user_id, status)
+			values ($1, $2, 'active')
+			returning id::text
+		`, tenantID, user.ID).Scan(&memberID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into tenant_member_roles (tenant_id, tenant_member_id, role_id)
+			values ($1, $2, $3)
+		`, tenantID, memberID, roleID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into notifications (tenant_id, user_id, title, body)
+			values ($1, $2, '企业已创建', '欢迎使用智标通，请先完善团队、知识库和审批链配置。')
+		`, tenantID, user.ID); err != nil {
+			return err
+		}
+		role, err := roleByID(ctx, tx, roleID)
+		if err != nil {
+			return err
+		}
+		session = Session{
+			User:        user,
+			Tenant:      Tenant{ID: tenantID, Name: tenantName},
+			Role:        role,
+			Permissions: role.Permissions,
+		}
+		return nil
+	})
+	return session, err
 }
 
 func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Session, error) {
@@ -574,6 +653,83 @@ func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID s
 
 func validLevel(level rbac.Level) bool {
 	return level == rbac.LevelNone || level == rbac.LevelRead || level == rbac.LevelFull
+}
+
+func seedDefaultRoles(ctx context.Context, tx pgx.Tx, tenantID string) (string, error) {
+	definitions := []struct {
+		Code        string
+		Name        string
+		Permissions map[string]rbac.Level
+	}{
+		{Code: "company_admin", Name: "企业管理员", Permissions: fullModulePermissions()},
+		{Code: "department_admin", Name: "部门管理员", Permissions: fullModulePermissions()},
+		{Code: "project_manager", Name: "项目经理", Permissions: map[string]rbac.Level{
+			"dashboard": rbac.LevelRead,
+			"tender":    rbac.LevelFull, "bid": rbac.LevelFull, "compliance": rbac.LevelFull, "project": rbac.LevelFull,
+			"cost": rbac.LevelRead, "knowledge": rbac.LevelFull, "team": rbac.LevelRead,
+		}},
+		{Code: "bid_specialist", Name: "投标专员", Permissions: map[string]rbac.Level{
+			"dashboard": rbac.LevelRead,
+			"tender":    rbac.LevelRead, "bid": rbac.LevelFull, "compliance": rbac.LevelFull, "project": rbac.LevelRead,
+			"cost": rbac.LevelNone, "knowledge": rbac.LevelRead, "team": rbac.LevelNone,
+		}},
+		{Code: "viewer", Name: "查看者", Permissions: map[string]rbac.Level{
+			"dashboard": rbac.LevelRead,
+			"tender":    rbac.LevelRead, "bid": rbac.LevelRead, "compliance": rbac.LevelRead, "project": rbac.LevelRead,
+			"cost": rbac.LevelNone, "knowledge": rbac.LevelRead, "team": rbac.LevelNone,
+		}},
+	}
+	companyAdminRoleID := ""
+	for _, definition := range definitions {
+		var roleID string
+		if err := tx.QueryRow(ctx, `
+			insert into roles (tenant_id, code, name)
+			values ($1, $2, $3)
+			returning id::text
+		`, tenantID, definition.Code, definition.Name).Scan(&roleID); err != nil {
+			return "", err
+		}
+		if err := replaceModulePermissions(ctx, tx, tenantID, roleID, definition.Permissions); err != nil {
+			return "", err
+		}
+		if definition.Code == "company_admin" {
+			companyAdminRoleID = roleID
+		}
+	}
+	if companyAdminRoleID == "" {
+		return "", ErrInvalidRequest
+	}
+	return companyAdminRoleID, nil
+}
+
+func fullModulePermissions() map[string]rbac.Level {
+	return map[string]rbac.Level{
+		"dashboard":  rbac.LevelFull,
+		"tender":     rbac.LevelFull,
+		"bid":        rbac.LevelFull,
+		"compliance": rbac.LevelFull,
+		"project":    rbac.LevelFull,
+		"cost":       rbac.LevelFull,
+		"knowledge":  rbac.LevelFull,
+		"team":       rbac.LevelFull,
+	}
+}
+
+func roleByID(ctx context.Context, tx pgx.Tx, roleID string) (Role, error) {
+	var role Role
+	if err := tx.QueryRow(ctx, `
+		select id::text, code, name
+		from roles
+		where id = $1
+	`, roleID).Scan(&role.ID, &role.Code, &role.Name); err != nil {
+		return Role{}, err
+	}
+	permissions, err := loadRolePermissions(ctx, tx, role.ID)
+	if err != nil {
+		return Role{}, err
+	}
+	role.Permissions = permissions
+	return role, nil
 }
 
 func memberByID(ctx context.Context, tx pgx.Tx, tenantID, memberID string) (Member, error) {

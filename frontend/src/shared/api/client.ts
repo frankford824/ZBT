@@ -729,6 +729,26 @@ export async function login(payload: {
   return data
 }
 
+export async function registerTenant(payload: {
+  tenant_name: string
+  admin_name: string
+  email: string
+  password: string
+}): Promise<LoginSessionPayload> {
+  const { data } = await apiClient.post<LoginSessionPayload>('/auth/register', payload)
+  return data
+}
+
+export async function refreshSession(): Promise<LoginSessionPayload> {
+  const { data } = await apiClient.post<LoginSessionPayload>('/auth/refresh')
+  return data
+}
+
+export async function logoutSession(): Promise<{ status: string }> {
+  const { data } = await apiClient.post<{ status: string }>('/auth/logout')
+  return data
+}
+
 export async function fetchMembers(): Promise<MemberDTO[]> {
   const { data } = await apiClient.get<{ items: MemberDTO[] }>('/tenant/members')
   return data.items

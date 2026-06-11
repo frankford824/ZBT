@@ -1585,3 +1585,62 @@ curl -X DELETE /api/v1/tenant/members/:id
 ### 偏离蓝图
 
 1. `DELETE /tenant/members/:id` 采用软禁用而非物理删除，以避免破坏审批、审计和历史项目成员引用；禁用后登录链路已验证会被拒绝。
+
+## Loop-19 / 注册与租户创建闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 最终验收中的“可以注册 / 登录”和“可以创建企业租户”。
+2. 将 `POST /auth/register`、`POST /auth/refresh`、`POST /auth/logout` 从 API 文档声明推进到真实后端接口。
+3. 前端 `/register` 从静态表单切到真实注册接口。
+
+### 代码交付
+
+1. SaaS Store 新增 `RegisterRequest` 和 `Register`，注册时生成 tenant UUID 并在同一事务中设置 RLS 上下文。
+2. 注册链路创建 tenant、管理员 user、tenant_member、tenant_member_roles、默认角色矩阵、module_permissions 和欢迎通知。
+3. 新租户默认包含 company_admin、department_admin、project_manager、bid_specialist 和 viewer 角色。
+4. API 新增 `POST /auth/register`、`POST /auth/refresh` 和 `POST /auth/logout`。
+5. 登录、注册和刷新复用统一 session/token 响应结构。
+6. 前端 API client 新增 `registerTenant`、`refreshSession` 和 `logoutSession`。
+7. `/register` 页面接入真实注册接口，注册成功后保存 session 并进入 `/onboarding`。
+8. Shell 退出登录会调用后端 logout 后清理本地 session。
+9. API 蓝图和 README 同步更新注册说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/saas/store.go internal/api/routes.go && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend
+./infra/scripts/check.sh
+curl -X POST /api/v1/auth/register
+curl -X POST /api/v1/auth/refresh
+curl -X POST /api/v1/auth/logout
+curl -X GET /api/v1/me
+curl -X GET /api/v1/tenant/members
+curl -X GET /api/v1/roles
+curl -X GET /api/v1/notifications
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker backend/frontend 构建成功，并启动成功。
+5. `./infra/scripts/check.sh` 通过。
+6. 运行时注册新租户 `9229ce60-4e3a-4140-8ee2-5c55b762826a`，管理员邮箱 `register-20260611132924@zbt.local`，用户 `843c1d38-7442-47bd-822f-2cd510b4bd91`。
+7. 注册响应直接返回 company_admin session，权限模块数量为 8。
+8. 新 token 访问 `/me` 返回同一 tenant；`GET /tenant/members` 返回 1 个 active company_admin 成员；`GET /roles` 返回 bid_specialist、company_admin、department_admin、project_manager、viewer 5 个默认角色；`GET /notifications` 返回 1 条欢迎通知。
+9. `POST /auth/refresh` 返回有效 access_token；`POST /auth/logout` 返回 200。
+10. 使用注册邮箱和密码再次 `POST /auth/login` 成功，返回同一 tenant。
+11. 使用 `zbt_app` 设置新租户 RLS 上下文查询 tenant/roles/member/notification 数量分别为 1/5/1/1；设置默认租户 RLS 上下文查询该新租户数据均为 0。
+
+### 偏离蓝图
+
+1. 当前 logout 为 stateless JWT 语义，不维护服务端 token 黑名单；前端会调用后端 logout 后清理本地 session。
+2. `/onboarding` 本轮仍是前端初始化提示页，注册链路已创建 tenant 和默认角色矩阵；后续可继续接入知识库分类、审批链模板等初始化动作。

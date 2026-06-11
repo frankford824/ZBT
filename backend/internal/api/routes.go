@@ -209,10 +209,13 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 	})
 
 	public := router.Group("/api/v1")
+	public.POST("/auth/register", s.register)
 	public.POST("/auth/login", s.login)
+	public.POST("/auth/refresh", s.refresh)
 	public.POST("/ai/callbacks/tasks", s.aiTaskCallback)
 
 	api := router.Group("/api/v1", s.authenticate(), tenant.Middleware())
+	api.POST("/auth/logout", s.logout)
 	api.GET("/me", s.currentUser)
 	api.GET("/meta/routes", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"routes": routeSpecs, "ai_service_url": cfg.AIServiceURL})
@@ -246,8 +249,51 @@ func (s *server) login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	respondSession(c, s.cfg, session)
+}
 
-	token, err := auth.SignJWT(s.cfg.JWTSecret, auth.Claims{
+func (s *server) register(c *gin.Context) {
+	var req saas.RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	session, err := s.store.Register(c.Request.Context(), req)
+	if errors.Is(err, saas.ErrInvalidRequest) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	respondSession(c, s.cfg, session)
+}
+
+func (s *server) refresh(c *gin.Context) {
+	claims, err := auth.ParseJWT(s.cfg.JWTSecret, bearerToken(c.GetHeader("Authorization")))
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	session, err := s.store.SessionByUserRole(c.Request.Context(), claims.TenantID, claims.UserID, claims.RoleID)
+	if errors.Is(err, saas.ErrNotFound) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "session not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	respondSession(c, s.cfg, session)
+}
+
+func (s *server) logout(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
+	token, err := auth.SignJWT(cfg.JWTSecret, auth.Claims{
 		UserID:    session.User.ID,
 		TenantID:  session.Tenant.ID,
 		RoleID:    session.Role.ID,
