@@ -1,6 +1,7 @@
 import {
   CheckOutlined,
   CompressOutlined,
+  DeleteOutlined,
   DiffOutlined,
   DownloadOutlined,
   EditOutlined,
@@ -23,6 +24,7 @@ import {
   Col,
   Form,
   Input,
+  Popconfirm,
   Progress,
   Radio,
   Row,
@@ -50,6 +52,7 @@ import {
   createBid,
   createBidExport,
   createPresignedUpload,
+  deleteBid,
   fetchAITask,
   fetchBidChapters,
   fetchBid,
@@ -242,6 +245,14 @@ export function BidListPage() {
     },
     onError: () => message.error('提交审批失败'),
   })
+  const archiveMutation = useMutation({
+    mutationFn: deleteBid,
+    onSuccess: async () => {
+      message.success('标书已归档')
+      await queryClient.invalidateQueries({ queryKey: ['bids'] })
+    },
+    onError: () => message.error('标书归档失败'),
+  })
   if (bids.isLoading) return <LoadingBlock />
   if (bids.isError) return <ErrorBlock />
 
@@ -291,6 +302,18 @@ export function BidListPage() {
                   >
                     提交审批
                   </Button>
+                  <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
+                    <Button
+                      type="link"
+                      size="small"
+                      danger
+                      icon={<DeleteOutlined />}
+                      disabled={row.status === 'in_review' || row.status === 'approved'}
+                      loading={archiveMutation.isPending && archiveMutation.variables === row.id}
+                    >
+                      归档
+                    </Button>
+                  </Popconfirm>
                 </Space>
               ),
             },

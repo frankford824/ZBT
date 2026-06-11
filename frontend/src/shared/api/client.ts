@@ -1333,6 +1333,22 @@ export async function fetchBid(bidId: string): Promise<BidDocumentDTO> {
   return data
 }
 
+export async function updateBid(
+  bidId: string,
+  payload: {
+    title?: string
+    project_id?: string | null
+    status?: 'draft' | 'generating' | 'editing' | 'in_review' | 'approved' | 'submitted' | 'archived'
+  },
+): Promise<BidDocumentDTO> {
+  const { data } = await apiClient.patch<BidDocumentDTO>(`/bids/${bidId}`, payload)
+  return data
+}
+
+export async function deleteBid(bidId: string): Promise<void> {
+  await apiClient.delete(`/bids/${bidId}`)
+}
+
 export async function fetchBidParts(bidId: string): Promise<BidPartDTO[]> {
   const { data } = await apiClient.get<{ items: BidPartDTO[] }>(`/bids/${bidId}/parts`)
   return data.items

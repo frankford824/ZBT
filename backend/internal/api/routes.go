@@ -418,6 +418,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
 	group.DELETE("/roles/:id", rbac.Require("team", rbac.LevelFull), s.deleteRole)
 	group.GET("/notifications", s.listNotifications)
+	group.GET("/knowledge", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeHome)
 	group.GET("/knowledge/categories", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeCategories)
 	group.POST("/knowledge/categories", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeCategory)
 	group.PATCH("/knowledge/categories/:id", rbac.Require("knowledge", rbac.LevelFull), s.updateKnowledgeCategory)
@@ -443,6 +444,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/bids", rbac.Require("bid", rbac.LevelRead), s.listBids)
 	group.POST("/bids", rbac.Require("bid", rbac.LevelFull), s.createBid)
 	group.GET("/bids/:id", rbac.Require("bid", rbac.LevelRead), s.getBid)
+	group.PATCH("/bids/:id", rbac.Require("bid", rbac.LevelFull), s.updateBid)
+	group.DELETE("/bids/:id", rbac.Require("bid", rbac.LevelFull), s.deleteBid)
 	group.POST("/bids/:id/upload-tender-file", rbac.Require("bid", rbac.LevelFull), s.uploadBidTenderFile)
 	group.POST("/bids/:id/parse-tender", rbac.Require("bid", rbac.LevelFull), s.parseBidTender)
 	group.GET("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelRead), s.getBidParseResult)
@@ -557,6 +560,7 @@ func registerStubs(group *gin.RouterGroup) {
 		"POST /compliance/rules":                       true,
 		"PATCH /compliance/rules/:id":                  true,
 		"DELETE /compliance/rules/:id":                 true,
+		"GET /knowledge":                               true,
 		"GET /knowledge/categories":                    true,
 		"POST /knowledge/categories":                   true,
 		"PATCH /knowledge/categories/:id":              true,
@@ -582,6 +586,8 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /bids":                                    true,
 		"POST /bids":                                   true,
 		"GET /bids/:id":                                true,
+		"PATCH /bids/:id":                              true,
+		"DELETE /bids/:id":                             true,
 		"POST /bids/:id/upload-tender-file":            true,
 		"POST /bids/:id/parse-tender":                  true,
 		"GET /bids/:id/parse-result":                   true,
@@ -1205,6 +1211,48 @@ func (s *server) streamNotifications(c *gin.Context) {
 	_ = writeSSE(c, flusher, "notifications", gin.H{"items": result, "updated_at": time.Now()})
 }
 
+func (s *server) knowledgeHome(c *gin.Context) {
+	tenantID := tenant.FromContext(c.Request.Context())
+	stats, err := s.knowledgeStore.Stats(c.Request.Context(), tenantID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	categories, err := s.knowledgeStore.ListCategories(c.Request.Context(), tenantID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	tags, err := s.knowledgeStore.ListTags(c.Request.Context(), tenantID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	documents, err := s.knowledgeStore.ListDocuments(c.Request.Context(), tenantID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	templates, err := s.knowledgeStore.ListDocumentTemplates(c.Request.Context(), tenantID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	if len(documents) > 8 {
+		documents = documents[:8]
+	}
+	if len(templates) > 8 {
+		templates = templates[:8]
+	}
+	respond(c, gin.H{
+		"stats":            stats,
+		"categories":       categories,
+		"tags":             tags,
+		"recent_documents": documents,
+		"templates":        templates,
+	}, nil)
+}
+
 func (s *server) listKnowledgeCategories(c *gin.Context) {
 	result, err := s.knowledgeStore.ListCategories(c.Request.Context(), tenant.FromContext(c.Request.Context()))
 	respond(c, gin.H{"items": result}, err)
@@ -1427,6 +1475,25 @@ func (s *server) createBid(c *gin.Context) {
 func (s *server) getBid(c *gin.Context) {
 	result, err := s.bidStore.GetDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, result, err)
+}
+
+func (s *server) updateBid(c *gin.Context) {
+	var req bid.UpdateDocumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.bidStore.UpdateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteBid(c *gin.Context) {
+	err := s.bidStore.DeleteDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 func (s *server) uploadBidTenderFile(c *gin.Context) {

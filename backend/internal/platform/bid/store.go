@@ -240,6 +240,12 @@ type CreateDocumentRequest struct {
 	BidType     string `json:"bid_type"`
 }
 
+type UpdateDocumentRequest struct {
+	Title     string  `json:"title"`
+	ProjectID *string `json:"project_id"`
+	Status    string  `json:"status"`
+}
+
 type UseTemplateRequest struct {
 	Title       string `json:"title"`
 	ProjectName string `json:"project_name"`
@@ -550,6 +556,7 @@ func (s *Store) ListDocuments(ctx context.Context, tenantID string) ([]Document,
 			from bid_documents bd
 			left join projects p on p.id = bd.project_id and p.tenant_id = bd.tenant_id
 			where bd.tenant_id = $1
+				and bd.status <> 'archived'
 			order by bd.created_at desc
 			limit 100
 		`, tenantID)
@@ -615,6 +622,88 @@ func (s *Store) CreateDocument(ctx context.Context, tenantID string, req CreateD
 		return Document{}, err
 	}
 	return s.GetDocument(ctx, tenantID, id)
+}
+
+func (s *Store) UpdateDocument(ctx context.Context, tenantID, id string, req UpdateDocumentRequest) (Document, error) {
+	id = strings.TrimSpace(id)
+	if _, err := uuid.Parse(id); err != nil {
+		return Document{}, ErrInvalidRequest
+	}
+	title := strings.TrimSpace(req.Title)
+	status := strings.TrimSpace(req.Status)
+	if status != "" {
+		status = normalizeDocumentStatus(status)
+		if status == "" {
+			return Document{}, ErrInvalidRequest
+		}
+	}
+	projectID := ""
+	updateProject := req.ProjectID != nil
+	if req.ProjectID != nil {
+		projectID = strings.TrimSpace(*req.ProjectID)
+		if projectID != "" {
+			if _, err := uuid.Parse(projectID); err != nil {
+				return Document{}, ErrInvalidRequest
+			}
+		}
+	}
+	var document Document
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if projectID != "" {
+			var exists bool
+			if err := tx.QueryRow(ctx, `select exists(select 1 from projects where tenant_id = $1 and id = $2)`, tenantID, projectID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrInvalidRequest
+			}
+		}
+		updated, err := scanDocument(tx.QueryRow(ctx, `
+			update bid_documents
+			set
+				title = coalesce(nullif($3, ''), title),
+				status = coalesce(nullif($4, ''), status),
+				project_id = case when $5 then nullif($6, '')::uuid else project_id end,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+			returning id::text, project_id::text, '',
+				title, bid_type, status, created_at, updated_at
+		`, tenantID, id, title, status, updateProject, projectID))
+		if err != nil {
+			return err
+		}
+		document = updated
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Document{}, ErrNotFound
+	}
+	if err != nil {
+		return Document{}, err
+	}
+	return s.GetDocument(ctx, tenantID, document.ID)
+}
+
+func (s *Store) DeleteDocument(ctx context.Context, tenantID, id string) error {
+	id = strings.TrimSpace(id)
+	if _, err := uuid.Parse(id); err != nil {
+		return ErrInvalidRequest
+	}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update bid_documents
+			set status = 'archived', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, id)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	return err
 }
 
 func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID string, req UploadTenderFileRequest) (UploadTenderFileResponse, error) {
@@ -3770,6 +3859,15 @@ func normalizeBidType(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "combined"
+	}
+}
+
+func normalizeDocumentStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "draft", "generating", "editing", "in_review", "approved", "submitted", "archived":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
 	}
 }
 

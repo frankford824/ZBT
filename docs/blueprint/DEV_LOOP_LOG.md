@@ -1644,3 +1644,60 @@ curl -X GET /api/v1/notifications
 
 1. 当前 logout 为 stateless JWT 语义，不维护服务端 token 黑名单；前端会调用后端 logout 后清理本地 session。
 2. `/onboarding` 本轮仍是前端初始化提示页，注册链路已创建 tenant 和默认角色矩阵；后续可继续接入知识库分类、审批链模板等初始化动作。
+
+## Loop-20 / 最终 API Stub 清零 - 2026-06-11
+
+### 本轮目标
+
+1. 清理 `routeSpecs` 中最后 3 条仍可能落入通用 stub 的接口：`GET /knowledge`、`PATCH /bids/:id`、`DELETE /bids/:id`。
+2. 标书列表支持真实更新与软归档，避免破坏审批、导出和审计历史。
+3. 知识库首页入口返回真实统计、分类、标签、近期文档和模板数据。
+
+### 代码交付
+
+1. Bid Store 新增 `UpdateDocumentRequest`、`UpdateDocument` 和 `DeleteDocument`。
+2. `PATCH /bids/:id` 支持更新标题、状态和关联项目，并校验跨租户项目引用。
+3. `DELETE /bids/:id` 将标书状态置为 `archived`，`GET /bids` 默认过滤 archived，`GET /bids/:id` 保留审计回查能力。
+4. `GET /knowledge` 汇总 `stats`、`categories`、`tags`、`recent_documents` 和 `templates`。
+5. 前端 API client 新增 `updateBid` 和 `deleteBid`，标书列表增加归档操作。
+6. API 蓝图同步更新最终 stub 清理状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/api/routes.go && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+python3 routeSpecs/custom-map stub 检查
+docker compose build backend frontend
+docker compose up -d backend frontend
+./infra/scripts/check.sh
+curl -X POST /api/v1/bids
+curl -X PATCH /api/v1/bids/:id
+curl -X GET /api/v1/knowledge
+curl -X DELETE /api/v1/bids/:id
+curl -X GET /api/v1/bids
+curl -X GET /api/v1/bids/:id
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. `routeSpecs` 与 custom map 对比输出 `NO_STUB_ROUTES`。
+5. Docker backend/frontend 构建成功，并启动成功。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时新建 bid `7d93f41d-b6d0-491d-8e76-89a7e3e98f06`，初始 status=`draft`。
+8. `PATCH /bids/:id` 将标题改为“归档验证已更新”、status=`editing`，接口返回更新后的标书快照。
+9. `GET /knowledge` 返回完整总览 keys：`stats`、`categories`、`tags`、`recent_documents`、`templates`；本地数据计数为 categories=4、tags=3、recent_documents=5、templates=4。
+10. tenant2/other 调用 tenant1 bid 的 `PATCH /bids/:id` 返回 404。
+11. `DELETE /bids/:id` 返回 204；`GET /bids` 不再返回该 bid；`GET /bids/:id` 仍可回查 status=`archived`。
+12. tenant2/other 调用 tenant1 archived bid 的 `DELETE /bids/:id` 返回 404。
+13. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询该 archived bid 数量为 1；tenant2 RLS 上下文数量为 0。
+
+### 偏离蓝图
+
+1. `DELETE /bids/:id` 采用软归档而非物理删除，以保留生成任务、审批、导出、章节和审计追踪。
