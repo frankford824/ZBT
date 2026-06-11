@@ -21,6 +21,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
+	platformtender "github.com/frankford824/ZBT/backend/internal/platform/tender"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,6 +38,7 @@ type server struct {
 	fileService    *platformfile.Service
 	knowledgeStore *knowledge.Store
 	bidStore       *bid.Store
+	tenderStore    *platformtender.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -178,11 +180,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -287,6 +289,19 @@ func (s *server) currentUser(c *gin.Context) {
 }
 
 func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
+	group.GET("/tenders", rbac.Require("tender", rbac.LevelRead), s.listTenders)
+	group.POST("/tenders", rbac.Require("tender", rbac.LevelFull), s.createTender)
+	group.GET("/tenders/:id", rbac.Require("tender", rbac.LevelRead), s.getTender)
+	group.PATCH("/tenders/:id", rbac.Require("tender", rbac.LevelFull), s.updateTender)
+	group.POST("/tenders/:id/favorite", rbac.Require("tender", rbac.LevelRead), s.favoriteTender)
+	group.DELETE("/tenders/:id/favorite", rbac.Require("tender", rbac.LevelRead), s.unfavoriteTender)
+	group.POST("/tenders/:id/create-project", rbac.Require("tender", rbac.LevelFull), s.createProjectFromTender)
+	group.POST("/tenders/:id/create-bid", rbac.Require("tender", rbac.LevelFull), s.createBidFromTender)
+	group.GET("/tender-sources", rbac.Require("tender", rbac.LevelRead), s.listTenderSources)
+	group.POST("/tender-sources", rbac.Require("tender", rbac.LevelFull), s.createTenderSource)
+	group.PATCH("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.updateTenderSource)
+	group.DELETE("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.deleteTenderSource)
+	group.POST("/tender-sources/:id/verify", rbac.Require("tender", rbac.LevelFull), s.verifyTenderSource)
 	group.GET("/tenant", rbac.Require("team", rbac.LevelRead), s.getTenant)
 	group.PATCH("/tenant", rbac.Require("team", rbac.LevelFull), s.updateTenant)
 	group.GET("/tenant/members", rbac.Require("team", rbac.LevelRead), s.listMembers)
@@ -353,6 +368,19 @@ func registerStubs(group *gin.RouterGroup) {
 		"PATCH /roles/:id":                        true,
 		"DELETE /roles/:id":                       true,
 		"GET /notifications":                      true,
+		"GET /tenders":                            true,
+		"POST /tenders":                           true,
+		"GET /tenders/:id":                        true,
+		"PATCH /tenders/:id":                      true,
+		"POST /tenders/:id/favorite":              true,
+		"DELETE /tenders/:id/favorite":            true,
+		"POST /tenders/:id/create-project":        true,
+		"POST /tenders/:id/create-bid":            true,
+		"GET /tender-sources":                     true,
+		"POST /tender-sources":                    true,
+		"PATCH /tender-sources/:id":               true,
+		"DELETE /tender-sources/:id":              true,
+		"POST /tender-sources/:id/verify":         true,
 		"GET /knowledge/categories":               true,
 		"POST /knowledge/categories":              true,
 		"PATCH /knowledge/categories/:id":         true,
@@ -424,6 +452,118 @@ func stub(spec routeSpec) gin.HandlerFunc {
 		payload["status"] = "ok"
 		c.JSON(http.StatusOK, payload)
 	}
+}
+
+func (s *server) listTenders(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.tenderStore.List(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), platformtender.ListFilter{
+		Search:       c.Query("q"),
+		Region:       c.Query("region"),
+		Status:       c.Query("status"),
+		SourceID:     c.Query("source_id"),
+		FavoriteOnly: c.Query("favorite") == "true",
+		Recommended:  c.Query("recommended") == "true",
+	})
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createTender(c *gin.Context) {
+	var req platformtender.CreateTenderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.tenderStore.Create(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) getTender(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.tenderStore.Get(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) updateTender(c *gin.Context) {
+	var req platformtender.UpdateTenderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.tenderStore.Update(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) favoriteTender(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.tenderStore.SetFavorite(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), true)
+	respond(c, result, err)
+}
+
+func (s *server) unfavoriteTender(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.tenderStore.SetFavorite(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), false)
+	respond(c, result, err)
+}
+
+func (s *server) createProjectFromTender(c *gin.Context) {
+	result, err := s.tenderStore.CreateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) createBidFromTender(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	found, err := s.tenderStore.Get(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	result, err := s.bidStore.CreateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), bid.CreateDocumentRequest{
+		Title:       found.Title + "投标文件",
+		ProjectName: found.Title,
+		BidType:     "combined",
+	})
+	respondStatus(c, http.StatusCreated, gin.H{"tender": found, "bid": result}, err)
+}
+
+func (s *server) listTenderSources(c *gin.Context) {
+	result, err := s.tenderStore.ListSources(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createTenderSource(c *gin.Context) {
+	var req platformtender.CreateSourceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.tenderStore.CreateSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateTenderSource(c *gin.Context) {
+	var req platformtender.UpdateSourceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.tenderStore.UpdateSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteTenderSource(c *gin.Context) {
+	err := s.tenderStore.DeleteSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) verifyTenderSource(c *gin.Context) {
+	result, err := s.tenderStore.VerifySource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
 }
 
 func (s *server) getTenant(c *gin.Context) {
@@ -998,11 +1138,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

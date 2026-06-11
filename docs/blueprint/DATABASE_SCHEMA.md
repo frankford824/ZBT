@@ -14,6 +14,8 @@ tenants、users、tenant_members、tenant_member_roles、roles、permissions、r
 
 tender_sources、tenders、tender_user_states、tender_parse_results。
 
+`tender_sources` 保存租户内标讯平台配置，包含平台类型、URL、状态、最后检测时间、检测结果和 JSON 配置。`tenders` 保存标讯主体信息，包含采购单位、地区、预算、发布日期、截止日期、匹配度、摘要、关键要求、风险条款和来源 URL。`tender_user_states` 保存用户级收藏状态；`tender_parse_results` 预留解析结果结构。当前前端 `/tenders` 已接入真实列表、推荐/收藏筛选、详情、收藏、数据源新增和 URL 可达性检测。
+
 ## 项目
 
 projects、project_milestones、project_members、project_logs。

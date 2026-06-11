@@ -1,93 +1,199 @@
-import { Button, Card, Col, Descriptions, Form, Input, Row, Select, Space, Table, Tabs, Tag } from 'antd'
-import { Link, useParams } from 'react-router-dom'
+import {
+  App as AntApp,
+  Button,
+  Card,
+  Col,
+  Descriptions,
+  Form,
+  Input,
+  List,
+  Row,
+  Select,
+  Space,
+  Table,
+  Tabs,
+  Tag,
+} from 'antd'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import {
+  createBidFromTender,
+  createProjectFromTender,
+  createTenderSource,
+  favoriteTender,
+  fetchTender,
+  fetchTenderSources,
+  fetchTenders,
+  unfavoriteTender,
+  verifyTenderSource,
+  type TenderDTO,
+  type TenderSourceDTO,
+} from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
+import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 
-const tenderRows = [
-  {
-    id: 'tender-demo',
-    title: '某市智慧交通综合治理平台建设项目',
-    region: '浙江',
-    budget: '1,280万',
-    match: 91,
-    deadline: '2026-06-18',
-  },
-  {
-    id: 'tender-2',
-    title: '园区能耗监测与运维服务采购',
-    region: '江苏',
-    budget: '640万',
-    match: 86,
-    deadline: '2026-06-22',
-  },
-]
+const tabParams: Record<string, Parameters<typeof fetchTenders>[0]> = {
+  全部: {},
+  AI推荐: { recommended: true },
+  监控: { status: 'open' },
+  收藏: { favorite: true },
+}
+
+function dateText(value?: string | null) {
+  return value ? value.slice(0, 10) : '-'
+}
 
 export function TendersPage() {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState('全部')
+  const [sourceForm] = Form.useForm()
+  const tenders = useQuery({
+    queryKey: ['tenders', activeTab],
+    queryFn: () => fetchTenders(tabParams[activeTab]),
+    enabled: activeTab !== '监控设置',
+  })
+  const sources = useQuery({
+    queryKey: ['tender-sources'],
+    queryFn: fetchTenderSources,
+  })
+  const favoriteMutation = useMutation({
+    mutationFn: (tender: TenderDTO) => (tender.favorite ? unfavoriteTender(tender.id) : favoriteTender(tender.id)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tenders'] })
+      message.success('收藏状态已更新')
+    },
+    onError: () => message.error('收藏更新失败'),
+  })
+  const sourceMutation = useMutation({
+    mutationFn: createTenderSource,
+    onSuccess: () => {
+      sourceForm.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['tender-sources'] })
+      message.success('数据源已创建')
+    },
+    onError: () => message.error('数据源创建失败'),
+  })
+  const verifyMutation = useMutation({
+    mutationFn: verifyTenderSource,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tender-sources'] })
+      message.success('检测完成')
+    },
+    onError: () => message.error('检测失败'),
+  })
+
+  const tenderTable = () => {
+    if (tenders.isLoading) return <LoadingBlock />
+    if (tenders.isError) return <ErrorBlock />
+    if (!tenders.data?.length) return <EmptyBlock />
+    return (
+      <Table
+        rowKey="id"
+        dataSource={tenders.data}
+        columns={[
+          {
+            title: '标讯名称',
+            dataIndex: 'title',
+            render: (value, row) => <Link to={`/tenders/${row.id}`}>{value}</Link>,
+          },
+          { title: '地区', dataIndex: 'region' },
+          { title: '预算', dataIndex: 'budget_text' },
+          {
+            title: '匹配度',
+            dataIndex: 'match_score',
+            render: (value) => <Tag color="purple">{value}%</Tag>,
+          },
+          { title: '截止日期', dataIndex: 'deadline', render: dateText },
+          {
+            title: '操作',
+            render: (_, row) => (
+              <Button
+                type="link"
+                loading={favoriteMutation.isPending && favoriteMutation.variables?.id === row.id}
+                onClick={() => favoriteMutation.mutate(row)}
+              >
+                {row.favorite ? '取消收藏' : '收藏'}
+              </Button>
+            ),
+          },
+        ]}
+      />
+    )
+  }
+
+  const sourcePanel = () => (
+    <Row gutter={[16, 16]}>
+      <Col xs={24} lg={10}>
+        <Card title="数据源配置">
+          <Form form={sourceForm} layout="vertical" onFinish={sourceMutation.mutate}>
+            <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '平台名称必填' }]}>
+              <Input placeholder="中国招标投标公共服务平台" />
+            </Form.Item>
+            <Form.Item name="url" label="平台 URL" rules={[{ required: true, message: '平台 URL 必填' }]}>
+              <Input placeholder="https://www.example.com" />
+            </Form.Item>
+            <Form.Item name="source_type" label="平台类型" initialValue="政府采购">
+              <Select options={['政府采购', '建设工程', '产权交易', '公共资源', '其他'].map((value) => ({ value }))} />
+            </Form.Item>
+            <Button htmlType="submit" type="primary" loading={sourceMutation.isPending}>
+              新增数据源
+            </Button>
+          </Form>
+        </Card>
+      </Col>
+      <Col xs={24} lg={14}>
+        <Card title="已配置数据源">
+          {sources.isLoading && <LoadingBlock />}
+          {sources.isError && <ErrorBlock />}
+          {!sources.isLoading && !sources.isError && !sources.data?.length && <EmptyBlock />}
+          <List
+            dataSource={sources.data}
+            renderItem={(source: TenderSourceDTO) => (
+              <List.Item
+                actions={[
+                  <Button
+                    key="verify"
+                    type="link"
+                    loading={verifyMutation.isPending && verifyMutation.variables === source.id}
+                    onClick={() => verifyMutation.mutate(source.id)}
+                  >
+                    URL 可达性检测
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    <Space>
+                      {source.name}
+                      <Tag color={source.status === 'active' ? 'green' : 'red'}>{source.status}</Tag>
+                    </Space>
+                  }
+                  description={`${source.source_type} · ${source.url} · ${source.last_verify_message || '未检测'}`}
+                />
+              </List.Item>
+            )}
+          />
+        </Card>
+      </Col>
+    </Row>
+  )
+
   return (
     <PageFrame
       module="投标准备"
       title="标讯大厅"
       subtitle="标讯搜索、AI 推荐、收藏和数据源配置"
       tags={['page-tender', '/tenders']}
-      actions={[
-        <Button key="source">新增数据源</Button>,
-        <Button key="verify" type="primary">
-          URL 可达性检测
-        </Button>,
-      ]}
     >
       <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
         items={['全部', 'AI推荐', '监控', '收藏', '监控设置'].map((label) => ({
           key: label,
           label,
-          children:
-            label === '监控设置' ? (
-              <Row gutter={16}>
-                <Col xs={24} lg={10}>
-                  <Card title="数据源配置">
-                    <Form layout="vertical">
-                      <Form.Item label="平台名称">
-                        <Input placeholder="中国招标投标公共服务平台" />
-                      </Form.Item>
-                      <Form.Item label="平台 URL">
-                        <Input placeholder="https://www.example.com" />
-                      </Form.Item>
-                      <Form.Item label="平台类型">
-                        <Select options={['政府采购', '建设工程', '产权交易', '其他'].map((value) => ({ value }))} />
-                      </Form.Item>
-                    </Form>
-                  </Card>
-                </Col>
-                <Col xs={24} lg={14}>
-                  <Card title="关键词监控">
-                    <Space wrap>
-                      {['智慧城市', '系统集成', '运维服务', '交通治理'].map((word) => (
-                        <Tag key={word}>{word}</Tag>
-                      ))}
-                    </Space>
-                  </Card>
-                </Col>
-              </Row>
-            ) : (
-              <Table
-                rowKey="id"
-                dataSource={tenderRows}
-                columns={[
-                  {
-                    title: '标讯名称',
-                    dataIndex: 'title',
-                    render: (value, row) => <Link to={`/tenders/${row.id}`}>{value}</Link>,
-                  },
-                  { title: '地区', dataIndex: 'region' },
-                  { title: '预算', dataIndex: 'budget' },
-                  {
-                    title: '匹配度',
-                    dataIndex: 'match',
-                    render: (value) => <Tag color="purple">{value}%</Tag>,
-                  },
-                  { title: '截止日期', dataIndex: 'deadline' },
-                ]}
-              />
-            ),
+          children: label === '监控设置' ? sourcePanel() : tenderTable(),
         }))}
       />
     </PageFrame>
@@ -96,29 +202,74 @@ export function TendersPage() {
 
 export function TenderDetailPage() {
   const { tenderId } = useParams()
+  const navigate = useNavigate()
+  const { message } = AntApp.useApp()
+  const tender = useQuery({
+    queryKey: ['tender', tenderId],
+    queryFn: () => fetchTender(tenderId || ''),
+    enabled: Boolean(tenderId),
+  })
+  const projectMutation = useMutation({
+    mutationFn: () => createProjectFromTender(tenderId || ''),
+    onSuccess: (project) => {
+      message.success('项目已创建')
+      navigate(`/projects/${project.id}`)
+    },
+    onError: () => message.error('创建项目失败'),
+  })
+  const bidMutation = useMutation({
+    mutationFn: () => createBidFromTender(tenderId || ''),
+    onSuccess: ({ bid }) => {
+      message.success('标书已创建')
+      navigate(`/bids/${bid.id}/wizard?step=1`)
+    },
+    onError: () => message.error('生成标书失败'),
+  })
+
+  if (tender.isLoading) return <LoadingBlock />
+  if (tender.isError) return <ErrorBlock />
+  if (!tender.data) return <EmptyBlock />
+
   return (
     <PageFrame
       module="标讯大厅"
-      title="标讯详情"
-      subtitle={tenderId}
+      title={tender.data.title}
+      subtitle={tender.data.source_name || tender.data.region}
       tags={['/tenders/:tenderId']}
       actions={[
-        <Button key="project">创建项目</Button>,
-        <Button key="bid" type="primary">
-          <Link to="/bids/new">生成标书</Link>
+        <Button key="project" loading={projectMutation.isPending} onClick={() => projectMutation.mutate()}>
+          创建项目
+        </Button>,
+        <Button key="bid" type="primary" loading={bidMutation.isPending} onClick={() => bidMutation.mutate()}>
+          生成标书
         </Button>,
       ]}
     >
       <Descriptions bordered column={2}>
-        <Descriptions.Item label="招标单位">某市交通运输局</Descriptions.Item>
-        <Descriptions.Item label="预算金额">1,280万</Descriptions.Item>
-        <Descriptions.Item label="投标截止">2026-06-18</Descriptions.Item>
-        <Descriptions.Item label="匹配度">91%</Descriptions.Item>
+        <Descriptions.Item label="招标单位">{tender.data.purchaser || '-'}</Descriptions.Item>
+        <Descriptions.Item label="预算金额">{tender.data.budget_text || '-'}</Descriptions.Item>
+        <Descriptions.Item label="投标截止">{dateText(tender.data.deadline)}</Descriptions.Item>
+        <Descriptions.Item label="匹配度">{tender.data.match_score}%</Descriptions.Item>
+        <Descriptions.Item label="地区">{tender.data.region || '-'}</Descriptions.Item>
+        <Descriptions.Item label="状态">{tender.data.status}</Descriptions.Item>
         <Descriptions.Item label="关键要求" span={2}>
-          要求具备信息系统建设、数据治理和平台运维相关业绩，技术方案需覆盖数据安全、实施计划和售后服务。
+          <Space wrap>
+            {tender.data.requirements.map((item) => (
+              <Tag key={item}>{item}</Tag>
+            ))}
+          </Space>
         </Descriptions.Item>
         <Descriptions.Item label="废标条款" span={2}>
-          缺少法定代表人签章、投标有效期不足、报价大小写不一致。
+          <Space wrap>
+            {tender.data.risk_flags.map((item) => (
+              <Tag key={item} color="red">
+                {item}
+              </Tag>
+            ))}
+          </Space>
+        </Descriptions.Item>
+        <Descriptions.Item label="摘要" span={2}>
+          {tender.data.summary || '-'}
         </Descriptions.Item>
       </Descriptions>
     </PageFrame>

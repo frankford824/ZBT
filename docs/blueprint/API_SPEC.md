@@ -18,6 +18,8 @@ GET /tenant、PATCH /tenant、GET /tenant/members、POST /tenant/members/invite�
 
 GET /tenders、POST /tenders、GET /tenders/:id、PATCH /tenders/:id、POST /tenders/:id/favorite、DELETE /tenders/:id/favorite、POST /tenders/:id/create-project、POST /tenders/:id/create-bid、GET /tender-sources、POST /tender-sources、PATCH /tender-sources/:id、DELETE /tender-sources/:id、POST /tender-sources/:id/verify。
 
+标讯一期已落地 `tender_sources`、`tenders`、`tender_user_states` 和 `tender_parse_results` RLS 表。`GET /tenders` 支持关键词、地区、状态、数据源、推荐和收藏筛选；`POST /tenders/:id/favorite` / `DELETE /tenders/:id/favorite` 保存用户级收藏状态；`POST /tenders/:id/create-project` 可从标讯创建 opportunity 项目；`POST /tenders/:id/create-bid` 可从标讯创建 draft 标书。`GET /tender-sources` / `POST /tender-sources` / `POST /tender-sources/:id/verify` 已接入前端“监控设置”，URL 检测先 HEAD，失败时回退 GET，并记录最后检测状态和消息。
+
 ## Project
 
 GET /projects、POST /projects、GET /projects/:id、PATCH /projects/:id、DELETE /projects/:id、POST /projects/:id/transition、GET /projects/:id/milestones、POST /projects/:id/milestones、PATCH /projects/:id/milestones/:milestoneId、DELETE /projects/:id/milestones/:milestoneId、POST /projects/:id/members、DELETE /projects/:id/members/:memberId、POST /projects/:id/create-cost-project、GET /projects/:id/activities。

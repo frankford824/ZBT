@@ -139,6 +139,56 @@ export type AITaskDTO = {
   updated_at: string
 }
 
+export type TenderDTO = {
+  id: string
+  source_id: string | null
+  source_name: string
+  title: string
+  purchaser: string
+  region: string
+  budget_amount: number | null
+  budget_text: string
+  publish_date: string | null
+  deadline: string | null
+  status: 'open' | 'closed' | 'awarded' | 'cancelled'
+  match_score: number
+  summary: string
+  requirements: string[]
+  risk_flags: string[]
+  source_url: string
+  metadata: Record<string, unknown>
+  favorite: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type TenderSourceDTO = {
+  id: string
+  name: string
+  source_type: string
+  url: string
+  status: 'active' | 'inactive' | 'failed'
+  last_verified_at: string | null
+  last_verify_status: string | null
+  last_verify_message: string
+  config: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type TenderProjectDTO = {
+  id: string
+  name: string
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export type CreateBidFromTenderDTO = {
+  tender: TenderDTO
+  bid: BidDocumentDTO
+}
+
 export type BidGenerationSnapshotDTO = {
   bid_id: string
   summary: {
@@ -368,6 +418,67 @@ export async function fetchRoles(): Promise<RoleDTO[]> {
 export async function fetchNotifications(): Promise<NotificationDTO[]> {
   const { data } = await apiClient.get<{ items: NotificationDTO[] }>('/notifications')
   return data.items
+}
+
+export async function fetchTenders(params?: {
+  q?: string
+  region?: string
+  status?: string
+  source_id?: string
+  favorite?: boolean
+  recommended?: boolean
+}): Promise<TenderDTO[]> {
+  const { data } = await apiClient.get<{ items: TenderDTO[] }>('/tenders', { params })
+  return data.items
+}
+
+export async function fetchTender(tenderId: string): Promise<TenderDTO> {
+  const { data } = await apiClient.get<TenderDTO>(`/tenders/${tenderId}`)
+  return data
+}
+
+export async function createTender(payload: Partial<TenderDTO>): Promise<TenderDTO> {
+  const { data } = await apiClient.post<TenderDTO>('/tenders', payload)
+  return data
+}
+
+export async function favoriteTender(tenderId: string): Promise<TenderDTO> {
+  const { data } = await apiClient.post<TenderDTO>(`/tenders/${tenderId}/favorite`)
+  return data
+}
+
+export async function unfavoriteTender(tenderId: string): Promise<TenderDTO> {
+  const { data } = await apiClient.delete<TenderDTO>(`/tenders/${tenderId}/favorite`)
+  return data
+}
+
+export async function createProjectFromTender(tenderId: string): Promise<TenderProjectDTO> {
+  const { data } = await apiClient.post<TenderProjectDTO>(`/tenders/${tenderId}/create-project`)
+  return data
+}
+
+export async function createBidFromTender(tenderId: string): Promise<CreateBidFromTenderDTO> {
+  const { data } = await apiClient.post<CreateBidFromTenderDTO>(`/tenders/${tenderId}/create-bid`)
+  return data
+}
+
+export async function fetchTenderSources(): Promise<TenderSourceDTO[]> {
+  const { data } = await apiClient.get<{ items: TenderSourceDTO[] }>('/tender-sources')
+  return data.items
+}
+
+export async function createTenderSource(payload: {
+  name: string
+  source_type: string
+  url: string
+}): Promise<TenderSourceDTO> {
+  const { data } = await apiClient.post<TenderSourceDTO>('/tender-sources', payload)
+  return data
+}
+
+export async function verifyTenderSource(sourceId: string): Promise<TenderSourceDTO> {
+  const { data } = await apiClient.post<TenderSourceDTO>(`/tender-sources/${sourceId}/verify`)
+  return data
 }
 
 export async function fetchKnowledgeCategories(): Promise<KnowledgeCategoryDTO[]> {

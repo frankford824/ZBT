@@ -925,3 +925,56 @@ curl -X POST /api/v1/bid-templates/:templateId/use ...
 
 1. 当前模板使用动作先创建默认分册和章节，尚未按模板 content 动态生成完整大纲。
 2. 模板预览、上传 docx 模板文件和模板编辑仍待后续实现。
+
+## Loop-7 / 标讯大厅真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/tenders` 和 `/tenders/:tenderId` 从静态页面/stub 推进到真实租户数据。
+2. 落地标讯列表、详情、收藏、数据源配置和 URL 可达性检测。
+3. 支持从标讯创建项目和生成标书。
+
+### 代码交付
+
+1. 新增迁移 `00012_tender_foundation.sql`，创建 `tender_sources`、`tenders`、`tender_user_states`、`tender_parse_results`，启用 FORCE RLS，并写入默认数据源和标讯种子。
+2. 新增 `platform/tender` store，包含列表筛选、详情、创建/更新标讯、收藏、数据源 CRUD、URL 检测和从标讯创建项目。
+3. API 路由新增真实 Tender handlers，替换 `GET /tenders`、`POST /tenders`、`GET /tenders/:id`、`PATCH /tenders/:id`、收藏、创建项目/标书、数据源和检测相关 stub。
+4. 前端 API client 新增 Tender DTO 和接口方法。
+5. 标讯大厅页改为真实列表，支持全部、AI 推荐、监控、收藏和监控设置；详情页展示真实要求/风险，并可创建项目或生成标书。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+curl -X GET /api/v1/tenders ...
+curl -X POST /api/v1/tenders/:id/favorite ...
+curl -X POST /api/v1/tenders/:id/create-project ...
+curl -X POST /api/v1/tenders/:id/create-bid ...
+curl -X POST /api/v1/tender-sources/:id/verify ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker 重新构建并启动 backend/frontend 成功。
+5. 运行时 `GET /tenders` 返回 3 条租户标讯，`GET /tenders?recommended=true` 返回 3 条推荐标讯。
+6. 运行时收藏首条标讯后返回 `favorite=true`，`GET /tenders?favorite=true` 可查到该标讯。
+7. 运行时详情返回 `某市智慧交通综合治理平台建设项目`。
+8. 运行时从标讯创建项目 `dc3689e8-594f-446e-afe3-e4e9c1c80f21`，从标讯生成标书 `7e36ccea-c123-41a0-b029-ad097682e206`。
+9. 运行时创建临时数据源并检测 `http://127.0.0.1:8080/healthz`，检测结果为 `ok / 200 OK`，验证后删除临时数据源返回 204。
+10. goose 迁移版本为 12。
+11. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询新建项目和标书均返回 0，tenant1 均返回 1。
+
+### 偏离蓝图
+
+1. 标讯自动抓取、Cookie 登录和自定义 CSS 选择器抓取仍按蓝图放到二期。
+2. `tender_parse_results` 仅落表预留，尚未接入招标文件解析任务。
+3. 从标讯生成标书当前创建 combined draft 标书，尚未把标讯解析结果写入标书大纲。
