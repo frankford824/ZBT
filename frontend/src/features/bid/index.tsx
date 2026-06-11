@@ -49,15 +49,20 @@ import {
   fetchBid,
   fetchBidExport,
   fetchBidExports,
+  fetchBidGenerationJobs,
   fetchBidMaterialSelection,
   fetchBidParseResult,
   fetchBidParts,
   fetchBidTemplates,
   fetchBids,
   fetchChapterVersions,
+  generateBid,
   generateBidOutline,
+  cancelBidGenerationJob,
+  pauseBidGenerationJob,
   parseBidTender,
   regenerateChapter,
+  resumeBidGenerationJob,
   submitBidForApproval,
   updateBidMaterialSelection,
   updateBidPartOutline,
@@ -68,6 +73,7 @@ import {
   type BidChapterDTO,
   type BidDocumentDTO,
   type BidExportDTO,
+  type BidGenerationJobDTO,
   type BidGenerationSnapshotDTO,
   type BidTemplateDTO,
 } from '../../shared/api/client'
@@ -446,6 +452,20 @@ export function BidWizardPage() {
       return items.some((item) => item.status === 'queued' || item.status === 'running') ? 2000 : false
     },
   })
+  const generationJobs = useQuery({
+    queryKey: ['bid-generation-jobs', bidId],
+    queryFn: () => fetchBidGenerationJobs(bidId),
+    enabled: Boolean(bidId),
+    refetchInterval: (query) => {
+      const items = query.state.data ?? []
+      return items.some((item) => item.status === 'queued' || item.status === 'running' || item.status === 'paused') ? 2000 : false
+    },
+  })
+  useEffect(() => {
+    const active = (generationJobs.data ?? []).some((item) => item.status === 'queued' || item.status === 'running')
+    if (!active) return
+    void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
+  }, [generationJobs.data, queryClient, bidId])
   const uploadTenderMutation = useMutation({
     mutationFn: async () => {
       if (!tenderFile) {
@@ -527,6 +547,44 @@ export function BidWizardPage() {
       await queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] })
     },
     onError: () => message.error('保存素材选择失败'),
+  })
+  const generateBidMutation = useMutation({
+    mutationFn: (partCode?: string) => generateBid(bidId, partCode ? { scope: 'part', part_code: partCode } : { scope: 'full' }),
+    onSuccess: async () => {
+      message.success('逐章生成任务已启动')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
+      ])
+    },
+    onError: () => message.error('启动逐章生成失败'),
+  })
+  const pauseJobMutation = useMutation({
+    mutationFn: pauseBidGenerationJob,
+    onSuccess: async () => {
+      message.success('生成任务已暂停')
+      await queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] })
+    },
+    onError: () => message.error('暂停生成任务失败'),
+  })
+  const resumeJobMutation = useMutation({
+    mutationFn: resumeBidGenerationJob,
+    onSuccess: async () => {
+      message.success('生成任务已继续')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
+      ])
+    },
+    onError: () => message.error('继续生成任务失败'),
+  })
+  const cancelJobMutation = useMutation({
+    mutationFn: cancelBidGenerationJob,
+    onSuccess: async () => {
+      message.success('生成任务已取消')
+      await queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] })
+    },
+    onError: () => message.error('取消生成任务失败'),
   })
   const exportMutation = useMutation({
     mutationFn: (payload: { export_type: 'docx' | 'pdf' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
@@ -784,18 +842,105 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 4 ? (
-            <Tabs
-              items={exportableParts.map((part) => {
-                const partChapters = (chapters.data ?? []).filter((chapter) => chapter.bid_part_id === part.id)
-                const readyCount = partChapters.filter((chapter) => ['generated', 'accepted', 'edited'].includes(chapter.status)).length
-                const percent = partChapters.length ? Math.round((readyCount / partChapters.length) * 100) : 0
-                return {
-                  key: part.id,
-                  label: part.title,
-                  children: <Progress percent={percent} />,
-                }
-              })}
-            />
+            <Space direction="vertical" size={16} className="full-width">
+              <Space wrap>
+                <Button
+                  type="primary"
+                  icon={<SyncOutlined />}
+                  loading={generateBidMutation.isPending && !generateBidMutation.variables}
+                  onClick={() => generateBidMutation.mutate(undefined)}
+                >
+                  启动整标逐章生成
+                </Button>
+                {exportableParts.map((part) => (
+                  <Button
+                    key={part.id}
+                    icon={<SyncOutlined />}
+                    loading={generateBidMutation.isPending && generateBidMutation.variables === part.code}
+                    onClick={() => generateBidMutation.mutate(part.code)}
+                  >
+                    生成{part.title}
+                  </Button>
+                ))}
+              </Space>
+              <Tabs
+                items={exportableParts.map((part) => {
+                  const partChapters = (chapters.data ?? []).filter((chapter) => chapter.bid_part_id === part.id)
+                  const readyCount = partChapters.filter((chapter) => ['generated', 'accepted', 'edited'].includes(chapter.status)).length
+                  const percent = partChapters.length ? Math.round((readyCount / partChapters.length) * 100) : 0
+                  return {
+                    key: part.id,
+                    label: part.title,
+                    children: (
+                      <Space direction="vertical" className="full-width">
+                        <Progress percent={percent} />
+                        <Timeline
+                          items={partChapters.map((chapter) => ({
+                            color: chapter.status === 'generated' || chapter.status === 'accepted' ? 'green' : chapter.status === 'generating' ? 'blue' : 'gray',
+                            children: (
+                              <Space>
+                                <span>{chapter.title}</span>
+                                <Tag color={chapterStatusColor(chapter.status)}>{chapter.status}</Tag>
+                              </Space>
+                            ),
+                          }))}
+                        />
+                      </Space>
+                    ),
+                  }
+                })}
+              />
+              <Table
+                size="small"
+                rowKey="id"
+                pagination={false}
+                loading={generationJobs.isLoading}
+                locale={{ emptyText: <EmptyBlock /> }}
+                dataSource={generationJobs.data ?? []}
+                columns={[
+                  { title: '任务', dataIndex: 'id', render: (value: string) => value.slice(0, 8) },
+                  { title: '范围', dataIndex: 'scope' },
+                  { title: '状态', dataIndex: 'status', render: generationJobStatusTag },
+                  { title: '进度', dataIndex: 'progress', render: (value: number) => <Progress percent={value} size="small" /> },
+                  {
+                    title: '章节',
+                    render: (_, row: BidGenerationJobDTO) => `${row.completed_steps}/${row.total_steps}`,
+                  },
+                  {
+                    title: '操作',
+                    render: (_, row: BidGenerationJobDTO) => (
+                      <Space>
+                        <Button
+                          size="small"
+                          disabled={row.status !== 'running' && row.status !== 'queued'}
+                          loading={pauseJobMutation.isPending && pauseJobMutation.variables === row.id}
+                          onClick={() => pauseJobMutation.mutate(row.id)}
+                        >
+                          暂停
+                        </Button>
+                        <Button
+                          size="small"
+                          disabled={row.status !== 'paused'}
+                          loading={resumeJobMutation.isPending && resumeJobMutation.variables === row.id}
+                          onClick={() => resumeJobMutation.mutate(row.id)}
+                        >
+                          继续
+                        </Button>
+                        <Button
+                          size="small"
+                          danger
+                          disabled={!['queued', 'running', 'paused'].includes(row.status)}
+                          loading={cancelJobMutation.isPending && cancelJobMutation.variables === row.id}
+                          onClick={() => cancelJobMutation.mutate(row.id)}
+                        >
+                          取消
+                        </Button>
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+            </Space>
           ) : null}
           {current === 5 ? (
             <Button type="primary">
@@ -896,6 +1041,11 @@ function exportTypeLabel(row: BidExportDTO, partCode: string) {
 
 function exportStatusTag(value: BidExportDTO['status']) {
   const color = value === 'done' ? 'green' : value === 'failed' ? 'red' : 'blue'
+  return <Tag color={color}>{value}</Tag>
+}
+
+function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
+  const color = value === 'done' ? 'green' : value === 'failed' || value === 'cancelled' ? 'red' : value === 'paused' ? 'orange' : 'blue'
   return <Tag color={color}>{value}</Tag>
 }
 

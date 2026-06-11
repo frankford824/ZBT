@@ -674,6 +674,52 @@ export type BidMaterialSelectionDTO = {
   updated_at: string
 }
 
+export type BidGenerationJobDTO = {
+  id: string
+  bid_document_id: string
+  scope: 'full' | 'part' | 'chapter'
+  status: 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'
+  progress: number
+  total_steps: number
+  completed_steps: number
+  failed_steps: number
+  model_used: string
+  prompt_tokens: number
+  completion_tokens: number
+  error_message: string | null
+  trace_id: string
+  created_by: string | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type BidGenerationStepDTO = {
+  id: string
+  job_id: string
+  bid_document_id: string
+  bid_part_id: string
+  chapter_id: string
+  chapter_title: string
+  step_order: number
+  status: 'queued' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'
+  ai_task_id: string | null
+  external_task_id: string | null
+  error_message: string | null
+  metadata: Record<string, unknown>
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type BidGenerationJobDetailDTO = {
+  task_id: string
+  job: BidGenerationJobDTO
+  steps: BidGenerationStepDTO[]
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -1319,6 +1365,39 @@ export async function updateBidMaterialSelection(
   payload: { selected_refs: unknown[]; notes?: string },
 ): Promise<BidMaterialSelectionDTO> {
   const { data } = await apiClient.put<BidMaterialSelectionDTO>(`/bids/${bidId}/material-selection`, payload)
+  return data
+}
+
+export async function generateBid(
+  bidId: string,
+  payload: { scope?: 'full' | 'part' | 'chapter'; part_code?: string; chapter_ids?: string[] } = {},
+): Promise<BidGenerationJobDetailDTO> {
+  const { data } = await apiClient.post<BidGenerationJobDetailDTO>(`/bids/${bidId}/generate`, payload)
+  return data
+}
+
+export async function fetchBidGenerationJobs(bidId: string): Promise<BidGenerationJobDTO[]> {
+  const { data } = await apiClient.get<{ items: BidGenerationJobDTO[] }>(`/bids/${bidId}/generation-jobs`)
+  return data.items
+}
+
+export async function fetchBidGenerationJob(jobId: string): Promise<BidGenerationJobDetailDTO> {
+  const { data } = await apiClient.get<BidGenerationJobDetailDTO>(`/generation-jobs/${jobId}`)
+  return data
+}
+
+export async function pauseBidGenerationJob(jobId: string): Promise<BidGenerationJobDetailDTO> {
+  const { data } = await apiClient.post<BidGenerationJobDetailDTO>(`/generation-jobs/${jobId}/pause`)
+  return data
+}
+
+export async function resumeBidGenerationJob(jobId: string): Promise<BidGenerationJobDetailDTO> {
+  const { data } = await apiClient.post<BidGenerationJobDetailDTO>(`/generation-jobs/${jobId}/resume`)
+  return data
+}
+
+export async function cancelBidGenerationJob(jobId: string): Promise<BidGenerationJobDetailDTO> {
+  const { data } = await apiClient.post<BidGenerationJobDetailDTO>(`/generation-jobs/${jobId}/cancel`)
   return data
 }
 

@@ -1424,3 +1424,58 @@ curl -X PUT /api/v1/bids/:id/material-selection ...
 
 1. 招标文件解析和目录生成当前为 Go 侧确定性 bootstrap，实现了接口契约、任务记录和人工确认闭环；尚未接入真实 OCR/LLM 解析 worker。
 2. 素材选择当前保存用户确认结果和备注，后续逐章生成仍需将该选择纳入知识库检索过滤与提示词上下文。
+
+## Loop-16 / 逐章生成 Job 与暂停继续闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 中 `POST /bids/:id/generate`、`GET /generation-jobs/:jobId`、pause/resume/cancel 和“可逐章生成标书”的主链路。
+2. 每章独立任务，复用现有 ModelRouter、AI service、HMAC callback、source_refs、needs_human_input 和版本快照链路。
+3. 前端 7 步向导第 5 步从静态进度切换为真实整标/分册生成控制台。
+
+### 代码交付
+
+1. 新增 `bid_generation_jobs`、`bid_generation_steps` RLS 表，记录 job 进度、step 状态、关联 `ai_tasks` 和 trace_id。
+2. Go API 新增真实 `POST /bids/:id/generate`、`GET /bids/:id/generation-jobs`、`GET /generation-jobs/:jobId`、`POST /generation-jobs/:jobId/pause|resume|cancel`。
+3. Go 生成 job 后只派发一个章节任务；章节 HMAC 回调完成后刷新 step/job 进度，并在 job 仍 running 时自动派发下一章。pause 在章节边界生效，resume 继续派发下一 queued step，cancel 取消未开始 step。
+4. 前端向导第 5 步支持启动整标逐章生成、按分册生成、查看 job 进度和暂停/继续/取消。
+5. API 与数据库蓝图同步更新新增接口和表。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+git diff --check
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X POST /api/v1/bids/:id/generate ...
+curl -X GET /api/v1/generation-jobs/:jobId ...
+curl -X POST /api/v1/generation-jobs/:jobId/pause ...
+curl -X POST /api/v1/generation-jobs/:jobId/resume ...
+curl -X POST /api/v1/generation-jobs/:jobId/cancel ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `python3 -m compileall app` 通过。
+4. `git diff --check` 通过。
+5. Docker backend/frontend/ai-service 构建成功，并启动成功。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时新建 bid `17f35433-974e-49b1-9db0-ff6a11e89956`，生成目录后启动技术标逐章生成 job `8f88573f-4ea2-4ee6-9bf9-ed65684ed119`，自动推进完成为 status=`done`，steps=`3/3`。
+8. 运行时启动商务标 job `e2430c3b-a9c4-4bcb-b454-89bc0273aea9` 后立即 pause，返回 status=`paused`；resume 后自动推进完成为 status=`done`。
+9. 运行时新建 cancel 验证 bid 并启动 full job `6bb84e5a-6d0f-48ba-ad44-5646855b7682`，调用 cancel 后 status=`cancelled`。
+10. 完整生成验证 bid 的章节中 generated/accepted 数量为 6。
+11. tenant2/other 访问 tenant1 generation job 返回 404。
+12. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询 generation jobs 可见 2 条、tech job steps 可见 3 条、cancel job status=`cancelled`；tenant2 RLS 上下文 jobs/steps 均为 0。
+
+### 偏离蓝图
+
+1. pause 在章节边界生效；当前正在执行的 AI chapter task 不做强制中断，完成后不会继续派发下一章，符合本阶段任务边界控制。
+2. cancel 会取消未开始 step；已经派发给 AI service 的 running step 仍可能回调完成，但 job 保持 cancelled 且不会继续派发。

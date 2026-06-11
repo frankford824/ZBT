@@ -405,6 +405,12 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PUT("/bids/:id/parts/:partId/outline", rbac.Require("bid", rbac.LevelFull), s.updateBidPartOutline)
 	group.GET("/bids/:id/material-selection", rbac.Require("bid", rbac.LevelRead), s.getBidMaterialSelection)
 	group.PUT("/bids/:id/material-selection", rbac.Require("bid", rbac.LevelFull), s.updateBidMaterialSelection)
+	group.POST("/bids/:id/generate", rbac.Require("bid", rbac.LevelFull), s.generateBid)
+	group.GET("/bids/:id/generation-jobs", rbac.Require("bid", rbac.LevelRead), s.listBidGenerationJobs)
+	group.GET("/generation-jobs/:jobId", rbac.Require("bid", rbac.LevelRead), s.getBidGenerationJob)
+	group.POST("/generation-jobs/:jobId/pause", rbac.Require("bid", rbac.LevelFull), s.pauseBidGenerationJob)
+	group.POST("/generation-jobs/:jobId/resume", rbac.Require("bid", rbac.LevelFull), s.resumeBidGenerationJob)
+	group.POST("/generation-jobs/:jobId/cancel", rbac.Require("bid", rbac.LevelFull), s.cancelBidGenerationJob)
 	group.GET("/bids/:id/generation/stream", rbac.Require("bid", rbac.LevelRead), s.streamBidGeneration)
 	group.GET("/bids/:id/chapters", rbac.Require("bid", rbac.LevelRead), s.listBidChapters)
 	group.PATCH("/chapters/:chapterId", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
@@ -535,6 +541,12 @@ func registerStubs(group *gin.RouterGroup) {
 		"PUT /bids/:id/parts/:partId/outline":          true,
 		"GET /bids/:id/material-selection":             true,
 		"PUT /bids/:id/material-selection":             true,
+		"POST /bids/:id/generate":                      true,
+		"GET /bids/:id/generation-jobs":                true,
+		"GET /generation-jobs/:jobId":                  true,
+		"POST /generation-jobs/:jobId/pause":           true,
+		"POST /generation-jobs/:jobId/resume":          true,
+		"POST /generation-jobs/:jobId/cancel":          true,
 		"GET /bids/:id/generation/stream":              true,
 		"GET /bids/:id/chapters":                       true,
 		"PATCH /chapters/:chapterId":                   true,
@@ -1423,6 +1435,44 @@ func (s *server) updateBidMaterialSelection(c *gin.Context) {
 	}
 	userID, _ := c.Get("user_id")
 	result, err := s.bidStore.UpdateMaterialSelection(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) generateBid(c *gin.Context) {
+	var req bid.GenerateBidRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.GenerateBid(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) listBidGenerationJobs(c *gin.Context) {
+	result, err := s.bidStore.ListGenerationJobs(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) getBidGenerationJob(c *gin.Context) {
+	result, err := s.bidStore.GetGenerationJob(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("jobId"))
+	respond(c, result, err)
+}
+
+func (s *server) pauseBidGenerationJob(c *gin.Context) {
+	result, err := s.bidStore.PauseGenerationJob(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("jobId"))
+	respond(c, result, err)
+}
+
+func (s *server) resumeBidGenerationJob(c *gin.Context) {
+	result, err := s.bidStore.ResumeGenerationJob(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("jobId"))
+	respond(c, result, err)
+}
+
+func (s *server) cancelBidGenerationJob(c *gin.Context) {
+	result, err := s.bidStore.CancelGenerationJob(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("jobId"))
 	respond(c, result, err)
 }
 

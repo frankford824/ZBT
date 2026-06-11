@@ -34,6 +34,8 @@ bid_documents、bid_tender_files、bid_parse_results、bid_parts、bid_chapters�
 
 `bid_tender_files` 关联已确认的 `file_assets`，记录某份标书当前使用的招标文件并支持 superseded 状态。`bid_parse_results` 保存招标文件结构化解析结果、解析状态、确认人和确认时间，当前用于资格要求、废标风险、评分点、目录建议和素材建议。`bid_material_selections` 保存用户确认后的素材勾选结果和备注，供后续逐章生成检索知识库时读取。
 
+`bid_generation_jobs` 保存整标、分册或指定章节生成任务，状态为 queued / running / paused / done / failed / cancelled，记录 progress、total_steps、completed_steps、failed_steps、trace_id 和 token 汇总。`bid_generation_steps` 保存每章独立 step，关联 `bid_chapters` 和 `ai_tasks`；Go 每次只派发一个 running step，章节回调完成后刷新 job 进度并按状态继续派发下一章。
+
 `bid_exports` 关联 `file_assets` 保存导出产物，export_type 支持 docx / pdf / zip，status 为 queued / running / done / failed / cancelled。当前实现支持 docx、LibreOffice 转 PDF 和 ZIP 打包，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
 
 `bid_templates` 保存租户内标书模板库，包含 name、bid_type、category、description、version、content、usage_count 和 status。当前前端 `/bids/templates` 已接入列表和使用动作；使用模板会创建 draft 标书、初始化默认分册章节，并递增模板 usage_count。

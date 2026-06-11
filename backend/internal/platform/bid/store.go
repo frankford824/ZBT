@@ -182,6 +182,58 @@ type GenerationTask struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type GenerationJob struct {
+	ID               string     `json:"id"`
+	BidDocumentID    string     `json:"bid_document_id"`
+	Scope            string     `json:"scope"`
+	Status           string     `json:"status"`
+	Progress         int        `json:"progress"`
+	TotalSteps       int        `json:"total_steps"`
+	CompletedSteps   int        `json:"completed_steps"`
+	FailedSteps      int        `json:"failed_steps"`
+	ModelUsed        string     `json:"model_used"`
+	PromptTokens     int        `json:"prompt_tokens"`
+	CompletionTokens int        `json:"completion_tokens"`
+	ErrorMessage     *string    `json:"error_message"`
+	TraceID          string     `json:"trace_id"`
+	CreatedBy        *string    `json:"created_by"`
+	StartedAt        *time.Time `json:"started_at"`
+	CompletedAt      *time.Time `json:"completed_at"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+type GenerationStep struct {
+	ID             string         `json:"id"`
+	JobID          string         `json:"job_id"`
+	BidDocumentID  string         `json:"bid_document_id"`
+	BidPartID      string         `json:"bid_part_id"`
+	ChapterID      string         `json:"chapter_id"`
+	ChapterTitle   string         `json:"chapter_title"`
+	StepOrder      int            `json:"step_order"`
+	Status         string         `json:"status"`
+	AITaskID       *string        `json:"ai_task_id"`
+	ExternalTaskID *string        `json:"external_task_id"`
+	ErrorMessage   *string        `json:"error_message"`
+	Metadata       map[string]any `json:"metadata"`
+	StartedAt      *time.Time     `json:"started_at"`
+	CompletedAt    *time.Time     `json:"completed_at"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
+type GenerateBidRequest struct {
+	Scope      string   `json:"scope"`
+	PartCode   string   `json:"part_code"`
+	ChapterIDs []string `json:"chapter_ids"`
+}
+
+type GenerationJobDetail struct {
+	TaskID string           `json:"task_id"`
+	Job    GenerationJob    `json:"job"`
+	Steps  []GenerationStep `json:"steps"`
+}
+
 type CreateDocumentRequest struct {
 	Title       string `json:"title"`
 	ProjectName string `json:"project_name"`
@@ -370,6 +422,14 @@ type chapterGenerateResponse struct {
 	NeedsHumanInput []string       `json:"needs_human_input"`
 	ModelMetadata   map[string]any `json:"model_metadata"`
 	TokenUsage      map[string]int `json:"token_usage"`
+}
+
+type generationDispatch struct {
+	JobID     string
+	StepID    string
+	TaskID    string
+	ChapterID string
+	Payload   chapterGenerateRequest
 }
 
 func NewStore(cfg config.Config, pool *pgxpool.Pool) *Store {
@@ -1174,6 +1234,257 @@ func (s *Store) GenerationSnapshot(ctx context.Context, tenantID, bidID string) 
 	return snapshot, err
 }
 
+func (s *Store) GenerateBid(ctx context.Context, tenantID, userID, bidID string, req GenerateBidRequest) (GenerationJobDetail, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return GenerationJobDetail{}, ErrInvalidRequest
+	}
+	scope := normalizeGenerationScope(req.Scope)
+	partCode := normalizeGenerationPartCode(req.PartCode)
+	chapterFilter := map[string]bool{}
+	for _, id := range req.ChapterIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, err := uuid.Parse(id); err != nil {
+			return GenerationJobDetail{}, ErrInvalidRequest
+		}
+		chapterFilter[id] = true
+	}
+	if len(chapterFilter) > 0 {
+		scope = "chapter"
+	}
+	if partCode != "" {
+		scope = "part"
+	}
+
+	var jobID string
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		chapters, err := chaptersForGeneration(ctx, tx, tenantID, bidID, partCode, chapterFilter)
+		if err != nil {
+			return err
+		}
+		if len(chapters) == 0 {
+			return ErrInvalidRequest
+		}
+		traceID := "trace-bid-generate-" + uuid.NewString()
+		if err := tx.QueryRow(ctx, `
+			insert into bid_generation_jobs (
+				tenant_id, bid_document_id, scope, status, progress,
+				total_steps, trace_id, created_by
+			)
+			values ($1, $2, $3, 'queued', 0, $4, $5, nullif($6, '')::uuid)
+			returning id::text
+		`, tenantID, bidID, scope, len(chapters), traceID, userID).Scan(&jobID); err != nil {
+			return err
+		}
+		for index, chapter := range chapters {
+			if _, err := tx.Exec(ctx, `
+				insert into bid_generation_steps (
+					tenant_id, job_id, bid_document_id, bid_part_id,
+					chapter_id, step_order, status
+				)
+				values ($1, $2, $3, $4, $5, $6, 'queued')
+			`, tenantID, jobID, bidID, chapter.BidPartID, chapter.ID, (index+1)*10); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationJobDetail{}, ErrNotFound
+	}
+	if err != nil {
+		return GenerationJobDetail{}, err
+	}
+	if err := s.dispatchNextGenerationStep(ctx, tenantID, jobID); err != nil {
+		return GenerationJobDetail{}, err
+	}
+	return s.GetGenerationJob(ctx, tenantID, jobID)
+}
+
+func (s *Store) ListGenerationJobs(ctx context.Context, tenantID, bidID string) ([]GenerationJob, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	jobs := []GenerationJob{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `
+			select id::text, bid_document_id::text, scope, status, progress,
+				total_steps, completed_steps, failed_steps, model_used,
+				prompt_tokens, completion_tokens, error_message, trace_id, created_by::text,
+				started_at, completed_at, created_at, updated_at
+			from bid_generation_jobs
+			where tenant_id = $1 and bid_document_id = $2
+			order by created_at desc
+			limit 20
+		`, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			job, err := scanGenerationJob(rows)
+			if err != nil {
+				return err
+			}
+			jobs = append(jobs, job)
+		}
+		return rows.Err()
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return jobs, err
+}
+
+func (s *Store) GetGenerationJob(ctx context.Context, tenantID, jobID string) (GenerationJobDetail, error) {
+	jobID = strings.TrimSpace(jobID)
+	if _, err := uuid.Parse(jobID); err != nil {
+		return GenerationJobDetail{}, ErrInvalidRequest
+	}
+	var detail GenerationJobDetail
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		found, err := generationJobDetailByID(ctx, tx, tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		detail = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationJobDetail{}, ErrNotFound
+	}
+	return detail, err
+}
+
+func (s *Store) PauseGenerationJob(ctx context.Context, tenantID, jobID string) (GenerationJobDetail, error) {
+	jobID = strings.TrimSpace(jobID)
+	if _, err := uuid.Parse(jobID); err != nil {
+		return GenerationJobDetail{}, ErrInvalidRequest
+	}
+	var detail GenerationJobDetail
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update bid_generation_jobs
+			set status = 'paused', updated_at = now()
+			where tenant_id = $1 and id = $2 and status in ('queued', 'running')
+		`, tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var exists bool
+			if err := tx.QueryRow(ctx, `select exists(select 1 from bid_generation_jobs where tenant_id = $1 and id = $2)`, tenantID, jobID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrNotFound
+			}
+		}
+		found, err := generationJobDetailByID(ctx, tx, tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		detail = found
+		return nil
+	})
+	return detail, err
+}
+
+func (s *Store) ResumeGenerationJob(ctx context.Context, tenantID, jobID string) (GenerationJobDetail, error) {
+	jobID = strings.TrimSpace(jobID)
+	if _, err := uuid.Parse(jobID); err != nil {
+		return GenerationJobDetail{}, ErrInvalidRequest
+	}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update bid_generation_jobs
+			set status = 'running', started_at = coalesce(started_at, now()), updated_at = now()
+			where tenant_id = $1 and id = $2 and status = 'paused'
+		`, tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var exists bool
+			if err := tx.QueryRow(ctx, `select exists(select 1 from bid_generation_jobs where tenant_id = $1 and id = $2)`, tenantID, jobID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrNotFound
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return GenerationJobDetail{}, err
+	}
+	if err := s.dispatchNextGenerationStep(ctx, tenantID, jobID); err != nil {
+		return GenerationJobDetail{}, err
+	}
+	return s.GetGenerationJob(ctx, tenantID, jobID)
+}
+
+func (s *Store) CancelGenerationJob(ctx context.Context, tenantID, jobID string) (GenerationJobDetail, error) {
+	jobID = strings.TrimSpace(jobID)
+	if _, err := uuid.Parse(jobID); err != nil {
+		return GenerationJobDetail{}, ErrInvalidRequest
+	}
+	var detail GenerationJobDetail
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update bid_generation_jobs
+			set status = 'cancelled',
+				completed_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and id = $2 and status in ('queued', 'running', 'paused')
+		`, tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			var exists bool
+			if err := tx.QueryRow(ctx, `select exists(select 1 from bid_generation_jobs where tenant_id = $1 and id = $2)`, tenantID, jobID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrNotFound
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_generation_steps
+			set status = 'cancelled',
+				completed_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and job_id = $2 and status in ('queued', 'paused')
+		`, tenantID, jobID); err != nil {
+			return err
+		}
+		if err := refreshGenerationJob(ctx, tx, tenantID, jobID); err != nil {
+			return err
+		}
+		found, err := generationJobDetailByID(ctx, tx, tenantID, jobID)
+		if err != nil {
+			return err
+		}
+		detail = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationJobDetail{}, ErrNotFound
+	}
+	return detail, err
+}
+
 func (s *Store) UpdateChapterContent(ctx context.Context, tenantID, userID, chapterID string, req UpdateChapterContentRequest) (ChapterVersion, error) {
 	var version ChapterVersion
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -1589,6 +1900,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 		return Task{}, ErrInvalidRequest
 	}
 	var task Task
+	var nextJobID string
 	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
 		resultJSON, _ := json.Marshal(payload.Result)
 		found, err := scanTask(tx.QueryRow(ctx, `
@@ -1670,6 +1982,13 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					return err
 				}
 			}
+			jobID, shouldDispatch, err := updateGenerationStepForTask(ctx, tx, payload.TenantID, task.ID, status, payload.ErrorMessage)
+			if err != nil {
+				return err
+			}
+			if shouldDispatch {
+				nextJobID = jobID
+			}
 		default:
 			return ErrInvalidRequest
 		}
@@ -1677,6 +1996,9 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
+	}
+	if err == nil && nextJobID != "" {
+		err = s.dispatchNextGenerationStep(ctx, payload.TenantID, nextJobID)
 	}
 	return task, err
 }
@@ -1793,6 +2115,185 @@ func (s *Store) bindAcceptedTask(
 		return nil
 	})
 	return task, err
+}
+
+func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID string) error {
+	var dispatch *generationDispatch
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var status, bidID, createdBy string
+		if err := tx.QueryRow(ctx, `
+			select status, bid_document_id::text, coalesce(created_by::text, '')
+			from bid_generation_jobs
+			where tenant_id = $1 and id = $2
+		`, tenantID, jobID).Scan(&status, &bidID, &createdBy); err != nil {
+			return err
+		}
+		if status == "paused" || status == "done" || status == "failed" || status == "cancelled" {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_generation_jobs
+			set status = 'running',
+				started_at = coalesce(started_at, now()),
+				updated_at = now()
+			where tenant_id = $1 and id = $2 and status = 'queued'
+		`, tenantID, jobID); err != nil {
+			return err
+		}
+		var hasRunning bool
+		if err := tx.QueryRow(ctx, `
+			select exists(
+				select 1 from bid_generation_steps
+				where tenant_id = $1 and job_id = $2 and status = 'running'
+			)
+		`, tenantID, jobID).Scan(&hasRunning); err != nil {
+			return err
+		}
+		if hasRunning {
+			return nil
+		}
+		var stepID, chapterID string
+		if err := tx.QueryRow(ctx, `
+			select id::text, chapter_id::text
+			from bid_generation_steps
+			where tenant_id = $1 and job_id = $2 and status = 'queued'
+			order by step_order, created_at
+			limit 1
+		`, tenantID, jobID).Scan(&stepID, &chapterID); errors.Is(err, pgx.ErrNoRows) {
+			return refreshGenerationJob(ctx, tx, tenantID, jobID)
+		} else if err != nil {
+			return err
+		}
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		knowledgeRefs, err := retrieveKnowledgeRefsForChapter(ctx, tx, tenantID, chapter)
+		if err != nil {
+			return err
+		}
+		selectedRefs := make([]string, 0, len(knowledgeRefs))
+		for _, ref := range knowledgeRefs {
+			selectedRefs = append(selectedRefs, ref.ChunkID)
+		}
+		requestPayload := chapterGenerateRequest{
+			TaskID:                 "task-chapter-" + uuid.NewString(),
+			TenantID:               tenantID,
+			BidDocumentID:          chapter.BidDocumentID,
+			BidPartID:              chapter.BidPartID,
+			ChapterID:              chapter.ID,
+			ChapterTitle:           chapter.Title,
+			TenderRequirements:     []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
+			SelectedKnowledgeRefs:  selectedRefs,
+			RetrievedKnowledgeRefs: knowledgeRefs,
+			CallbackURL:            s.cfg.AICallbackURL,
+		}
+		payloadJSON, _ := json.Marshal(requestPayload)
+		createdTask, err := scanTask(tx.QueryRow(ctx, `
+			insert into ai_tasks (
+				tenant_id, user_id, task_type, status,
+				external_task_id, resource_type, resource_id, payload, route
+			)
+			values ($1, nullif($2, '')::uuid, 'chapter_generate', 'queued', $3, 'bid_chapter', $4, $5, '{}')
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, tenantID, createdBy, requestPayload.TaskID, chapter.ID, payloadJSON))
+		if err != nil {
+			return err
+		}
+		metadataJSON, _ := json.Marshal(map[string]any{
+			"job_id":           jobID,
+			"bid_document_id":  bidID,
+			"chapter_title":    chapter.Title,
+			"knowledge_ref_ct": len(knowledgeRefs),
+		})
+		if _, err := tx.Exec(ctx, `
+			update bid_generation_steps
+			set status = 'running',
+				ai_task_id = $3,
+				external_task_id = $4,
+				metadata = metadata || $5::jsonb,
+				started_at = coalesce(started_at, now()),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, stepID, createdTask.ID, requestPayload.TaskID, metadataJSON); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_chapters
+			set status = 'generating', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapter.ID); err != nil {
+			return err
+		}
+		dispatch = &generationDispatch{
+			JobID:     jobID,
+			StepID:    stepID,
+			TaskID:    createdTask.ID,
+			ChapterID: chapter.ID,
+			Payload:   requestPayload,
+		}
+		return refreshGenerationJob(ctx, tx, tenantID, jobID)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil || dispatch == nil {
+		return err
+	}
+	accepted, err := s.submitChapterGenerate(ctx, dispatch.Payload)
+	if err != nil {
+		_ = s.markGenerationStepFailed(ctx, tenantID, dispatch.JobID, dispatch.StepID, dispatch.TaskID, dispatch.ChapterID, err.Error())
+		return err
+	}
+	_, err = s.bindAcceptedTask(ctx, tenantID, dispatch.ChapterID, dispatch.TaskID, accepted, dispatch.Payload, func(ctx context.Context, tx pgx.Tx) error {
+		routeJSON, _ := json.Marshal(accepted.Route)
+		_, err := tx.Exec(ctx, `
+			update bid_generation_steps
+			set external_task_id = $3,
+				metadata = metadata || jsonb_build_object('route', $4::jsonb),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, dispatch.StepID, accepted.TaskID, routeJSON)
+		return err
+	})
+	return err
+}
+
+func (s *Store) markGenerationStepFailed(ctx context.Context, tenantID, jobID, stepID, taskID, chapterID, message string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, message); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_generation_steps
+			set status = 'failed',
+				error_message = $3,
+				completed_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, stepID, message); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_chapters
+			set status = 'needs_fix',
+				needs_human_input = case
+					when nullif($3, '') is null then needs_human_input
+					else jsonb_build_array($3)
+				end,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapterID, message); err != nil {
+			return err
+		}
+		return refreshGenerationJob(ctx, tx, tenantID, jobID)
+	})
 }
 
 func (s *Store) markExportFailed(ctx context.Context, tenantID, exportID, taskID, message string) error {
@@ -2028,6 +2529,172 @@ func partsForZipExport(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (
 		parts = append(parts, part)
 	}
 	return parts, rows.Err()
+}
+
+func chaptersForGeneration(ctx context.Context, tx pgx.Tx, tenantID, bidID, partCode string, chapterFilter map[string]bool) ([]Chapter, error) {
+	args := []any{tenantID, bidID}
+	where := []string{"c.tenant_id = $1", "c.bid_document_id = $2"}
+	if partCode != "" {
+		args = append(args, partCode)
+		where = append(where, fmt.Sprintf("p.code = $%d", len(args)))
+	}
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+		select c.id::text, c.bid_document_id::text, c.bid_part_id::text, c.title, c.content, c.plain_text,
+			c.status, c.sort_order, c.source_refs, c.needs_human_input, c.created_at, c.updated_at
+		from bid_chapters c
+		join bid_parts p on p.tenant_id = c.tenant_id and p.id = c.bid_part_id
+		where %s
+		order by p.sort_order, c.sort_order, c.created_at
+	`, strings.Join(where, " and ")), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	chapters := []Chapter{}
+	for rows.Next() {
+		chapter, err := scanChapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		if len(chapterFilter) > 0 && !chapterFilter[chapter.ID] {
+			continue
+		}
+		chapters = append(chapters, chapter)
+	}
+	return chapters, rows.Err()
+}
+
+func generationJobDetailByID(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (GenerationJobDetail, error) {
+	job, err := scanGenerationJob(tx.QueryRow(ctx, `
+		select id::text, bid_document_id::text, scope, status, progress,
+			total_steps, completed_steps, failed_steps, model_used,
+			prompt_tokens, completion_tokens, error_message, trace_id, created_by::text,
+			started_at, completed_at, created_at, updated_at
+		from bid_generation_jobs
+		where tenant_id = $1 and id = $2
+	`, tenantID, jobID))
+	if err != nil {
+		return GenerationJobDetail{}, err
+	}
+	steps, err := generationStepsByJobID(ctx, tx, tenantID, jobID)
+	if err != nil {
+		return GenerationJobDetail{}, err
+	}
+	return GenerationJobDetail{TaskID: job.ID, Job: job, Steps: steps}, nil
+}
+
+func generationStepsByJobID(ctx context.Context, tx pgx.Tx, tenantID, jobID string) ([]GenerationStep, error) {
+	rows, err := tx.Query(ctx, `
+		select s.id::text, s.job_id::text, s.bid_document_id::text, s.bid_part_id::text,
+			s.chapter_id::text, c.title, s.step_order, s.status, s.ai_task_id::text,
+			s.external_task_id, s.error_message, s.metadata, s.started_at, s.completed_at,
+			s.created_at, s.updated_at
+		from bid_generation_steps s
+		join bid_chapters c on c.tenant_id = s.tenant_id and c.id = s.chapter_id
+		where s.tenant_id = $1 and s.job_id = $2
+		order by s.step_order, s.created_at
+	`, tenantID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	steps := []GenerationStep{}
+	for rows.Next() {
+		step, err := scanGenerationStep(rows)
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, step)
+	}
+	return steps, rows.Err()
+}
+
+func updateGenerationStepForTask(ctx context.Context, tx pgx.Tx, tenantID, taskID, status, message string) (string, bool, error) {
+	var jobID string
+	err := tx.QueryRow(ctx, `
+		update bid_generation_steps
+		set status = $3,
+			error_message = nullif($4, ''),
+			completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
+			updated_at = now()
+		where tenant_id = $1 and ai_task_id = $2
+		returning job_id::text
+	`, tenantID, taskID, status, message).Scan(&jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	shouldDispatch, err := refreshGenerationJobAndShouldDispatch(ctx, tx, tenantID, jobID)
+	return jobID, shouldDispatch, err
+}
+
+func refreshGenerationJob(ctx context.Context, tx pgx.Tx, tenantID, jobID string) error {
+	_, err := refreshGenerationJobAndShouldDispatch(ctx, tx, tenantID, jobID)
+	return err
+}
+
+func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (bool, error) {
+	var currentStatus string
+	var total, done, failed, cancelled, running, queued, promptTokens, completionTokens int
+	if err := tx.QueryRow(ctx, `
+		select
+			j.status,
+			count(s.id)::int,
+			count(*) filter (where s.status = 'done')::int,
+			count(*) filter (where s.status = 'failed')::int,
+			count(*) filter (where s.status = 'cancelled')::int,
+			count(*) filter (where s.status = 'running')::int,
+			count(*) filter (where s.status = 'queued')::int,
+			coalesce(sum((t.result->'token_usage'->>'input_tokens')::int), 0)::int,
+			coalesce(sum((t.result->'token_usage'->>'output_tokens')::int), 0)::int
+		from bid_generation_jobs j
+		left join bid_generation_steps s on s.tenant_id = j.tenant_id and s.job_id = j.id
+		left join ai_tasks t on t.tenant_id = s.tenant_id and t.id = s.ai_task_id
+		where j.tenant_id = $1 and j.id = $2
+		group by j.id, j.status
+	`, tenantID, jobID).Scan(&currentStatus, &total, &done, &failed, &cancelled, &running, &queued, &promptTokens, &completionTokens); err != nil {
+		return false, err
+	}
+	progress := 0
+	if total > 0 {
+		progress = int(float64(done+failed+cancelled) / float64(total) * 100)
+	}
+	nextStatus := currentStatus
+	completedAtExpr := "completed_at"
+	if currentStatus != "paused" && currentStatus != "cancelled" {
+		switch {
+		case failed > 0:
+			nextStatus = "failed"
+			completedAtExpr = "now()"
+		case total > 0 && done+cancelled == total:
+			if cancelled > 0 && done == 0 {
+				nextStatus = "cancelled"
+			} else {
+				nextStatus = "done"
+			}
+			completedAtExpr = "now()"
+		case running > 0 || queued > 0:
+			nextStatus = "running"
+		}
+	}
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
+		update bid_generation_jobs
+		set status = $3,
+			progress = $4,
+			completed_steps = $5,
+			failed_steps = $6,
+			prompt_tokens = $7,
+			completion_tokens = $8,
+			completed_at = %s,
+			updated_at = now()
+		where tenant_id = $1 and id = $2
+	`, completedAtExpr), tenantID, jobID, nextStatus, progress, done, failed, promptTokens, completionTokens); err != nil {
+		return false, err
+	}
+	shouldDispatch := currentStatus != "paused" && currentStatus != "cancelled" && failed == 0 && running == 0 && queued > 0
+	return shouldDispatch, nil
 }
 
 type outlinePartSpec struct {
@@ -2721,6 +3388,62 @@ func scanTask(row scanner) (Task, error) {
 	return task, err
 }
 
+func scanGenerationJob(row scanner) (GenerationJob, error) {
+	var job GenerationJob
+	var errorMessage, createdBy sql.NullString
+	var startedAt, completedAt sql.NullTime
+	err := row.Scan(
+		&job.ID, &job.BidDocumentID, &job.Scope, &job.Status, &job.Progress,
+		&job.TotalSteps, &job.CompletedSteps, &job.FailedSteps, &job.ModelUsed,
+		&job.PromptTokens, &job.CompletionTokens, &errorMessage, &job.TraceID,
+		&createdBy, &startedAt, &completedAt, &job.CreatedAt, &job.UpdatedAt,
+	)
+	if errorMessage.Valid {
+		job.ErrorMessage = &errorMessage.String
+	}
+	if createdBy.Valid {
+		job.CreatedBy = &createdBy.String
+	}
+	if startedAt.Valid {
+		job.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		job.CompletedAt = &completedAt.Time
+	}
+	return job, err
+}
+
+func scanGenerationStep(row scanner) (GenerationStep, error) {
+	var step GenerationStep
+	var aiTaskID, externalTaskID, errorMessage sql.NullString
+	var metadataRaw []byte
+	var startedAt, completedAt sql.NullTime
+	err := row.Scan(
+		&step.ID, &step.JobID, &step.BidDocumentID, &step.BidPartID,
+		&step.ChapterID, &step.ChapterTitle, &step.StepOrder, &step.Status,
+		&aiTaskID, &externalTaskID, &errorMessage, &metadataRaw,
+		&startedAt, &completedAt, &step.CreatedAt, &step.UpdatedAt,
+	)
+	if aiTaskID.Valid {
+		step.AITaskID = &aiTaskID.String
+	}
+	if externalTaskID.Valid {
+		step.ExternalTaskID = &externalTaskID.String
+	}
+	if errorMessage.Valid {
+		step.ErrorMessage = &errorMessage.String
+	}
+	step.Metadata = map[string]any{}
+	_ = json.Unmarshal(metadataRaw, &step.Metadata)
+	if startedAt.Valid {
+		step.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		step.CompletedAt = &completedAt.Time
+	}
+	return step, err
+}
+
 func scanTenderFile(row scanner) (TenderFile, error) {
 	var file TenderFile
 	err := row.Scan(
@@ -2924,6 +3647,24 @@ func normalizePartCode(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "combined_body"
+	}
+}
+
+func normalizeGenerationScope(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "part", "chapter":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "full"
+	}
+}
+
+func normalizeGenerationPartCode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "combined_body", "tech", "business", "boq", "attachment":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
 	}
 }
 
