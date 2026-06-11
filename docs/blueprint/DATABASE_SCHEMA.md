@@ -10,7 +10,7 @@ tenants、users、tenant_members、tenant_member_roles、roles、permissions、r
 
 `file_assets` 记录 MinIO 对象元数据，`object_key` 固定为 `tenant_id/biz_type/uuid`，`status` 为 pending / ready / failed / deleted。上传链路先由 Go 生成预签名 URL，浏览器 PUT 到私有 bucket 后再 confirm 为 ready。
 
-`ai_call_logs` 保存当前租户内 AI/文档处理/导出调用审计，包含 trace_id、task_type、provider、model、input_tokens、output_tokens、latency_ms、status、error_message 和 biz_ref。Go 在知识库 embedding 搜索成功后直接写入日志；Python AI 服务通过 HMAC 回调完成的 knowledge_process、chapter_generate、document_export 任务由 Go 验签、更新 `ai_tasks` 后追加日志。前端 `/team?tab=logs` 通过 `GET /ai-call-logs` 读取。
+`ai_call_logs` 保存当前租户内 AI/文档处理/导出调用审计，包含 trace_id、task_type、provider、model、input_tokens、output_tokens、latency_ms、status、error_message 和 biz_ref。Go 在知识库 embedding 和 rerank 搜索成功后直接写入日志；Python AI 服务通过 HMAC 回调完成的 knowledge_process、chapter_generate、chapter_ai_action、cost_advice、document_export 任务由 Go 验签、更新 `ai_tasks` 后追加日志。前端 `/team?tab=logs` 通过 `GET /ai-call-logs` 读取。
 
 ## 标讯
 
@@ -48,7 +48,7 @@ knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document
 
 `knowledge_documents` 关联 `file_assets`，记录文档标题、类型、分类、解析状态、摘要和元数据。`knowledge_categories` / `knowledge_tags` 支撑文档库分类树和标签管理，`knowledge_document_tags` 保存文档与标签关系。`ai_tasks` 记录 Go 编排的 AI/文档处理任务，Python AI 服务只返回任务状态或回调结果，最终由 Go 验签后更新业务状态。
 
-`knowledge_chunks` 保存解析切片正文、页码、section_path、metadata 和 `embedding vector(1024)`。当前最小实现使用 Python MockProvider 生成 embedding，Go 回调写入 pgvector，并通过 `idx_knowledge_chunks_embedding_hnsw` 使用 HNSW cosine 索引支撑租户内语义搜索。
+`knowledge_chunks` 保存解析切片正文、页码、section_path、metadata 和 `embedding vector(1024)`。当前实现使用 Python MockProvider 生成 embedding，Go 回调写入 pgvector，并通过 `idx_knowledge_chunks_embedding_hnsw` 使用 HNSW cosine 索引支撑租户内语义搜索。`POST /knowledge/search` 会分别召回 pgvector 候选和全文关键词候选，RRF 融合后调用 RerankProvider 精排。
 
 `knowledge_references` 是 AI 生成内容引用知识库的反向索引。章节生成引用真实 chunk 时写入 `source_document_id`、`chapter_id`、`chunk_id` 和解析 metadata，`GET /knowledge/documents/:id/references` 据此展示文档被哪些标书章节引用。
 

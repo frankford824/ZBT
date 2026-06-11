@@ -18,7 +18,12 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+ARG INSTALL_DEV_DEPS=true
+RUN if [ "$INSTALL_DEV_DEPS" = "true" ]; then \
+        pip install --no-cache-dir ".[dev]"; \
+    else \
+        pip install --no-cache-dir .; \
+    fi
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

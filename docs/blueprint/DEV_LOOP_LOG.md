@@ -1857,3 +1857,51 @@ curl -X GET /api/v1/ai-call-logs
 ### 偏离蓝图
 
 1. RerankProvider 当前仍为 MockProvider；调用入口、ModelRouter 路由、Go 端 rerank 调用、ai_call_logs 和租户隔离已落地，后续可替换 Cohere/Jina/Local BGE reranker。
+
+## Loop-24 / README 启动说明与 AI pytest 验证 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 最终验收项“模型可通过 model_routing.yaml 切换”和“README 能指导新开发者启动”。
+2. 消除此前多轮记录的 AI 服务 pytest 环境缺口，让 Docker 环境可以直接运行 Python 测试。
+3. 让 `./infra/scripts/check.sh` 在服务已启动时自动执行容器内 pytest。
+
+### 代码交付
+
+1. Python AI 服务启动时优先读取 `MODEL_ROUTING_FILE`，未设置时回退内置 `app/config/model_routing.yaml`。
+2. AI Dockerfile 新增 `INSTALL_DEV_DEPS` 构建参数，默认安装 `.[dev]`，因此容器内包含 pytest、ruff 和 mypy；需要瘦身时可设置 `INSTALL_DEV_DEPS=false`。
+3. `infra/scripts/check.sh` 保留本地 `compileall`，本机有 pytest 时运行本机测试；本机缺 pytest 时跳过并提示；若 `ai-service` 容器正在运行，则执行 `docker compose exec -T ai-service python -m pytest app/tests`。
+4. 根 README 重写为当前真实启动、账号、验证、模型路由、文件上传和验收定位说明；`frontend/README.md` 从 Vite 模板改为项目内前端说明。
+5. `.env.example` 的 `MODEL_ROUTING_FILE` 改为 Docker 内真实路径 `./app/config/model_routing.yaml`。
+6. API 和数据库蓝图同步更新 RAG rerank、ai_call_logs 和知识库检索说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && python3 -m compileall app
+docker compose config
+docker compose build ai-service
+docker compose up -d ai-service
+docker compose exec -T ai-service python -m pytest app/tests
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/models/health
+docker compose exec -T ai-service python -c 'from app.main import CONFIG_PATH; print(CONFIG_PATH)'
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. ai-service `python3 -m compileall app` 通过。
+2. `docker compose config` 通过。
+3. Docker ai-service 镜像构建成功，日志显示安装了 `pytest-9.0.3`。
+4. ai-service 容器重启成功。
+5. `docker compose exec -T ai-service python -m pytest app/tests` 通过，5 个 Python 测试全部通过。
+6. AI `/healthz` 和 `/models/health` 返回 ok，mock provider 健康。
+7. 容器内 `CONFIG_PATH` 输出 `app/config/model_routing.yaml`，证明 `MODEL_ROUTING_FILE` 生效。
+8. `./infra/scripts/check.sh` 通过；其中本机 pytest 不可用时按预期跳过本机 pytest，随后在运行中的 ai-service 容器内执行 pytest，5 个测试通过。
+
+### 偏离蓝图
+
+1. 本机 Python 仍未安装项目依赖，因此本机 pytest 会被检查脚本跳过；Docker 开发环境已能直接运行 pytest，符合新开发者一键启动和验证路径。

@@ -29,7 +29,14 @@ from app.schemas.knowledge import (
     KnowledgeRerankResult,
 )
 
-CONFIG_PATH = Path(__file__).parent / "config" / "model_routing.yaml"
+def routing_config_path() -> Path:
+    configured = os.getenv("MODEL_ROUTING_FILE", "").strip()
+    if configured:
+        return Path(configured)
+    return Path(__file__).parent / "config" / "model_routing.yaml"
+
+
+CONFIG_PATH = routing_config_path()
 
 app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0")
 router = ModelRouter.from_yaml(CONFIG_PATH)
