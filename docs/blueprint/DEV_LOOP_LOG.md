@@ -775,3 +775,59 @@ curl -X POST /api/v1/knowledge/templates ...
 ### 下一轮建议
 
 继续补知识库管理交互：标签/分类创建编辑删除表单、文档元数据编辑，或将文档模板关联 file_assets 实现模板文件上传/预览。
+
+## Loop-6 / 分类标签管理交互闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 将已有分类/标签 CRUD 后端接口接入前端真实操作。
+2. 在文档库侧栏提供分类创建、编辑、删除。
+3. 在标签管理页提供标签创建、编辑、删除和颜色选择。
+4. 验证分类/标签 CRUD 仍受租户 RLS 隔离。
+
+### 代码交付
+
+1. 前端 API client 新增 `createKnowledgeCategory`、`updateKnowledgeCategory`、`deleteKnowledgeCategory`。
+2. 前端 API client 新增 `createKnowledgeTag`、`updateKnowledgeTag`、`deleteKnowledgeTag`。
+3. 文档库页面分类侧栏从只读 Tree 改为分类列表，支持新建、编辑和删除；删除分类后后端会将关联文档置为未分类。
+4. 标签管理页新增标签表单弹窗，支持新建/编辑标签名称和颜色；列表操作支持删除确认。
+5. 分类/标签变更后刷新分类、标签、文档和知识库统计查询。
+6. API_SPEC 同步记录分类和标签 CRUD 已接入前端管理交互。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build frontend
+docker compose up -d frontend backend ai-service
+curl -X POST /api/v1/knowledge/categories ...
+curl -X PATCH /api/v1/knowledge/categories/:id ...
+curl -X DELETE /api/v1/knowledge/categories/:id
+curl -X POST /api/v1/knowledge/tags ...
+curl -X PATCH /api/v1/knowledge/tags/:id ...
+curl -X DELETE /api/v1/knowledge/tags/:id
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker 重新构建并启动 frontend 成功。
+5. 运行时创建分类 `运行分类-1781187016`，PATCH 后变为 `运行分类-1781187016-改`，description 为 `更新验证`。
+6. 运行时创建标签 `运行标签-1781187016`，PATCH 后变为 `运行标签-1781187016-改`，color 为 `red`。
+7. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询上述分类和标签，均返回 0。
+8. DELETE 分类和标签均返回 204；再次列表确认 `category_removed=true`、`tag_removed=true`。
+
+### 偏离蓝图
+
+1. 分类当前只支持一级分类，尚未做父子层级编辑。
+2. 标签与文档的关联仍通过文档编辑接口预留，前端尚未提供文档标签批量调整。
+
+### 下一轮建议
+
+继续做文档元数据编辑：标题、分类、标签、摘要的前端表单；或推进模板文件上传/预览和模板使用动作。

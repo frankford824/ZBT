@@ -356,9 +356,49 @@ export async function fetchKnowledgeCategories(): Promise<KnowledgeCategoryDTO[]
   return data.items
 }
 
+export async function createKnowledgeCategory(payload: {
+  name: string
+  description?: string
+}): Promise<KnowledgeCategoryDTO> {
+  const { data } = await apiClient.post<KnowledgeCategoryDTO>('/knowledge/categories', payload)
+  return data
+}
+
+export async function updateKnowledgeCategory(
+  categoryId: string,
+  payload: { name?: string; description?: string },
+): Promise<KnowledgeCategoryDTO> {
+  const { data } = await apiClient.patch<KnowledgeCategoryDTO>(`/knowledge/categories/${categoryId}`, payload)
+  return data
+}
+
+export async function deleteKnowledgeCategory(categoryId: string): Promise<void> {
+  await apiClient.delete(`/knowledge/categories/${categoryId}`)
+}
+
 export async function fetchKnowledgeTags(): Promise<KnowledgeTagDTO[]> {
   const { data } = await apiClient.get<{ items: KnowledgeTagDTO[] }>('/knowledge/tags')
   return data.items
+}
+
+export async function createKnowledgeTag(payload: {
+  name: string
+  color?: string
+}): Promise<KnowledgeTagDTO> {
+  const { data } = await apiClient.post<KnowledgeTagDTO>('/knowledge/tags', payload)
+  return data
+}
+
+export async function updateKnowledgeTag(
+  tagId: string,
+  payload: { name?: string; color?: string },
+): Promise<KnowledgeTagDTO> {
+  const { data } = await apiClient.patch<KnowledgeTagDTO>(`/knowledge/tags/${tagId}`, payload)
+  return data
+}
+
+export async function deleteKnowledgeTag(tagId: string): Promise<void> {
+  await apiClient.delete(`/knowledge/tags/${tagId}`)
 }
 
 export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocumentDTO[]> {

@@ -1,6 +1,8 @@
 import {
   CloudUploadOutlined,
+  DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
   FileSearchOutlined,
   LinkOutlined,
   PlayCircleOutlined,
@@ -8,14 +10,18 @@ import {
   TagsOutlined,
 } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { App as AntApp, Button, Card, Col, Drawer, Form, Input, List, Modal, Row, Space, Statistic, Table, Tag, Tree, Upload } from 'antd'
+import { App as AntApp, Button, Card, Col, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Upload } from 'antd'
 import type { UploadProps } from 'antd'
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   confirmFileUpload,
+  createKnowledgeCategory,
   createKnowledgeTemplate,
+  createKnowledgeTag,
   createPresignedUpload,
+  deleteKnowledgeCategory,
+  deleteKnowledgeTag,
   fetchFileURL,
   fetchKnowledgeCategories,
   fetchKnowledgeDocumentReferences,
@@ -25,7 +31,10 @@ import {
   fetchKnowledgeTemplates,
   processKnowledgeDocument,
   searchKnowledge,
+  updateKnowledgeCategory,
+  updateKnowledgeTag,
   uploadToPresignedUrl,
+  type KnowledgeCategoryDTO,
   type KnowledgeDocumentTemplateDTO,
   type KnowledgeDocumentReferenceDTO,
   type KnowledgeSearchResponseDTO,
@@ -130,6 +139,9 @@ export function KnowledgeDocsPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const [referenceDocument, setReferenceDocument] = useState<KnowledgeDocumentDTO | null>(null)
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false)
+  const [editingCategory, setEditingCategory] = useState<KnowledgeCategoryDTO | null>(null)
+  const [categoryForm] = Form.useForm<{ name: string; description?: string }>()
   const documents = useQuery({
     queryKey: ['knowledge-documents'],
     queryFn: fetchKnowledgeDocuments,
@@ -137,6 +149,40 @@ export function KnowledgeDocsPage() {
   const categories = useQuery({
     queryKey: ['knowledge-categories'],
     queryFn: fetchKnowledgeCategories,
+  })
+  const refreshKnowledgeLists = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['knowledge-categories'] }),
+      queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] }),
+      queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] }),
+    ])
+  }
+  const createCategory = useMutation({
+    mutationFn: createKnowledgeCategory,
+    onSuccess: async () => {
+      await refreshKnowledgeLists()
+      message.success('分类已创建')
+      closeCategoryModal()
+    },
+    onError: () => message.error('分类创建失败'),
+  })
+  const updateCategory = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: { name?: string; description?: string } }) =>
+      updateKnowledgeCategory(id, values),
+    onSuccess: async () => {
+      await refreshKnowledgeLists()
+      message.success('分类已更新')
+      closeCategoryModal()
+    },
+    onError: () => message.error('分类更新失败'),
+  })
+  const deleteCategory = useMutation({
+    mutationFn: deleteKnowledgeCategory,
+    onSuccess: async () => {
+      await refreshKnowledgeLists()
+      message.success('分类已删除')
+    },
+    onError: () => message.error('分类删除失败'),
   })
 
   const uploadProps: UploadProps = {
@@ -174,6 +220,32 @@ export function KnowledgeDocsPage() {
     await queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] })
     message.success(`处理任务已创建：${task.external_task_id ?? task.id}`)
   }
+  const openCreateCategory = () => {
+    setEditingCategory(null)
+    categoryForm.resetFields()
+    setCategoryModalOpen(true)
+  }
+  const openEditCategory = (category: KnowledgeCategoryDTO) => {
+    setEditingCategory(category)
+    categoryForm.setFieldsValue({
+      name: category.name,
+      description: category.description,
+    })
+    setCategoryModalOpen(true)
+  }
+  const closeCategoryModal = () => {
+    setCategoryModalOpen(false)
+    setEditingCategory(null)
+    categoryForm.resetFields()
+  }
+  const submitCategory = async () => {
+    const values = await categoryForm.validateFields()
+    if (editingCategory) {
+      await updateCategory.mutateAsync({ id: editingCategory.id, values })
+      return
+    }
+    await createCategory.mutateAsync(values)
+  }
 
   return (
     <PageFrame
@@ -189,19 +261,33 @@ export function KnowledgeDocsPage() {
     >
       <Row gutter={16}>
         <Col xs={24} xl={6}>
-          <Card title="文档分类">
-            <Tree
-              defaultExpandAll
-              treeData={[
-                {
-                  title: `全部文档 ${documents.data?.length ?? 0}`,
-                  key: 'all',
-                  children: (categories.data ?? []).map((item) => ({
-                    title: item.name,
-                    key: item.id,
-                  })),
-                },
-              ]}
+          <Card
+            title={`文档分类 ${documents.data?.length ?? 0}`}
+            extra={<Button size="small" icon={<PlusOutlined />} onClick={openCreateCategory}>新建</Button>}
+          >
+            <List
+              loading={categories.isLoading}
+              dataSource={categories.data ?? []}
+              locale={{ emptyText: '暂无分类' }}
+              renderItem={(item) => (
+                <List.Item
+                  actions={[
+                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEditCategory(item)} />,
+                    <Popconfirm
+                      key="delete"
+                      title="删除分类"
+                      description="关联文档会变为未分类。"
+                      okText="删除"
+                      cancelText="取消"
+                      onConfirm={() => deleteCategory.mutate(item.id)}
+                    >
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>,
+                  ]}
+                >
+                  <List.Item.Meta title={item.name} description={item.description || '无说明'} />
+                </List.Item>
+              )}
             />
           </Card>
         </Col>
@@ -284,6 +370,23 @@ export function KnowledgeDocsPage() {
         document={referenceDocument}
         onClose={() => setReferenceDocument(null)}
       />
+      <Modal
+        title={editingCategory ? '编辑分类' : '新建分类'}
+        open={categoryModalOpen}
+        onCancel={closeCategoryModal}
+        onOk={() => void submitCategory()}
+        confirmLoading={createCategory.isPending || updateCategory.isPending}
+        destroyOnHidden
+      >
+        <Form form={categoryForm} layout="vertical">
+          <Form.Item label="分类名称" name="name" rules={[{ required: true, message: '请输入分类名称' }]}>
+            <Input placeholder="例如：技术方案" />
+          </Form.Item>
+          <Form.Item label="说明" name="description">
+            <Input.TextArea rows={3} placeholder="分类适用范围或归档规则" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </PageFrame>
   )
 }
@@ -469,6 +572,11 @@ export function KnowledgeTemplatesPage() {
 }
 
 export function KnowledgeTagsPage() {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [editingTag, setEditingTag] = useState<KnowledgeTagDTO | null>(null)
+  const [form] = Form.useForm<{ name: string; color?: string }>()
   const tags = useQuery({
     queryKey: ['knowledge-tags'],
     queryFn: fetchKnowledgeTags,
@@ -477,8 +585,65 @@ export function KnowledgeTagsPage() {
     queryKey: ['knowledge-documents'],
     queryFn: fetchKnowledgeDocuments,
   })
+  const refreshTags = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['knowledge-tags'] }),
+      queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] }),
+      queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] }),
+    ])
+  }
+  const createTag = useMutation({
+    mutationFn: createKnowledgeTag,
+    onSuccess: async () => {
+      await refreshTags()
+      message.success('标签已创建')
+      closeModal()
+    },
+    onError: () => message.error('标签创建失败'),
+  })
+  const updateTag = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: { name?: string; color?: string } }) =>
+      updateKnowledgeTag(id, values),
+    onSuccess: async () => {
+      await refreshTags()
+      message.success('标签已更新')
+      closeModal()
+    },
+    onError: () => message.error('标签更新失败'),
+  })
+  const deleteTag = useMutation({
+    mutationFn: deleteKnowledgeTag,
+    onSuccess: async () => {
+      await refreshTags()
+      message.success('标签已删除')
+    },
+    onError: () => message.error('标签删除失败'),
+  })
   const documentsByTag = (tag: KnowledgeTagDTO) =>
     (documents.data ?? []).filter((document) => document.tags.some((item) => item.id === tag.id))
+  const openCreate = () => {
+    setEditingTag(null)
+    form.setFieldsValue({ name: '', color: 'blue' })
+    setOpen(true)
+  }
+  const openEdit = (tag: KnowledgeTagDTO) => {
+    setEditingTag(tag)
+    form.setFieldsValue({ name: tag.name, color: tag.color })
+    setOpen(true)
+  }
+  const closeModal = () => {
+    setOpen(false)
+    setEditingTag(null)
+    form.resetFields()
+  }
+  const submitTag = async () => {
+    const values = await form.validateFields()
+    if (editingTag) {
+      await updateTag.mutateAsync({ id: editingTag.id, values })
+      return
+    }
+    await createTag.mutateAsync(values)
+  }
 
   return (
     <PageFrame
@@ -487,7 +652,7 @@ export function KnowledgeTagsPage() {
       subtitle="标签颜色、关联文档和删除确认"
       tags={['page-knowledge-tags', '/knowledge/tags']}
       actions={[
-        <Button key="new" type="primary" icon={<TagsOutlined />}>
+        <Button key="new" type="primary" icon={<TagsOutlined />} onClick={openCreate}>
           新建标签
         </Button>,
       ]}
@@ -498,8 +663,23 @@ export function KnowledgeTagsPage() {
             <List
               loading={tags.isLoading}
               dataSource={tags.data ?? []}
+              locale={{ emptyText: '暂无标签' }}
               renderItem={(item) => (
-                <List.Item>
+                <List.Item
+                  actions={[
+                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(item)} />,
+                    <Popconfirm
+                      key="delete"
+                      title="删除标签"
+                      description="关联文档会移除此标签。"
+                      okText="删除"
+                      cancelText="取消"
+                      onConfirm={() => deleteTag.mutate(item.id)}
+                    >
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>,
+                  ]}
+                >
                   <Tag color={item.color}>{item.name}</Tag>
                   <span>{documentsByTag(item).length} 个文档</span>
                 </List.Item>
@@ -518,13 +698,43 @@ export function KnowledgeTagsPage() {
                 { title: '关联文档', dataIndex: 'title' },
                 {
                   title: '标签',
-                  render: (_, row: KnowledgeDocumentDTO) => row.tags.map((tag) => <Tag key={tag.id} color={tag.color}>{tag.name}</Tag>),
+                  render: (_, row: KnowledgeDocumentDTO) => (
+                    <Space wrap>
+                      {row.tags.map((tag) => <Tag key={tag.id} color={tag.color}>{tag.name}</Tag>)}
+                    </Space>
+                  ),
                 },
               ]}
             />
           </Card>
         </Col>
       </Row>
+      <Modal
+        title={editingTag ? '编辑标签' : '新建标签'}
+        open={open}
+        onCancel={closeModal}
+        onOk={() => void submitTag()}
+        confirmLoading={createTag.isPending || updateTag.isPending}
+        destroyOnHidden
+      >
+        <Form form={form} layout="vertical" initialValues={{ color: 'blue' }}>
+          <Form.Item label="标签名称" name="name" rules={[{ required: true, message: '请输入标签名称' }]}>
+            <Input placeholder="例如：资质证书" />
+          </Form.Item>
+          <Form.Item label="颜色" name="color">
+            <Select
+              options={[
+                { value: 'blue', label: '蓝色' },
+                { value: 'green', label: '绿色' },
+                { value: 'orange', label: '橙色' },
+                { value: 'red', label: '红色' },
+                { value: 'purple', label: '紫色' },
+                { value: 'cyan', label: '青色' },
+              ]}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </PageFrame>
   )
 }
