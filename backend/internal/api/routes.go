@@ -16,6 +16,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/bid"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
+	platformcost "github.com/frankford824/ZBT/backend/internal/platform/cost"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	platformproject "github.com/frankford824/ZBT/backend/internal/platform/project"
@@ -41,6 +42,7 @@ type server struct {
 	bidStore       *bid.Store
 	tenderStore    *platformtender.Store
 	projectStore   *platformproject.Store
+	costStore      *platformcost.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -182,11 +184,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -318,6 +320,17 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.DELETE("/projects/:id/members/:memberId", rbac.Require("project", rbac.LevelFull), s.deleteProjectMember)
 	group.POST("/projects/:id/create-cost-project", rbac.Require("project", rbac.LevelFull), s.createCostProjectFromProject)
 	group.GET("/projects/:id/activities", rbac.Require("project", rbac.LevelRead), s.projectActivities)
+	group.GET("/cost-projects", rbac.Require("cost", rbac.LevelRead), s.listCostProjects)
+	group.POST("/cost-projects", rbac.Require("cost", rbac.LevelFull), s.createCostProject)
+	group.GET("/cost-projects/:id", rbac.Require("cost", rbac.LevelRead), s.getCostProject)
+	group.PATCH("/cost-projects/:id", rbac.Require("cost", rbac.LevelFull), s.updateCostProject)
+	group.GET("/cost-projects/:id/items", rbac.Require("cost", rbac.LevelRead), s.listCostItems)
+	group.POST("/cost-projects/:id/items", rbac.Require("cost", rbac.LevelFull), s.createCostItem)
+	group.PATCH("/cost-items/:id", rbac.Require("cost", rbac.LevelFull), s.updateCostItem)
+	group.DELETE("/cost-items/:id", rbac.Require("cost", rbac.LevelFull), s.deleteCostItem)
+	group.GET("/cost-projects/:id/analysis", rbac.Require("cost", rbac.LevelRead), s.costAnalysis)
+	group.POST("/cost-projects/:id/ai-advice", rbac.Require("cost", rbac.LevelFull), s.costAdvice)
+	group.POST("/cost-projects/:id/report", rbac.Require("cost", rbac.LevelFull), s.createCostReport)
 	group.GET("/tenant", rbac.Require("team", rbac.LevelRead), s.getTenant)
 	group.PATCH("/tenant", rbac.Require("team", rbac.LevelFull), s.updateTenant)
 	group.GET("/tenant/members", rbac.Require("team", rbac.LevelRead), s.listMembers)
@@ -411,6 +424,17 @@ func registerStubs(group *gin.RouterGroup) {
 		"DELETE /projects/:id/members/:memberId":       true,
 		"POST /projects/:id/create-cost-project":       true,
 		"GET /projects/:id/activities":                 true,
+		"GET /cost-projects":                           true,
+		"POST /cost-projects":                          true,
+		"GET /cost-projects/:id":                       true,
+		"PATCH /cost-projects/:id":                     true,
+		"GET /cost-projects/:id/items":                 true,
+		"POST /cost-projects/:id/items":                true,
+		"PATCH /cost-items/:id":                        true,
+		"DELETE /cost-items/:id":                       true,
+		"GET /cost-projects/:id/analysis":              true,
+		"POST /cost-projects/:id/ai-advice":            true,
+		"POST /cost-projects/:id/report":               true,
 		"GET /knowledge/categories":                    true,
 		"POST /knowledge/categories":                   true,
 		"PATCH /knowledge/categories/:id":              true,
@@ -715,6 +739,85 @@ func (s *server) createCostProjectFromProject(c *gin.Context) {
 func (s *server) projectActivities(c *gin.Context) {
 	result, err := s.projectStore.ListActivities(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) listCostProjects(c *gin.Context) {
+	result, err := s.costStore.ListProjects(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createCostProject(c *gin.Context) {
+	var req platformcost.CreateProjectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.costStore.CreateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) getCostProject(c *gin.Context) {
+	result, err := s.costStore.GetProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) updateCostProject(c *gin.Context) {
+	var req platformcost.UpdateProjectRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.costStore.UpdateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) listCostItems(c *gin.Context) {
+	result, err := s.costStore.ListItems(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createCostItem(c *gin.Context) {
+	var req platformcost.CreateItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.costStore.CreateItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateCostItem(c *gin.Context) {
+	var req platformcost.UpdateItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.costStore.UpdateItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteCostItem(c *gin.Context) {
+	err := s.costStore.DeleteItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) costAnalysis(c *gin.Context) {
+	result, err := s.costStore.Analysis(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) costAdvice(c *gin.Context) {
+	result, err := s.costStore.Advice(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) createCostReport(c *gin.Context) {
+	result, err := s.costStore.CreateReport(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
 }
 
 func (s *server) getTenant(c *gin.Context) {
@@ -1289,11 +1392,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

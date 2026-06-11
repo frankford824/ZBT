@@ -44,9 +44,15 @@ GET /knowledge、GET /knowledge/categories、POST /knowledge/categories、PATCH 
 
 POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、GET /compliance/checks/:id/issues、GET /compliance/checks/:id/stream、POST /compliance/issues/:id/autofix、POST /compliance/issues/:id/ignore、POST /compliance/issues/:id/confirm-fail、POST /compliance/checks/:id/report、GET /compliance/rules、POST /compliance/rules、PATCH /compliance/rules/:id、DELETE /compliance/rules/:id。
 
-## Cost / Approval / Notification / File
+## Cost
 
-覆盖 x.md 第 14 节列出的成本、审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出、合规和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底。
+GET /cost-projects、POST /cost-projects、GET /cost-projects/:id、PATCH /cost-projects/:id、GET /cost-projects/:id/items、POST /cost-projects/:id/items、PATCH /cost-items/:id、DELETE /cost-items/:id、GET /cost-projects/:id/analysis、POST /cost-projects/:id/ai-advice、POST /cost-projects/:id/report。
+
+成本一期已落地 `cost_projects`、`cost_items`、`cost_reports` RLS 表。`GET /cost-projects` 返回关联项目、预算、实际、利润率和成本项数量；`POST /cost-projects` 可为项目创建或更新成本项目；成本项支持新增、更新和删除；`GET /cost-projects/:id/analysis` 返回分类汇总、超预算项和规则化建议；`POST /cost-projects/:id/ai-advice` 当前返回同一分析结构作为 AI 建议占位；`POST /cost-projects/:id/report` 生成 `cost_reports` 记录。前端 `/costs` 和 `/costs/:costProjectId` 已接入真实列表、成本构成图、成本明细、建议和报告动作。
+
+## Approval / Notification / File
+
+覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出、合规和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底。
 
 文件接口一期已落地：
 

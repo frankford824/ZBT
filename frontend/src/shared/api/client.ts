@@ -223,9 +223,53 @@ export type ProjectActivityDTO = {
 export type CostProjectDTO = {
   id: string
   project_id: string
+  project_name?: string
   name: string
   status: 'draft' | 'active' | 'closed'
   budget_amount: number | null
+  total_budget?: number
+  total_actual?: number
+  margin_amount?: number
+  margin_rate?: number
+  item_count?: number
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type CostItemDTO = {
+  id: string
+  cost_project_id: string
+  category: string
+  name: string
+  cost_type: 'labor' | 'material' | 'equipment' | 'service' | 'other'
+  budget_amount: number
+  actual_amount: number
+  status: 'planned' | 'committed' | 'actual'
+  vendor: string
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+export type CostAnalysisDTO = {
+  project: CostProjectDTO
+  category_totals: Array<{
+    category: string
+    total_budget: number
+    total_actual: number
+    margin_amount: number
+  }>
+  overrun_items: CostItemDTO[]
+  recommendations: string[]
+}
+
+export type CostReportDTO = {
+  id: string
+  cost_project_id: string
+  report_type: string
+  status: 'queued' | 'generated' | 'failed'
+  summary: string
   metadata: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -597,6 +641,74 @@ export async function createCostProject(projectId: string): Promise<CostProjectD
 export async function fetchProjectActivities(projectId: string): Promise<ProjectActivityDTO[]> {
   const { data } = await apiClient.get<{ items: ProjectActivityDTO[] }>(`/projects/${projectId}/activities`)
   return data.items
+}
+
+export async function fetchCostProjects(): Promise<CostProjectDTO[]> {
+  const { data } = await apiClient.get<{ items: CostProjectDTO[] }>('/cost-projects')
+  return data.items
+}
+
+export async function createCostProjectRecord(payload: {
+  project_id: string
+  name?: string
+  status?: CostProjectDTO['status']
+  budget_amount?: number
+}): Promise<CostProjectDTO> {
+  const { data } = await apiClient.post<CostProjectDTO>('/cost-projects', payload)
+  return data
+}
+
+export async function fetchCostProject(costProjectId: string): Promise<CostProjectDTO> {
+  const { data } = await apiClient.get<CostProjectDTO>(`/cost-projects/${costProjectId}`)
+  return data
+}
+
+export async function updateCostProject(
+  costProjectId: string,
+  payload: Partial<Pick<CostProjectDTO, 'name' | 'status' | 'budget_amount'>>,
+): Promise<CostProjectDTO> {
+  const { data } = await apiClient.patch<CostProjectDTO>(`/cost-projects/${costProjectId}`, payload)
+  return data
+}
+
+export async function fetchCostItems(costProjectId: string): Promise<CostItemDTO[]> {
+  const { data } = await apiClient.get<{ items: CostItemDTO[] }>(`/cost-projects/${costProjectId}/items`)
+  return data.items
+}
+
+export async function createCostItem(
+  costProjectId: string,
+  payload: Partial<CostItemDTO> & { name: string },
+): Promise<CostItemDTO> {
+  const { data } = await apiClient.post<CostItemDTO>(`/cost-projects/${costProjectId}/items`, payload)
+  return data
+}
+
+export async function updateCostItem(
+  costItemId: string,
+  payload: Partial<CostItemDTO> & { name: string },
+): Promise<CostItemDTO> {
+  const { data } = await apiClient.patch<CostItemDTO>(`/cost-items/${costItemId}`, payload)
+  return data
+}
+
+export async function deleteCostItem(costItemId: string): Promise<void> {
+  await apiClient.delete(`/cost-items/${costItemId}`)
+}
+
+export async function fetchCostAnalysis(costProjectId: string): Promise<CostAnalysisDTO> {
+  const { data } = await apiClient.get<CostAnalysisDTO>(`/cost-projects/${costProjectId}/analysis`)
+  return data
+}
+
+export async function createCostAdvice(costProjectId: string): Promise<CostAnalysisDTO> {
+  const { data } = await apiClient.post<CostAnalysisDTO>(`/cost-projects/${costProjectId}/ai-advice`)
+  return data
+}
+
+export async function createCostReport(costProjectId: string): Promise<CostReportDTO> {
+  const { data } = await apiClient.post<CostReportDTO>(`/cost-projects/${costProjectId}/report`)
+  return data
 }
 
 export async function fetchKnowledgeCategories(): Promise<KnowledgeCategoryDTO[]> {

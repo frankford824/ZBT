@@ -56,6 +56,8 @@ compliance_checks、compliance_issues、compliance_rules、compliance_reports、
 
 cost_projects、cost_items、cost_reports。
 
+`cost_projects` 保存项目级成本测算，关联 `projects`，包含状态、预算金额和元数据。`cost_items` 保存分类、名称、类型、预算金额、实际金额、状态、供应商和备注，用于预算实际对比。`cost_reports` 保存成本报告生成结果和摘要元数据。当前前端 `/costs` 已接入真实列表、成本构成、明细、分析建议和报告生成动作。
+
 ## 团队协作
 
 approval_chains、approval_instances、approval_actions、comments、notifications。

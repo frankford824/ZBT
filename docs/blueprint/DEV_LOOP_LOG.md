@@ -1033,3 +1033,59 @@ curl -X POST /api/v1/projects/:id/create-cost-project ...
 1. 成本项目目前仅落地最小 `cost_projects` 表和创建动作，成本项、分析、AI 建议和报告仍待成本模块继续实现。
 2. 项目成员当前通过 API 支持添加/删除，前端详情页本轮只展示负责人，未做成员管理面板。
 3. 项目删除在存在关联标书时仍会受外键约束保护，后续可补归档/软删除策略。
+
+## Loop-9 / 成本管理真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/costs` 和 `/costs/:costProjectId` 从静态页面/stub 推进到真实租户数据。
+2. 落地成本项目、成本项、成本分析、AI 建议占位和报告生成。
+3. 补齐项目中标后创建成本项目之后的成本管理闭环。
+
+### 代码交付
+
+1. 新增迁移 `00014_cost_foundation.sql`，创建 `cost_items` 和 `cost_reports`，启用 FORCE RLS，并为既有示例成本项目写入默认成本项。
+2. 新增 `platform/cost` store，包含成本项目列表/创建/详情/更新、成本项 CRUD、成本分析、建议和报告生成。
+3. API 路由新增真实 Cost handlers，替换 `GET /cost-projects`、`POST /cost-projects`、`GET /cost-projects/:id`、`PATCH /cost-projects/:id`、成本项、analysis、ai-advice 和 report 相关 stub。
+4. 前端 API client 新增 CostItem、CostAnalysis、CostReport DTO 和接口方法。
+5. 成本管理页改为真实列表；成本详情页接入预算/实际/利润率、成本构成图、成本明细、新增成本项、AI 优化建议和报告生成。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+curl -X GET /api/v1/cost-projects ...
+curl -X POST /api/v1/cost-projects ...
+curl -X POST /api/v1/cost-projects/:id/items ...
+curl -X PATCH /api/v1/cost-items/:id ...
+curl -X GET /api/v1/cost-projects/:id/analysis ...
+curl -X POST /api/v1/cost-projects/:id/ai-advice ...
+curl -X POST /api/v1/cost-projects/:id/report ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker 后端重建并启动成功；首次完整 build 因 Docker Hub token/metadata TLS handshake timeout 失败，重试后 frontend build 和启动成功。
+5. 运行时 `GET /cost-projects` 初始返回 2 个成本项目。
+6. 运行时创建项目 `c80007ef-014f-4d53-a17c-9c51be7dca51`，并创建成本项目 `e5c7f0b3-13b9-4d25-96b2-95d9ff6d110c`。
+7. 运行时新增成本项 `392a0b6b-fc49-4cfe-93ae-9a90eac66247`，PATCH 后 actual_amount 为 310000，列表返回 1 条。
+8. 运行时 analysis 返回 1 个超预算项，首条建议为 `利润率低于 20%，建议复核人力投入和外采成本。`。
+9. 运行时 `POST /cost-projects/:id/ai-advice` 返回 2 条建议。
+10. 运行时 `POST /cost-projects/:id/report` 生成报告 `b765d945-040b-40b0-9ed5-cc9ca27fedc9`，status 为 `generated`。
+11. goose 迁移版本为 14。
+12. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询新建成本项目、成本项和报告均返回 0，tenant1 均返回 1。
+
+### 偏离蓝图
+
+1. `ai-advice` 当前是规则化建议占位，尚未接入 Python AI 服务异步任务。
+2. `report` 当前生成数据库报告摘要，尚未导出 docx/pdf 文件资产。
+3. 成本项目删除和成本报告列表接口尚未展开，后续可随成本模块深化补齐。
