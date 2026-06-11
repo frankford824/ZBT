@@ -1,8 +1,13 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +15,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
+	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
@@ -24,9 +30,10 @@ type routeSpec struct {
 }
 
 type server struct {
-	cfg         config.Config
-	store       *saas.Store
-	fileService *platformfile.Service
+	cfg            config.Config
+	store          *saas.Store
+	fileService    *platformfile.Service
+	knowledgeStore *knowledge.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -167,11 +174,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -183,6 +190,7 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 
 	public := router.Group("/api/v1")
 	public.POST("/auth/login", s.login)
+	public.POST("/ai/callbacks/tasks", s.aiTaskCallback)
 
 	api := router.Group("/api/v1", s.authenticate(), tenant.Middleware())
 	api.GET("/me", s.currentUser)
@@ -284,31 +292,65 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
 	group.DELETE("/roles/:id", rbac.Require("team", rbac.LevelFull), s.deleteRole)
 	group.GET("/notifications", s.listNotifications)
+	group.GET("/knowledge/categories", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeCategories)
+	group.POST("/knowledge/categories", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeCategory)
+	group.PATCH("/knowledge/categories/:id", rbac.Require("knowledge", rbac.LevelFull), s.updateKnowledgeCategory)
+	group.DELETE("/knowledge/categories/:id", rbac.Require("knowledge", rbac.LevelFull), s.deleteKnowledgeCategory)
+	group.GET("/knowledge/tags", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeTags)
+	group.POST("/knowledge/tags", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeTag)
+	group.PATCH("/knowledge/tags/:id", rbac.Require("knowledge", rbac.LevelFull), s.updateKnowledgeTag)
+	group.DELETE("/knowledge/tags/:id", rbac.Require("knowledge", rbac.LevelFull), s.deleteKnowledgeTag)
 	group.GET("/knowledge/documents", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeDocuments)
+	group.POST("/knowledge/documents", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeDocument)
+	group.GET("/knowledge/documents/:id", rbac.Require("knowledge", rbac.LevelRead), s.getKnowledgeDocument)
+	group.PATCH("/knowledge/documents/:id", rbac.Require("knowledge", rbac.LevelFull), s.updateKnowledgeDocument)
+	group.DELETE("/knowledge/documents/:id", rbac.Require("knowledge", rbac.LevelFull), s.deleteKnowledgeDocument)
+	group.POST("/knowledge/documents/:id/process", rbac.Require("knowledge", rbac.LevelFull), s.processKnowledgeDocument)
+	group.GET("/knowledge/documents/:id/preview", rbac.Require("knowledge", rbac.LevelRead), s.previewKnowledgeDocument)
+	group.GET("/knowledge/documents/:id/references", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeDocumentReferences)
+	group.GET("/knowledge/stats", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeStats)
 	group.POST("/files/presign-upload", rbac.Require("knowledge", rbac.LevelFull), s.presignFileUpload)
 	group.POST("/files/:id/confirm", rbac.Require("knowledge", rbac.LevelFull), s.confirmFileUpload)
 	group.GET("/files/:id/download-url", rbac.Require("knowledge", rbac.LevelRead), s.fileDownloadURL)
 	group.GET("/files/:id/preview-url", rbac.Require("knowledge", rbac.LevelRead), s.filePreviewURL)
+	group.GET("/ai-tasks/:taskId", rbac.Require("dashboard", rbac.LevelRead), s.getAITask)
 }
 
 func registerStubs(group *gin.RouterGroup) {
 	custom := map[string]bool{
-		"GET /me":                     true,
-		"GET /meta/routes":            true,
-		"GET /tenant":                 true,
-		"PATCH /tenant":               true,
-		"GET /tenant/members":         true,
-		"POST /tenant/members/invite": true,
-		"GET /roles":                  true,
-		"POST /roles":                 true,
-		"PATCH /roles/:id":            true,
-		"DELETE /roles/:id":           true,
-		"GET /notifications":          true,
-		"GET /knowledge/documents":    true,
-		"POST /files/presign-upload":  true,
-		"POST /files/:id/confirm":     true,
-		"GET /files/:id/download-url": true,
-		"GET /files/:id/preview-url":  true,
+		"GET /me":                                 true,
+		"GET /meta/routes":                        true,
+		"GET /tenant":                             true,
+		"PATCH /tenant":                           true,
+		"GET /tenant/members":                     true,
+		"POST /tenant/members/invite":             true,
+		"GET /roles":                              true,
+		"POST /roles":                             true,
+		"PATCH /roles/:id":                        true,
+		"DELETE /roles/:id":                       true,
+		"GET /notifications":                      true,
+		"GET /knowledge/categories":               true,
+		"POST /knowledge/categories":              true,
+		"PATCH /knowledge/categories/:id":         true,
+		"DELETE /knowledge/categories/:id":        true,
+		"GET /knowledge/tags":                     true,
+		"POST /knowledge/tags":                    true,
+		"PATCH /knowledge/tags/:id":               true,
+		"DELETE /knowledge/tags/:id":              true,
+		"GET /knowledge/documents":                true,
+		"POST /knowledge/documents":               true,
+		"GET /knowledge/documents/:id":            true,
+		"PATCH /knowledge/documents/:id":          true,
+		"DELETE /knowledge/documents/:id":         true,
+		"POST /knowledge/documents/:id/process":   true,
+		"GET /knowledge/documents/:id/preview":    true,
+		"GET /knowledge/documents/:id/references": true,
+		"GET /knowledge/stats":                    true,
+		"POST /files/presign-upload":              true,
+		"POST /files/:id/confirm":                 true,
+		"GET /files/:id/download-url":             true,
+		"GET /files/:id/preview-url":              true,
+		"GET /ai-tasks/:taskId":                   true,
 	}
 	for _, spec := range routeSpecs {
 		if custom[spec.Method+" "+spec.Path] {
@@ -423,9 +465,150 @@ func (s *server) listNotifications(c *gin.Context) {
 	respond(c, gin.H{"items": result}, err)
 }
 
-func (s *server) listKnowledgeDocuments(c *gin.Context) {
-	result, err := s.fileService.ListAssets(c.Request.Context(), tenant.FromContext(c.Request.Context()), "knowledge")
+func (s *server) listKnowledgeCategories(c *gin.Context) {
+	result, err := s.knowledgeStore.ListCategories(c.Request.Context(), tenant.FromContext(c.Request.Context()))
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createKnowledgeCategory(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.CreateCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name, req.Description)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateKnowledgeCategory(c *gin.Context) {
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.UpdateCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Description)
+	respond(c, result, err)
+}
+
+func (s *server) deleteKnowledgeCategory(c *gin.Context) {
+	err := s.knowledgeStore.DeleteCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) listKnowledgeTags(c *gin.Context) {
+	result, err := s.knowledgeStore.ListTags(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createKnowledgeTag(c *gin.Context) {
+	var req struct {
+		Name  string `json:"name" binding:"required"`
+		Color string `json:"color"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.CreateTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name, req.Color)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) updateKnowledgeTag(c *gin.Context) {
+	var req struct {
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.UpdateTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Color)
+	respond(c, result, err)
+}
+
+func (s *server) deleteKnowledgeTag(c *gin.Context) {
+	err := s.knowledgeStore.DeleteTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) listKnowledgeDocuments(c *gin.Context) {
+	result, err := s.knowledgeStore.ListDocuments(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createKnowledgeDocument(c *gin.Context) {
+	var req struct {
+		FileID string `json:"file_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.EnsureDocumentForFile(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.FileID)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) getKnowledgeDocument(c *gin.Context) {
+	result, err := s.knowledgeStore.GetDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) updateKnowledgeDocument(c *gin.Context) {
+	var req knowledge.UpdateDocumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.UpdateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) deleteKnowledgeDocument(c *gin.Context) {
+	err := s.knowledgeStore.DeleteDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *server) processKnowledgeDocument(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.knowledgeStore.ProcessDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) previewKnowledgeDocument(c *gin.Context) {
+	document, err := s.knowledgeStore.GetDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	result, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), document.File.ID, true)
+	respond(c, result, err)
+}
+
+func (s *server) knowledgeDocumentReferences(c *gin.Context) {
+	respond(c, gin.H{"items": []gin.H{}}, nil)
+}
+
+func (s *server) knowledgeStats(c *gin.Context) {
+	result, err := s.knowledgeStore.Stats(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, result, err)
 }
 
 func (s *server) presignFileUpload(c *gin.Context) {
@@ -441,7 +624,16 @@ func (s *server) presignFileUpload(c *gin.Context) {
 
 func (s *server) confirmFileUpload(c *gin.Context) {
 	result, err := s.fileService.ConfirmUpload(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
-	respond(c, result, err)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	if result.BizType == "knowledge" {
+		document, err := s.knowledgeStore.EnsureDocumentForFile(c.Request.Context(), tenant.FromContext(c.Request.Context()), result.ID)
+		respond(c, gin.H{"file": result, "document": document}, err)
+		return
+	}
+	respond(c, result, nil)
 }
 
 func (s *server) fileDownloadURL(c *gin.Context) {
@@ -452,6 +644,49 @@ func (s *server) fileDownloadURL(c *gin.Context) {
 func (s *server) filePreviewURL(c *gin.Context) {
 	result, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), true)
 	respond(c, result, err)
+}
+
+func (s *server) getAITask(c *gin.Context) {
+	result, err := s.knowledgeStore.GetTask(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("taskId"))
+	respond(c, result, err)
+}
+
+func (s *server) aiTaskCallback(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !s.verifyCallbackSignature(c.GetHeader("X-ZBT-Timestamp"), c.GetHeader("X-ZBT-Signature"), body) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid callback signature"})
+		return
+	}
+	var payload knowledge.CallbackPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.ApplyCallback(c.Request.Context(), payload)
+	respond(c, result, err)
+}
+
+func (s *server) verifyCallbackSignature(timestampHeader, signatureHeader string, body []byte) bool {
+	if s.cfg.AIServiceHMACSecret == "" || timestampHeader == "" || signatureHeader == "" {
+		return false
+	}
+	timestamp, err := strconv.ParseInt(timestampHeader, 10, 64)
+	if err != nil {
+		return false
+	}
+	if time.Since(time.Unix(timestamp, 0)).Abs() > 5*time.Minute {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(s.cfg.AIServiceHMACSecret))
+	mac.Write([]byte(timestampHeader))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	expected := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(signatureHeader))
 }
 
 func requiredLevel(spec routeSpec) rbac.Level {
@@ -477,11 +712,11 @@ func respond(c *gin.Context, payload any, err error) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	if errors.Is(err, platformfile.ErrInvalidRequest) {
+	if errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

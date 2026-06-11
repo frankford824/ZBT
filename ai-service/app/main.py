@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.gateway.model_router import ModelRouter
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.generation import ChapterGenerateRequest, ChapterGenerateResponse
+from app.schemas.knowledge import KnowledgeProcessRequest
 
 CONFIG_PATH = Path(__file__).parent / "config" / "model_routing.yaml"
 
@@ -29,6 +30,13 @@ async def model_health() -> dict[str, object]:
 async def tender_parse() -> TaskAccepted:
     route = router.resolve("tender_parse", tenant_id="tenant-demo")
     return TaskAccepted(task_id="task-tender-parse-demo", status="queued", route=route.model_dump())
+
+
+@app.post("/tasks/knowledge-process", response_model=TaskAccepted, status_code=202)
+async def knowledge_process(payload: KnowledgeProcessRequest) -> TaskAccepted:
+    route = router.resolve("knowledge_process", tenant_id=payload.tenant_id)
+    task_suffix = payload.document_id.replace("-", "")[:12]
+    return TaskAccepted(task_id=f"task-knowledge-{task_suffix}", status="queued", route=route.model_dump())
 
 
 @app.post("/tasks/chapter-generate", response_model=ChapterGenerateResponse)

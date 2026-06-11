@@ -46,6 +46,13 @@ routes:
       provider: mock
       model: configurable-embedding-model
       dimensions: 1024
+  knowledge_process:
+    primary:
+      provider: mock
+      model: configurable-document-processing-pipeline
+      output: json
+      schema: KnowledgeProcessTask
+      timeout_s: 300
   knowledge_rerank:
     primary:
       provider: mock

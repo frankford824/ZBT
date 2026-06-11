@@ -51,6 +51,8 @@ services:
       MIGRATION_DATABASE_URL: postgres://zbt:zbt@postgres:5432/zbt?sslmode=disable
       REDIS_URL: redis:6379
       AI_SERVICE_URL: http://ai-service:8000
+      AI_CALLBACK_URL: http://backend:8080/api/v1/ai/callbacks/tasks
+      AI_SERVICE_HMAC_SECRET: dev-only-zbt-ai-callback-secret
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
       MINIO_ACCESS_KEY: zbt_minio
@@ -76,6 +78,7 @@ services:
       USE_MOCK_PROVIDERS: "true"
       MODEL_ROUTING_FILE: ./app/config/model_routing.yaml
       LIBREOFFICE_PATH: /usr/bin/soffice
+      AI_SERVICE_HMAC_SECRET: dev-only-zbt-ai-callback-secret
     ports:
       - "8000:8000"
 

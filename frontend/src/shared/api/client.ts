@@ -71,6 +71,74 @@ export type PresignedFileUrlDTO = {
   expires_at: string
 }
 
+export type KnowledgeCategoryDTO = {
+  id: string
+  name: string
+  description: string
+  parent_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type KnowledgeTagDTO = {
+  id: string
+  name: string
+  color: string
+  created_at: string
+  updated_at: string
+}
+
+export type KnowledgeDocumentDTO = {
+  id: string
+  title: string
+  doc_type: string
+  parse_status: 'ready' | 'queued' | 'processing' | 'processed' | 'failed'
+  summary: string
+  metadata: Record<string, unknown>
+  file: {
+    id: string
+    filename: string
+    content_type: string
+    size_bytes: number
+    status: string
+  }
+  category: KnowledgeCategoryDTO | null
+  tags: KnowledgeTagDTO[]
+  processed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ConfirmUploadDTO = {
+  file: FileAssetDTO
+  document?: KnowledgeDocumentDTO
+}
+
+export type KnowledgeStatsDTO = {
+  document_count: number
+  ready_count: number
+  queued_count: number
+  processed_count: number
+  failed_count: number
+  category_counts: Record<string, number>
+  tag_counts: Record<string, number>
+}
+
+export type AITaskDTO = {
+  id: string
+  task_type: string
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+  external_task_id: string | null
+  resource_type: string
+  resource_id: string
+  payload: Record<string, unknown>
+  route: Record<string, unknown>
+  result: Record<string, unknown>
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -104,8 +172,18 @@ export async function fetchNotifications(): Promise<NotificationDTO[]> {
   return data.items
 }
 
-export async function fetchKnowledgeDocuments(): Promise<FileAssetDTO[]> {
-  const { data } = await apiClient.get<{ items: FileAssetDTO[] }>('/knowledge/documents')
+export async function fetchKnowledgeCategories(): Promise<KnowledgeCategoryDTO[]> {
+  const { data } = await apiClient.get<{ items: KnowledgeCategoryDTO[] }>('/knowledge/categories')
+  return data.items
+}
+
+export async function fetchKnowledgeTags(): Promise<KnowledgeTagDTO[]> {
+  const { data } = await apiClient.get<{ items: KnowledgeTagDTO[] }>('/knowledge/tags')
+  return data.items
+}
+
+export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocumentDTO[]> {
+  const { data } = await apiClient.get<{ items: KnowledgeDocumentDTO[] }>('/knowledge/documents')
   return data.items
 }
 
@@ -132,8 +210,18 @@ export async function uploadToPresignedUrl(
   })
 }
 
-export async function confirmFileUpload(fileId: string): Promise<FileAssetDTO> {
-  const { data } = await apiClient.post<FileAssetDTO>(`/files/${fileId}/confirm`)
+export async function confirmFileUpload(fileId: string): Promise<ConfirmUploadDTO> {
+  const { data } = await apiClient.post<ConfirmUploadDTO>(`/files/${fileId}/confirm`)
+  return data
+}
+
+export async function processKnowledgeDocument(documentId: string): Promise<AITaskDTO> {
+  const { data } = await apiClient.post<AITaskDTO>(`/knowledge/documents/${documentId}/process`)
+  return data
+}
+
+export async function fetchKnowledgeStats(): Promise<KnowledgeStatsDTO> {
+  const { data } = await apiClient.get<KnowledgeStatsDTO>('/knowledge/stats')
   return data
 }
 

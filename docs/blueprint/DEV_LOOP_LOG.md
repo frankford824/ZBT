@@ -179,3 +179,62 @@ docker compose exec -T postgres psql 'postgres://zbt_app:zbt_app@localhost:5432/
 ### 下一轮建议
 
 进入 Loop-3：围绕知识库文档处理流水线落地 knowledge_documents、分类/标签、解析任务创建，以及 Go -> Python AI 服务任务编排和回调验签。
+
+## Loop-3 知识库文档处理底座 - 2026-06-11
+
+### 本轮目标
+
+1. 将知识库从 file_asset 列表推进为真实 knowledge_documents。
+2. 补齐分类、标签、文档详情、文档处理任务和统计接口。
+3. 建立 Go -> Python AI 服务任务编排，并提供 HMAC 回调验签入口。
+4. 前端知识库首页、文档库、标签页接入真实知识库 API。
+
+### 代码交付
+
+1. 新增 `00005_knowledge_documents_tasks.sql`，创建 `knowledge_categories`、`knowledge_tags`、`knowledge_documents`、`knowledge_document_tags`、`knowledge_references`、`ai_tasks`，并启用 FORCE RLS。
+2. 新增 `platform/knowledge` 服务，封装分类/标签 CRUD、文档列表/详情/更新、file_asset -> knowledge_document、处理任务、统计和回调落库。
+3. 后端实现 `/knowledge/categories`、`/knowledge/tags`、`/knowledge/documents`、`/knowledge/documents/:id/process`、`/knowledge/stats`、`/ai-tasks/:taskId`。
+4. 新增公开但 HMAC 验签的 `/api/v1/ai/callbacks/tasks`，签名内容为 `timestamp.body`。
+5. Python AI 服务新增 `/tasks/knowledge-process`，通过 ModelRouter 解析 `knowledge_process` 路由后返回外部 task_id。
+6. 前端知识库首页读取统计，文档库读取真实文档、分类树和处理任务，标签页读取真实标签和关联文档。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+curl -X POST /api/v1/files/presign-upload ...
+curl -X PUT "<presigned-url>" --data-binary @/tmp/zbt-knowledge-loop3.txt
+curl -X POST /api/v1/files/<id>/confirm
+curl /api/v1/knowledge/categories
+curl /api/v1/knowledge/tags
+curl /api/v1/knowledge/stats
+curl -X POST /api/v1/knowledge/documents/<id>/process
+curl -X POST /api/v1/ai/callbacks/tasks -H X-ZBT-Timestamp -H X-ZBT-Signature ...
+curl /api/v1/ai-tasks/<taskId>
+curl /api/v1/knowledge/documents/<id>
+```
+
+结果：
+
+1. backend 自动执行到 goose version 5。
+2. AI `/healthz` 与 `/models/health` 返回 ok，mock provider 健康。
+3. 文件上传 PUT 返回 200，confirm 后生成 knowledge_document，初始 parse_status 为 ready。
+4. 分类数 4，标签数 3，知识库统计 document_count 为 1。
+5. `POST /knowledge/documents/:id/process` 创建本地任务 `b4ec7f38-bdcf-4976-9a09-ef80499e536d`，外部任务 `task-knowledge-ba4fd961048f`，状态 queued。
+6. HMAC 回调返回 200；回调后 ai_task 状态为 done，knowledge_document 状态为 processed，summary 为 `知识库解析回调验证完成`。
+7. tenant2 访问 tenant1 的 knowledge_document 返回 404。
+
+### 偏离蓝图
+
+1. Python 端尚未真正解析 PDF/Word/Excel/PPT，也未生成 chunks 与 embedding；当前为受 ModelRouter 管理的任务入口和回调闭环。
+2. `knowledge_search` 仍是接口占位；混合检索、RRF、rerank 和 source_refs 落库将在后续 Loop 实现。
+
+### 下一轮建议
+
+继续 Loop-3：实现最小文档解析和 chunk 入库，将 text/plain / PDF / Word 的文本抽取结果写入 `knowledge_chunks`，再接入 `/knowledge/search` 的关键词检索与 source_refs 返回。

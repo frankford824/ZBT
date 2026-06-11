@@ -30,6 +30,8 @@ GET /bids、POST /bids、GET /bids/:id、PATCH /bids/:id、DELETE /bids/:id、PO
 
 GET /knowledge、GET /knowledge/categories、POST /knowledge/categories、PATCH /knowledge/categories/:id、DELETE /knowledge/categories/:id、GET /knowledge/tags、POST /knowledge/tags、PATCH /knowledge/tags/:id、DELETE /knowledge/tags/:id、GET /knowledge/documents、POST /knowledge/documents、GET /knowledge/documents/:id、PATCH /knowledge/documents/:id、DELETE /knowledge/documents/:id、POST /knowledge/documents/:id/process、GET /knowledge/documents/:id/preview、GET /knowledge/documents/:id/references、POST /knowledge/search、GET /knowledge/templates、POST /knowledge/templates、GET /knowledge/stats。
 
+知识库一期已落地分类、标签、文档列表/详情/更新、处理任务创建和统计接口。`POST /knowledge/documents/:id/process` 由 Go 记录 `ai_tasks` 后调用 Python `/tasks/knowledge-process`，Python 返回外部 task_id；后续结果通过 `POST /ai/callbacks/tasks` 回调 Go。
+
 ## Compliance
 
 POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、GET /compliance/checks/:id/issues、GET /compliance/checks/:id/stream、POST /compliance/issues/:id/autofix、POST /compliance/issues/:id/ignore、POST /compliance/issues/:id/confirm-fail、POST /compliance/checks/:id/report、GET /compliance/rules、POST /compliance/rules、PATCH /compliance/rules/:id、DELETE /compliance/rules/:id。
@@ -45,3 +47,8 @@ POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、
 - GET /files/:id/download-url：鉴权和租户校验后返回 attachment 预签名 URL。
 - GET /files/:id/preview-url：鉴权和租户校验后返回 inline 预签名 URL。
 - GET /knowledge/documents：返回当前租户知识库文件资产列表。
+
+AI 回调接口：
+
+- POST /ai/callbacks/tasks：公开入口，但必须携带 `X-ZBT-Timestamp` 和 `X-ZBT-Signature`。签名内容为 `timestamp.body` 的 HMAC-SHA256 hex，密钥来自 `AI_SERVICE_HMAC_SECRET`。
+- GET /ai-tasks/:taskId：当前租户内查询 Go 记录的 AI 任务状态。

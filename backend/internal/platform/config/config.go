@@ -9,6 +9,7 @@ type Config struct {
 	RedisURL             string
 	AIServiceURL         string
 	AIServiceHMACSecret  string
+	AICallbackURL        string
 	MinIOEndpoint        string
 	MinIOPublicEndpoint  string
 	MinIOAccessKey       string
@@ -28,6 +29,7 @@ func Load() Config {
 		RedisURL:             env("REDIS_URL", "redis://redis:6379/0"),
 		AIServiceURL:         env("AI_SERVICE_URL", "http://ai-service:8000"),
 		AIServiceHMACSecret:  env("AI_SERVICE_HMAC_SECRET", ""),
+		AICallbackURL:        env("AI_CALLBACK_URL", "http://backend:8080/api/v1/ai/callbacks/tasks"),
 		MinIOEndpoint:        env("MINIO_ENDPOINT", "minio:9000"),
 		MinIOPublicEndpoint:  env("MINIO_PUBLIC_ENDPOINT", env("MINIO_ENDPOINT", "minio:9000")),
 		MinIOAccessKey:       env("MINIO_ACCESS_KEY", "zbt_minio"),

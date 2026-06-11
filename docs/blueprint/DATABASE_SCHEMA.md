@@ -30,6 +30,8 @@ bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation
 
 knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document_tags、knowledge_chunks、knowledge_references、document_templates。
 
+`knowledge_documents` 关联 `file_assets`，记录文档标题、类型、分类、解析状态、摘要和元数据。`knowledge_categories` / `knowledge_tags` 支撑文档库分类树和标签管理，`knowledge_document_tags` 保存文档与标签关系。`ai_tasks` 记录 Go 编排的 AI/文档处理任务，Python AI 服务只返回任务状态或回调结果，最终由 Go 验签后更新业务状态。
+
 ## 合规
 
 compliance_checks、compliance_issues、compliance_rules、compliance_reports、compliance_fix_logs。
