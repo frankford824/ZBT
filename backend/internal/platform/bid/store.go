@@ -261,6 +261,11 @@ type UpdateChapterContentRequest struct {
 	PlainText string         `json:"plain_text"`
 }
 
+type ChapterAIActionRequest struct {
+	Action      string `json:"action"`
+	Instruction string `json:"instruction"`
+}
+
 type ChapterRegenerateResponse struct {
 	Chapter Chapter `json:"chapter"`
 	Task    Task    `json:"task"`
@@ -393,6 +398,14 @@ type chapterGenerateRequest struct {
 	RetrievedKnowledgeRefs []retrievedKnowledgeRef `json:"retrieved_knowledge_refs"`
 	CallbackURL            string                  `json:"callback_url,omitempty"`
 	ModelHint              *string                 `json:"model_hint,omitempty"`
+}
+
+type chapterActionRequest struct {
+	chapterGenerateRequest
+	Action            string         `json:"action"`
+	Instruction       string         `json:"instruction"`
+	CurrentPlainText  string         `json:"current_plain_text"`
+	CurrentTiptapJSON map[string]any `json:"current_tiptap_json"`
 }
 
 type retrievedKnowledgeRef struct {
@@ -1641,6 +1654,94 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 	return result, nil
 }
 
+func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID string, req ChapterAIActionRequest) (ChapterRegenerateResponse, error) {
+	action := normalizeChapterAction(req.Action)
+	if action == "" {
+		return ChapterRegenerateResponse{}, ErrInvalidRequest
+	}
+	var result ChapterRegenerateResponse
+	var requestPayload chapterActionRequest
+	var task Task
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		knowledgeRefs, err := retrieveKnowledgeRefsForChapter(ctx, tx, tenantID, chapter)
+		if err != nil {
+			return err
+		}
+		selectedRefs := make([]string, 0, len(knowledgeRefs))
+		for _, ref := range knowledgeRefs {
+			selectedRefs = append(selectedRefs, ref.ChunkID)
+		}
+		requestPayload = chapterActionRequest{
+			chapterGenerateRequest: chapterGenerateRequest{
+				TaskID:                 "task-chapter-action-" + uuid.NewString(),
+				TenantID:               tenantID,
+				BidDocumentID:          chapter.BidDocumentID,
+				BidPartID:              chapter.BidPartID,
+				ChapterID:              chapter.ID,
+				ChapterTitle:           chapter.Title,
+				TenderRequirements:     []string{"所有事实性内容必须保留引用", "缺少来源的企业资质、人员、证书、金额和日期必须标记人工确认"},
+				SelectedKnowledgeRefs:  selectedRefs,
+				RetrievedKnowledgeRefs: knowledgeRefs,
+				CallbackURL:            s.cfg.AICallbackURL,
+			},
+			Action:            action,
+			Instruction:       strings.TrimSpace(req.Instruction),
+			CurrentPlainText:  chapter.PlainText,
+			CurrentTiptapJSON: chapter.Content,
+		}
+		payloadJSON, _ := json.Marshal(requestPayload)
+		createdTask, err := scanTask(tx.QueryRow(ctx, `
+			insert into ai_tasks (
+				tenant_id, user_id, task_type, status,
+				external_task_id, resource_type, resource_id, payload, route
+			)
+			values ($1, $2, 'chapter_ai_action', 'queued', $3, 'bid_chapter', $4, $5, '{}')
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, tenantID, userID, requestPayload.TaskID, chapter.ID, payloadJSON))
+		if err != nil {
+			return err
+		}
+		task = createdTask
+		if _, err := tx.Exec(ctx, `
+			update bid_chapters
+			set status = 'generating', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapter.ID); err != nil {
+			return err
+		}
+		updated, err := chapterByID(ctx, tx, tenantID, chapter.ID)
+		if err != nil {
+			return err
+		}
+		result = ChapterRegenerateResponse{Chapter: updated, Task: task}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ChapterRegenerateResponse{}, ErrNotFound
+	}
+	if err != nil {
+		return ChapterRegenerateResponse{}, err
+	}
+
+	accepted, err := s.submitChapterAction(ctx, requestPayload)
+	if err != nil {
+		_ = s.markChapterGenerateFailed(ctx, tenantID, chapterID, task.ID, err.Error())
+		return ChapterRegenerateResponse{}, err
+	}
+	updated, err := s.bindAcceptedTask(ctx, tenantID, chapterID, task.ID, accepted, requestPayload, nil)
+	if err != nil {
+		return ChapterRegenerateResponse{}, err
+	}
+	result.Task = updated
+	return result, nil
+}
+
 func (s *Store) ListChapterVersions(ctx context.Context, tenantID, chapterID string) ([]ChapterVersion, error) {
 	versions := []ChapterVersion{}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -1964,7 +2065,11 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				if err != nil {
 					return err
 				}
-				if err := applyChapterGeneration(ctx, tx, payload.TenantID, task.ResourceID, generation); err != nil {
+				changeReason := "ai_regenerate"
+				if task.TaskType == "chapter_ai_action" {
+					changeReason = "ai_action"
+				}
+				if err := applyChapterGeneration(ctx, tx, payload.TenantID, task.ResourceID, generation, changeReason); err != nil {
 					return err
 				}
 			}
@@ -2018,7 +2123,7 @@ func chapterGenerationFromResult(result map[string]any) (chapterGenerateResponse
 	return generation, nil
 }
 
-func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID string, generation chapterGenerateResponse) error {
+func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID string, generation chapterGenerateResponse, changeReason string) error {
 	chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
 	if err != nil {
 		return err
@@ -2048,7 +2153,10 @@ func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID 
 	if err != nil {
 		return err
 	}
-	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, "ai_regenerate", generation.ModelMetadata, generation.TokenUsage); err != nil {
+	if changeReason == "" {
+		changeReason = "ai_regenerate"
+	}
+	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, changeReason, generation.ModelMetadata, generation.TokenUsage); err != nil {
 		return err
 	}
 	return replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID)
@@ -2355,6 +2463,41 @@ func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenera
 		return aiTaskAccepted{}, err
 	}
 	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/chapter-generate"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
+	}
+	var accepted aiTaskAccepted
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		return aiTaskAccepted{}, err
+	}
+	if accepted.TaskID == "" {
+		return aiTaskAccepted{}, ErrInvalidRequest
+	}
+	if accepted.Status == "" {
+		accepted.Status = "queued"
+	}
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	return accepted, nil
+}
+
+func (s *Store) submitChapterAction(ctx context.Context, payload chapterActionRequest) (aiTaskAccepted, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/chapter-action"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return aiTaskAccepted{}, err
@@ -3662,6 +3805,15 @@ func normalizeGenerationScope(value string) string {
 func normalizeGenerationPartCode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "combined_body", "tech", "business", "boq", "attachment":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeChapterAction(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "optimize", "expand", "shorten", "add_detail", "self_check":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""

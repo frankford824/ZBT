@@ -40,6 +40,8 @@ GET /bids、POST /bids、GET /bids/:id、PATCH /bids/:id、DELETE /bids/:id、PO
 
 章节一期已落地 `PUT /chapters/:chapterId/content`、`POST /chapters/:chapterId/accept`、`POST /chapters/:chapterId/regenerate`、`GET /chapters/:chapterId/versions`、`GET /chapters/:chapterId/diff` 和 `GET /bids/:id/generation/stream`。保存和采纳会同步写入 `bid_chapter_versions`；重新生成由 Go 先检索当前租户 `knowledge_chunks`，创建 `ai_tasks` 并把章节置为 `generating`，再调用 Python `/tasks/chapter-generate`。Python 返回 202 + task_id 后在后台走 ModelRouter，生成完成后通过 HMAC 回调 Go，Go 回写 Tiptap JSON、source_refs、needs_human_input、版本快照和 `knowledge_references`；真实 chunk 引用会解析为 `source_document_id` + `chunk_id`。前端通过带 Authorization 头的 fetch SSE 订阅 `/bids/:id/generation/stream` 获取章节与 task 快照，并保留 `GET /ai-tasks/:taskId` 轮询兜底。
 
+章节 AI 动作已落地 `POST /chapters/:chapterId/ai-action`，支持 `optimize`、`expand`、`shorten`、`add_detail`、`self_check`。Go 记录 `chapter_ai_action` 任务并调用 Python `/tasks/chapter-action`；Python 根据 action 走 `rewrite_assistant` 或 `chapter_self_check` ModelRouter 路由，返回 Tiptap JSON、source_refs、self_check、needs_human_input、model_metadata 和 token_usage 后 HMAC 回调 Go。Go 回写章节、版本快照和知识库引用，前端三栏编辑器 AI 助手已提供优化、扩写、缩写、加细节和自检按钮。
+
 逐章生成 job 已落地 `POST /bids/:id/generate`、`GET /bids/:id/generation-jobs`、`GET /generation-jobs/:jobId`、`POST /generation-jobs/:jobId/pause|resume|cancel`。Go 创建 `bid_generation_jobs` 和 `bid_generation_steps` 后只派发一个章节任务；章节 HMAC 回调完成后刷新 step/job 进度，并在 job 仍为 running 时自动派发下一章。pause 在章节边界生效，resume 会继续派发下一 queued step，cancel 会取消未开始 step。前端 7 步向导第 5 步已接入整标/分册生成、任务进度和暂停/继续/取消操作。
 
 ## Knowledge

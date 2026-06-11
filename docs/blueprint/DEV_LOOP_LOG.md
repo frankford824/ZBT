@@ -1479,3 +1479,57 @@ curl -X POST /api/v1/generation-jobs/:jobId/cancel ...
 
 1. pause 在章节边界生效；当前正在执行的 AI chapter task 不做强制中断，完成后不会继续派发下一章，符合本阶段任务边界控制。
 2. cancel 会取消未开始 step；已经派发给 AI service 的 running step 仍可能回调完成，但 job 保持 cancelled 且不会继续派发。
+
+## Loop-17 / 章节 AI 改写与自检闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 中 `POST /chapters/:chapterId/ai-action`、章节自检真实接口和改写助手真实接口。
+2. AI 动作必须通过 Python AI 服务 ModelRouter，不在 Go 业务代码里直连模型或本地伪造最终结果。
+3. 前端三栏编辑器的 AI 助手提供优化、扩写、缩写、加细节和自检动作。
+
+### 代码交付
+
+1. Python AI 服务新增 `ChapterActionRequest` 和 `/tasks/chapter-action`，根据 action 走 `rewrite_assistant` 或 `chapter_self_check` 路由。
+2. MockProvider 新增 `chapter_action()`，返回 Tiptap JSON、source_refs、self_check、needs_human_input、model_metadata 和 token_usage。
+3. Go 新增 `ChapterAIAction`，创建 `chapter_ai_action` ai_task，调用 Python AI 服务，HMAC 回调后回写章节、版本快照、source_refs 和 knowledge_references。
+4. API 新增真实 `POST /chapters/:chapterId/ai-action` handler 并移出 stub。
+5. 前端编辑器 AI 助手新增优化、扩写、缩写、加细节、自检按钮，复用 task 轮询刷新章节。
+6. API 蓝图同步更新章节 AI 动作状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+git diff --check
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X POST /api/v1/chapters/:chapterId/ai-action {"action":"optimize"}
+curl -X POST /api/v1/chapters/:chapterId/ai-action {"action":"self_check"}
+curl -X GET /api/v1/ai-tasks/:taskId
+curl -X GET /api/v1/chapters/:chapterId/versions
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `python3 -m compileall app` 通过。
+4. `git diff --check` 通过。
+5. Docker backend/frontend/ai-service 构建成功，并启动成功。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时新建 bid `404e92b9-75c6-4b33-ab27-8eba0bc08410`，生成默认大纲后选取章节 `8997758b-ebac-404f-99af-c27baa828fc2`。
+8. `optimize` 动作创建 task `2888a139-244f-4a76-9fca-216ac2c4d6a6`，Go 轮询状态为 `done`，task_type=`chapter_ai_action`，result.model_metadata.action=`optimize`。
+9. `self_check` 动作创建 task `1a38542b-836c-44dd-91dd-1cd4c5b9fb8d`，Go 轮询状态为 `done`，task_type=`chapter_ai_action`，result.model_metadata.action=`self_check`，result.self_check 存在。
+10. 回查章节状态为 `generated`，source_refs 数量为 4，needs_human_input 数量为 1，最新版本 change_reason=`ai_action`，版本数量为 2。
+11. tenant2/other 调用 tenant1 章节 `POST /chapters/:chapterId/ai-action` 返回 404。
+12. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询该章节 chapter_ai_action task 数量为 2、ai_action 版本数量为 2；tenant2 RLS 上下文两者均为 0。
+
+### 偏离蓝图
+
+1. 本轮仍使用 MockProvider 作为无 API Key 环境下的模型提供方，但调用入口、路由选择、Pydantic 校验和 HMAC 回调均经过 Python AI 服务 ModelRouter。

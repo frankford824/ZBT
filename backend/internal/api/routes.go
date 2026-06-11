@@ -419,6 +419,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/chapters/:chapterId/versions", rbac.Require("bid", rbac.LevelRead), s.listChapterVersions)
 	group.GET("/chapters/:chapterId/diff", rbac.Require("bid", rbac.LevelRead), s.chapterDiff)
 	group.PUT("/chapters/:chapterId/content", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
+	group.POST("/chapters/:chapterId/ai-action", rbac.Require("bid", rbac.LevelFull), s.chapterAIAction)
 	group.POST("/bids/:id/exports", rbac.Require("bid", rbac.LevelFull), s.createBidExport)
 	group.GET("/bids/:id/exports", rbac.Require("bid", rbac.LevelRead), s.listBidExports)
 	group.GET("/bid-exports/:exportId", rbac.Require("bid", rbac.LevelRead), s.getBidExport)
@@ -555,6 +556,7 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /chapters/:chapterId/versions":            true,
 		"GET /chapters/:chapterId/diff":                true,
 		"PUT /chapters/:chapterId/content":             true,
+		"POST /chapters/:chapterId/ai-action":          true,
 		"POST /bids/:id/exports":                       true,
 		"GET /bids/:id/exports":                        true,
 		"GET /bid-exports/:exportId":                   true,
@@ -1558,6 +1560,17 @@ func (s *server) acceptChapter(c *gin.Context) {
 func (s *server) regenerateChapter(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	result, err := s.bidStore.RegenerateChapter(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("chapterId"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) chapterAIAction(c *gin.Context) {
+	var req bid.ChapterAIActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.ChapterAIAction(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("chapterId"), req)
 	respondStatus(c, http.StatusAccepted, result, err)
 }
 

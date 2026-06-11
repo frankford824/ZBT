@@ -1,11 +1,16 @@
 import {
   CheckOutlined,
+  CompressOutlined,
   DiffOutlined,
   DownloadOutlined,
+  EditOutlined,
+  ExpandAltOutlined,
   FilePdfOutlined,
   FileZipOutlined,
+  PlusCircleOutlined,
   PlusOutlined,
   SaveOutlined,
+  SafetyCertificateOutlined,
   SyncOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
@@ -39,6 +44,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import {
   acceptChapter,
+  chapterAiAction,
   confirmBidParseResult,
   confirmFileUpload,
   createBid,
@@ -1216,8 +1222,21 @@ export function BidEditorPage() {
     },
     onError: () => message.error('AI 重新生成失败'),
   })
+  const aiActionMutation = useMutation({
+    mutationFn: (action: 'optimize' | 'expand' | 'shorten' | 'add_detail' | 'self_check') =>
+      chapterAiAction(currentChapter?.id ?? '', { action }),
+    onSuccess: async (result) => {
+      setRegenerateTaskId(result.task.id)
+      message.success(`AI 章节动作已创建：${result.task.external_task_id ?? result.task.id}`)
+      await invalidateChapterState()
+    },
+    onError: () => message.error('AI 章节动作失败'),
+  })
   const isRegenerating = Boolean(
-    regenerateMutation.isPending || isRegenerateTaskActive(regenerateTaskStatus, regenerateTaskId) || currentChapter?.status === 'generating',
+    regenerateMutation.isPending ||
+      aiActionMutation.isPending ||
+      isRegenerateTaskActive(regenerateTaskStatus, regenerateTaskId) ||
+      currentChapter?.status === 'generating',
   )
 
   if (bid.isLoading || parts.isLoading || chapters.isLoading) return <LoadingBlock />
@@ -1310,6 +1329,23 @@ export function BidEditorPage() {
               <Button icon={<SyncOutlined />} loading={isRegenerating} disabled={!currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
                 查找素材并重新生成
               </Button>
+              <Space wrap>
+                <Button size="small" icon={<EditOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('optimize')}>
+                  优化
+                </Button>
+                <Button size="small" icon={<ExpandAltOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('expand')}>
+                  扩写
+                </Button>
+                <Button size="small" icon={<CompressOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('shorten')}>
+                  缩写
+                </Button>
+                <Button size="small" icon={<PlusCircleOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('add_detail')}>
+                  加细节
+                </Button>
+                <Button size="small" icon={<SafetyCertificateOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('self_check')}>
+                  自检
+                </Button>
+              </Space>
               <Button icon={<DiffOutlined />} disabled={!currentChapter}>
                 查看版本差异
               </Button>

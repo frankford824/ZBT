@@ -1419,6 +1419,14 @@ export async function regenerateChapter(chapterId: string): Promise<ChapterRegen
   return data
 }
 
+export async function chapterAiAction(
+  chapterId: string,
+  payload: { action: 'optimize' | 'expand' | 'shorten' | 'add_detail' | 'self_check'; instruction?: string },
+): Promise<ChapterRegenerateDTO> {
+  const { data } = await apiClient.post<ChapterRegenerateDTO>(`/chapters/${chapterId}/ai-action`, payload)
+  return data
+}
+
 export async function fetchChapterVersions(chapterId: string): Promise<BidChapterVersionDTO[]> {
   const { data } = await apiClient.get<{ items: BidChapterVersionDTO[] }>(`/chapters/${chapterId}/versions`)
   return data.items

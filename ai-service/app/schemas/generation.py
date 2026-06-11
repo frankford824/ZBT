@@ -30,6 +30,13 @@ class ChapterGenerateRequest(BaseModel):
     model_hint: str | None = None
 
 
+class ChapterActionRequest(ChapterGenerateRequest):
+    action: str = "optimize"
+    instruction: str = ""
+    current_plain_text: str = ""
+    current_tiptap_json: dict[str, object] = Field(default_factory=dict)
+
+
 class ChapterGenerateResponse(BaseModel):
     trace_id: str
     tiptap_json: dict[str, object]

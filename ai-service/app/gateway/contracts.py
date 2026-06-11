@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from app.schemas.generation import ChapterGenerateRequest, ChapterGenerateResponse
+from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest, ChapterGenerateResponse
 
 
 class LLMProvider(Protocol):
@@ -17,6 +17,8 @@ class LLMProvider(Protocol):
     def health_check(self) -> bool: ...
 
     def generate_chapter(self, payload: ChapterGenerateRequest) -> ChapterGenerateResponse: ...
+
+    def chapter_action(self, payload: ChapterActionRequest) -> ChapterGenerateResponse: ...
 
 
 class EmbeddingProvider(Protocol):

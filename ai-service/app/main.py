@@ -18,7 +18,7 @@ from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, 
 from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.export import DocumentExportRequest
-from app.schemas.generation import ChapterGenerateRequest
+from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest
 from app.schemas.knowledge import (
     KnowledgeEmbeddingRequest,
     KnowledgeEmbeddingResponse,
@@ -199,6 +199,44 @@ def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> N
         }
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+@app.post("/tasks/chapter-action", response_model=TaskAccepted, status_code=202)
+async def chapter_action(
+    payload: ChapterActionRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
+    route_name = "chapter_self_check" if payload.action == "self_check" else "rewrite_assistant"
+    route = router.resolve(route_name, tenant_id=payload.tenant_id)
+    task_suffix = payload.chapter_id.replace("-", "")[:8]
+    action_suffix = payload.action.replace("_", "-")[:16]
+    task_id = payload.task_id or f"task-chapter-action-{task_suffix}-{action_suffix}-{uuid.uuid4().hex[:8]}"
+    background_tasks.add_task(process_chapter_action, task_id, payload, route_name, route.model)
+    return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
+
+
+def process_chapter_action(task_id: str, payload: ChapterActionRequest, route_name: str, model_hint: str) -> None:
+    try:
+        provider = router.get_llm(route_name, tenant_id=payload.tenant_id)
+        payload.model_hint = model_hint
+        generation = provider.chapter_action(payload)
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "done",
+            "result": generation.model_dump(),
+        }
+    except Exception as exc:  # pragma: no cover - defensive task boundary
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": str(exc),
+            "result": {"error": str(exc), "chapter_id": payload.chapter_id, "action": payload.action},
+        }
+    if payload.callback_url:
+        post_callback(payload.callback_url, callback_payload)
+
 
 @app.post("/tasks/export/docx", response_model=TaskAccepted, status_code=202)
 async def export_docx(
