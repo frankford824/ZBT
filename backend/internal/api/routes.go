@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
 	platformapproval "github.com/frankford824/ZBT/backend/internal/platform/approval"
 	"github.com/frankford824/ZBT/backend/internal/platform/audit"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
@@ -49,6 +50,7 @@ type server struct {
 	complianceStore *platformcompliance.Store
 	approvalStore   *platformapproval.Store
 	dashboardStore  *platformdashboard.Store
+	aiCallStore     *aicall.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -184,6 +186,7 @@ var routeSpecs = []routeSpec{
 	{"GET", "/notifications", "team", false},
 	{"POST", "/notifications/read", "team", false},
 	{"GET", "/notifications/stream", "team", false},
+	{"GET", "/ai-call-logs", "team", false},
 	{"POST", "/files/presign-upload", "knowledge", false},
 	{"POST", "/files/:id/confirm", "knowledge", false},
 	{"GET", "/files/:id/download-url", "knowledge", false},
@@ -191,11 +194,11 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware())
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -420,6 +423,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/approvals/:id/reject", rbac.Require("team", rbac.LevelFull), s.rejectApproval)
 	group.POST("/notifications/read", s.markNotificationsRead)
 	group.GET("/notifications/stream", s.streamNotifications)
+	group.GET("/ai-call-logs", rbac.Require("team", rbac.LevelRead), s.listAICallLogs)
 }
 
 func registerStubs(group *gin.RouterGroup) {
@@ -540,6 +544,7 @@ func registerStubs(group *gin.RouterGroup) {
 		"POST /approvals/:id/reject":                   true,
 		"POST /notifications/read":                     true,
 		"GET /notifications/stream":                    true,
+		"GET /ai-call-logs":                            true,
 	}
 	for _, spec := range routeSpecs {
 		if custom[spec.Method+" "+spec.Path] {
@@ -1247,7 +1252,8 @@ func (s *server) searchKnowledge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	results, err := s.knowledgeStore.Search(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	userID, _ := c.Get("user_id")
+	results, err := s.knowledgeStore.Search(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req)
 	if err != nil {
 		respond(c, nil, err)
 		return
@@ -1257,6 +1263,12 @@ func (s *server) searchKnowledge(c *gin.Context) {
 		sourceRefs = append(sourceRefs, result.SourceRef)
 	}
 	respond(c, gin.H{"items": results, "source_refs": sourceRefs}, nil)
+}
+
+func (s *server) listAICallLogs(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	result, err := s.aiCallStore.List(c.Request.Context(), tenant.FromContext(c.Request.Context()), limit)
+	respond(c, gin.H{"items": result}, err)
 }
 
 func (s *server) listKnowledgeTemplates(c *gin.Context) {
@@ -1589,6 +1601,9 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 	switch task.ResourceType {
 	case "knowledge_document":
 		result, err := s.knowledgeStore.ApplyCallback(c.Request.Context(), payload)
+		if err == nil {
+			_, err = s.aiCallStore.RecordTaskCallback(c.Request.Context(), payload.TenantID, payload.TaskID, payload.Result, payload.Status, payload.ErrorMessage)
+		}
 		respond(c, result, err)
 	case "bid_export", "bid_chapter":
 		result, err := s.bidStore.ApplyCallback(c.Request.Context(), bid.CallbackPayload{
@@ -1598,6 +1613,9 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 			Result:       payload.Result,
 			ErrorMessage: payload.ErrorMessage,
 		})
+		if err == nil {
+			_, err = s.aiCallStore.RecordTaskCallback(c.Request.Context(), payload.TenantID, payload.TaskID, payload.Result, payload.Status, payload.ErrorMessage)
+		}
 		respond(c, result, err)
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported callback resource type"})

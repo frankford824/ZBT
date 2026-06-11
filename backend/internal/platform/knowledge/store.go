@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,9 +27,10 @@ var (
 )
 
 type Store struct {
-	pool   *pgxpool.Pool
-	cfg    config.Config
-	client *http.Client
+	pool     *pgxpool.Pool
+	cfg      config.Config
+	client   *http.Client
+	aiLogger *aicall.Store
 }
 
 type Category struct {
@@ -209,10 +211,11 @@ type embeddingResponse struct {
 	Route      map[string]any `json:"route"`
 }
 
-func NewStore(cfg config.Config, pool *pgxpool.Pool) *Store {
+func NewStore(cfg config.Config, pool *pgxpool.Pool, aiLogger *aicall.Store) *Store {
 	return &Store{
-		pool: pool,
-		cfg:  cfg,
+		pool:     pool,
+		cfg:      cfg,
+		aiLogger: aiLogger,
 		client: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -856,7 +859,7 @@ func (s *Store) Stats(ctx context.Context, tenantID string) (Stats, error) {
 	return stats, err
 }
 
-func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) ([]SearchResult, error) {
+func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchRequest) ([]SearchResult, error) {
 	query := strings.TrimSpace(req.Query)
 	limit := req.Limit
 	if limit <= 0 || limit > 20 {
@@ -864,10 +867,12 @@ func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) 
 	}
 	queryEmbedding := ""
 	if query != "" {
-		if embeddings, err := s.embedKnowledgeTexts(ctx, tenantID, []string{query}); err == nil && len(embeddings) > 0 {
-			if literal, err := vectorLiteralFromEmbedding(embeddings[0]); err == nil {
+		if response, err := s.embedKnowledgeTexts(ctx, tenantID, userID, []string{query}); err == nil && len(response.Embeddings) > 0 {
+			if literal, err := vectorLiteralFromEmbedding(response.Embeddings[0]); err == nil {
 				queryEmbedding = literal
 			}
+		} else if err != nil && strings.Contains(err.Error(), "record ai call log") {
+			return nil, err
 		}
 	}
 	results := []SearchResult{}
@@ -1019,39 +1024,60 @@ func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]a
 	return accepted, nil
 }
 
-func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID string, texts []string) ([][]float64, error) {
+func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string, texts []string) (embeddingResponse, error) {
 	if len(texts) == 0 {
-		return nil, ErrInvalidRequest
+		return embeddingResponse{}, ErrInvalidRequest
 	}
+	startedAt := time.Now()
 	body, err := json.Marshal(embeddingRequest{
 		TenantID: tenantID,
 		Texts:    texts,
 	})
 	if err != nil {
-		return nil, err
+		return embeddingResponse{}, err
 	}
 	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/embeddings/knowledge"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return embeddingResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return embeddingResponse{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("ai service embedding returned %s", resp.Status)
+		return embeddingResponse{}, fmt.Errorf("ai service embedding returned %s", resp.Status)
 	}
 	var decoded embeddingResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, err
+		return embeddingResponse{}, err
 	}
 	if len(decoded.Embeddings) != len(texts) {
-		return nil, fmt.Errorf("ai service embedding count mismatch: got %d want %d", len(decoded.Embeddings), len(texts))
+		return embeddingResponse{}, fmt.Errorf("ai service embedding count mismatch: got %d want %d", len(decoded.Embeddings), len(texts))
 	}
-	return decoded.Embeddings, nil
+	if s.aiLogger != nil {
+		if _, err := s.aiLogger.Record(ctx, aicall.RecordInput{
+			TenantID:    tenantID,
+			UserID:      userID,
+			TraceID:     fmt.Sprintf("knowledge-embedding-%d", time.Now().UnixNano()),
+			TaskType:    "knowledge_embedding",
+			Provider:    decoded.Provider,
+			Model:       decoded.Model,
+			InputTokens: estimateTokens(strings.Join(texts, "\n")),
+			LatencyMS:   int(time.Since(startedAt).Milliseconds()),
+			Status:      "done",
+			BizRef: map[string]any{
+				"endpoint":   "/embeddings/knowledge",
+				"text_count": len(texts),
+				"dimensions": decoded.Dimensions,
+			},
+		}); err != nil {
+			return embeddingResponse{}, fmt.Errorf("record ai call log: %w", err)
+		}
+	}
+	return decoded, nil
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
@@ -1405,6 +1431,18 @@ func normalizeTaskStatus(status string) string {
 	default:
 		return ""
 	}
+}
+
+func estimateTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	count := len([]rune(text)) / 4
+	if count < 1 {
+		return 1
+	}
+	return count
 }
 
 func NewID() string {

@@ -15,7 +15,6 @@ import {
   Table,
   Tabs,
   Tag,
-  Timeline,
   Typography,
 } from 'antd'
 import { useState } from 'react'
@@ -23,6 +22,7 @@ import {
   approveApproval,
   createApprovalChain,
   deleteApprovalChain,
+  fetchAICallLogs,
   fetchApprovalChains,
   fetchApprovals,
   fetchMembers,
@@ -33,22 +33,39 @@ import {
   rejectApproval,
   updateApprovalChain,
   type ApprovalChainDTO,
-  type ApprovalInstanceDTO,
   type ApprovalStepDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 
 function statusTag(status: string) {
-  const color = status === 'approved' ? 'green' : status === 'rejected' ? 'red' : status === 'pending' ? 'blue' : 'default'
+  const color =
+    status === 'approved' || status === 'done'
+      ? 'green'
+      : status === 'rejected' || status === 'failed'
+        ? 'red'
+        : status === 'pending' || status === 'running' || status === 'queued'
+          ? 'blue'
+          : 'default'
   const label: Record<string, string> = {
     pending: '审批中',
     approved: '已通过',
     rejected: '已驳回',
     cancelled: '已取消',
+    done: '完成',
+    failed: '失败',
+    running: '运行中',
+    queued: '排队中',
     active: '正常',
   }
   return <Tag color={color}>{label[status] || status}</Tag>
+}
+
+const taskTypeLabels: Record<string, string> = {
+  knowledge_process: '知识库处理',
+  knowledge_embedding: '知识库向量化',
+  chapter_generate: '章节生成',
+  document_export: '文档导出',
 }
 
 function formatTime(value?: string | null) {
@@ -56,11 +73,10 @@ function formatTime(value?: string | null) {
   return new Date(value).toLocaleString()
 }
 
-function approvalTimeline(approvals: ApprovalInstanceDTO[]) {
-  return approvals.slice(0, 8).map((approval) => ({
-    color: approval.status === 'approved' ? 'green' : approval.status === 'rejected' ? 'red' : 'blue',
-    children: `${approval.title} · ${approval.submitted_by_name || '系统'} · ${formatTime(approval.created_at)}`,
-  }))
+function formatBizRef(value: Record<string, unknown>) {
+  const resourceType = typeof value.resource_type === 'string' ? value.resource_type : '-'
+  const resourceId = typeof value.resource_id === 'string' ? value.resource_id : '-'
+  return `${resourceType} · ${resourceId}`
 }
 
 export function TeamPage() {
@@ -76,6 +92,7 @@ export function TeamPage() {
   const notificationsQuery = useQuery({ queryKey: ['team', 'notifications'], queryFn: fetchNotifications })
   const approvalsQuery = useQuery({ queryKey: ['team', 'approvals'], queryFn: () => fetchApprovals() })
   const chainsQuery = useQuery({ queryKey: ['team', 'approval-chains'], queryFn: fetchApprovalChains })
+  const aiLogsQuery = useQuery({ queryKey: ['team', 'ai-call-logs'], queryFn: () => fetchAICallLogs(50) })
 
   const roleOptions = rolesQuery.data?.map((role) => ({ value: role.code, label: role.name })) ?? []
 
@@ -314,12 +331,31 @@ export function TeamPage() {
           {
             key: 'logs',
             label: '日志',
-            children: approvalsQuery.isLoading ? (
+            children: aiLogsQuery.isLoading ? (
               <LoadingBlock />
-            ) : approvalsQuery.isError ? (
+            ) : aiLogsQuery.isError ? (
               <ErrorBlock />
-            ) : approvalsQuery.data?.length ? (
-              <Timeline items={approvalTimeline(approvalsQuery.data)} />
+            ) : aiLogsQuery.data?.length ? (
+              <Table
+                rowKey="id"
+                dataSource={aiLogsQuery.data}
+                columns={[
+                  { title: '任务', dataIndex: 'task_type', render: (value) => taskTypeLabels[value] || value },
+                  { title: '模型路由', render: (_, row) => `${row.provider} / ${row.model}` },
+                  { title: '调用人', dataIndex: 'user_name', render: (value) => value || '系统' },
+                  {
+                    title: 'Token',
+                    render: (_, row) => `${row.input_tokens} / ${row.output_tokens}`,
+                  },
+                  { title: '耗时', dataIndex: 'latency_ms', render: (value) => `${value} ms` },
+                  { title: '状态', dataIndex: 'status', render: statusTag },
+                  {
+                    title: '资源',
+                    render: (_, row) => formatBizRef(row.biz_ref),
+                  },
+                  { title: '时间', dataIndex: 'created_at', render: formatTime },
+                ]}
+              />
             ) : (
               <EmptyBlock />
             ),

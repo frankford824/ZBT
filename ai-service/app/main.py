@@ -98,6 +98,7 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
             f"{chunk.title}\n{chunk.section_path}\n{chunk.content}" for chunk in parsed.chunks
         ]
         embeddings = embedding_provider.embed_batch(embedding_inputs) if embedding_inputs else []
+        input_tokens = sum(estimate_tokens(text) for text in embedding_inputs)
         for chunk, embedding in zip(parsed.chunks, embeddings, strict=False):
             chunk.embedding = embedding
             chunk.metadata["embedding_model"] = embedding_route.model
@@ -117,6 +118,15 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
                 "embedding_model": embedding_route.model,
                 "embedding_provider": embedding_provider.name,
                 "embedding_dimensions": embedding_provider.get_dimensions(),
+                "model_metadata": {
+                    "provider": embedding_provider.name,
+                    "model": embedding_route.model,
+                    "embedding_dimensions": embedding_provider.get_dimensions(),
+                },
+                "token_usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": 0,
+                },
             },
         }
     except Exception as exc:  # pragma: no cover - defensive task boundary
@@ -148,6 +158,13 @@ def post_callback(callback_url: str, payload: dict[str, object]) -> None:
     )
     with request.urlopen(req, timeout=10) as response:
         response.read()
+
+
+def estimate_tokens(text: str) -> int:
+    value = text.strip()
+    if not value:
+        return 0
+    return max(1, len(value) // 4)
 
 
 @app.post("/tasks/chapter-generate", response_model=TaskAccepted, status_code=202)

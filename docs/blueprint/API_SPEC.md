@@ -16,6 +16,8 @@ POST /auth/register、POST /auth/login、POST /auth/refresh、POST /auth/logout�
 
 GET /tenant、PATCH /tenant、GET /tenant/members、POST /tenant/members/invite、PATCH /tenant/members/:id、DELETE /tenant/members/:id、GET /roles、POST /roles、PATCH /roles/:id、DELETE /roles/:id。
 
+AI 调用审计已落地 `GET /ai-call-logs`，返回当前租户内的模型调用记录，包含 task_type、provider、model、token_usage、latency_ms、status、error_message 和业务资源引用。`/team?tab=logs` 已从审批时间线切换为真实 AI 调用日志表。
+
 ## Tender
 
 GET /tenders、POST /tenders、GET /tenders/:id、PATCH /tenders/:id、POST /tenders/:id/favorite、DELETE /tenders/:id/favorite、POST /tenders/:id/create-project、POST /tenders/:id/create-bid、GET /tender-sources、POST /tender-sources、PATCH /tender-sources/:id、DELETE /tender-sources/:id、POST /tender-sources/:id/verify。
@@ -72,3 +74,4 @@ AI 回调接口：
 
 - POST /ai/callbacks/tasks：公开入口，但必须携带 `X-ZBT-Timestamp` 和 `X-ZBT-Signature`。签名内容为 `timestamp.body` 的 HMAC-SHA256 hex，密钥来自 `AI_SERVICE_HMAC_SECRET`。
 - GET /ai-tasks/:taskId：当前租户内查询 Go 记录的 AI 任务状态。
+- GET /ai-call-logs：当前租户内查询 AI 调用审计日志；知识库 embedding 搜索和 Python HMAC 回调完成的章节生成、文档处理、导出任务都会由 Go 写入 `ai_call_logs`。

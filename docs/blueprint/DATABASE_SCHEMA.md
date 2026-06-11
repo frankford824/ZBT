@@ -10,6 +10,8 @@ tenants、users、tenant_members、tenant_member_roles、roles、permissions、r
 
 `file_assets` 记录 MinIO 对象元数据，`object_key` 固定为 `tenant_id/biz_type/uuid`，`status` 为 pending / ready / failed / deleted。上传链路先由 Go 生成预签名 URL，浏览器 PUT 到私有 bucket 后再 confirm 为 ready。
 
+`ai_call_logs` 保存当前租户内 AI/文档处理/导出调用审计，包含 trace_id、task_type、provider、model、input_tokens、output_tokens、latency_ms、status、error_message 和 biz_ref。Go 在知识库 embedding 搜索成功后直接写入日志；Python AI 服务通过 HMAC 回调完成的 knowledge_process、chapter_generate、document_export 任务由 Go 验签、更新 `ai_tasks` 后追加日志。前端 `/team?tab=logs` 通过 `GET /ai-call-logs` 读取。
+
 ## 标讯
 
 tender_sources、tenders、tender_user_states、tender_parse_results。

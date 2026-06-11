@@ -1261,3 +1261,57 @@ curl -X GET /api/v1/dashboard/summary ...
 1. 工作台 summary 当前是只读聚合快照，尚未接入 Redis 或 WebSocket 实时增量刷新。
 2. 趋势图当前聚合标书数量和项目中标率，尚未加入成本偏差、风险热度等深度经营指标。
 3. 待办当前聚合审批、严重合规问题和 AI 任务数量，尚未拆分成可单项跳转的任务中心。
+
+## Loop-13 / AI 调用审计日志 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 中所有 AI 调用必须写入 `ai_call_logs` 的底座要求。
+2. 将知识库 embedding 搜索和 Python HMAC 回调完成的 AI 任务接入真实租户审计日志。
+3. 将团队协作日志页从审批时间线推进到真实 AI 调用审计表。
+
+### 代码交付
+
+1. 新增 `platform/aicall` store，支持 AI 调用日志记录、回调任务去重记录和租户内列表查询。
+2. 后端启动流程创建并注入 `aicall.Store`；API 新增 `GET /api/v1/ai-call-logs`，纳入 `routeSpecs` 和 `team:read` 权限。
+3. `POST /ai/callbacks/tasks` 在 knowledge_document、bid_chapter、bid_export 回调更新业务任务后追加 `ai_call_logs`。
+4. `POST /knowledge/search` 调用 Python `/embeddings/knowledge` 成功后写入 `knowledge_embedding` 审计日志，并保留 AI 服务不可用时的关键词检索兜底。
+5. Python knowledge_process 回调结果补充 `model_metadata` 和 `token_usage`，便于 Go 统一落库。
+6. 前端 API client 新增 `AICallLogDTO` 和 `fetchAICallLogs`；`/team?tab=logs` 改为展示真实 AI 调用日志。
+7. API 和数据库蓝图补充 AI 调用审计说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+git diff --check
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X POST /api/v1/knowledge/search ...
+curl -X POST /api/v1/chapters/:chapterId/regenerate ...
+curl -X GET /api/v1/ai-call-logs ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `python3 -m compileall app` 通过；本机 Python 未安装 pytest，额外 `python3 -m pytest app/tests` 未运行。
+4. `git diff --check` 通过。
+5. Docker backend/frontend/ai-service 构建成功，并启动成功。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时 tenant1/admin 调用 `/knowledge/search` 后，`GET /ai-call-logs` 返回新增 `knowledge_embedding` 日志：provider=`mock`，model=`configurable-embedding-model`，status=`done`，input_tokens=2。
+8. 运行时 tenant1/admin 触发章节 `52000000-0000-4000-8000-000000000001` 重新生成，任务 `17d2ea65-6441-482a-bb69-705bf3b51160` 回调完成为 `done`，`GET /ai-call-logs` 返回 `chapter_generate` 日志：provider=`mock`，model=`mock-model`，input_tokens=220，output_tokens=256。
+9. 运行时 tenant2/other `GET /ai-call-logs` 返回 0 条。
+10. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询 `ai_call_logs` 可见 `chapter_generate` 和 `knowledge_embedding` 各 1 条；tenant2 RLS 上下文可见 0 条。
+
+### 偏离蓝图
+
+1. `estimated_cost` 当前仍为 0，尚未按 provider/model 配置单价计算费用。
+2. Python `ModelRouter.log_call()` 仍是轻量内存返回；持久化审计由 Go 在业务回调和 embedding 查询完成后统一落库。
+3. 失败的 Python AI 服务调用当前只有进入 HMAC 回调或成功返回 Go 后才会写日志；HTTP 级不可达失败仍作为调用方错误处理。

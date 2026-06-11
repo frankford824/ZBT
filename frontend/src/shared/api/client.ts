@@ -195,6 +195,25 @@ export type AITaskDTO = {
   updated_at: string
 }
 
+export type AICallLogDTO = {
+  id: string
+  user_id: string | null
+  user_name: string
+  trace_id: string
+  task_type: string
+  provider: string
+  model: string
+  input_tokens: number
+  output_tokens: number
+  estimated_cost: number
+  latency_ms: number
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | string
+  error_message: string | null
+  fallback_from: string | null
+  biz_ref: Record<string, unknown>
+  created_at: string
+}
+
 export type TenderDTO = {
   id: string
   source_id: string | null
@@ -629,6 +648,11 @@ export async function fetchRoles(): Promise<RoleDTO[]> {
 
 export async function fetchNotifications(): Promise<NotificationDTO[]> {
   const { data } = await apiClient.get<{ items: NotificationDTO[] }>('/notifications')
+  return data.items
+}
+
+export async function fetchAICallLogs(limit = 50): Promise<AICallLogDTO[]> {
+  const { data } = await apiClient.get<{ items: AICallLogDTO[] }>('/ai-call-logs', { params: { limit } })
   return data.items
 }
 
