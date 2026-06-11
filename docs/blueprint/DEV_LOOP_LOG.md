@@ -1905,3 +1905,52 @@ docker compose exec -T ai-service python -c 'from app.main import CONFIG_PATH; p
 ### 偏离蓝图
 
 1. 本机 Python 仍未安装项目依赖，因此本机 pytest 会被检查脚本跳过；Docker 开发环境已能直接运行 pytest，符合新开发者一键启动和验证路径。
+
+## Loop-25 / 合规问题跳转编辑器定位 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 最终验收项“可跳转编辑器定位问题”。
+2. 合规 issue 需要携带关联标书、章节和编辑器路径，前端可从问题清单直接打开编辑器复核。
+3. 保持旧合规检查兼容，缺少新 location 字段时仍可回退到检查关联标书。
+
+### 代码交付
+
+1. `platform/compliance` 生成 issue 时新增 `buildIssueLocation`，关联标书检查会写入 `module=bid_editor`、`bid_document_id`、`chapter_id`、`part_code` 和内部编辑器 `path`。
+2. issue 定位章节取关联标书的首个章节，按 `bid_parts.sort_order`、`bid_chapters.sort_order`、章节创建时间排序，保证可跳到真实存在的编辑器章节。
+3. 合规问题表新增“定位”按钮，优先使用后端 `location.path`，缺字段时用 `check.bid_document_id`、`chapter_id`、`part_code` 拼出 `/bids/:bidId/editor`。
+4. autofix 审计消息从“后续接入编辑器自动定位”更新为当前可定位复核语义。
+5. API 文档同步说明 `compliance_issues.location` 的编辑器定位字段。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+./infra/scripts/check.sh
+docker compose build backend frontend
+docker compose up -d backend frontend
+curl -X POST /api/v1/bids ...
+curl -X POST /api/v1/compliance/checks ...
+curl -X GET /api/v1/compliance/checks/:id/issues ...
+curl -X GET /api/v1/bids/:bidId/chapters ...
+docker compose exec -T postgres psql -U zbt_app -d zbt ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `./infra/scripts/check.sh` 通过，包含前端构建、Go 测试和运行中 ai-service 容器内 pytest。
+4. Docker backend/frontend 构建成功，并启动成功。
+5. 运行时创建标书 `c2298b64-02ea-49ed-ac2d-1b44ead891cd`，创建合规检查 `c4625b0c-5d42-45f2-b976-657d23537836`。
+6. `GET /compliance/checks/:id/issues` 返回 issue `dae1526d-5931-4ad9-b197-e5aade2f438f`，location 为 `/bids/c2298b64-02ea-49ed-ac2d-1b44ead891cd/editor?chapter=770f80e7-7c03-4f78-b321-0d9b4ad4c8d5&part=combined_body`。
+7. `GET /bids/:bidId/chapters` 验证该 `chapter_id` 属于同一标书。
+8. tenant2 使用明确 tenant_id 登录后访问 tenant1 的 check 返回 404。
+9. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询该 issue 数量为 1；设置 tenant2 RLS 上下文查询数量为 0。
+
+### 偏离蓝图
+
+1. 目前定位到章节级，尚未在 Tiptap 文档内部滚动到具体段落或高亮 rule anchor；后续可把 `anchor` 接入编辑器内文档节点定位。

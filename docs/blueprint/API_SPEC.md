@@ -58,7 +58,7 @@ GET /knowledge、GET /knowledge/categories、POST /knowledge/categories、PATCH 
 
 POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、GET /compliance/checks/:id/issues、GET /compliance/checks/:id/stream、POST /compliance/issues/:id/autofix、POST /compliance/issues/:id/ignore、POST /compliance/issues/:id/confirm-fail、POST /compliance/checks/:id/report、GET /compliance/rules、POST /compliance/rules、PATCH /compliance/rules/:id、DELETE /compliance/rules/:id。
 
-合规一期已落地 `compliance_rules`、`compliance_checks`、`compliance_issues`、`compliance_reports`、`compliance_fix_logs` RLS 表。`POST /compliance/checks` 按 L1-L4 选中层级创建检查，返回检查快照和问题列表；规则严重度支持 pass、warn、fail_candidate、fail，其中 LLM/语义类规则默认只能产出 fail_candidate，确定 fail 由规则或人工确认产生。`POST /compliance/issues/:id/autofix` / `ignore` / `confirm-fail` 会写修复日志并回算检查结果；`GET /compliance/checks/:id/stream` 返回 compliance SSE 快照；`POST /compliance/checks/:id/report` 生成报告摘要。前端 `/compliance` 和 `/compliance/:checkId` 已接入真实检查历史、规则库、问题处理和报告动作。
+合规一期已落地 `compliance_rules`、`compliance_checks`、`compliance_issues`、`compliance_reports`、`compliance_fix_logs` RLS 表。`POST /compliance/checks` 按 L1-L4 选中层级创建检查，返回检查快照和问题列表；规则严重度支持 pass、warn、fail_candidate、fail，其中 LLM/语义类规则默认只能产出 fail_candidate，确定 fail 由规则或人工确认产生。关联标书的检查会在 `compliance_issues.location` 写入 `module=bid_editor`、`bid_document_id`、`chapter_id`、`part_code` 和内部编辑器 `path`，前端问题清单可直接跳转 `/bids/:bidId/editor?chapter=...&part=...` 定位复核；旧 issue 缺少定位字段时前端回退到检查的 `bid_document_id`。`POST /compliance/issues/:id/autofix` / `ignore` / `confirm-fail` 会写修复日志并回算检查结果；`GET /compliance/checks/:id/stream` 返回 compliance SSE 快照；`POST /compliance/checks/:id/report` 生成报告摘要。前端 `/compliance` 和 `/compliance/:checkId` 已接入真实检查历史、规则库、问题处理、定位跳转和报告动作。
 
 ## Cost
 

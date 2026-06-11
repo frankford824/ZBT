@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -162,7 +163,8 @@ func (s *Store) CreateCheck(ctx context.Context, tenantID string, req CreateChec
 		`, tenantID, bidID, name, configRaw, taskID).Scan(&checkID); err != nil {
 			return err
 		}
-		if err := s.generateIssues(ctx, tx, tenantID, checkID, levels); err != nil {
+		bidDocumentID, _ := bidID.(string)
+		if err := s.generateIssues(ctx, tx, tenantID, checkID, bidDocumentID, levels); err != nil {
 			return err
 		}
 		resultStatus, score, err := summarizeIssues(ctx, tx, tenantID, checkID)
@@ -245,7 +247,7 @@ func (s *Store) Snapshot(ctx context.Context, tenantID, checkID string) (CheckSn
 }
 
 func (s *Store) AutofixIssue(ctx context.Context, tenantID, issueID string) (Issue, error) {
-	return s.updateIssueStatus(ctx, tenantID, issueID, "fixed", "autofix", "规则化修复动作已记录，后续接入编辑器自动定位。")
+	return s.updateIssueStatus(ctx, tenantID, issueID, "fixed", "autofix", "规则化修复动作已记录，可通过问题定位跳转到编辑器复核。")
 }
 
 func (s *Store) IgnoreIssue(ctx context.Context, tenantID, issueID string) (Issue, error) {
@@ -481,7 +483,7 @@ func (s *Store) updateIssueStatus(ctx context.Context, tenantID, issueID, status
 	return s.GetIssue(ctx, tenantID, issueID)
 }
 
-func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID string, levels []string) error {
+func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID, bidID string, levels []string) error {
 	selectedLevels := map[string]bool{}
 	for _, level := range levels {
 		selectedLevels[level] = true
@@ -517,7 +519,11 @@ func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID
 			continue
 		}
 		evidence, suggestion := evidenceForRule(rule)
-		location, _ := json.Marshal(map[string]any{"module": "bid_editor", "anchor": rule.Code})
+		locationMap, err := buildIssueLocation(ctx, tx, tenantID, bidID, rule)
+		if err != nil {
+			return err
+		}
+		location, _ := json.Marshal(locationMap)
 		if _, err := tx.Exec(ctx, `
 			insert into compliance_issues (tenant_id, check_id, rule_id, category, severity, status, title, evidence, suggestion, location)
 			values ($1, $2, $3, $4, $5, 'open', $6, $7, $8, $9)
@@ -526,6 +532,58 @@ func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID
 		}
 	}
 	return nil
+}
+
+func buildIssueLocation(ctx context.Context, tx pgx.Tx, tenantID, bidID string, rule Rule) (map[string]any, error) {
+	location := map[string]any{
+		"module": "bid_editor",
+		"anchor": rule.Code,
+	}
+	if bidID == "" {
+		return location, nil
+	}
+	location["bid_document_id"] = bidID
+
+	chapterID, partCode, err := firstBidChapterLocation(ctx, tx, tenantID, bidID)
+	if err != nil {
+		return nil, err
+	}
+	if chapterID != "" {
+		location["chapter_id"] = chapterID
+	}
+	if partCode != "" {
+		location["part_code"] = partCode
+	}
+
+	params := url.Values{}
+	if partCode != "" {
+		params.Set("part", partCode)
+	}
+	if chapterID != "" {
+		params.Set("chapter", chapterID)
+	}
+	path := "/bids/" + bidID + "/editor"
+	if query := params.Encode(); query != "" {
+		path += "?" + query
+	}
+	location["path"] = path
+	return location, nil
+}
+
+func firstBidChapterLocation(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (string, string, error) {
+	var chapterID, partCode string
+	err := tx.QueryRow(ctx, `
+		select bc.id::text, bp.code
+		from bid_chapters bc
+		join bid_parts bp on bp.tenant_id = bc.tenant_id and bp.id = bc.bid_part_id
+		where bc.tenant_id = $1 and bc.bid_document_id = $2
+		order by bp.sort_order, bc.sort_order, bc.created_at
+		limit 1
+	`, tenantID, bidID).Scan(&chapterID, &partCode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", nil
+	}
+	return chapterID, partCode, err
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {

@@ -1,4 +1,5 @@
 import {
+  AimOutlined,
   CheckCircleOutlined,
   DeleteOutlined,
   PlusOutlined,
@@ -103,6 +104,29 @@ function issueCounts(checks: ComplianceCheckDTO[]) {
     },
     { total: 0, fail: 0, pending: 0, score: 0 },
   )
+}
+
+function stringLocationValue(location: Record<string, unknown>, key: string) {
+  const value = location[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function editorLocationPath(checkBidId: string | null, issue: ComplianceIssueDTO) {
+  const bidId = stringLocationValue(issue.location, 'bid_document_id') || checkBidId || ''
+  if (!bidId) return ''
+
+  const locationPath = stringLocationValue(issue.location, 'path')
+  if (locationPath.startsWith(`/bids/${bidId}/editor`)) {
+    return locationPath
+  }
+
+  const params = new URLSearchParams()
+  const partCode = stringLocationValue(issue.location, 'part_code')
+  const chapterId = stringLocationValue(issue.location, 'chapter_id')
+  if (partCode) params.set('part', partCode)
+  if (chapterId) params.set('chapter', chapterId)
+  const query = params.toString()
+  return `/bids/${bidId}/editor${query ? `?${query}` : ''}`
 }
 
 export function CompliancePage() {
@@ -353,6 +377,7 @@ export function CompliancePage() {
 
 export function ComplianceDetailPage() {
   const { checkId = '' } = useParams()
+  const navigate = useNavigate()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const check = useQuery({
@@ -418,8 +443,12 @@ export function ComplianceDetailPage() {
           title: '操作',
           render: (_, row) => {
             const closed = row.status === 'fixed' || row.status === 'ignored'
+            const editorPath = editorLocationPath(check.data.bid_document_id, row)
             return (
               <Space wrap>
+                <Button size="small" icon={<AimOutlined />} disabled={!editorPath} onClick={() => navigate(editorPath)}>
+                  定位
+                </Button>
                 <Button
                   size="small"
                   icon={<ToolOutlined />}
