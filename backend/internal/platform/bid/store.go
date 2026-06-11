@@ -219,6 +219,86 @@ type ChapterDiff struct {
 	Previous *ChapterVersion `json:"previous"`
 }
 
+type TenderFile struct {
+	ID            string    `json:"id"`
+	BidDocumentID string    `json:"bid_document_id"`
+	FileAssetID   string    `json:"file_asset_id"`
+	Filename      string    `json:"filename"`
+	ContentType   string    `json:"content_type"`
+	SizeBytes     int64     `json:"size_bytes"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type ParseResult struct {
+	ID               string         `json:"id"`
+	BidDocumentID    string         `json:"bid_document_id"`
+	FileAssetID      *string        `json:"file_asset_id"`
+	Status           string         `json:"status"`
+	StructuredResult map[string]any `json:"structured_result"`
+	ErrorMessage     *string        `json:"error_message"`
+	ConfirmedBy      *string        `json:"confirmed_by"`
+	ConfirmedAt      *time.Time     `json:"confirmed_at"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
+type UploadTenderFileRequest struct {
+	FileID string `json:"file_id"`
+}
+
+type UploadTenderFileResponse struct {
+	File        TenderFile  `json:"file"`
+	ParseResult ParseResult `json:"parse_result"`
+}
+
+type ParseTenderResponse struct {
+	Task        Task        `json:"task"`
+	ParseResult ParseResult `json:"parse_result"`
+}
+
+type ConfirmParseResultRequest struct {
+	StructuredResult map[string]any `json:"structured_result"`
+}
+
+type OutlineGenerateResponse struct {
+	Task     Task      `json:"task"`
+	Parts    []Part    `json:"parts"`
+	Chapters []Chapter `json:"chapters"`
+}
+
+type PartOutline struct {
+	Part     Part      `json:"part"`
+	Chapters []Chapter `json:"chapters"`
+}
+
+type OutlineChapterInput struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	PlainText string `json:"plain_text"`
+	SortOrder int    `json:"sort_order"`
+}
+
+type UpdatePartOutlineRequest struct {
+	Chapters []OutlineChapterInput `json:"chapters"`
+}
+
+type MaterialSelection struct {
+	ID            string    `json:"id"`
+	BidDocumentID string    `json:"bid_document_id"`
+	SelectedRefs  []any     `json:"selected_refs"`
+	Notes         string    `json:"notes"`
+	UpdatedBy     *string   `json:"updated_by"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type UpdateMaterialSelectionRequest struct {
+	SelectedRefs []any  `json:"selected_refs"`
+	Notes        string `json:"notes"`
+}
+
 type CreateExportResponse struct {
 	Export Export `json:"export"`
 	Task   Task   `json:"task"`
@@ -464,6 +544,297 @@ func (s *Store) CreateDocument(ctx context.Context, tenantID string, req CreateD
 	return s.GetDocument(ctx, tenantID, id)
 }
 
+func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID string, req UploadTenderFileRequest) (UploadTenderFileResponse, error) {
+	bidID = strings.TrimSpace(bidID)
+	fileID := strings.TrimSpace(req.FileID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return UploadTenderFileResponse{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(fileID); err != nil {
+		return UploadTenderFileResponse{}, ErrInvalidRequest
+	}
+
+	var result UploadTenderFileResponse
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		var fileStatus string
+		if err := tx.QueryRow(ctx, `
+			select status
+			from file_assets
+			where tenant_id = $1 and id = $2
+		`, tenantID, fileID).Scan(&fileStatus); err != nil {
+			return err
+		}
+		if fileStatus != "ready" {
+			return platformfile.ErrInvalidObjectState
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_tender_files
+			set status = 'superseded', updated_at = now()
+			where tenant_id = $1 and bid_document_id = $2 and file_asset_id <> $3 and status = 'active'
+		`, tenantID, bidID, fileID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update file_assets
+			set biz_type = 'bid_tender',
+				biz_id = $3,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, fileID, bidID); err != nil {
+			return err
+		}
+		attached, err := scanTenderFile(tx.QueryRow(ctx, `
+			with upserted as (
+				insert into bid_tender_files (tenant_id, bid_document_id, file_asset_id, status, created_by)
+				values ($1, $2, $3, 'active', nullif($4, '')::uuid)
+				on conflict (tenant_id, bid_document_id, file_asset_id) do update
+				set status = 'active', updated_at = now()
+				returning id, bid_document_id, file_asset_id, status, created_at, updated_at
+			)
+			select u.id::text, u.bid_document_id::text, u.file_asset_id::text,
+				f.filename, f.content_type, f.size_bytes,
+				u.status, u.created_at, u.updated_at
+			from upserted u
+			join file_assets f on f.tenant_id = $1 and f.id = u.file_asset_id
+		`, tenantID, bidID, fileID, userID))
+		if err != nil {
+			return err
+		}
+		parseResult, err := upsertParseResult(ctx, tx, tenantID, bidID, fileID, "queued", map[string]any{}, "")
+		if err != nil {
+			return err
+		}
+		result = UploadTenderFileResponse{File: attached, ParseResult: parseResult}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UploadTenderFileResponse{}, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string) (ParseTenderResponse, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return ParseTenderResponse{}, ErrInvalidRequest
+	}
+
+	var result ParseTenderResponse
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		document, err := bidForExport(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		file, err := latestTenderFileForBid(ctx, tx, tenantID, bidID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrInvalidRequest
+		}
+		if err != nil {
+			return err
+		}
+		structured := defaultTenderStructuredResult(document, file)
+		parseResult, err := upsertParseResult(ctx, tx, tenantID, bidID, file.FileAssetID, "ready", structured, "")
+		if err != nil {
+			return err
+		}
+		payload := map[string]any{
+			"tenant_id":       tenantID,
+			"bid_document_id": bidID,
+			"file_asset_id":   file.FileAssetID,
+			"filename":        file.Filename,
+			"mode":            "deterministic_bootstrap",
+		}
+		payloadJSON, _ := json.Marshal(payload)
+		resultJSON, _ := json.Marshal(structured)
+		routeJSON, _ := json.Marshal(map[string]any{"route": "local.tender_parse"})
+		externalTaskID := "task-tender-parse-" + uuid.NewString()
+		task, err := scanTask(tx.QueryRow(ctx, `
+			insert into ai_tasks (
+				tenant_id, user_id, task_type, status, external_task_id,
+				resource_type, resource_id, payload, route, result, started_at, completed_at
+			)
+			values ($1, nullif($2, '')::uuid, 'tender_parse', 'done', $3,
+				'bid_parse_result', $4, $5, $6, $7, now(), now())
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, tenantID, userID, externalTaskID, parseResult.ID, payloadJSON, routeJSON, resultJSON))
+		if err != nil {
+			return err
+		}
+		if err := ensureMaterialSelection(ctx, tx, tenantID, bidID, userID, defaultMaterialRefs(structured), ""); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_documents
+			set status = 'editing', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, bidID); err != nil {
+			return err
+		}
+		result = ParseTenderResponse{Task: task, ParseResult: parseResult}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ParseTenderResponse{}, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) GetParseResult(ctx context.Context, tenantID, bidID string) (ParseResult, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return ParseResult{}, ErrInvalidRequest
+	}
+	var result ParseResult
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		found, err := parseResultForBid(ctx, tx, tenantID, bidID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			found, err = upsertParseResult(ctx, tx, tenantID, bidID, "", "queued", map[string]any{}, "")
+		}
+		if err != nil {
+			return err
+		}
+		result = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ParseResult{}, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID string, req ConfirmParseResultRequest) (ParseResult, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return ParseResult{}, ErrInvalidRequest
+	}
+	var result ParseResult
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		document, err := bidForExport(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		current, err := parseResultForBid(ctx, tx, tenantID, bidID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			current, err = upsertParseResult(ctx, tx, tenantID, bidID, "", "queued", defaultTenderStructuredResult(document, TenderFile{}), "")
+		}
+		if err != nil {
+			return err
+		}
+		structured := req.StructuredResult
+		if structured == nil {
+			structured = current.StructuredResult
+		}
+		structuredJSON, _ := json.Marshal(structured)
+		confirmed, err := scanParseResult(tx.QueryRow(ctx, `
+			update bid_parse_results
+			set status = 'confirmed',
+				structured_result = $3,
+				error_message = null,
+				confirmed_by = nullif($4, '')::uuid,
+				confirmed_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and bid_document_id = $2
+			returning id::text, bid_document_id::text, file_asset_id::text, status,
+				structured_result, error_message, confirmed_by::text, confirmed_at, created_at, updated_at
+		`, tenantID, bidID, structuredJSON, userID))
+		if err != nil {
+			return err
+		}
+		if err := ensureMaterialSelection(ctx, tx, tenantID, bidID, userID, defaultMaterialRefs(structured), ""); err != nil {
+			return err
+		}
+		result = confirmed
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ParseResult{}, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) GenerateOutline(ctx context.Context, tenantID, userID, bidID string) (OutlineGenerateResponse, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return OutlineGenerateResponse{}, ErrInvalidRequest
+	}
+	var task Task
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		document, err := bidForExport(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		parseResult, err := parseResultForBid(ctx, tx, tenantID, bidID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			parseResult, err = upsertParseResult(ctx, tx, tenantID, bidID, "", "ready", defaultTenderStructuredResult(document, TenderFile{}), "")
+		}
+		if err != nil {
+			return err
+		}
+		specs := outlineSpecsFromStructuredResult(document, parseResult.StructuredResult)
+		if err := applyOutlineSpecs(ctx, tx, tenantID, bidID, specs); err != nil {
+			return err
+		}
+		resultPayload := map[string]any{
+			"bid_document_id": bidID,
+			"parts_count":     len(specs),
+			"chapters_count":  outlineChapterCount(specs),
+		}
+		payloadJSON, _ := json.Marshal(map[string]any{
+			"tenant_id":       tenantID,
+			"bid_document_id": bidID,
+			"parse_result_id": parseResult.ID,
+			"mode":            "deterministic_bootstrap",
+		})
+		resultJSON, _ := json.Marshal(resultPayload)
+		routeJSON, _ := json.Marshal(map[string]any{"route": "local.outline_generate"})
+		task, err = scanTask(tx.QueryRow(ctx, `
+			insert into ai_tasks (
+				tenant_id, user_id, task_type, status, external_task_id,
+				resource_type, resource_id, payload, route, result, started_at, completed_at
+			)
+			values ($1, nullif($2, '')::uuid, 'outline_generate', 'done', $3,
+				'bid_document', $4, $5, $6, $7, now(), now())
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, tenantID, userID, "task-outline-"+uuid.NewString(), bidID, payloadJSON, routeJSON, resultJSON))
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update bid_documents
+			set status = 'editing', updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, bidID); err != nil {
+			return err
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OutlineGenerateResponse{}, ErrNotFound
+	}
+	if err != nil {
+		return OutlineGenerateResponse{}, err
+	}
+	parts, err := s.ListParts(ctx, tenantID, bidID)
+	if err != nil {
+		return OutlineGenerateResponse{}, err
+	}
+	chapters, err := s.ListChapters(ctx, tenantID, bidID)
+	if err != nil {
+		return OutlineGenerateResponse{}, err
+	}
+	return OutlineGenerateResponse{Task: task, Parts: parts, Chapters: chapters}, nil
+}
+
 func (s *Store) ListParts(ctx context.Context, tenantID, bidID string) ([]Part, error) {
 	parts := []Part{}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -513,6 +884,188 @@ func (s *Store) ListChapters(ctx context.Context, tenantID, bidID string) ([]Cha
 		return rows.Err()
 	})
 	return chapters, err
+}
+
+func (s *Store) GetPartOutline(ctx context.Context, tenantID, bidID, partID string) (PartOutline, error) {
+	bidID = strings.TrimSpace(bidID)
+	partID = strings.TrimSpace(partID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return PartOutline{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(partID); err != nil {
+		return PartOutline{}, ErrInvalidRequest
+	}
+	var outline PartOutline
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		part, err := partByID(ctx, tx, tenantID, bidID, partID)
+		if err != nil {
+			return err
+		}
+		chapters, err := chaptersForPart(ctx, tx, tenantID, bidID, partID)
+		if err != nil {
+			return err
+		}
+		outline = PartOutline{Part: part, Chapters: chapters}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PartOutline{}, ErrNotFound
+	}
+	return outline, err
+}
+
+func (s *Store) UpdatePartOutline(ctx context.Context, tenantID, userID, bidID, partID string, req UpdatePartOutlineRequest) (PartOutline, error) {
+	bidID = strings.TrimSpace(bidID)
+	partID = strings.TrimSpace(partID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return PartOutline{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(partID); err != nil {
+		return PartOutline{}, ErrInvalidRequest
+	}
+	if len(req.Chapters) == 0 {
+		return PartOutline{}, ErrInvalidRequest
+	}
+
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := partByID(ctx, tx, tenantID, bidID, partID); err != nil {
+			return err
+		}
+		for index, input := range req.Chapters {
+			title := strings.TrimSpace(input.Title)
+			if title == "" {
+				return ErrInvalidRequest
+			}
+			sortOrder := input.SortOrder
+			if sortOrder <= 0 {
+				sortOrder = (index + 1) * 10
+			}
+			plainText := strings.TrimSpace(input.PlainText)
+			chapterID := strings.TrimSpace(input.ID)
+			if chapterID == "" {
+				if plainText == "" {
+					plainText = "请补充" + title + "内容。"
+				}
+				contentJSON, _ := json.Marshal(tiptapFromPlainText(plainText))
+				if _, err := tx.Exec(ctx, `
+					insert into bid_chapters (
+						tenant_id, bid_document_id, bid_part_id, title,
+						content, plain_text, status, sort_order
+					)
+					values ($1, $2, $3, $4, $5, $6, 'pending', $7)
+				`, tenantID, bidID, partID, title, contentJSON, plainText, sortOrder); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := uuid.Parse(chapterID); err != nil {
+				return ErrInvalidRequest
+			}
+			var contentJSON []byte
+			if plainText != "" {
+				contentJSON, _ = json.Marshal(tiptapFromPlainText(plainText))
+			}
+			tag, err := tx.Exec(ctx, `
+				update bid_chapters
+				set title = $5,
+					plain_text = case when nullif($6, '') is null then plain_text else $6 end,
+					content = case when nullif($6, '') is null then content else $7 end,
+					sort_order = $8,
+					status = case when status = 'accepted' then status else 'edited' end,
+					updated_at = now()
+				where tenant_id = $1 and bid_document_id = $2 and bid_part_id = $3 and id = $4
+			`, tenantID, bidID, partID, chapterID, title, plainText, contentJSON, sortOrder)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return ErrNotFound
+			}
+		}
+		metadataJSON, _ := json.Marshal(map[string]any{
+			"outline_updated_by": userID,
+			"outline_updated_at": time.Now().UTC().Format(time.RFC3339),
+		})
+		if _, err := tx.Exec(ctx, `
+			update bid_parts
+			set status = 'generated',
+				metadata = metadata || $4::jsonb,
+				updated_at = now()
+			where tenant_id = $1 and bid_document_id = $2 and id = $3
+		`, tenantID, bidID, partID, metadataJSON); err != nil {
+			return err
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PartOutline{}, ErrNotFound
+	}
+	if err != nil {
+		return PartOutline{}, err
+	}
+	return s.GetPartOutline(ctx, tenantID, bidID, partID)
+}
+
+func (s *Store) GetMaterialSelection(ctx context.Context, tenantID, bidID string) (MaterialSelection, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return MaterialSelection{}, ErrInvalidRequest
+	}
+	var selection MaterialSelection
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		found, err := materialSelectionForBid(ctx, tx, tenantID, bidID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			refs := []any{}
+			if parseResult, parseErr := parseResultForBid(ctx, tx, tenantID, bidID); parseErr == nil {
+				refs = defaultMaterialRefs(parseResult.StructuredResult)
+			}
+			if err := ensureMaterialSelection(ctx, tx, tenantID, bidID, "", refs, ""); err != nil {
+				return err
+			}
+			found, err = materialSelectionForBid(ctx, tx, tenantID, bidID)
+		}
+		if err != nil {
+			return err
+		}
+		selection = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MaterialSelection{}, ErrNotFound
+	}
+	return selection, err
+}
+
+func (s *Store) UpdateMaterialSelection(ctx context.Context, tenantID, userID, bidID string, req UpdateMaterialSelectionRequest) (MaterialSelection, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return MaterialSelection{}, ErrInvalidRequest
+	}
+	var selection MaterialSelection
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		if req.SelectedRefs == nil {
+			req.SelectedRefs = []any{}
+		}
+		if err := ensureMaterialSelection(ctx, tx, tenantID, bidID, userID, req.SelectedRefs, req.Notes); err != nil {
+			return err
+		}
+		found, err := materialSelectionForBid(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		selection = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MaterialSelection{}, ErrNotFound
+	}
+	return selection, err
 }
 
 func (s *Store) GenerationSnapshot(ctx context.Context, tenantID, bidID string) (GenerationSnapshot, error) {
@@ -1477,6 +2030,372 @@ func partsForZipExport(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (
 	return parts, rows.Err()
 }
 
+type outlinePartSpec struct {
+	Code      string
+	Title     string
+	SortOrder int
+	Chapters  []outlineChapterSpec
+}
+
+type outlineChapterSpec struct {
+	Title     string
+	PlainText string
+	SortOrder int
+}
+
+func latestTenderFileForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (TenderFile, error) {
+	return scanTenderFile(tx.QueryRow(ctx, `
+		select btf.id::text, btf.bid_document_id::text, btf.file_asset_id::text,
+			f.filename, f.content_type, f.size_bytes,
+			btf.status, btf.created_at, btf.updated_at
+		from bid_tender_files btf
+		join file_assets f on f.tenant_id = btf.tenant_id and f.id = btf.file_asset_id
+		where btf.tenant_id = $1 and btf.bid_document_id = $2 and btf.status = 'active'
+		order by btf.updated_at desc
+		limit 1
+	`, tenantID, bidID))
+}
+
+func parseResultForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (ParseResult, error) {
+	return scanParseResult(tx.QueryRow(ctx, `
+		select id::text, bid_document_id::text, file_asset_id::text, status,
+			structured_result, error_message, confirmed_by::text, confirmed_at, created_at, updated_at
+		from bid_parse_results
+		where tenant_id = $1 and bid_document_id = $2
+	`, tenantID, bidID))
+}
+
+func upsertParseResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	fileID string,
+	status string,
+	structured map[string]any,
+	errorMessage string,
+) (ParseResult, error) {
+	if structured == nil {
+		structured = map[string]any{}
+	}
+	if status == "" {
+		status = "queued"
+	}
+	body, _ := json.Marshal(structured)
+	return scanParseResult(tx.QueryRow(ctx, `
+		insert into bid_parse_results (
+			tenant_id, bid_document_id, file_asset_id, status, structured_result, error_message
+		)
+		values ($1, $2, nullif($3, '')::uuid, $4, $5, nullif($6, ''))
+		on conflict (tenant_id, bid_document_id) do update
+		set file_asset_id = coalesce(excluded.file_asset_id, bid_parse_results.file_asset_id),
+			status = excluded.status,
+			structured_result = excluded.structured_result,
+			error_message = excluded.error_message,
+			updated_at = now()
+		returning id::text, bid_document_id::text, file_asset_id::text, status,
+			structured_result, error_message, confirmed_by::text, confirmed_at, created_at, updated_at
+	`, tenantID, bidID, fileID, status, body, errorMessage))
+}
+
+func partByID(ctx context.Context, tx pgx.Tx, tenantID, bidID, partID string) (Part, error) {
+	return scanPart(tx.QueryRow(ctx, `
+		select id::text, bid_document_id::text, code, title, sort_order, status, metadata, created_at, updated_at
+		from bid_parts
+		where tenant_id = $1 and bid_document_id = $2 and id = $3
+	`, tenantID, bidID, partID))
+}
+
+func chaptersForPart(ctx context.Context, tx pgx.Tx, tenantID, bidID, partID string) ([]Chapter, error) {
+	chapters := []Chapter{}
+	rows, err := tx.Query(ctx, `
+		select id::text, bid_document_id::text, bid_part_id::text, title, content, plain_text,
+			status, sort_order, source_refs, needs_human_input, created_at, updated_at
+		from bid_chapters
+		where tenant_id = $1 and bid_document_id = $2 and bid_part_id = $3
+		order by sort_order, created_at
+	`, tenantID, bidID, partID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		chapter, err := scanChapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		chapters = append(chapters, chapter)
+	}
+	return chapters, rows.Err()
+}
+
+func materialSelectionForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (MaterialSelection, error) {
+	return scanMaterialSelection(tx.QueryRow(ctx, `
+		select id::text, bid_document_id::text, selected_refs, notes, updated_by::text, created_at, updated_at
+		from bid_material_selections
+		where tenant_id = $1 and bid_document_id = $2
+	`, tenantID, bidID))
+}
+
+func ensureMaterialSelection(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	userID string,
+	selectedRefs []any,
+	notes string,
+) error {
+	if selectedRefs == nil {
+		selectedRefs = []any{}
+	}
+	body, _ := json.Marshal(selectedRefs)
+	_, err := tx.Exec(ctx, `
+		insert into bid_material_selections (tenant_id, bid_document_id, selected_refs, notes, updated_by)
+		values ($1, $2, $3, $4, nullif($5, '')::uuid)
+		on conflict (tenant_id, bid_document_id) do update
+		set selected_refs = excluded.selected_refs,
+			notes = case when excluded.notes = '' then bid_material_selections.notes else excluded.notes end,
+			updated_by = coalesce(excluded.updated_by, bid_material_selections.updated_by),
+			updated_at = now()
+	`, tenantID, bidID, body, strings.TrimSpace(notes), userID)
+	return err
+}
+
+func defaultTenderStructuredResult(document Document, file TenderFile) map[string]any {
+	outline := defaultOutlineSpecs(document)
+	parts := make([]any, 0, len(outline))
+	for _, part := range outline {
+		chapters := make([]any, 0, len(part.Chapters))
+		for _, chapter := range part.Chapters {
+			chapters = append(chapters, map[string]any{
+				"title":      chapter.Title,
+				"plain_text": chapter.PlainText,
+				"sort_order": chapter.SortOrder,
+			})
+		}
+		parts = append(parts, map[string]any{
+			"code":       part.Code,
+			"title":      part.Title,
+			"sort_order": part.SortOrder,
+			"chapters":   chapters,
+		})
+	}
+	sourceFile := map[string]any{}
+	if file.FileAssetID != "" {
+		sourceFile = map[string]any{
+			"file_asset_id": file.FileAssetID,
+			"filename":      file.Filename,
+			"content_type":  file.ContentType,
+			"size_bytes":    file.SizeBytes,
+		}
+	}
+	return map[string]any{
+		"project_name": document.Title,
+		"bid_type":     document.BidType,
+		"source_file":  sourceFile,
+		"deadline":     time.Now().UTC().AddDate(0, 0, 14).Format("2006-01-02"),
+		"qualification_requirements": []any{
+			"营业执照、法定代表人授权及签章文件齐备",
+			"具备类似项目实施经验或信息系统建设能力证明",
+			"提供项目团队、服务承诺和安全管理相关材料",
+		},
+		"invalid_clause_risks": []any{
+			"签章、报价、投标有效期不一致可能导致无效投标",
+			"资格证明材料缺失或过期需要人工复核",
+			"技术响应未逐条覆盖评分点会影响得分",
+		},
+		"scoring_points": []any{
+			"实施方案完整性",
+			"项目团队与案例经验",
+			"数据安全和运维服务能力",
+		},
+		"outline": map[string]any{"parts": parts},
+		"material_suggestions": []any{
+			map[string]any{"title": "企业资质证书", "ref_type": "qualification", "reason": "响应资格审查要求", "selected": true},
+			map[string]any{"title": "同类项目案例", "ref_type": "case", "reason": "支撑评分项中的经验能力", "selected": true},
+			map[string]any{"title": "技术方案素材", "ref_type": "solution", "reason": "复用实施方案和安全保障描述", "selected": true},
+		},
+	}
+}
+
+func outlineSpecsFromStructuredResult(document Document, structured map[string]any) []outlinePartSpec {
+	if structured != nil {
+		if outline, ok := structured["outline"].(map[string]any); ok {
+			if rawParts, ok := outline["parts"].([]any); ok {
+				specs := make([]outlinePartSpec, 0, len(rawParts))
+				for index, rawPart := range rawParts {
+					partMap, ok := rawPart.(map[string]any)
+					if !ok {
+						continue
+					}
+					code := normalizePartCode(asString(partMap["code"]))
+					title := strings.TrimSpace(asString(partMap["title"]))
+					if title == "" {
+						title = defaultPartTitle(code)
+					}
+					sortOrder := asInt(partMap["sort_order"])
+					if sortOrder <= 0 {
+						sortOrder = (index + 1) * 10
+					}
+					chapters := outlineChaptersFromAny(partMap["chapters"])
+					if len(chapters) == 0 {
+						chapters = defaultOutlineChapters(code)
+					}
+					specs = append(specs, outlinePartSpec{Code: code, Title: title, SortOrder: sortOrder, Chapters: chapters})
+				}
+				if len(specs) > 0 {
+					return specs
+				}
+			}
+		}
+	}
+	return defaultOutlineSpecs(document)
+}
+
+func defaultOutlineSpecs(document Document) []outlinePartSpec {
+	if document.BidType == "separated" {
+		return []outlinePartSpec{
+			{Code: "tech", Title: "技术标", SortOrder: 10, Chapters: defaultOutlineChapters("tech")},
+			{Code: "business", Title: "商务标", SortOrder: 20, Chapters: defaultOutlineChapters("business")},
+		}
+	}
+	return []outlinePartSpec{
+		{Code: "combined_body", Title: "综合标书主体", SortOrder: 10, Chapters: defaultOutlineChapters("combined_body")},
+	}
+}
+
+func defaultOutlineChapters(partCode string) []outlineChapterSpec {
+	switch partCode {
+	case "business":
+		return []outlineChapterSpec{
+			{Title: "一、投标函", PlainText: "响应招标文件商务条款，确认投标有效期、报价和签章要求。", SortOrder: 10},
+			{Title: "二、资格证明文件", PlainText: "整理营业执照、授权书、资质证书和承诺函。", SortOrder: 20},
+			{Title: "三、商务偏离表", PlainText: "逐条核对付款、服务期、验收和违约责任条款。", SortOrder: 30},
+		}
+	case "tech":
+		return []outlineChapterSpec{
+			{Title: "一、项目理解", PlainText: "提炼建设目标、范围边界、关键约束和响应策略。", SortOrder: 10},
+			{Title: "二、总体技术方案", PlainText: "描述系统架构、数据流程、安全设计和集成方式。", SortOrder: 20},
+			{Title: "三、实施计划与保障", PlainText: "说明项目组织、里程碑、质量控制和运维服务。", SortOrder: 30},
+		}
+	default:
+		return []outlineChapterSpec{
+			{Title: "一、项目理解", PlainText: "提炼招标需求、评分重点和废标风险。", SortOrder: 10},
+			{Title: "二、实施方案", PlainText: "响应技术路线、交付计划、团队安排和服务承诺。", SortOrder: 20},
+			{Title: "三、商务响应", PlainText: "汇总报价、资格证明、合同条款和偏离说明。", SortOrder: 30},
+		}
+	}
+}
+
+func outlineChaptersFromAny(value any) []outlineChapterSpec {
+	raw, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	chapters := make([]outlineChapterSpec, 0, len(raw))
+	for index, item := range raw {
+		sortOrder := (index + 1) * 10
+		switch typed := item.(type) {
+		case string:
+			title := strings.TrimSpace(typed)
+			if title != "" {
+				chapters = append(chapters, outlineChapterSpec{Title: title, PlainText: "请补充" + title + "内容。", SortOrder: sortOrder})
+			}
+		case map[string]any:
+			title := strings.TrimSpace(asString(typed["title"]))
+			if title == "" {
+				continue
+			}
+			if parsed := asInt(typed["sort_order"]); parsed > 0 {
+				sortOrder = parsed
+			}
+			plainText := strings.TrimSpace(asString(typed["plain_text"]))
+			if plainText == "" {
+				plainText = "请补充" + title + "内容。"
+			}
+			chapters = append(chapters, outlineChapterSpec{Title: title, PlainText: plainText, SortOrder: sortOrder})
+		}
+	}
+	return chapters
+}
+
+func applyOutlineSpecs(ctx context.Context, tx pgx.Tx, tenantID, bidID string, specs []outlinePartSpec) error {
+	for _, spec := range specs {
+		code := normalizePartCode(spec.Code)
+		title := strings.TrimSpace(spec.Title)
+		if title == "" {
+			title = defaultPartTitle(code)
+		}
+		metadataJSON, _ := json.Marshal(map[string]any{
+			"outline_generated": true,
+			"outline_source":    "parse_result",
+		})
+		var partID string
+		if err := tx.QueryRow(ctx, `
+			insert into bid_parts (tenant_id, bid_document_id, code, title, sort_order, status, metadata)
+			values ($1, $2, $3, $4, $5, 'generated', $6)
+			on conflict (tenant_id, bid_document_id, code) do update
+			set title = excluded.title,
+				sort_order = excluded.sort_order,
+				status = 'generated',
+				metadata = bid_parts.metadata || excluded.metadata,
+				updated_at = now()
+			returning id::text
+		`, tenantID, bidID, code, title, spec.SortOrder, metadataJSON).Scan(&partID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			delete from bid_chapters
+			where tenant_id = $1 and bid_document_id = $2 and bid_part_id = $3
+		`, tenantID, bidID, partID); err != nil {
+			return err
+		}
+		for index, chapter := range spec.Chapters {
+			chapterTitle := strings.TrimSpace(chapter.Title)
+			if chapterTitle == "" {
+				continue
+			}
+			sortOrder := chapter.SortOrder
+			if sortOrder <= 0 {
+				sortOrder = (index + 1) * 10
+			}
+			plainText := strings.TrimSpace(chapter.PlainText)
+			if plainText == "" {
+				plainText = "请补充" + chapterTitle + "内容。"
+			}
+			contentJSON, _ := json.Marshal(tiptapFromPlainText(plainText))
+			if _, err := tx.Exec(ctx, `
+				insert into bid_chapters (
+					tenant_id, bid_document_id, bid_part_id, title,
+					content, plain_text, status, sort_order
+				)
+				values ($1, $2, $3, $4, $5, $6, 'pending', $7)
+			`, tenantID, bidID, partID, chapterTitle, contentJSON, plainText, sortOrder); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func outlineChapterCount(specs []outlinePartSpec) int {
+	total := 0
+	for _, spec := range specs {
+		total += len(spec.Chapters)
+	}
+	return total
+}
+
+func defaultMaterialRefs(structured map[string]any) []any {
+	if structured != nil {
+		if refs, ok := structured["material_suggestions"].([]any); ok {
+			return refs
+		}
+	}
+	return []any{}
+}
+
 func exportChapters(chapters []Chapter) []exportChapterPayload {
 	payload := make([]exportChapterPayload, 0, len(chapters))
 	for _, chapter := range chapters {
@@ -1802,6 +2721,58 @@ func scanTask(row scanner) (Task, error) {
 	return task, err
 }
 
+func scanTenderFile(row scanner) (TenderFile, error) {
+	var file TenderFile
+	err := row.Scan(
+		&file.ID, &file.BidDocumentID, &file.FileAssetID,
+		&file.Filename, &file.ContentType, &file.SizeBytes,
+		&file.Status, &file.CreatedAt, &file.UpdatedAt,
+	)
+	return file, err
+}
+
+func scanParseResult(row scanner) (ParseResult, error) {
+	var result ParseResult
+	var fileAssetID, errorMessage, confirmedBy sql.NullString
+	var confirmedAt sql.NullTime
+	var structuredRaw []byte
+	err := row.Scan(
+		&result.ID, &result.BidDocumentID, &fileAssetID, &result.Status,
+		&structuredRaw, &errorMessage, &confirmedBy, &confirmedAt, &result.CreatedAt, &result.UpdatedAt,
+	)
+	if fileAssetID.Valid {
+		result.FileAssetID = &fileAssetID.String
+	}
+	if errorMessage.Valid {
+		result.ErrorMessage = &errorMessage.String
+	}
+	if confirmedBy.Valid {
+		result.ConfirmedBy = &confirmedBy.String
+	}
+	if confirmedAt.Valid {
+		result.ConfirmedAt = &confirmedAt.Time
+	}
+	result.StructuredResult = map[string]any{}
+	_ = json.Unmarshal(structuredRaw, &result.StructuredResult)
+	return result, err
+}
+
+func scanMaterialSelection(row scanner) (MaterialSelection, error) {
+	var selection MaterialSelection
+	var selectedRaw []byte
+	var updatedBy sql.NullString
+	err := row.Scan(
+		&selection.ID, &selection.BidDocumentID, &selectedRaw, &selection.Notes,
+		&updatedBy, &selection.CreatedAt, &selection.UpdatedAt,
+	)
+	if updatedBy.Valid {
+		selection.UpdatedBy = &updatedBy.String
+	}
+	selection.SelectedRefs = []any{}
+	_ = json.Unmarshal(selectedRaw, &selection.SelectedRefs)
+	return selection, err
+}
+
 func tiptapFromPlainText(text string) map[string]any {
 	paragraphs := []any{}
 	for _, line := range strings.Split(text, "\n") {
@@ -1848,6 +2819,35 @@ func collectText(value any, lines *[]string) {
 		for _, child := range typed {
 			collectText(child, lines)
 		}
+	}
+}
+
+func asString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return ""
+	}
+}
+
+func asInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return int(parsed)
+	default:
+		return 0
 	}
 }
 
@@ -1924,6 +2924,21 @@ func normalizePartCode(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "combined_body"
+	}
+}
+
+func defaultPartTitle(code string) string {
+	switch code {
+	case "tech":
+		return "技术标"
+	case "business":
+		return "商务标"
+	case "boq":
+		return "工程量清单"
+	case "attachment":
+		return "附件"
+	default:
+		return "综合标书主体"
 	}
 }
 

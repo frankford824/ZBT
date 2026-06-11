@@ -29,6 +29,7 @@ import {
   Tag,
   Timeline,
   Typography,
+  Upload,
   App as AntApp,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -38,20 +39,31 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import {
   acceptChapter,
+  confirmBidParseResult,
+  confirmFileUpload,
   createBid,
   createBidExport,
+  createPresignedUpload,
   fetchAITask,
   fetchBidChapters,
   fetchBid,
   fetchBidExport,
   fetchBidExports,
+  fetchBidMaterialSelection,
+  fetchBidParseResult,
   fetchBidParts,
   fetchBidTemplates,
   fetchBids,
   fetchChapterVersions,
+  generateBidOutline,
+  parseBidTender,
   regenerateChapter,
   submitBidForApproval,
+  updateBidMaterialSelection,
+  updateBidPartOutline,
   updateChapterContent,
+  uploadBidTenderFile,
+  uploadToPresignedUrl,
   useBidTemplate,
   type BidChapterDTO,
   type BidDocumentDTO,
@@ -72,6 +84,13 @@ const bidSchema = z.object({
 })
 
 type BidFormValues = z.infer<typeof bidSchema>
+
+type OutlineDraftChapter = {
+  id?: string
+  title: string
+  plain_text: string
+  sort_order: number
+}
 
 export function BidNewPage() {
   const navigate = useNavigate()
@@ -364,6 +383,11 @@ export function BidWizardPage() {
   const step = Number(searchParams.get('step') || '1')
   const current = Math.min(Math.max(step, 1), 7) - 1
   const steps = ['项目信息', 'AI解析', '目录大纲', '知识库配置', '逐章生成', '标书编辑器', '导出提交']
+  const [tenderFile, setTenderFile] = useState<File | null>(null)
+  const [parseDraftText, setParseDraftText] = useState('')
+  const [outlineDrafts, setOutlineDrafts] = useState<Record<string, OutlineDraftChapter[]>>({})
+  const [materialDraft, setMaterialDraft] = useState<unknown[]>([])
+  const [materialNotes, setMaterialNotes] = useState('')
   const bid = useQuery({
     queryKey: ['bid', bidId],
     queryFn: () => fetchBid(bidId),
@@ -374,6 +398,45 @@ export function BidWizardPage() {
     queryFn: () => fetchBidParts(bidId),
     enabled: Boolean(bidId),
   })
+  const chapters = useQuery({
+    queryKey: ['bid-chapters', bidId],
+    queryFn: () => fetchBidChapters(bidId),
+    enabled: Boolean(bidId),
+  })
+  const parseResult = useQuery({
+    queryKey: ['bid-parse-result', bidId],
+    queryFn: () => fetchBidParseResult(bidId),
+    enabled: Boolean(bidId),
+  })
+  const materialSelection = useQuery({
+    queryKey: ['bid-material-selection', bidId],
+    queryFn: () => fetchBidMaterialSelection(bidId),
+    enabled: Boolean(bidId),
+  })
+  useEffect(() => {
+    if (!parseResult.data) return
+    setParseDraftText(JSON.stringify(parseResult.data.structured_result ?? {}, null, 2))
+  }, [parseResult.data?.updated_at])
+  useEffect(() => {
+    if (!parts.data || !chapters.data) return
+    const next: Record<string, OutlineDraftChapter[]> = {}
+    for (const part of parts.data) {
+      next[part.id] = chapters.data
+        .filter((chapter) => chapter.bid_part_id === part.id)
+        .map((chapter) => ({
+          id: chapter.id,
+          title: chapter.title,
+          plain_text: chapter.plain_text,
+          sort_order: chapter.sort_order,
+        }))
+    }
+    setOutlineDrafts(next)
+  }, [parts.data, chapters.data])
+  useEffect(() => {
+    if (!materialSelection.data) return
+    setMaterialDraft(materialSelection.data.selected_refs ?? [])
+    setMaterialNotes(materialSelection.data.notes ?? '')
+  }, [materialSelection.data?.updated_at])
   const exportsQuery = useQuery({
     queryKey: ['bid-exports', bidId],
     queryFn: () => fetchBidExports(bidId),
@@ -382,6 +445,88 @@ export function BidWizardPage() {
       const items = query.state.data ?? []
       return items.some((item) => item.status === 'queued' || item.status === 'running') ? 2000 : false
     },
+  })
+  const uploadTenderMutation = useMutation({
+    mutationFn: async () => {
+      if (!tenderFile) {
+        throw new Error('请选择招标文件')
+      }
+      const upload = await createPresignedUpload({
+        filename: tenderFile.name,
+        content_type: tenderFile.type || 'application/octet-stream',
+        size_bytes: tenderFile.size,
+        biz_type: 'bid_tender',
+        biz_id: bidId,
+      })
+      await uploadToPresignedUrl(upload, tenderFile)
+      const confirmed = await confirmFileUpload(upload.file.id)
+      return uploadBidTenderFile(bidId, { file_id: confirmed.file.id })
+    },
+    onSuccess: async () => {
+      message.success('招标文件已上传')
+      setTenderFile(null)
+      await queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] })
+    },
+    onError: () => message.error('上传招标文件失败'),
+  })
+  const parseTenderMutation = useMutation({
+    mutationFn: () => parseBidTender(bidId),
+    onSuccess: async () => {
+      message.success('解析任务已完成')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
+      ])
+    },
+    onError: () => message.error('解析招标文件失败'),
+  })
+  const confirmParseMutation = useMutation({
+    mutationFn: () => {
+      const structured = parseDraftText.trim() ? (JSON.parse(parseDraftText) as Record<string, unknown>) : undefined
+      return confirmBidParseResult(bidId, { structured_result: structured })
+    },
+    onSuccess: async () => {
+      message.success('解析结果已确认')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
+      ])
+    },
+    onError: () => message.error('确认解析结果失败，请检查 JSON 格式'),
+  })
+  const generateOutlineMutation = useMutation({
+    mutationFn: () => generateBidOutline(bidId),
+    onSuccess: async () => {
+      message.success('目录大纲已生成')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['bid-parts', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
+      ])
+    },
+    onError: () => message.error('生成目录大纲失败'),
+  })
+  const saveOutlineMutation = useMutation({
+    mutationFn: (partId: string) =>
+      updateBidPartOutline(bidId, partId, {
+        chapters: outlineDrafts[partId] ?? [],
+      }),
+    onSuccess: async () => {
+      message.success('目录已保存')
+      await queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
+    },
+    onError: () => message.error('保存目录失败'),
+  })
+  const saveMaterialMutation = useMutation({
+    mutationFn: () =>
+      updateBidMaterialSelection(bidId, {
+        selected_refs: materialDraft,
+        notes: materialNotes,
+      }),
+    onSuccess: async () => {
+      message.success('素材选择已保存')
+      await queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] })
+    },
+    onError: () => message.error('保存素材选择失败'),
   })
   const exportMutation = useMutation({
     mutationFn: (payload: { export_type: 'docx' | 'pdf' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
@@ -403,6 +548,35 @@ export function BidWizardPage() {
     onError: () => message.error('获取下载链接失败'),
   })
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
+  const primaryPartCode = exportableParts[0]?.code
+  const parseRows = structuredResultRows(parseResult.data?.structured_result)
+  const setOutlineDraft = (partId: string, rowIndex: number, patch: Partial<OutlineDraftChapter>) => {
+    setOutlineDrafts((current) => ({
+      ...current,
+      [partId]: (current[partId] ?? []).map((item, index) => (index === rowIndex ? { ...item, ...patch } : item)),
+    }))
+  }
+  const addOutlineDraft = (partId: string) => {
+    setOutlineDrafts((current) => {
+      const rows = current[partId] ?? []
+      return {
+        ...current,
+        [partId]: [
+          ...rows,
+          {
+            title: '新增章节',
+            plain_text: '请补充新增章节内容。',
+            sort_order: (rows.length + 1) * 10,
+          },
+        ],
+      }
+    })
+  }
+  const toggleMaterialRef = (index: number, selected: boolean) => {
+    setMaterialDraft((current) =>
+      current.map((item, itemIndex) => (itemIndex === index ? { ...materialRefRecord(item), selected } : item)),
+    )
+  }
 
   return (
     <PageFrame
@@ -418,33 +592,214 @@ export function BidWizardPage() {
           onChange={(next) => setSearchParams({ step: String(next + 1) })}
         />
         <Card title={steps[current]}>
-          {current === 0 ? <Button icon={<UploadOutlined />}>上传招标文件</Button> : null}
+          {current === 0 ? (
+            <Space direction="vertical" size={16} className="full-width">
+              <Space wrap>
+                <Upload
+                  accept=".pdf,.doc,.docx,.txt"
+                  maxCount={1}
+                  beforeUpload={(file) => {
+                    setTenderFile(file)
+                    return false
+                  }}
+                  onRemove={() => {
+                    setTenderFile(null)
+                  }}
+                >
+                  <Button icon={<UploadOutlined />}>选择招标文件</Button>
+                </Upload>
+                <Button
+                  type="primary"
+                  icon={<UploadOutlined />}
+                  disabled={!tenderFile}
+                  loading={uploadTenderMutation.isPending}
+                  onClick={() => uploadTenderMutation.mutate()}
+                >
+                  上传并绑定
+                </Button>
+                <Tag color={parseResult.data?.file_asset_id ? 'green' : 'default'}>
+                  {parseResult.data?.file_asset_id ? '已绑定' : '未绑定'}
+                </Tag>
+              </Space>
+              <Typography.Text type="secondary">
+                {tenderFile ? `${tenderFile.name} · ${Math.ceil(tenderFile.size / 1024)} KB` : '支持 PDF、Word 或文本文件'}
+              </Typography.Text>
+            </Space>
+          ) : null}
           {current === 1 ? (
-            <Table
-              pagination={false}
-              rowKey="name"
-              dataSource={[
-                { name: '项目名称', value: '智慧交通综合治理平台建设' },
-                { name: '废标条款', value: '签章、有效期、报价一致性' },
-                { name: '评分重点', value: '实施方案、数据安全、运维能力' },
-              ]}
-              columns={[
-                { title: '字段', dataIndex: 'name' },
-                { title: '解析结果', dataIndex: 'value' },
-              ]}
-            />
+            <Space direction="vertical" size={16} className="full-width">
+              <Space wrap>
+                <Button
+                  type="primary"
+                  icon={<SyncOutlined />}
+                  loading={parseTenderMutation.isPending}
+                  onClick={() => parseTenderMutation.mutate()}
+                >
+                  触发解析
+                </Button>
+                <Button
+                  icon={<CheckOutlined />}
+                  loading={confirmParseMutation.isPending}
+                  disabled={!parseResult.data}
+                  onClick={() => confirmParseMutation.mutate()}
+                >
+                  确认解析结果
+                </Button>
+                <Tag color={parseResult.data?.status === 'confirmed' ? 'green' : parseResult.data?.status === 'ready' ? 'blue' : 'default'}>
+                  {parseResult.data?.status ?? 'queued'}
+                </Tag>
+              </Space>
+              <Table
+                size="small"
+                pagination={false}
+                rowKey="name"
+                dataSource={parseRows}
+                columns={[
+                  { title: '字段', dataIndex: 'name', width: 180 },
+                  { title: '解析结果', dataIndex: 'value' },
+                ]}
+              />
+              <Input.TextArea
+                rows={10}
+                value={parseDraftText}
+                onChange={(event) => setParseDraftText(event.target.value)}
+              />
+            </Space>
+          ) : null}
+          {current === 2 ? (
+            <Space direction="vertical" size={16} className="full-width">
+              <Space wrap>
+                <Button
+                  type="primary"
+                  icon={<SyncOutlined />}
+                  loading={generateOutlineMutation.isPending}
+                  onClick={() => generateOutlineMutation.mutate()}
+                >
+                  生成目录大纲
+                </Button>
+                <Typography.Text type="secondary">目录保存后会同步到标书编辑器章节树</Typography.Text>
+              </Space>
+              <Tabs
+                items={(parts.data ?? []).map((part) => ({
+                  key: part.id,
+                  label: part.title,
+                  children: (
+                    <Space direction="vertical" size={12} className="full-width">
+                      <Space wrap>
+                        <Button icon={<PlusOutlined />} onClick={() => addOutlineDraft(part.id)}>
+                          新增章节
+                        </Button>
+                        <Button
+                          type="primary"
+                          icon={<SaveOutlined />}
+                          loading={saveOutlineMutation.isPending && saveOutlineMutation.variables === part.id}
+                          onClick={() => saveOutlineMutation.mutate(part.id)}
+                        >
+                          保存目录
+                        </Button>
+                      </Space>
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(row) => row.id ?? `${part.id}-${row.sort_order}-${row.title}`}
+                        dataSource={outlineDrafts[part.id] ?? []}
+                        columns={[
+                          {
+                            title: '排序',
+                            dataIndex: 'sort_order',
+                            width: 96,
+                            render: (value: number, _row: OutlineDraftChapter, index: number) => (
+                              <Input
+                                value={value}
+                                onChange={(event) =>
+                                  setOutlineDraft(part.id, index, { sort_order: Number(event.target.value) || (index + 1) * 10 })
+                                }
+                              />
+                            ),
+                          },
+                          {
+                            title: '章节标题',
+                            dataIndex: 'title',
+                            width: 240,
+                            render: (value: string, _row: OutlineDraftChapter, index: number) => (
+                              <Input value={value} onChange={(event) => setOutlineDraft(part.id, index, { title: event.target.value })} />
+                            ),
+                          },
+                          {
+                            title: '生成提示',
+                            dataIndex: 'plain_text',
+                            render: (value: string, _row: OutlineDraftChapter, index: number) => (
+                              <Input.TextArea
+                                rows={2}
+                                value={value}
+                                onChange={(event) => setOutlineDraft(part.id, index, { plain_text: event.target.value })}
+                              />
+                            ),
+                          },
+                        ]}
+                      />
+                    </Space>
+                  ),
+                }))}
+              />
+            </Space>
+          ) : null}
+          {current === 3 ? (
+            <Space direction="vertical" size={16} className="full-width">
+              <Table
+                size="small"
+                pagination={false}
+                rowKey={(_row, index) => `material-${index}`}
+                dataSource={materialDraft}
+                columns={[
+                  {
+                    title: '选择',
+                    width: 80,
+                    render: (_value, row: unknown, index: number) => (
+                      <input
+                        type="checkbox"
+                        checked={materialRefSelected(row)}
+                        onChange={(event) => toggleMaterialRef(index, event.target.checked)}
+                      />
+                    ),
+                  },
+                  { title: '素材', render: (_value, row: unknown) => materialRefTitle(row) },
+                  { title: '原因', render: (_value, row: unknown) => materialRefReason(row) },
+                ]}
+              />
+              <Input.TextArea
+                rows={4}
+                value={materialNotes}
+                placeholder="素材筛选备注"
+                onChange={(event) => setMaterialNotes(event.target.value)}
+              />
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={saveMaterialMutation.isPending}
+                onClick={() => saveMaterialMutation.mutate()}
+              >
+                保存素材选择
+              </Button>
+            </Space>
           ) : null}
           {current === 4 ? (
             <Tabs
-              items={[
-                { key: 'tech', label: '技术标', children: <Progress percent={66} /> },
-                { key: 'business', label: '商务标', children: <Progress percent={42} /> },
-              ]}
+              items={exportableParts.map((part) => {
+                const partChapters = (chapters.data ?? []).filter((chapter) => chapter.bid_part_id === part.id)
+                const readyCount = partChapters.filter((chapter) => ['generated', 'accepted', 'edited'].includes(chapter.status)).length
+                const percent = partChapters.length ? Math.round((readyCount / partChapters.length) * 100) : 0
+                return {
+                  key: part.id,
+                  label: part.title,
+                  children: <Progress percent={percent} />,
+                }
+              })}
             />
           ) : null}
           {current === 5 ? (
             <Button type="primary">
-              <Link to="/bids/bid-demo/editor?part=tech">进入编辑器</Link>
+              <Link to={`/bids/${bidId}/editor${primaryPartCode ? `?part=${primaryPartCode}` : ''}`}>进入编辑器</Link>
             </Button>
           ) : null}
           {current === 6 ? (
@@ -542,6 +897,48 @@ function exportTypeLabel(row: BidExportDTO, partCode: string) {
 function exportStatusTag(value: BidExportDTO['status']) {
   const color = value === 'done' ? 'green' : value === 'failed' ? 'red' : 'blue'
   return <Tag color={color}>{value}</Tag>
+}
+
+function structuredResultRows(result: Record<string, unknown> | undefined) {
+  const rows = [
+    { name: '项目名称', value: formatStructuredValue(result?.project_name) },
+    { name: '投标截止', value: formatStructuredValue(result?.deadline) },
+    { name: '资格要求', value: formatStructuredValue(result?.qualification_requirements) },
+    { name: '废标风险', value: formatStructuredValue(result?.invalid_clause_risks) },
+    { name: '评分重点', value: formatStructuredValue(result?.scoring_points) },
+  ]
+  return rows.filter((row) => row.value)
+}
+
+function formatStructuredValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item)).join('、')
+  }
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+  return value ? String(value) : ''
+}
+
+function materialRefRecord(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return { title: formatStructuredValue(value), selected: true }
+}
+
+function materialRefTitle(value: unknown) {
+  const record = materialRefRecord(value)
+  return String(record.title ?? record.name ?? record.ref_type ?? '素材')
+}
+
+function materialRefReason(value: unknown) {
+  const record = materialRefRecord(value)
+  return String(record.reason ?? record.description ?? '')
+}
+
+function materialRefSelected(value: unknown) {
+  return materialRefRecord(value).selected !== false
 }
 
 export function BidEditorPage() {

@@ -28,9 +28,11 @@ projects、project_milestones、project_members、project_logs。
 
 ## 标书
 
-bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation_jobs、bid_generation_steps、bid_exports、bid_templates。
+bid_documents、bid_tender_files、bid_parse_results、bid_parts、bid_chapters、bid_chapter_versions、bid_generation_jobs、bid_generation_steps、bid_material_selections、bid_exports、bid_templates。
 
 标书类型：combined、separated、custom。bid_parts 支持 combined_body、tech、business、boq、attachment。
+
+`bid_tender_files` 关联已确认的 `file_assets`，记录某份标书当前使用的招标文件并支持 superseded 状态。`bid_parse_results` 保存招标文件结构化解析结果、解析状态、确认人和确认时间，当前用于资格要求、废标风险、评分点、目录建议和素材建议。`bid_material_selections` 保存用户确认后的素材勾选结果和备注，供后续逐章生成检索知识库时读取。
 
 `bid_exports` 关联 `file_assets` 保存导出产物，export_type 支持 docx / pdf / zip，status 为 queued / running / done / failed / cancelled。当前实现支持 docx、LibreOffice 转 PDF 和 ZIP 打包，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
 

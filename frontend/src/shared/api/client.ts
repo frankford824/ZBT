@@ -618,6 +618,62 @@ export type ChapterRegenerateDTO = {
   task: AITaskDTO
 }
 
+export type BidParseResultDTO = {
+  id: string
+  bid_document_id: string
+  file_asset_id: string | null
+  status: 'queued' | 'processing' | 'ready' | 'confirmed' | 'failed'
+  structured_result: Record<string, unknown>
+  error_message: string | null
+  confirmed_by: string | null
+  confirmed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type BidTenderFileDTO = {
+  id: string
+  bid_document_id: string
+  file_asset_id: string
+  filename: string
+  content_type: string
+  size_bytes: number
+  status: 'active' | 'superseded' | 'deleted'
+  created_at: string
+  updated_at: string
+}
+
+export type UploadBidTenderFileDTO = {
+  file: BidTenderFileDTO
+  parse_result: BidParseResultDTO
+}
+
+export type ParseBidTenderDTO = {
+  task: AITaskDTO
+  parse_result: BidParseResultDTO
+}
+
+export type BidPartOutlineDTO = {
+  part: BidPartDTO
+  chapters: BidChapterDTO[]
+}
+
+export type GenerateBidOutlineDTO = {
+  task: AITaskDTO
+  parts: BidPartDTO[]
+  chapters: BidChapterDTO[]
+}
+
+export type BidMaterialSelectionDTO = {
+  id: string
+  bid_document_id: string
+  selected_refs: unknown[]
+  notes: string
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -1103,8 +1159,11 @@ export async function uploadToPresignedUrl(
 }
 
 export async function confirmFileUpload(fileId: string): Promise<ConfirmUploadDTO> {
-  const { data } = await apiClient.post<ConfirmUploadDTO>(`/files/${fileId}/confirm`)
-  return data
+  const { data } = await apiClient.post<ConfirmUploadDTO | FileAssetDTO>(`/files/${fileId}/confirm`)
+  if ('file' in data) {
+    return data
+  }
+  return { file: data }
 }
 
 export async function processKnowledgeDocument(documentId: string): Promise<AITaskDTO> {
@@ -1200,6 +1259,67 @@ export async function fetchBidParts(bidId: string): Promise<BidPartDTO[]> {
 export async function fetchBidChapters(bidId: string): Promise<BidChapterDTO[]> {
   const { data } = await apiClient.get<{ items: BidChapterDTO[] }>(`/bids/${bidId}/chapters`)
   return data.items
+}
+
+export async function uploadBidTenderFile(
+  bidId: string,
+  payload: { file_id: string },
+): Promise<UploadBidTenderFileDTO> {
+  const { data } = await apiClient.post<UploadBidTenderFileDTO>(`/bids/${bidId}/upload-tender-file`, payload)
+  return data
+}
+
+export async function parseBidTender(bidId: string): Promise<ParseBidTenderDTO> {
+  const { data } = await apiClient.post<ParseBidTenderDTO>(`/bids/${bidId}/parse-tender`)
+  return data
+}
+
+export async function fetchBidParseResult(bidId: string): Promise<BidParseResultDTO> {
+  const { data } = await apiClient.get<BidParseResultDTO>(`/bids/${bidId}/parse-result`)
+  return data
+}
+
+export async function confirmBidParseResult(
+  bidId: string,
+  payload: { structured_result?: Record<string, unknown> },
+): Promise<BidParseResultDTO> {
+  const { data } = await apiClient.put<BidParseResultDTO>(`/bids/${bidId}/parse-result`, payload)
+  return data
+}
+
+export async function generateBidOutline(bidId: string): Promise<GenerateBidOutlineDTO> {
+  const { data } = await apiClient.post<GenerateBidOutlineDTO>(`/bids/${bidId}/outline/generate`)
+  return data
+}
+
+export async function fetchBidPartOutline(
+  bidId: string,
+  partId: string,
+): Promise<BidPartOutlineDTO> {
+  const { data } = await apiClient.get<BidPartOutlineDTO>(`/bids/${bidId}/parts/${partId}/outline`)
+  return data
+}
+
+export async function updateBidPartOutline(
+  bidId: string,
+  partId: string,
+  payload: { chapters: Array<{ id?: string; title: string; plain_text?: string; sort_order?: number }> },
+): Promise<BidPartOutlineDTO> {
+  const { data } = await apiClient.put<BidPartOutlineDTO>(`/bids/${bidId}/parts/${partId}/outline`, payload)
+  return data
+}
+
+export async function fetchBidMaterialSelection(bidId: string): Promise<BidMaterialSelectionDTO> {
+  const { data } = await apiClient.get<BidMaterialSelectionDTO>(`/bids/${bidId}/material-selection`)
+  return data
+}
+
+export async function updateBidMaterialSelection(
+  bidId: string,
+  payload: { selected_refs: unknown[]; notes?: string },
+): Promise<BidMaterialSelectionDTO> {
+  const { data } = await apiClient.put<BidMaterialSelectionDTO>(`/bids/${bidId}/material-selection`, payload)
+  return data
 }
 
 export async function updateChapterContent(

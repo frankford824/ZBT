@@ -395,7 +395,16 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/bids", rbac.Require("bid", rbac.LevelRead), s.listBids)
 	group.POST("/bids", rbac.Require("bid", rbac.LevelFull), s.createBid)
 	group.GET("/bids/:id", rbac.Require("bid", rbac.LevelRead), s.getBid)
+	group.POST("/bids/:id/upload-tender-file", rbac.Require("bid", rbac.LevelFull), s.uploadBidTenderFile)
+	group.POST("/bids/:id/parse-tender", rbac.Require("bid", rbac.LevelFull), s.parseBidTender)
+	group.GET("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelRead), s.getBidParseResult)
+	group.PUT("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelFull), s.confirmBidParseResult)
+	group.POST("/bids/:id/outline/generate", rbac.Require("bid", rbac.LevelFull), s.generateBidOutline)
 	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
+	group.GET("/bids/:id/parts/:partId/outline", rbac.Require("bid", rbac.LevelRead), s.getBidPartOutline)
+	group.PUT("/bids/:id/parts/:partId/outline", rbac.Require("bid", rbac.LevelFull), s.updateBidPartOutline)
+	group.GET("/bids/:id/material-selection", rbac.Require("bid", rbac.LevelRead), s.getBidMaterialSelection)
+	group.PUT("/bids/:id/material-selection", rbac.Require("bid", rbac.LevelFull), s.updateBidMaterialSelection)
 	group.GET("/bids/:id/generation/stream", rbac.Require("bid", rbac.LevelRead), s.streamBidGeneration)
 	group.GET("/bids/:id/chapters", rbac.Require("bid", rbac.LevelRead), s.listBidChapters)
 	group.PATCH("/chapters/:chapterId", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
@@ -516,7 +525,16 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /bids":                                    true,
 		"POST /bids":                                   true,
 		"GET /bids/:id":                                true,
+		"POST /bids/:id/upload-tender-file":            true,
+		"POST /bids/:id/parse-tender":                  true,
+		"GET /bids/:id/parse-result":                   true,
+		"PUT /bids/:id/parse-result":                   true,
+		"POST /bids/:id/outline/generate":              true,
 		"GET /bids/:id/parts":                          true,
+		"GET /bids/:id/parts/:partId/outline":          true,
+		"PUT /bids/:id/parts/:partId/outline":          true,
+		"GET /bids/:id/material-selection":             true,
+		"PUT /bids/:id/material-selection":             true,
 		"GET /bids/:id/generation/stream":              true,
 		"GET /bids/:id/chapters":                       true,
 		"PATCH /chapters/:chapterId":                   true,
@@ -1328,9 +1346,84 @@ func (s *server) getBid(c *gin.Context) {
 	respond(c, result, err)
 }
 
+func (s *server) uploadBidTenderFile(c *gin.Context) {
+	var req bid.UploadTenderFileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.UploadTenderFile(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) parseBidTender(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.ParseTender(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
+func (s *server) getBidParseResult(c *gin.Context) {
+	result, err := s.bidStore.GetParseResult(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) confirmBidParseResult(c *gin.Context) {
+	var req bid.ConfirmParseResultRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.ConfirmParseResult(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
+}
+
+func (s *server) generateBidOutline(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.GenerateOutline(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
+	respondStatus(c, http.StatusAccepted, result, err)
+}
+
 func (s *server) listBidParts(c *gin.Context) {
 	result, err := s.bidStore.ListParts(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) getBidPartOutline(c *gin.Context) {
+	result, err := s.bidStore.GetPartOutline(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), c.Param("partId"))
+	respond(c, result, err)
+}
+
+func (s *server) updateBidPartOutline(c *gin.Context) {
+	var req bid.UpdatePartOutlineRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.UpdatePartOutline(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), c.Param("partId"), req)
+	respond(c, result, err)
+}
+
+func (s *server) getBidMaterialSelection(c *gin.Context) {
+	result, err := s.bidStore.GetMaterialSelection(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
+}
+
+func (s *server) updateBidMaterialSelection(c *gin.Context) {
+	var req bid.UpdateMaterialSelectionRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.bidStore.UpdateMaterialSelection(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
+	respond(c, result, err)
 }
 
 func (s *server) listBidChapters(c *gin.Context) {

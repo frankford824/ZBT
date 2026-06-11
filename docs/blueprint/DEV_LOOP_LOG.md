@@ -1367,3 +1367,60 @@ curl -X GET /api/v1/bid-exports/:exportId ...
 
 1. PDF 当前以最小 docx 中间文件转换生成，封面、目录、页眉页脚、水印和模板版式保真仍待增强。
 2. ZIP 当前仍打包 docx 文件，尚未包含 PDF 副本、附件、工程量清单、电子标特殊格式或导出清单 manifest。
+
+## Loop-15 / 招标文件解析与目录大纲闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 最终验收中“可上传招标文件、可触发解析任务、可人工确认解析结果、可生成目录大纲、可编辑目录”的主链路。
+2. 保持文件私有存储、租户 RLS、AI task 编排和现有标书章节模型一致。
+3. 前端 7 步向导第 1-4 步从静态占位切换为真实接口。
+
+### 代码交付
+
+1. 新增 `bid_tender_files`、`bid_parse_results`、`bid_material_selections` RLS 表。
+2. Go API 新增真实 `POST /bids/:id/upload-tender-file`、`POST /bids/:id/parse-tender`、`GET/PUT /bids/:id/parse-result`、`POST /bids/:id/outline/generate`、`GET/PUT /bids/:id/parts/:partId/outline`、`GET/PUT /bids/:id/material-selection`。
+3. 解析和目录生成当前使用确定性 bootstrap 结果，同时写入 done 状态 `ai_tasks`，接口仍返回 202 以保持后续异步 AI/OCR 契约。
+4. 前端向导支持选择文件、预签名上传、绑定标书、触发解析、编辑 JSON 解析结果、确认解析、生成目录、编辑/新增章节和保存素材选择。
+5. API 与数据库蓝图同步更新新增接口和表。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+git diff --check
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X POST /api/v1/files/presign-upload ...
+curl -X POST /api/v1/bids/:id/upload-tender-file ...
+curl -X POST /api/v1/bids/:id/parse-tender ...
+curl -X PUT /api/v1/bids/:id/parse-result ...
+curl -X POST /api/v1/bids/:id/outline/generate ...
+curl -X PUT /api/v1/bids/:id/parts/:partId/outline ...
+curl -X PUT /api/v1/bids/:id/material-selection ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `python3 -m compileall app` 通过。
+4. `git diff --check` 通过。
+5. Docker backend/frontend/ai-service 构建成功，并启动成功；前端 client 归一化修正后已单独重建并重启 frontend 容器。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时新建 bid `62596c59-a084-4a8f-b758-1da522c201ac`，上传并确认招标文件 `3583c823-0007-460f-891c-88aadb2ab740`，`POST /bids/:id/upload-tender-file` 返回 parse_result.status=`queued`。
+8. 运行时 `POST /bids/:id/parse-tender` 返回 task.status=`done`；`GET /parse-result` 返回 status=`ready`；`PUT /parse-result` 后 status=`confirmed`。
+9. 运行时 `POST /outline/generate` 生成 2 个 part；`PUT /parts/:partId/outline` 新增“运行时验证章节”后该 part 章节数为 4。
+10. 运行时 `GET/PUT /material-selection` 成功保存 notes=`runtime material verification`。
+11. tenant2/other 访问 tenant1 新建 bid 的 parse-result 返回 404。
+12. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询新 bid：`bid_parse_results=1`、`bid_tender_files=1`、`bid_material_selections=1`；tenant2 RLS 上下文三项均为 0。
+
+### 偏离蓝图
+
+1. 招标文件解析和目录生成当前为 Go 侧确定性 bootstrap，实现了接口契约、任务记录和人工确认闭环；尚未接入真实 OCR/LLM 解析 worker。
+2. 素材选择当前保存用户确认结果和备注，后续逐章生成仍需将该选择纳入知识库检索过滤与提示词上下文。
