@@ -31,9 +31,12 @@ curl http://localhost:8000/models/health
 curl http://localhost:5173/api/v1/meta/routes
 docker compose exec -T ai-service python -m pytest app/tests
 ./infra/scripts/check.sh
+python3 infra/scripts/acceptance_tail_check.py
 ```
 
-`./infra/scripts/check.sh` 会执行前端生产构建、Go 测试、AI `compileall`、可用时的 Python pytest、`docker compose config`，并在 `ai-service` 容器运行时追加容器内 pytest。
+`./infra/scripts/check.sh` 会执行验收脚本语法检查、前端生产构建、Go 测试、AI `compileall`、可用时的 Python pytest、`docker compose config`，并在 `ai-service` 容器运行时追加容器内 pytest。
+
+`python3 infra/scripts/acceptance_tail_check.py` 需要在本地 Docker 服务启动后运行，会通过真实 API 创建验收数据，覆盖 `x.md` 第 39-50 项：审批提交/通过/驳回、驳回回到 editing、成本项目和成本项、成本分析、中标案例回流知识库、AI 调用日志、模型路由、MockProvider、README 和开发日志。
 
 ## 默认账号
 

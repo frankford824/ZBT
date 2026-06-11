@@ -1954,3 +1954,45 @@ docker compose exec -T postgres psql -U zbt_app -d zbt ...
 ### 偏离蓝图
 
 1. 目前定位到章节级，尚未在 Tiptap 文档内部滚动到具体段落或高亮 rule anchor；后续可把 `anchor` 接入编辑器内文档节点定位。
+
+## Loop-26 / x.md 尾部验收脚本 - 2026-06-11
+
+### 本轮目标
+
+1. 为 x.md 第 39-50 项补充可重复运行的验收入口，避免只靠历史日志证明尾部闭环。
+2. 脚本必须走真实 HTTP API，覆盖审批、成本、中标案例、知识库搜索、AI 日志、模型路由和文档记录。
+3. 常规检查脚本只做语法检查，避免无意中在每次 `check.sh` 写入运行时验收数据。
+
+### 代码交付
+
+1. 新增 `infra/scripts/acceptance_tail_check.py`，使用 Python 标准库登录本地 API，创建独立验收数据并检查 x.md 39-50。
+2. 验收脚本覆盖：提交审批、审批通过、审批驳回、驳回后标书回到 `editing`、中标项目创建成本项目、录入成本项、成本分析预算/实际/利润率、中标案例回流知识库、知识库搜索触发 `ai_call_logs`、AI `/models/health` MockProvider、`model_routing.yaml` 路由、README 和 DEV_LOOP_LOG。
+3. `infra/scripts/check.sh` 新增 `python3 -m py_compile infra/scripts/acceptance_tail_check.py`，确保常规检查能发现脚本语法错误。
+4. README 新增尾部验收脚本命令和运行条件说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/acceptance_tail_check.py
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 验收脚本登录 `admin@zbt.local` 成功。
+2. 第 39 项通过：创建标书 `c1b5c214-8a2d-43e2-968a-93eb46497048` 并提交审批，审批实例 `20d36415-cd35-4d0d-a897-b8e5736aa35e`，标书进入 `in_review`。
+3. 第 40 项审批通过路径通过：标书 `385d010c-5716-4ff1-bf49-6bc1820d7661`，审批实例 `a16e2072-862d-42ba-b533-fb06b9a7dd7c`，最终 `approved`。
+4. 第 40-41 项驳回路径通过：标书 `8eab5180-522a-467a-9df7-29d79988a722`，审批实例 `28c5b411-90b5-42e3-b21e-0d62e5b78e56`，审批 `rejected` 后标书回到 `editing`。
+5. 第 42 项通过：中标项目 `97dc90e5-26ab-46f0-8eb5-b83c911878fb` 创建成本项目 `3e896284-c1ae-452e-b03d-c31651263fa5`。
+6. 第 43-44 项通过：成本项 `d0b208ca-7fe7-4b2d-9020-73528596bdb3` 写入后，分析返回 total_budget=10000、total_actual=8500、margin_rate=15。
+7. 第 45 项通过：中标案例回流知识库 document `30b71ebb-9fd2-49b7-9304-06687e1f0415`、chunk `8e2bc839-e385-482d-afed-0c2e55598b34`、file `dc5f5ae7-e355-488d-9f13-678fb04a285c`。
+8. 第 46 项通过：知识库搜索召回该中标案例，并产生 1 条新的 `knowledge_embedding` AI 调用日志。
+9. 第 47-48 项通过：AI `/models/health` 返回 `{"mock": true}`，本地 `model_routing.yaml` 包含 knowledge_embedding、knowledge_rerank、chapter_generate、cost_advice、document_export 等路由。
+10. 第 49-50 项通过：README 包含启动、检查、模型路由、MockProvider 和默认账号说明；DEV_LOOP_LOG 包含最新 Loop 记录和检查结果段落。
+11. `./infra/scripts/check.sh` 通过，包含新增验收脚本语法检查、前端构建、Go 测试、AI compileall 和运行中 ai-service 容器内 pytest。
+
+### 偏离蓝图
+
+1. 该脚本是尾部验收脚本，当前只覆盖 x.md 第 39-50 项；完整 1-50 一键黄金链路仍可继续沉淀为独立验收脚本。
