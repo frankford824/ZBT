@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -317,6 +318,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/bids", rbac.Require("bid", rbac.LevelFull), s.createBid)
 	group.GET("/bids/:id", rbac.Require("bid", rbac.LevelRead), s.getBid)
 	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
+	group.GET("/bids/:id/generation/stream", rbac.Require("bid", rbac.LevelRead), s.streamBidGeneration)
 	group.GET("/bids/:id/chapters", rbac.Require("bid", rbac.LevelRead), s.listBidChapters)
 	group.PATCH("/chapters/:chapterId", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
 	group.POST("/chapters/:chapterId/accept", rbac.Require("bid", rbac.LevelFull), s.acceptChapter)
@@ -369,6 +371,7 @@ func registerStubs(group *gin.RouterGroup) {
 		"POST /bids":                              true,
 		"GET /bids/:id":                           true,
 		"GET /bids/:id/parts":                     true,
+		"GET /bids/:id/generation/stream":         true,
 		"GET /bids/:id/chapters":                  true,
 		"PATCH /chapters/:chapterId":              true,
 		"POST /chapters/:chapterId/accept":        true,
@@ -692,6 +695,63 @@ func (s *server) listBidChapters(c *gin.Context) {
 	respond(c, gin.H{"items": result}, err)
 }
 
+func (s *server) streamBidGeneration(c *gin.Context) {
+	tenantID := tenant.FromContext(c.Request.Context())
+	bidID := c.Param("id")
+	snapshot, err := s.bidStore.GenerationSnapshot(c.Request.Context(), tenantID, bidID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	lastFingerprint := generationSnapshotFingerprint(snapshot)
+	if err := writeSSE(c, flusher, "generation", snapshot); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case <-ticker.C:
+			next, err := s.bidStore.GenerationSnapshot(c.Request.Context(), tenantID, bidID)
+			if err != nil {
+				_ = writeSSE(c, flusher, "error", gin.H{"error": err.Error()})
+				return
+			}
+			fingerprint := generationSnapshotFingerprint(next)
+			if fingerprint == lastFingerprint {
+				continue
+			}
+			lastFingerprint = fingerprint
+			if err := writeSSE(c, flusher, "generation", next); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(c.Writer, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *server) updateChapterContent(c *gin.Context) {
 	var req bid.UpdateChapterContentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -861,6 +921,24 @@ func requiredLevel(spec routeSpec) rbac.Level {
 		return rbac.LevelRead
 	}
 	return rbac.LevelFull
+}
+
+func writeSSE(c *gin.Context, flusher http.Flusher, event string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, body); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
+}
+
+func generationSnapshotFingerprint(snapshot bid.GenerationSnapshot) string {
+	snapshot.GeneratedAt = time.Time{}
+	body, _ := json.Marshal(snapshot)
+	return string(body)
 }
 
 func bearerToken(header string) string {

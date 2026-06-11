@@ -139,6 +139,42 @@ export type AITaskDTO = {
   updated_at: string
 }
 
+export type BidGenerationSnapshotDTO = {
+  bid_id: string
+  summary: {
+    total_chapters: number
+    generating_chapters: number
+    generated_chapters: number
+    accepted_chapters: number
+    needs_fix_chapters: number
+    queued_tasks: number
+    running_tasks: number
+    done_tasks: number
+    failed_tasks: number
+  }
+  chapters: Array<{
+    id: string
+    bid_part_id: string
+    title: string
+    status: string
+    sort_order: number
+    source_ref_count: number
+    needs_human_input_count: number
+    updated_at: string
+  }>
+  tasks: Array<{
+    id: string
+    external_task_id: string | null
+    chapter_id: string
+    chapter_title: string
+    status: AITaskDTO['status']
+    error_message: string | null
+    created_at: string
+    updated_at: string
+  }>
+  generated_at: string
+}
+
 export type KnowledgeSourceRefDTO = {
   chunk_id: string
   document_id: string

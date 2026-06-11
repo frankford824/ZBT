@@ -509,3 +509,52 @@ docker compose up -d backend frontend ai-service
 ### 下一轮建议
 
 继续完成章节生成 SSE 进度、真实 RAG 检索输入和 source_ref 解析；随后推进 Loop-6 知识库三子页面、文档预览、embedding MockProvider 与 pgvector 检索。
+
+## Loop-5 章节生成 SSE 进度 - 2026-06-11
+
+### 本轮目标
+
+1. 将 `GET /bids/:id/generation/stream` 从 stub 切到真实 SSE。
+2. SSE 事件输出标书下章节状态、章节生成 task 状态和汇总进度。
+3. 前端编辑器用带鉴权头的 fetch stream 订阅 SSE，并保留轮询兜底。
+
+### 代码交付
+
+1. `platform/bid` 新增 `GenerationSnapshot`，按 bid 聚合 chapters 和 `ai_tasks(resource_type='bid_chapter')`，输出 total/generating/generated/accepted/needs_fix 章节数和 queued/running/done/failed task 数。
+2. 后端新增 `streamBidGeneration`，鉴权和资源存在检查后返回 `text/event-stream`；首次发送 `generation` 事件，后续仅在章节/task 快照变化时推送，空闲时发送 heartbeat。
+3. 前端 `shared/sse/client.ts` 从原生 EventSource 改为 fetch stream，自动携带 JWT `Authorization` 和 `X-Tenant-ID`。
+4. 标书编辑器接入 `/bids/:id/generation/stream`，在右侧 AI 助手显示 SSE 状态、章节进度和当前章节最近 task 状态；收到 generation 事件后刷新 chapters 和 versions。
+5. API 和技术架构文档同步记录认证 SSE 设计。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+./infra/scripts/check.sh
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+```
+
+结果：
+
+1. backend 测试通过。
+2. frontend build 通过。
+3. `./infra/scripts/check.sh` 通过。
+4. Docker 重新构建并启动 backend/frontend 成功；backend `/healthz`、AI `/healthz` 返回 ok。
+5. 运行时 SSE 验证使用 bid `50000000-0000-4000-8000-000000000001`、chapter `52000000-0000-4000-8000-000000000001`。
+6. 打开 `/bids/:id/generation/stream` 后收到初始 `generation` 事件：total_chapters=4、done_tasks=1。
+7. 订阅期间触发 `POST /chapters/:chapterId/regenerate`，随后 stream 收到包含新 task `f4a012b2-18ff-413b-adee-323488abb374` / `task-chapter-3241b47d-e304-4a09-9cea-5589fcf13037` 的 `generation` 事件，task_status=done、done_tasks=2。
+8. SSE 鉴权验证：无 token 返回 401，tenant1 访问 stream 返回 200，tenant2 访问 tenant1 bid stream 返回 404。
+
+### 偏离蓝图
+
+1. 本轮补齐了 Loop-5 的 SSE 进度通道。
+2. SSE 当前推送快照级事件，尚未做 token-by-token 章节文本流式输出。
+3. source_ref 仍主要来自 MockProvider，真实 RAG 检索输入和 source_ref 解析仍待继续。
+
+### 下一轮建议
+
+继续做真实 RAG 检索输入、source_ref 解析到真实 `knowledge_chunks`，或进入 Loop-6 的知识库三子页面、文档预览和 pgvector 语义搜索。

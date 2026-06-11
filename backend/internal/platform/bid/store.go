@@ -125,6 +125,48 @@ type Task struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
+type GenerationSnapshot struct {
+	BidID       string              `json:"bid_id"`
+	Summary     GenerationSummary   `json:"summary"`
+	Chapters    []GenerationChapter `json:"chapters"`
+	Tasks       []GenerationTask    `json:"tasks"`
+	GeneratedAt time.Time           `json:"generated_at"`
+}
+
+type GenerationSummary struct {
+	TotalChapters      int `json:"total_chapters"`
+	GeneratingChapters int `json:"generating_chapters"`
+	GeneratedChapters  int `json:"generated_chapters"`
+	AcceptedChapters   int `json:"accepted_chapters"`
+	NeedsFixChapters   int `json:"needs_fix_chapters"`
+	QueuedTasks        int `json:"queued_tasks"`
+	RunningTasks       int `json:"running_tasks"`
+	DoneTasks          int `json:"done_tasks"`
+	FailedTasks        int `json:"failed_tasks"`
+}
+
+type GenerationChapter struct {
+	ID                   string    `json:"id"`
+	BidPartID            string    `json:"bid_part_id"`
+	Title                string    `json:"title"`
+	Status               string    `json:"status"`
+	SortOrder            int       `json:"sort_order"`
+	SourceRefCount       int       `json:"source_ref_count"`
+	NeedsHumanInputCount int       `json:"needs_human_input_count"`
+	UpdatedAt            time.Time `json:"updated_at"`
+}
+
+type GenerationTask struct {
+	ID             string    `json:"id"`
+	ExternalTaskID *string   `json:"external_task_id"`
+	ChapterID      string    `json:"chapter_id"`
+	ChapterTitle   string    `json:"chapter_title"`
+	Status         string    `json:"status"`
+	ErrorMessage   *string   `json:"error_message"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 type CreateDocumentRequest struct {
 	Title       string `json:"title"`
 	ProjectName string `json:"project_name"`
@@ -348,6 +390,112 @@ func (s *Store) ListChapters(ctx context.Context, tenantID, bidID string) ([]Cha
 		return rows.Err()
 	})
 	return chapters, err
+}
+
+func (s *Store) GenerationSnapshot(ctx context.Context, tenantID, bidID string) (GenerationSnapshot, error) {
+	snapshot := GenerationSnapshot{
+		BidID:       bidID,
+		Chapters:    []GenerationChapter{},
+		Tasks:       []GenerationTask{},
+		GeneratedAt: time.Now().UTC(),
+	}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			select exists(select 1 from bid_documents where tenant_id = $1 and id = $2)
+		`, tenantID, bidID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+
+		rows, err := tx.Query(ctx, `
+			select id::text, bid_part_id::text, title, status, sort_order,
+				jsonb_array_length(coalesce(source_refs, '[]'::jsonb)),
+				jsonb_array_length(coalesce(needs_human_input, '[]'::jsonb)),
+				updated_at
+			from bid_chapters
+			where tenant_id = $1 and bid_document_id = $2
+			order by sort_order, created_at
+		`, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var chapter GenerationChapter
+			if err := rows.Scan(
+				&chapter.ID, &chapter.BidPartID, &chapter.Title, &chapter.Status, &chapter.SortOrder,
+				&chapter.SourceRefCount, &chapter.NeedsHumanInputCount, &chapter.UpdatedAt,
+			); err != nil {
+				return err
+			}
+			snapshot.Chapters = append(snapshot.Chapters, chapter)
+			snapshot.Summary.TotalChapters++
+			switch chapter.Status {
+			case "generating":
+				snapshot.Summary.GeneratingChapters++
+			case "generated":
+				snapshot.Summary.GeneratedChapters++
+			case "accepted":
+				snapshot.Summary.AcceptedChapters++
+			case "needs_fix":
+				snapshot.Summary.NeedsFixChapters++
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		taskRows, err := tx.Query(ctx, `
+			select t.id::text, t.external_task_id::text, t.resource_id::text, c.title,
+				t.status, t.error_message, t.created_at, t.updated_at
+			from ai_tasks t
+			join bid_chapters c on c.tenant_id = t.tenant_id and c.id = t.resource_id
+			where t.tenant_id = $1
+				and c.bid_document_id = $2
+				and t.resource_type = 'bid_chapter'
+			order by t.created_at desc
+			limit 20
+		`, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		defer taskRows.Close()
+		for taskRows.Next() {
+			var task GenerationTask
+			var externalTaskID, errorMessage sql.NullString
+			if err := taskRows.Scan(
+				&task.ID, &externalTaskID, &task.ChapterID, &task.ChapterTitle,
+				&task.Status, &errorMessage, &task.CreatedAt, &task.UpdatedAt,
+			); err != nil {
+				return err
+			}
+			if externalTaskID.Valid {
+				task.ExternalTaskID = &externalTaskID.String
+			}
+			if errorMessage.Valid {
+				task.ErrorMessage = &errorMessage.String
+			}
+			snapshot.Tasks = append(snapshot.Tasks, task)
+			switch task.Status {
+			case "queued":
+				snapshot.Summary.QueuedTasks++
+			case "running":
+				snapshot.Summary.RunningTasks++
+			case "done":
+				snapshot.Summary.DoneTasks++
+			case "failed", "cancelled":
+				snapshot.Summary.FailedTasks++
+			}
+		}
+		return taskRows.Err()
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationSnapshot{}, ErrNotFound
+	}
+	return snapshot, err
 }
 
 func (s *Store) UpdateChapterContent(ctx context.Context, tenantID, userID, chapterID string, req UpdateChapterContentRequest) (ChapterVersion, error) {

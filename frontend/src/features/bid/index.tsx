@@ -52,9 +52,11 @@ import {
   type BidChapterDTO,
   type BidDocumentDTO,
   type BidExportDTO,
+  type BidGenerationSnapshotDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { openSse } from '../../shared/sse/client'
 
 const bidSchema = z.object({
   projectName: z.string().min(1, '项目名称必填'),
@@ -443,6 +445,8 @@ export function BidEditorPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const [regenerateTaskId, setRegenerateTaskId] = useState('')
+  const [generationSnapshot, setGenerationSnapshot] = useState<BidGenerationSnapshotDTO | null>(null)
+  const [generationStreamStatus, setGenerationStreamStatus] = useState<'connecting' | 'open' | 'error'>('connecting')
   const partParam = searchParams.get('part') ?? ''
   const chapterParam = searchParams.get('chapter') ?? ''
   const bid = useQuery({
@@ -479,6 +483,12 @@ export function BidEditorPage() {
     },
   })
   const regenerateTaskStatus = regenerateTask.data?.status
+  const generationSummary = generationSnapshot?.summary
+  const completedChapterCount = (generationSummary?.generated_chapters ?? 0) + (generationSummary?.accepted_chapters ?? 0)
+  const generationPercent = generationSummary?.total_chapters
+    ? Math.round((completedChapterCount / generationSummary.total_chapters) * 100)
+    : 0
+  const latestChapterTask = generationSnapshot?.tasks.find((task) => task.chapter_id === currentChapter?.id)
   const editor = useEditor({
     extensions: [StarterKit],
     content: '<p>请选择章节</p>',
@@ -501,6 +511,22 @@ export function BidEditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
     }
   }, [regenerateTaskId, regenerateTaskStatus, message, queryClient, bidId, currentChapter?.id])
+  useEffect(() => {
+    if (!bidId) return
+    setGenerationStreamStatus('connecting')
+    return openSse<BidGenerationSnapshotDTO>(`/bids/${bidId}/generation/stream`, {
+      onOpen: () => setGenerationStreamStatus('open'),
+      onMessage: (snapshot, event) => {
+        if (event !== 'generation') return
+        setGenerationSnapshot(snapshot)
+        void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
+        if (currentChapter?.id) {
+          void queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter.id] })
+        }
+      },
+      onError: () => setGenerationStreamStatus('error'),
+    })
+  }, [bidId, queryClient, currentChapter?.id])
 
   const invalidateChapterState = async () => {
     await Promise.all([
@@ -615,6 +641,11 @@ export function BidEditorPage() {
         <Col xs={24} xl={6}>
           <Card title="AI 助手">
             <Space direction="vertical">
+              <Tag color={generationStreamColor(generationStreamStatus)}>SSE: {generationStreamStatus}</Tag>
+              <Progress size="small" percent={generationPercent} />
+              <Typography.Text type="secondary">
+                章节 {completedChapterCount}/{generationSummary?.total_chapters ?? visibleChapters.length} · task done {generationSummary?.done_tasks ?? 0}
+              </Typography.Text>
               <Tag color="purple">source_refs: {currentChapter?.source_refs.length ?? 0}</Tag>
               <Tag color="orange">needs_human_input: {currentChapter?.needs_human_input.length ?? 0}</Tag>
               {(currentChapter?.needs_human_input ?? []).map((item) => (
@@ -623,6 +654,7 @@ export function BidEditorPage() {
                 </Typography.Text>
               ))}
               {regenerateTask.data ? <Tag color="blue">task: {regenerateTask.data.status}</Tag> : null}
+              {latestChapterTask ? <Tag color="cyan">latest: {latestChapterTask.status}</Tag> : null}
               <Button icon={<SyncOutlined />} loading={isRegenerating} disabled={!currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
                 查找素材并重新生成
               </Button>
@@ -661,4 +693,10 @@ function chapterStatusColor(status: BidChapterDTO['status']) {
 function isRegenerateTaskActive(status: string | undefined, taskId: string) {
   if (!taskId) return false
   return !status || status === 'queued' || status === 'running'
+}
+
+function generationStreamColor(status: 'connecting' | 'open' | 'error') {
+  if (status === 'open') return 'green'
+  if (status === 'error') return 'red'
+  return 'blue'
 }
