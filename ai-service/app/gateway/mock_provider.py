@@ -5,6 +5,7 @@ import math
 import re
 
 from app.schemas.common import SourceRef
+from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
 from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest, ChapterGenerateResponse
 
 
@@ -175,6 +176,49 @@ class MockProvider:
             token_usage={
                 "input_tokens": self.count_tokens(base_text) + sum(self.count_tokens(ref.content) for ref in payload.retrieved_knowledge_refs[:5]),
                 "output_tokens": self.count_tokens(rewritten),
+            },
+        )
+
+    def cost_advice(self, payload: CostAdviceRequest) -> CostAdviceResponse:
+        budget_gap = payload.total_budget - payload.total_actual
+        risk_flags: list[str] = []
+        focus_items: list[str] = []
+        if payload.margin_rate < 20:
+            risk_flags.append("利润率低于 20%，需要复核人力、外采和运维成本边界。")
+        if payload.total_actual > payload.total_budget:
+            risk_flags.append("实际成本已超过预算，需要冻结非必要支出并重新审批。")
+        for item in payload.overrun_items[:5]:
+            focus_items.append(f"{item.category} / {item.name} 超预算 {item.actual_amount - item.budget_amount:.2f} 元")
+        recommendations = list(payload.recommendations)
+        if not recommendations:
+            recommendations.append("当前成本结构未发现明显异常，建议保持周度实际成本滚动更新。")
+        if payload.overrun_items:
+            recommendations.append("优先处理超预算成本项，按供应商、合同和交付范围拆分责任。")
+        if payload.margin_rate < 25:
+            recommendations.append("将低毛利分类拆成可谈判采购项和内部交付效率项，分别制定压降目标。")
+        summary = (
+            f"{payload.cost_project_name or payload.project_name} 当前预算 {payload.total_budget:.2f}，"
+            f"实际 {payload.total_actual:.2f}，预算差额 {budget_gap:.2f}，利润率 {payload.margin_rate:.2f}%。"
+        )
+        input_text = " ".join(
+            [
+                payload.project_name,
+                payload.cost_project_name,
+                *payload.recommendations,
+                *(item.name for item in payload.overrun_items),
+            ]
+        )
+        output_text = " ".join([summary, *recommendations, *risk_flags, *focus_items])
+        return CostAdviceResponse(
+            trace_id=f"trace-mock-cost-advice-{payload.cost_project_id[:8]}",
+            summary=summary,
+            recommendations=recommendations[:6],
+            risk_flags=risk_flags,
+            focus_items=focus_items,
+            model_metadata={"provider": self.name, "model": payload.model_hint or "mock-cost-advice-model"},
+            token_usage={
+                "input_tokens": self.count_tokens(input_text),
+                "output_tokens": self.count_tokens(output_text),
             },
         )
 

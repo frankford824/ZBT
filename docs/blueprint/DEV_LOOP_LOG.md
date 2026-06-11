@@ -1701,3 +1701,56 @@ curl -X GET /api/v1/bids/:id
 ### 偏离蓝图
 
 1. `DELETE /bids/:id` 采用软归档而非物理删除，以保留生成任务、审批、导出、章节和审计追踪。
+
+## Loop-21 / 成本 AI 建议异步化 - 2026-06-11
+
+### 本轮目标
+
+1. 修正 `POST /cost-projects/:id/ai-advice` 在 `routeSpecs` 标记 async 但实现仍同步返回规则化分析的问题。
+2. 成本 AI 建议必须经过 Python AI 服务 ModelRouter，不在 Go 成本模块里伪造 AI 结果。
+3. 前端成本详情页支持提交 AI 建议任务并轮询 `/ai-tasks/:taskId` 展示结果。
+
+### 代码交付
+
+1. Cost Store 接入 `config.Config` 和 AI service client，新增 `Task`、`Advice`、`ApplyAdviceCallback`、任务状态更新与失败标记。
+2. `POST /cost-projects/:id/ai-advice` 改为创建 `task_type=cost_advice`、`resource_type=cost_project` 的 `ai_tasks`，再调用 Python `/tasks/cost-advice`。
+3. AI callback 分发新增 `cost_project` resource type，回调后更新任务结果并通过 `ai_call_logs` 记录 provider、model、token_usage 和 trace_id。
+4. Python AI 服务新增 `CostAdviceRequest`、`CostAdviceResponse` 和 `/tasks/cost-advice`，通过 `cost_advice` ModelRouter 路由调用 MockProvider。
+5. MockProvider 新增 `cost_advice()`，返回 summary、recommendations、risk_flags、focus_items、model_metadata 和 token_usage。
+6. 前端 `createCostAdvice` 返回 `AITaskDTO`，成本详情页提交任务后轮询 `/ai-tasks/:taskId` 并展示 AI 建议。
+7. API 蓝图同步更新成本 AI 建议链路。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w cmd/server/main.go internal/api/routes.go internal/platform/cost/store.go && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+git diff --check
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X POST /api/v1/cost-projects/:id/ai-advice
+curl -X GET /api/v1/ai-tasks/:taskId
+curl -X GET /api/v1/ai-call-logs
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. ai-service `python3 -m compileall app` 通过。
+4. `git diff --check` 通过。
+5. Docker backend/frontend/ai-service 构建成功，并启动成功。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时 tenant1/admin 对成本项目 `e5c7f0b3-13b9-4d25-96b2-95d9ff6d110c` 调用 `POST /cost-projects/:id/ai-advice`，返回本地任务 `a297ea78-5cf7-4ef9-9348-457cc1609436`、外部任务 `task-cost-advice-496fe75e-e18e-49dc-a942-a88e2b3f7d1f`。
+8. `GET /ai-tasks/:taskId` 轮询到 status=`done`，result.trace_id=`trace-mock-cost-advice-e5c7f0b3`，provider=`mock`，model=`configurable-low-cost-json-model`，recommendations 数量为 4。
+9. `GET /ai-call-logs` 可查到同 trace_id 的 `cost_advice` 日志，provider=`mock`。
+10. tenant2/other 调用 tenant1 成本项目 `POST /cost-projects/:id/ai-advice` 返回 404。
+11. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询该 `cost_advice` task 数量为 1、ai_call_logs 数量为 1；tenant2 RLS 上下文两者均为 0。
+
+### 偏离蓝图
+
+1. 本轮仍使用 MockProvider 作为无 API Key 环境下的成本建议模型提供方，但调用入口、路由选择、Pydantic 校验、HMAC 回调和 ai_call_logs 均已经过 Python AI 服务 ModelRouter。

@@ -1054,8 +1054,8 @@ export async function fetchCostAnalysis(costProjectId: string): Promise<CostAnal
   return data
 }
 
-export async function createCostAdvice(costProjectId: string): Promise<CostAnalysisDTO> {
-  const { data } = await apiClient.post<CostAnalysisDTO>(`/cost-projects/${costProjectId}/ai-advice`)
+export async function createCostAdvice(costProjectId: string): Promise<AITaskDTO> {
+  const { data } = await apiClient.post<AITaskDTO>(`/cost-projects/${costProjectId}/ai-advice`)
   return data
 }
 

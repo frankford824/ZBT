@@ -967,7 +967,8 @@ func (s *server) costAnalysis(c *gin.Context) {
 }
 
 func (s *server) costAdvice(c *gin.Context) {
-	result, err := s.costStore.Advice(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	userID, _ := c.Get("user_id")
+	result, err := s.costStore.Advice(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"))
 	respondStatus(c, http.StatusAccepted, result, err)
 }
 
@@ -1899,6 +1900,18 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 		respond(c, result, err)
 	case "bid_export", "bid_chapter":
 		result, err := s.bidStore.ApplyCallback(c.Request.Context(), bid.CallbackPayload{
+			TenantID:     payload.TenantID,
+			TaskID:       payload.TaskID,
+			Status:       payload.Status,
+			Result:       payload.Result,
+			ErrorMessage: payload.ErrorMessage,
+		})
+		if err == nil {
+			_, err = s.aiCallStore.RecordTaskCallback(c.Request.Context(), payload.TenantID, payload.TaskID, payload.Result, payload.Status, payload.ErrorMessage)
+		}
+		respond(c, result, err)
+	case "cost_project":
+		result, err := s.costStore.ApplyAdviceCallback(c.Request.Context(), platformcost.CallbackPayload{
 			TenantID:     payload.TenantID,
 			TaskID:       payload.TaskID,
 			Status:       payload.Status,

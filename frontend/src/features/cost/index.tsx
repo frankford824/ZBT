@@ -17,12 +17,13 @@ import {
   Tag,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   createCostAdvice,
   createCostItem,
   createCostReport,
+  fetchAITask,
   fetchCostAnalysis,
   fetchCostItems,
   fetchCostProject,
@@ -97,6 +98,7 @@ export function CostDetailPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [adviceTaskId, setAdviceTaskId] = useState('')
   const [form] = Form.useForm()
   const project = useQuery({
     queryKey: ['cost-project', costProjectId],
@@ -113,6 +115,16 @@ export function CostDetailPage() {
     queryFn: () => fetchCostAnalysis(costProjectId),
     enabled: Boolean(costProjectId),
   })
+  const adviceTask = useQuery({
+    queryKey: ['ai-task', adviceTaskId],
+    queryFn: () => fetchAITask(adviceTaskId),
+    enabled: Boolean(adviceTaskId),
+    refetchInterval: (query) => {
+      const task = query.state.data
+      if (!task) return 1500
+      return task.status === 'queued' || task.status === 'running' ? 1500 : false
+    },
+  })
   const itemMutation = useMutation({
     mutationFn: (payload: Partial<CostItemDTO> & { name: string }) => createCostItem(costProjectId, payload),
     onSuccess: () => {
@@ -127,7 +139,10 @@ export function CostDetailPage() {
   })
   const adviceMutation = useMutation({
     mutationFn: () => createCostAdvice(costProjectId),
-    onSuccess: (result) => message.success(result.recommendations[0] || '建议已生成'),
+    onSuccess: (task) => {
+      setAdviceTaskId(task.id)
+      message.success('AI 建议任务已提交')
+    },
     onError: () => message.error('AI 建议生成失败'),
   })
   const reportMutation = useMutation({
@@ -135,6 +150,18 @@ export function CostDetailPage() {
     onSuccess: (report) => message.success(report.summary || '报告已生成'),
     onError: () => message.error('报告生成失败'),
   })
+  const adviceTaskStatus = adviceTask.data?.status
+  useEffect(() => {
+    if (!adviceTaskId || !adviceTaskStatus) return
+    if (adviceTaskStatus === 'done') {
+      message.success(adviceSummary(adviceTask.data?.result) || 'AI 建议已生成')
+      void queryClient.invalidateQueries({ queryKey: ['cost-project', costProjectId] })
+    }
+    if (adviceTaskStatus === 'failed' || adviceTaskStatus === 'cancelled') {
+      message.error('AI 建议生成失败')
+    }
+  }, [adviceTaskId, adviceTaskStatus, adviceTask.data?.result, message, queryClient, costProjectId])
+  const adviceBusy = adviceMutation.isPending || adviceTaskStatus === 'queued' || adviceTaskStatus === 'running'
 
   if (project.isLoading) return <LoadingBlock />
   if (project.isError) return <ErrorBlock />
@@ -159,7 +186,7 @@ export function CostDetailPage() {
         <Button key="report" loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
           导出成本报告
         </Button>,
-        <Button key="ai" type="primary" loading={adviceMutation.isPending} onClick={() => adviceMutation.mutate()}>
+        <Button key="ai" type="primary" loading={adviceBusy} onClick={() => adviceMutation.mutate()}>
           AI 优化建议
         </Button>,
       ]}
@@ -209,6 +236,21 @@ export function CostDetailPage() {
                   ))}
                 </Space>
               </Descriptions.Item>
+              {adviceTask.data ? (
+                <Descriptions.Item label="AI 建议">
+                  <Space direction="vertical">
+                    <Tag color={adviceTask.data.status === 'done' ? 'green' : 'blue'}>{adviceTask.data.status}</Tag>
+                    {adviceRecommendations(adviceTask.data.result).map((item) => (
+                      <span key={item}>{item}</span>
+                    ))}
+                    {adviceRiskFlags(adviceTask.data.result).map((item) => (
+                      <Tag color="orange" key={item}>
+                        {item}
+                      </Tag>
+                    ))}
+                  </Space>
+                </Descriptions.Item>
+              ) : null}
             </Descriptions>
           </Card>
         </Col>
@@ -275,4 +317,19 @@ export function CostDetailPage() {
       </Modal>
     </PageFrame>
   )
+}
+
+function adviceRecommendations(result: Record<string, unknown> | undefined) {
+  if (!result || !Array.isArray(result.recommendations)) return []
+  return result.recommendations.filter((item): item is string => typeof item === 'string')
+}
+
+function adviceRiskFlags(result: Record<string, unknown> | undefined) {
+  if (!result || !Array.isArray(result.risk_flags)) return []
+  return result.risk_flags.filter((item): item is string => typeof item === 'string')
+}
+
+function adviceSummary(result: Record<string, unknown> | undefined) {
+  if (!result || typeof result.summary !== 'string') return ''
+  return result.summary
 }

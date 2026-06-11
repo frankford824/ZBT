@@ -48,7 +48,7 @@ func main() {
 	}
 
 	aiCallStore := aicall.NewStore(pool)
-	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool, aiCallStore), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(pool), compliance.NewStore(pool), approval.NewStore(pool), dashboard.NewStore(pool), aiCallStore)
+	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool, aiCallStore), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(cfg, pool), compliance.NewStore(pool), approval.NewStore(pool), dashboard.NewStore(pool), aiCallStore)
 
 	log.Printf("zbt backend listening on %s", cfg.HTTPAddr)
 	if err := router.Run(cfg.HTTPAddr); err != nil {

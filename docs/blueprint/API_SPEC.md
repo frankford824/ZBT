@@ -64,7 +64,7 @@ POST /compliance/checks、GET /compliance/checks、GET /compliance/checks/:id、
 
 GET /cost-projects、POST /cost-projects、GET /cost-projects/:id、PATCH /cost-projects/:id、GET /cost-projects/:id/items、POST /cost-projects/:id/items、PATCH /cost-items/:id、DELETE /cost-items/:id、GET /cost-projects/:id/analysis、POST /cost-projects/:id/ai-advice、POST /cost-projects/:id/report。
 
-成本一期已落地 `cost_projects`、`cost_items`、`cost_reports` RLS 表。`GET /cost-projects` 返回关联项目、预算、实际、利润率和成本项数量；`POST /cost-projects` 可为项目创建或更新成本项目；成本项支持新增、更新和删除；`GET /cost-projects/:id/analysis` 返回分类汇总、超预算项和规则化建议；`POST /cost-projects/:id/ai-advice` 当前返回同一分析结构作为 AI 建议占位；`POST /cost-projects/:id/report` 生成 `cost_reports` 记录。前端 `/costs` 和 `/costs/:costProjectId` 已接入真实列表、成本构成图、成本明细、建议和报告动作。
+成本一期已落地 `cost_projects`、`cost_items`、`cost_reports` RLS 表。`GET /cost-projects` 返回关联项目、预算、实际、利润率和成本项数量；`POST /cost-projects` 可为项目创建或更新成本项目；成本项支持新增、更新和删除；`GET /cost-projects/:id/analysis` 返回分类汇总、超预算项和规则化建议；`POST /cost-projects/:id/ai-advice` 已改为异步 AI 任务，Go 写入 `ai_tasks` 后调用 Python `/tasks/cost-advice`，Python 通过 `cost_advice` ModelRouter 路由生成 summary、recommendations、risk_flags、focus_items、model_metadata 和 token_usage，再 HMAC 回调 Go 更新任务并写入 `ai_call_logs`。前端 `/costs/:costProjectId` 会轮询 `/ai-tasks/:taskId` 展示 AI 建议结果。`POST /cost-projects/:id/report` 生成 `cost_reports` 记录。前端 `/costs` 和 `/costs/:costProjectId` 已接入真实列表、成本构成图、成本明细、建议和报告动作。
 
 ## Approval / Notification / File
 

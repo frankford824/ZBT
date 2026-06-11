@@ -1,15 +1,18 @@
 package cost
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
 	"time"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,7 +24,9 @@ var (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	cfg    config.Config
+	client *http.Client
 }
 
 type Project struct {
@@ -81,6 +86,23 @@ type Report struct {
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
 
+type Task struct {
+	ID             string         `json:"id"`
+	TaskType       string         `json:"task_type"`
+	Status         string         `json:"status"`
+	ExternalTaskID *string        `json:"external_task_id"`
+	ResourceType   string         `json:"resource_type"`
+	ResourceID     string         `json:"resource_id"`
+	Payload        map[string]any `json:"payload"`
+	Route          map[string]any `json:"route"`
+	Result         map[string]any `json:"result"`
+	ErrorMessage   *string        `json:"error_message"`
+	StartedAt      *time.Time     `json:"started_at"`
+	CompletedAt    *time.Time     `json:"completed_at"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
 type CreateProjectRequest struct {
 	ProjectID    string   `json:"project_id"`
 	Name         string   `json:"name"`
@@ -107,8 +129,28 @@ type CreateItemRequest struct {
 
 type UpdateItemRequest = CreateItemRequest
 
-func NewStore(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+type CallbackPayload struct {
+	TenantID     string         `json:"tenant_id"`
+	TaskID       string         `json:"task_id"`
+	Status       string         `json:"status"`
+	Result       map[string]any `json:"result"`
+	ErrorMessage string         `json:"error_message"`
+}
+
+type aiTaskAccepted struct {
+	TaskID string         `json:"task_id"`
+	Status string         `json:"status"`
+	Route  map[string]any `json:"route"`
+}
+
+func NewStore(cfg config.Config, pool *pgxpool.Pool) *Store {
+	return &Store{
+		pool: pool,
+		cfg:  cfg,
+		client: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+	}
 }
 
 func (s *Store) ListProjects(ctx context.Context, tenantID string) ([]Project, error) {
@@ -404,8 +446,130 @@ func (s *Store) Analysis(ctx context.Context, tenantID, projectID string) (Analy
 	}, nil
 }
 
-func (s *Store) Advice(ctx context.Context, tenantID, projectID string) (Analysis, error) {
-	return s.Analysis(ctx, tenantID, projectID)
+func (s *Store) Advice(ctx context.Context, tenantID, userID, projectID string) (Task, error) {
+	analysis, err := s.Analysis(ctx, tenantID, projectID)
+	if err != nil {
+		return Task{}, err
+	}
+	externalTaskID := "task-cost-advice-" + uuid.NewString()
+	payload := map[string]any{
+		"task_id":           externalTaskID,
+		"tenant_id":         tenantID,
+		"cost_project_id":   analysis.Project.ID,
+		"project_name":      analysis.Project.ProjectName,
+		"cost_project_name": analysis.Project.Name,
+		"budget_amount":     analysis.Project.BudgetAmount,
+		"total_budget":      analysis.Project.TotalBudget,
+		"total_actual":      analysis.Project.TotalActual,
+		"margin_rate":       analysis.Project.MarginRate,
+		"category_totals":   analysis.CategoryTotals,
+		"overrun_items":     analysis.OverrunItems,
+		"recommendations":   analysis.Recommendations,
+		"callback_url":      s.cfg.AICallbackURL,
+	}
+	payloadJSON, _ := json.Marshal(payload)
+	var task Task
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		created, err := scanTask(tx.QueryRow(ctx, `
+			insert into ai_tasks (
+				tenant_id, user_id, task_type, status, external_task_id,
+				resource_type, resource_id, payload, route
+			)
+			values ($1, $2, 'cost_advice', 'queued', $3, 'cost_project', $4, $5, '{}')
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, tenantID, nullableUserID(userID), externalTaskID, projectID, payloadJSON))
+		if err != nil {
+			return err
+		}
+		task = created
+		return nil
+	})
+	if err != nil {
+		return Task{}, err
+	}
+	accepted, err := s.submitCostAdvice(ctx, payload)
+	if err != nil {
+		_ = s.markTaskFailed(ctx, tenantID, task.ID, err.Error())
+		return Task{}, err
+	}
+	if err := s.applyAcceptedTask(ctx, tenantID, task.ID, accepted); err != nil {
+		return Task{}, err
+	}
+	return s.GetTask(ctx, tenantID, task.ID)
+}
+
+func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (Task, error) {
+	if err := validateUUID(taskID); err != nil {
+		return Task{}, err
+	}
+	var task Task
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		found, err := scanTask(tx.QueryRow(ctx, `
+			select id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+			from ai_tasks
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID))
+		if err != nil {
+			return err
+		}
+		task = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrNotFound
+	}
+	return task, err
+}
+
+func (s *Store) ApplyAdviceCallback(ctx context.Context, payload CallbackPayload) (Task, error) {
+	status := normalizeTaskStatus(payload.Status)
+	if status == "" || payload.TenantID == "" || payload.TaskID == "" {
+		return Task{}, ErrInvalidRequest
+	}
+	var task Task
+	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
+		resultJSON, _ := json.Marshal(payload.Result)
+		found, err := scanTask(tx.QueryRow(ctx, `
+			update ai_tasks
+			set status = $3,
+				result = $4,
+				error_message = nullif($5, ''),
+				started_at = coalesce(started_at, now()),
+				completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
+				updated_at = now()
+			where tenant_id = $1 and external_task_id = $2 and resource_type = 'cost_project'
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, payload.TenantID, payload.TaskID, status, resultJSON, payload.ErrorMessage))
+		if err != nil {
+			return err
+		}
+		task = found
+		if status == "done" {
+			metadataJSON, _ := json.Marshal(map[string]any{
+				"last_ai_advice_task_id": task.ID,
+				"last_ai_advice":         payload.Result,
+			})
+			if _, err := tx.Exec(ctx, `
+				update cost_projects
+				set metadata = metadata || $3::jsonb,
+					updated_at = now()
+				where tenant_id = $1 and id = $2
+			`, payload.TenantID, task.ResourceID, metadataJSON); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrNotFound
+	}
+	return task, err
 }
 
 func (s *Store) CreateReport(ctx context.Context, tenantID, projectID string) (Report, error) {
@@ -439,6 +603,81 @@ func (s *Store) CreateReport(ctx context.Context, tenantID, projectID string) (R
 		return nil
 	})
 	return report, err
+}
+
+func (s *Store) submitCostAdvice(ctx context.Context, payload map[string]any) (aiTaskAccepted, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/cost-advice"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
+	}
+	var accepted aiTaskAccepted
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		return aiTaskAccepted{}, err
+	}
+	if accepted.TaskID == "" {
+		return aiTaskAccepted{}, ErrInvalidRequest
+	}
+	if accepted.Status == "" {
+		accepted.Status = "queued"
+	}
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	return accepted, nil
+}
+
+func (s *Store) applyAcceptedTask(ctx context.Context, tenantID, taskID string, accepted aiTaskAccepted) error {
+	status := normalizeTaskStatus(accepted.Status)
+	if status == "" {
+		status = "queued"
+	}
+	routeJSON, _ := json.Marshal(accepted.Route)
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = case when status in ('done', 'failed', 'cancelled') then status else $3 end,
+				external_task_id = $4,
+				route = $5,
+				started_at = coalesce(started_at, now()),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, status, accepted.TaskID, routeJSON)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return pgx.ErrNoRows
+		}
+		return nil
+	})
+}
+
+func (s *Store) markTaskFailed(ctx context.Context, tenantID, taskID, message string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = 'failed',
+				error_message = $3,
+				completed_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, message)
+		return err
+	})
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
@@ -508,11 +747,53 @@ func scanItem(row scanner) (Item, error) {
 	return item, err
 }
 
+func scanTask(row scanner) (Task, error) {
+	var task Task
+	var externalTaskID, errorMessage sql.NullString
+	var payloadRaw, routeRaw, resultRaw []byte
+	var startedAt, completedAt sql.NullTime
+	err := row.Scan(
+		&task.ID, &task.TaskType, &task.Status, &externalTaskID,
+		&task.ResourceType, &task.ResourceID, &payloadRaw, &routeRaw, &resultRaw, &errorMessage,
+		&startedAt, &completedAt, &task.CreatedAt, &task.UpdatedAt,
+	)
+	if err != nil {
+		return Task{}, err
+	}
+	if externalTaskID.Valid {
+		task.ExternalTaskID = &externalTaskID.String
+	}
+	if errorMessage.Valid {
+		task.ErrorMessage = &errorMessage.String
+	}
+	if startedAt.Valid {
+		task.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		task.CompletedAt = &completedAt.Time
+	}
+	task.Payload = map[string]any{}
+	task.Route = map[string]any{}
+	task.Result = map[string]any{}
+	_ = json.Unmarshal(payloadRaw, &task.Payload)
+	_ = json.Unmarshal(routeRaw, &task.Route)
+	_ = json.Unmarshal(resultRaw, &task.Result)
+	return task, nil
+}
+
 func validateUUID(value string) error {
 	if _, err := uuid.Parse(strings.TrimSpace(value)); err != nil {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func nullableUserID(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func ensureCostProject(ctx context.Context, tx pgx.Tx, tenantID, projectID string) error {
@@ -568,6 +849,15 @@ func normalizeItemStatus(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "planned"
+	}
+}
+
+func normalizeTaskStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "queued", "running", "done", "failed", "cancelled":
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return ""
 	}
 }
 

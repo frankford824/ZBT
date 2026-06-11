@@ -17,6 +17,7 @@ from app.gateway.model_router import ModelRouter
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
+from app.schemas.cost import CostAdviceRequest
 from app.schemas.export import DocumentExportRequest
 from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest
 from app.schemas.knowledge import (
@@ -233,6 +234,41 @@ def process_chapter_action(task_id: str, payload: ChapterActionRequest, route_na
             "status": "failed",
             "error_message": str(exc),
             "result": {"error": str(exc), "chapter_id": payload.chapter_id, "action": payload.action},
+        }
+    if payload.callback_url:
+        post_callback(payload.callback_url, callback_payload)
+
+
+@app.post("/tasks/cost-advice", response_model=TaskAccepted, status_code=202)
+async def cost_advice(
+    payload: CostAdviceRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
+    route = router.resolve("cost_advice", tenant_id=payload.tenant_id)
+    task_suffix = payload.cost_project_id.replace("-", "")[:8]
+    task_id = payload.task_id or f"task-cost-advice-{task_suffix}-{uuid.uuid4().hex[:8]}"
+    background_tasks.add_task(process_cost_advice, task_id, payload, route.model)
+    return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
+
+
+def process_cost_advice(task_id: str, payload: CostAdviceRequest, model_hint: str) -> None:
+    try:
+        provider = router.get_llm("cost_advice", tenant_id=payload.tenant_id)
+        payload.model_hint = model_hint
+        result = provider.cost_advice(payload)
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "done",
+            "result": result.model_dump(),
+        }
+    except Exception as exc:  # pragma: no cover - defensive task boundary
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": str(exc),
+            "result": {"error": str(exc), "cost_project_id": payload.cost_project_id},
         }
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
