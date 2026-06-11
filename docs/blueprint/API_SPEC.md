@@ -28,7 +28,7 @@ GET /bids、POST /bids、GET /bids/:id、PATCH /bids/:id、DELETE /bids/:id、PO
 
 标书一期已落地最小 bid_documents、bid_parts、bid_chapters、bid_exports 数据闭环。`POST /bids/:id/exports` 支持 `export_type=docx` 或 `zip`。docx 导出时 Go 写入 ai_tasks 和待确认 file_asset 后调用 Python `/tasks/export/docx`；ZIP 打包时 Go 汇总技术标/商务标内容后调用 Python `/tasks/export/zip`。Python 生成文件并上传 MinIO，再通过 HMAC 回调 Go，Go 将 bid_exports 和 file_assets 标记为 ready/done。`GET /bid-exports/:exportId` 在导出完成后返回下载预签名 URL。
 
-章节一期已落地 `PUT /chapters/:chapterId/content`、`POST /chapters/:chapterId/accept`、`POST /chapters/:chapterId/regenerate`、`GET /chapters/:chapterId/versions` 和 `GET /chapters/:chapterId/diff`。保存、采纳和重新生成都会写入 `bid_chapter_versions`；重新生成通过 Python `/tasks/chapter-generate` 走 ModelRouter，回写 Tiptap JSON、source_refs、needs_human_input，并将引用记录到 `knowledge_references`。
+章节一期已落地 `PUT /chapters/:chapterId/content`、`POST /chapters/:chapterId/accept`、`POST /chapters/:chapterId/regenerate`、`GET /chapters/:chapterId/versions` 和 `GET /chapters/:chapterId/diff`。保存和采纳会同步写入 `bid_chapter_versions`；重新生成由 Go 先创建 `ai_tasks` 并把章节置为 `generating`，再调用 Python `/tasks/chapter-generate`。Python 返回 202 + task_id 后在后台走 ModelRouter，生成完成后通过 HMAC 回调 Go，Go 回写 Tiptap JSON、source_refs、needs_human_input、版本快照和 `knowledge_references`。前端通过 `GET /ai-tasks/:taskId` 轮询兜底刷新章节。
 
 ## Knowledge
 

@@ -253,8 +253,7 @@ export type BidExportDetailDTO = {
 
 export type ChapterRegenerateDTO = {
   chapter: BidChapterDTO
-  version: BidChapterVersionDTO
-  generation: Record<string, unknown>
+  task: AITaskDTO
 }
 
 export async function login(payload: {
@@ -335,6 +334,11 @@ export async function confirmFileUpload(fileId: string): Promise<ConfirmUploadDT
 
 export async function processKnowledgeDocument(documentId: string): Promise<AITaskDTO> {
   const { data } = await apiClient.post<AITaskDTO>(`/knowledge/documents/${documentId}/process`)
+  return data
+}
+
+export async function fetchAITask(taskId: string): Promise<AITaskDTO> {
+  const { data } = await apiClient.get<AITaskDTO>(`/ai-tasks/${taskId}`)
   return data
 }
 

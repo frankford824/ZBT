@@ -453,3 +453,59 @@ curl http://127.0.0.1:8000/models/health
 ### 下一轮建议
 
 继续补章节生成任务异步化、真实 RAG 检索输入、source_ref 解析为真实知识库 chunk，以及 bid_chapter_versions 的可视化差异。
+
+## Loop-5 章节生成异步化闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 修正章节重新生成同步调用 Python 的偏离，使逐章生成符合 202 + task_id 的异步约束。
+2. 复用 `ai_tasks` 和 HMAC 回调，将章节生成结果在回调阶段写入章节、版本和引用表。
+3. 前端编辑器在发起重新生成后轮询任务状态，完成后刷新章节内容和版本列表。
+
+### 代码交付
+
+1. Python `/tasks/chapter-generate` 改为返回 `TaskAccepted`，后台执行 ModelRouter，并通过 `callback_url` HMAC 回调 Go。
+2. Go `RegenerateChapter` 预生成外部 task_id，先写入 `ai_tasks(resource_type='bid_chapter')` 并将章节置为 `generating`，再调用 Python，避免快速回调和 task 绑定之间的竞态。
+3. Go AI 回调入口支持 `bid_chapter`，`bidStore.ApplyCallback` 按资源类型分派；章节生成完成后写入 `bid_chapters`、`bid_chapter_versions` 和 `knowledge_references`。
+4. 前端 `regenerateChapter` 响应改为 `{ chapter, task }`，编辑器页使用 `GET /ai-tasks/:taskId` 轮询任务状态，并在 done/failed/cancelled 后刷新页面数据。
+5. 文档同步更新 API、AI_PIPELINE 和 RAG 当前状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+python3 -m compileall ai-service/app
+python3 -m pytest ai-service/app/tests
+./infra/scripts/check.sh
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+```
+
+结果：
+
+1. backend 测试通过。
+2. frontend build 通过。
+3. AI compileall 通过。
+4. 当前系统 Python 缺少 pytest 模块，`python3 -m pytest ai-service/app/tests` 未运行成功；后续以 `infra/scripts/check.sh` 或容器内依赖继续验证。
+5. `./infra/scripts/check.sh` 通过。
+6. Docker 重新构建并启动 backend、frontend、ai-service 成功；backend goose current version 8，AI `/healthz` 与 `/models/health` 返回 ok。
+7. 运行时异步章节验证使用 bid `50000000-0000-4000-8000-000000000001`、chapter `52000000-0000-4000-8000-000000000001`。
+8. `POST /chapters/:chapterId/regenerate` 返回 202，章节立即进入 `generating`，返回本地 task `1d6d311b-abc7-4917-95bd-a9e5d5df37fd` 和外部 task `task-chapter-079d954e-6c59-4aef-88ad-888cce73d1d4`。
+9. `GET /ai-tasks/:taskId` 轮询到 `done`，result 中 `trace_id=trace-mock-chapter`。
+10. 回调后章节状态为 `generated`，source_refs 数量为 1，needs_human_input 为 `企业资质证书编号`、`项目经理证书有效期`。
+11. `GET /chapters/:chapterId/versions` 从 3 条增长为 4 条，最新版本 `change_reason=ai_regenerate`。
+12. tenant2 访问同一 task 返回 404，tenant2 重新生成 tenant1 章节返回 404。
+13. RLS 验证中 tenant1 可见 bid_chapter task 为 1 且 done 为 1、章节版本为 4、knowledge_references 为 1；tenant2 对同一章节任务、版本、引用均为 0。
+
+### 偏离蓝图
+
+1. 本轮已修正“章节重新生成同步调用 Python”的偏离。
+2. 前端目前是轮询兜底，尚未实现真正 SSE 流式进度。
+3. source_ref 仍主要来自 MockProvider，尚未接真实 RAG source_ref 解析到 `knowledge_chunks`。
+
+### 下一轮建议
+
+继续完成章节生成 SSE 进度、真实 RAG 检索输入和 source_ref 解析；随后推进 Loop-6 知识库三子页面、文档预览、embedding MockProvider 与 pgvector 检索。

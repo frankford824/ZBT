@@ -6,6 +6,7 @@ from app.schemas.common import SourceRef
 
 
 class ChapterGenerateRequest(BaseModel):
+    task_id: str | None = None
     tenant_id: str
     bid_document_id: str
     bid_part_id: str
@@ -13,6 +14,7 @@ class ChapterGenerateRequest(BaseModel):
     chapter_title: str
     tender_requirements: list[str] = Field(default_factory=list)
     selected_knowledge_refs: list[str] = Field(default_factory=list)
+    callback_url: str | None = None
     model_hint: str | None = None
 
 

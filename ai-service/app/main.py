@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib import request
@@ -17,7 +18,7 @@ from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.export import DocumentExportRequest
-from app.schemas.generation import ChapterGenerateRequest, ChapterGenerateResponse
+from app.schemas.generation import ChapterGenerateRequest
 from app.schemas.knowledge import KnowledgeProcessRequest
 
 CONFIG_PATH = Path(__file__).parent / "config" / "model_routing.yaml"
@@ -117,11 +118,38 @@ def post_callback(callback_url: str, payload: dict[str, object]) -> None:
         response.read()
 
 
-@app.post("/tasks/chapter-generate", response_model=ChapterGenerateResponse)
-async def chapter_generate(payload: ChapterGenerateRequest) -> ChapterGenerateResponse:
-    provider = router.get_llm("chapter_generate", tenant_id=payload.tenant_id)
-    return provider.generate_chapter(payload)
+@app.post("/tasks/chapter-generate", response_model=TaskAccepted, status_code=202)
+async def chapter_generate(
+    payload: ChapterGenerateRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
+    route = router.resolve("chapter_generate", tenant_id=payload.tenant_id)
+    task_suffix = payload.chapter_id.replace("-", "")[:8]
+    task_id = payload.task_id or f"task-chapter-{task_suffix}-{uuid.uuid4().hex[:8]}"
+    background_tasks.add_task(process_chapter_generate, task_id, payload)
+    return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
+
+def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> None:
+    try:
+        provider = router.get_llm("chapter_generate", tenant_id=payload.tenant_id)
+        generation = provider.generate_chapter(payload)
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "done",
+            "result": generation.model_dump(),
+        }
+    except Exception as exc:  # pragma: no cover - defensive task boundary
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": str(exc),
+            "result": {"error": str(exc), "chapter_id": payload.chapter_id},
+        }
+    if payload.callback_url:
+        post_callback(payload.callback_url, callback_payload)
 
 @app.post("/tasks/export/docx", response_model=TaskAccepted, status_code=202)
 async def export_docx(

@@ -823,7 +823,7 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 	case "knowledge_document":
 		result, err := s.knowledgeStore.ApplyCallback(c.Request.Context(), payload)
 		respond(c, result, err)
-	case "bid_export":
+	case "bid_export", "bid_chapter":
 		result, err := s.bidStore.ApplyCallback(c.Request.Context(), bid.CallbackPayload{
 			TenantID:     payload.TenantID,
 			TaskID:       payload.TaskID,

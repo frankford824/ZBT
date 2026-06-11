@@ -31,7 +31,7 @@ import {
   App as AntApp,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
@@ -39,6 +39,7 @@ import {
   acceptChapter,
   createBid,
   createBidExport,
+  fetchAITask,
   fetchBidChapters,
   fetchBid,
   fetchBidExport,
@@ -441,6 +442,7 @@ export function BidEditorPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const [regenerateTaskId, setRegenerateTaskId] = useState('')
   const partParam = searchParams.get('part') ?? ''
   const chapterParam = searchParams.get('chapter') ?? ''
   const bid = useQuery({
@@ -466,6 +468,17 @@ export function BidEditorPage() {
     queryFn: () => fetchChapterVersions(currentChapter?.id ?? ''),
     enabled: Boolean(currentChapter?.id),
   })
+  const regenerateTask = useQuery({
+    queryKey: ['ai-task', regenerateTaskId],
+    queryFn: () => fetchAITask(regenerateTaskId),
+    enabled: Boolean(regenerateTaskId),
+    refetchInterval: (query) => {
+      const task = query.state.data
+      if (!task) return 1500
+      return task.status === 'queued' || task.status === 'running' ? 1500 : false
+    },
+  })
+  const regenerateTaskStatus = regenerateTask.data?.status
   const editor = useEditor({
     extensions: [StarterKit],
     content: '<p>请选择章节</p>',
@@ -474,6 +487,20 @@ export function BidEditorPage() {
     if (!editor || !currentChapter) return
     editor.commands.setContent(contentForEditor(currentChapter))
   }, [editor, currentChapter?.id, currentChapter?.updated_at])
+  useEffect(() => {
+    if (!regenerateTaskId || !regenerateTaskStatus) return
+    if (regenerateTaskStatus === 'done') {
+      message.success('AI 重新生成完成')
+      setRegenerateTaskId('')
+      void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
+      void queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter?.id] })
+    }
+    if (regenerateTaskStatus === 'failed' || regenerateTaskStatus === 'cancelled') {
+      message.error('AI 重新生成失败')
+      setRegenerateTaskId('')
+      void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
+    }
+  }, [regenerateTaskId, regenerateTaskStatus, message, queryClient, bidId, currentChapter?.id])
 
   const invalidateChapterState = async () => {
     await Promise.all([
@@ -504,12 +531,16 @@ export function BidEditorPage() {
   })
   const regenerateMutation = useMutation({
     mutationFn: () => regenerateChapter(currentChapter?.id ?? ''),
-    onSuccess: async () => {
-      message.success('AI 重新生成完成')
+    onSuccess: async (result) => {
+      setRegenerateTaskId(result.task.id)
+      message.success(`AI 重新生成任务已创建：${result.task.external_task_id ?? result.task.id}`)
       await invalidateChapterState()
     },
     onError: () => message.error('AI 重新生成失败'),
   })
+  const isRegenerating = Boolean(
+    regenerateMutation.isPending || isRegenerateTaskActive(regenerateTaskStatus, regenerateTaskId) || currentChapter?.status === 'generating',
+  )
 
   if (bid.isLoading || parts.isLoading || chapters.isLoading) return <LoadingBlock />
   if (bid.isError || parts.isError || chapters.isError) return <ErrorBlock />
@@ -527,7 +558,7 @@ export function BidEditorPage() {
         <Button key="accept" icon={<CheckOutlined />} loading={acceptMutation.isPending} disabled={!currentChapter} onClick={() => acceptMutation.mutate()}>
           采纳
         </Button>,
-        <Button key="regen" icon={<SyncOutlined />} loading={regenerateMutation.isPending} disabled={!currentChapter} onClick={() => regenerateMutation.mutate()}>
+        <Button key="regen" icon={<SyncOutlined />} loading={isRegenerating} disabled={!currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
           重新生成
         </Button>,
         <Button key="export" icon={<DownloadOutlined />}>
@@ -591,7 +622,8 @@ export function BidEditorPage() {
                   {item}
                 </Typography.Text>
               ))}
-              <Button icon={<SyncOutlined />} loading={regenerateMutation.isPending} disabled={!currentChapter} onClick={() => regenerateMutation.mutate()}>
+              {regenerateTask.data ? <Tag color="blue">task: {regenerateTask.data.status}</Tag> : null}
+              <Button icon={<SyncOutlined />} loading={isRegenerating} disabled={!currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
                 查找素材并重新生成
               </Button>
               <Button icon={<DiffOutlined />} disabled={!currentChapter}>
@@ -622,5 +654,11 @@ function chapterStatusColor(status: BidChapterDTO['status']) {
   if (status === 'accepted') return 'green'
   if (status === 'edited') return 'orange'
   if (status === 'generated') return 'blue'
+  if (status === 'generating') return 'purple'
   return 'default'
+}
+
+function isRegenerateTaskActive(status: string | undefined, taskId: string) {
+  if (!taskId) return false
+  return !status || status === 'queued' || status === 'running'
 }

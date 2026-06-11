@@ -143,9 +143,8 @@ type UpdateChapterContentRequest struct {
 }
 
 type ChapterRegenerateResponse struct {
-	Chapter    Chapter        `json:"chapter"`
-	Version    ChapterVersion `json:"version"`
-	Generation map[string]any `json:"generation"`
+	Chapter Chapter `json:"chapter"`
+	Task    Task    `json:"task"`
 }
 
 type ChapterDiff struct {
@@ -184,6 +183,7 @@ type aiTaskAccepted struct {
 }
 
 type chapterGenerateRequest struct {
+	TaskID                string   `json:"task_id,omitempty"`
 	TenantID              string   `json:"tenant_id"`
 	BidDocumentID         string   `json:"bid_document_id"`
 	BidPartID             string   `json:"bid_part_id"`
@@ -191,6 +191,7 @@ type chapterGenerateRequest struct {
 	ChapterTitle          string   `json:"chapter_title"`
 	TenderRequirements    []string `json:"tender_requirements"`
 	SelectedKnowledgeRefs []string `json:"selected_knowledge_refs"`
+	CallbackURL           string   `json:"callback_url,omitempty"`
 	ModelHint             *string  `json:"model_hint,omitempty"`
 }
 
@@ -430,12 +431,14 @@ func (s *Store) AcceptChapter(ctx context.Context, tenantID, userID, chapterID s
 func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapterID string) (ChapterRegenerateResponse, error) {
 	var result ChapterRegenerateResponse
 	var requestPayload chapterGenerateRequest
+	var task Task
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
 		if err != nil {
 			return err
 		}
 		requestPayload = chapterGenerateRequest{
+			TaskID:                "task-chapter-" + uuid.NewString(),
 			TenantID:              tenantID,
 			BidDocumentID:         chapter.BidDocumentID,
 			BidPartID:             chapter.BidPartID,
@@ -443,76 +446,55 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 			ChapterTitle:          chapter.Title,
 			TenderRequirements:    []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
 			SelectedKnowledgeRefs: []string{},
+			CallbackURL:           s.cfg.AICallbackURL,
 		}
-		return nil
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ChapterRegenerateResponse{}, ErrNotFound
-	}
-	if err != nil {
-		return ChapterRegenerateResponse{}, err
-	}
-
-	generation, err := s.submitChapterGenerate(ctx, requestPayload)
-	if err != nil {
-		return ChapterRegenerateResponse{}, err
-	}
-
-	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		payloadJSON, _ := json.Marshal(requestPayload)
+		createdTask, err := scanTask(tx.QueryRow(ctx, `
+			insert into ai_tasks (
+				tenant_id, user_id, task_type, status,
+				external_task_id, resource_type, resource_id, payload, route
+			)
+			values ($1, $2, 'chapter_generate', 'queued', $3, 'bid_chapter', $4, $5, '{}')
+			returning id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+		`, tenantID, userID, requestPayload.TaskID, chapter.ID, payloadJSON))
 		if err != nil {
 			return err
 		}
-		sourceRefs := sourceRefsAsAny(generation.SourceRefs)
-		content := generation.TiptapJSON
-		plainText := plainTextFromTiptap(content)
-		if plainText == "" {
-			plainText = chapter.PlainText
-		}
-		contentJSON, _ := json.Marshal(content)
-		sourceRefsJSON, _ := json.Marshal(sourceRefs)
-		needsHumanInputJSON, _ := json.Marshal(generation.NeedsHumanInput)
+		task = createdTask
 		if _, err := tx.Exec(ctx, `
 			update bid_chapters
-			set content = $3,
-				plain_text = $4,
-				status = 'generated',
-				source_refs = $5,
-				needs_human_input = $6,
-				updated_at = now()
+			set status = 'generating', updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, chapterID, contentJSON, plainText, sourceRefsJSON, needsHumanInputJSON); err != nil {
+		`, tenantID, chapter.ID); err != nil {
 			return err
 		}
-		updated, err := chapterByID(ctx, tx, tenantID, chapterID)
+		updated, err := chapterByID(ctx, tx, tenantID, chapter.ID)
 		if err != nil {
 			return err
 		}
-		version, err := insertChapterVersion(ctx, tx, tenantID, userID, updated, "ai_regenerate", generation.ModelMetadata, generation.TokenUsage)
-		if err != nil {
-			return err
-		}
-		if err := replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID); err != nil {
-			return err
-		}
-		result = ChapterRegenerateResponse{
-			Chapter: updated,
-			Version: version,
-			Generation: map[string]any{
-				"trace_id":          generation.TraceID,
-				"self_check":        generation.SelfCheck,
-				"model_metadata":    generation.ModelMetadata,
-				"token_usage":       generation.TokenUsage,
-				"source_refs":       sourceRefs,
-				"needs_human_input": generation.NeedsHumanInput,
-			},
-		}
+		result = ChapterRegenerateResponse{Chapter: updated, Task: task}
 		return nil
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ChapterRegenerateResponse{}, ErrNotFound
 	}
-	return result, err
+	if err != nil {
+		return ChapterRegenerateResponse{}, err
+	}
+
+	accepted, err := s.submitChapterGenerate(ctx, requestPayload)
+	if err != nil {
+		_ = s.markChapterGenerateFailed(ctx, tenantID, chapterID, task.ID, err.Error())
+		return ChapterRegenerateResponse{}, err
+	}
+	updated, err := s.bindAcceptedTask(ctx, tenantID, chapterID, task.ID, accepted, requestPayload, nil)
+	if err != nil {
+		return ChapterRegenerateResponse{}, err
+	}
+	result.Task = updated
+	return result, nil
 }
 
 func (s *Store) ListChapterVersions(ctx context.Context, tenantID, chapterID string) ([]ChapterVersion, error) {
@@ -753,7 +735,14 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		_ = s.markExportFailed(ctx, tenantID, export.ID, task.ID, err.Error())
 		return CreateExportResponse{}, err
 	}
-	updated, updateErr := s.bindAcceptedTask(ctx, tenantID, export.ID, task.ID, accepted, payload)
+	updated, updateErr := s.bindAcceptedTask(ctx, tenantID, export.ID, task.ID, accepted, payload, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			update bid_exports
+			set status = $3, updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, export.ID, accepted.Status)
+		return err
+	})
 	if updateErr != nil {
 		return CreateExportResponse{}, updateErr
 	}
@@ -777,7 +766,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				started_at = coalesce(started_at, now()),
 				completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
 				updated_at = now()
-			where tenant_id = $1 and external_task_id = $2 and resource_type = 'bid_export'
+			where tenant_id = $1 and external_task_id = $2
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
@@ -786,41 +775,70 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			return err
 		}
 		task = found
-		if status == "done" {
-			sizeBytes := int64(0)
-			if value, ok := payload.Result["size_bytes"].(float64); ok {
-				sizeBytes = int64(value)
-			}
-			contentType := ""
-			if value, ok := payload.Result["content_type"].(string); ok {
-				contentType = strings.TrimSpace(value)
-			}
-			if contentType == "" {
-				contentType = docxContentType
+		switch task.ResourceType {
+		case "bid_export":
+			if status == "done" {
+				sizeBytes := int64(0)
+				if value, ok := payload.Result["size_bytes"].(float64); ok {
+					sizeBytes = int64(value)
+				}
+				contentType := ""
+				if value, ok := payload.Result["content_type"].(string); ok {
+					contentType = strings.TrimSpace(value)
+				}
+				if contentType == "" {
+					contentType = docxContentType
+				}
+				if _, err := tx.Exec(ctx, `
+					update file_assets
+					set status = 'ready',
+						size_bytes = $3,
+						content_type = $4,
+						confirmed_at = now(),
+						updated_at = now()
+					where tenant_id = $1
+						and id = (select file_asset_id from bid_exports where tenant_id = $1 and id = $2)
+				`, payload.TenantID, task.ResourceID, sizeBytes, contentType); err != nil {
+					return err
+				}
 			}
 			if _, err := tx.Exec(ctx, `
-				update file_assets
-				set status = 'ready',
-					size_bytes = $3,
-					content_type = $4,
-					confirmed_at = now(),
+				update bid_exports
+				set status = $3,
+					metadata = case when $4::jsonb = '{}'::jsonb then metadata else $4::jsonb end,
+					error_message = nullif($5, ''),
+					completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
 					updated_at = now()
-				where tenant_id = $1
-					and id = (select file_asset_id from bid_exports where tenant_id = $1 and id = $2)
-			`, payload.TenantID, task.ResourceID, sizeBytes, contentType); err != nil {
+				where tenant_id = $1 and id = $2
+			`, payload.TenantID, task.ResourceID, status, resultJSON, payload.ErrorMessage); err != nil {
 				return err
 			}
-		}
-		if _, err := tx.Exec(ctx, `
-			update bid_exports
-			set status = $3,
-				metadata = case when $4::jsonb = '{}'::jsonb then metadata else $4::jsonb end,
-				error_message = nullif($5, ''),
-				completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
-				updated_at = now()
-			where tenant_id = $1 and id = $2
-		`, payload.TenantID, task.ResourceID, status, resultJSON, payload.ErrorMessage); err != nil {
-			return err
+		case "bid_chapter":
+			if status == "done" {
+				generation, err := chapterGenerationFromResult(payload.Result)
+				if err != nil {
+					return err
+				}
+				if err := applyChapterGeneration(ctx, tx, payload.TenantID, task.ResourceID, generation); err != nil {
+					return err
+				}
+			}
+			if status == "failed" || status == "cancelled" {
+				if _, err := tx.Exec(ctx, `
+					update bid_chapters
+					set status = 'needs_fix',
+						needs_human_input = case
+							when nullif($3, '') is null then needs_human_input
+							else jsonb_build_array($3)
+						end,
+						updated_at = now()
+					where tenant_id = $1 and id = $2
+				`, payload.TenantID, task.ResourceID, payload.ErrorMessage); err != nil {
+					return err
+				}
+			}
+		default:
+			return ErrInvalidRequest
 		}
 		return nil
 	})
@@ -830,15 +848,100 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 	return task, err
 }
 
-func (s *Store) bindAcceptedTask(ctx context.Context, tenantID, exportID, taskID string, accepted aiTaskAccepted, payload map[string]any) (Task, error) {
+func chapterGenerationFromResult(result map[string]any) (chapterGenerateResponse, error) {
+	body, err := json.Marshal(result)
+	if err != nil {
+		return chapterGenerateResponse{}, err
+	}
+	var generation chapterGenerateResponse
+	if err := json.Unmarshal(body, &generation); err != nil {
+		return chapterGenerateResponse{}, err
+	}
+	if generation.TiptapJSON == nil || generation.TraceID == "" {
+		return chapterGenerateResponse{}, ErrInvalidRequest
+	}
+	return generation, nil
+}
+
+func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID string, generation chapterGenerateResponse) error {
+	chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+	if err != nil {
+		return err
+	}
+	sourceRefs := sourceRefsAsAny(generation.SourceRefs)
+	content := generation.TiptapJSON
+	plainText := plainTextFromTiptap(content)
+	if plainText == "" {
+		plainText = chapter.PlainText
+	}
+	contentJSON, _ := json.Marshal(content)
+	sourceRefsJSON, _ := json.Marshal(sourceRefs)
+	needsHumanInputJSON, _ := json.Marshal(generation.NeedsHumanInput)
+	if _, err := tx.Exec(ctx, `
+		update bid_chapters
+		set content = $3,
+			plain_text = $4,
+			status = 'generated',
+			source_refs = $5,
+			needs_human_input = $6,
+			updated_at = now()
+		where tenant_id = $1 and id = $2
+	`, tenantID, chapterID, contentJSON, plainText, sourceRefsJSON, needsHumanInputJSON); err != nil {
+		return err
+	}
+	updated, err := chapterByID(ctx, tx, tenantID, chapterID)
+	if err != nil {
+		return err
+	}
+	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, "ai_regenerate", generation.ModelMetadata, generation.TokenUsage); err != nil {
+		return err
+	}
+	return replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID)
+}
+
+func (s *Store) markChapterGenerateFailed(ctx context.Context, tenantID, chapterID, taskID, message string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, message); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+			update bid_chapters
+			set status = 'needs_fix',
+				needs_human_input = case
+					when nullif($3, '') is null then needs_human_input
+					else jsonb_build_array($3)
+				end,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, chapterID, message)
+		return err
+	})
+}
+
+func (s *Store) bindAcceptedTask(
+	ctx context.Context,
+	tenantID string,
+	resourceID string,
+	taskID string,
+	accepted aiTaskAccepted,
+	payload any,
+	after func(context.Context, pgx.Tx) error,
+) (Task, error) {
 	var task Task
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		payloadJSON, _ := json.Marshal(payload)
 		routeJSON, _ := json.Marshal(accepted.Route)
 		found, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
-			set status = $4,
-				external_task_id = $5,
+			set status = case
+					when status in ('done', 'failed', 'cancelled') then status
+					else $4
+				end,
+				external_task_id = coalesce(external_task_id, $5),
 				payload = $6,
 				route = $7,
 				updated_at = now()
@@ -846,17 +949,15 @@ func (s *Store) bindAcceptedTask(ctx context.Context, tenantID, exportID, taskID
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, tenantID, taskID, exportID, accepted.Status, accepted.TaskID, payloadJSON, routeJSON))
+		`, tenantID, taskID, resourceID, accepted.Status, accepted.TaskID, payloadJSON, routeJSON))
 		if err != nil {
 			return err
 		}
 		task = found
-		_, err = tx.Exec(ctx, `
-			update bid_exports
-			set status = $3, updated_at = now()
-			where tenant_id = $1 and id = $2
-		`, tenantID, exportID, accepted.Status)
-		return err
+		if after != nil {
+			return after(ctx, tx)
+		}
+		return nil
 	})
 	return task, err
 }
@@ -914,33 +1015,39 @@ func (s *Store) submitDocumentExport(ctx context.Context, exportType string, pay
 	return accepted, nil
 }
 
-func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenerateRequest) (chapterGenerateResponse, error) {
+func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenerateRequest) (aiTaskAccepted, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return chapterGenerateResponse{}, err
+		return aiTaskAccepted{}, err
 	}
 	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/chapter-generate"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return chapterGenerateResponse{}, err
+		return aiTaskAccepted{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return chapterGenerateResponse{}, err
+		return aiTaskAccepted{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return chapterGenerateResponse{}, fmt.Errorf("ai service returned %s", resp.Status)
+		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
-	var result chapterGenerateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return chapterGenerateResponse{}, err
+	var accepted aiTaskAccepted
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		return aiTaskAccepted{}, err
 	}
-	if result.TiptapJSON == nil || result.TraceID == "" {
-		return chapterGenerateResponse{}, ErrInvalidRequest
+	if accepted.TaskID == "" {
+		return aiTaskAccepted{}, ErrInvalidRequest
 	}
-	return result, nil
+	if accepted.Status == "" {
+		accepted.Status = "queued"
+	}
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	return accepted, nil
 }
 
 func chapterByID(ctx context.Context, tx pgx.Tx, tenantID, chapterID string) (Chapter, error) {
