@@ -216,6 +216,19 @@ export type KnowledgeDocumentReferenceDTO = {
   created_at: string
 }
 
+export type KnowledgeDocumentTemplateDTO = {
+  id: string
+  name: string
+  category: string
+  description: string
+  version: string
+  content: Record<string, unknown>
+  usage_count: number
+  status: 'active' | 'archived'
+  created_at: string
+  updated_at: string
+}
+
 export type BidDocumentDTO = {
   id: string
   project_id: string | null
@@ -412,6 +425,22 @@ export async function fetchKnowledgeDocumentReferences(
     `/knowledge/documents/${documentId}/references`,
   )
   return data.items
+}
+
+export async function fetchKnowledgeTemplates(): Promise<KnowledgeDocumentTemplateDTO[]> {
+  const { data } = await apiClient.get<{ items: KnowledgeDocumentTemplateDTO[] }>('/knowledge/templates')
+  return data.items
+}
+
+export async function createKnowledgeTemplate(payload: {
+  name: string
+  category?: string
+  description?: string
+  version?: string
+  content?: Record<string, unknown>
+}): Promise<KnowledgeDocumentTemplateDTO> {
+  const { data } = await apiClient.post<KnowledgeDocumentTemplateDTO>('/knowledge/templates', payload)
+  return data
 }
 
 export async function fetchBids(): Promise<BidDocumentDTO[]> {

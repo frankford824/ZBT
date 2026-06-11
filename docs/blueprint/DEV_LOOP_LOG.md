@@ -720,3 +720,58 @@ curl /api/v1/knowledge/documents/363729dc-65fb-4778-9a81-31f8489fe7ab/references
 ### 下一轮建议
 
 继续完善知识库三子页面：标签/分类管理表单、文档元数据编辑、模板库真实 API，或推进章节引用到编辑器定位。
+
+## Loop-6 / 文档模板库真实 API - 2026-06-11
+
+### 本轮目标
+
+1. 将 `/knowledge/templates` 从 stub 和静态前端表格推进为真实租户内数据。
+2. 落地 `document_templates` 表、RLS 和种子模板。
+3. 让文档模板页支持真实列表和新建模板。
+
+### 代码交付
+
+1. 新增迁移 `00010_document_templates.sql`，创建 `document_templates`，包含 name、category、description、version、content、usage_count、status，并启用 FORCE RLS。
+2. 为每个租户种子 3 个文档模板：项目实施方案、售后服务承诺、数据安全响应。
+3. `platform/knowledge` 新增 `DocumentTemplate`、`CreateDocumentTemplateRequest`、列表和创建方法。
+4. 后端注册真实 `GET /knowledge/templates` 和 `POST /knowledge/templates`，替换原 stub。
+5. 前端 API client 新增模板 DTO、列表和创建函数。
+6. `/knowledge/templates` 页面改为真实 API 表格，并提供“新建模板”弹窗，支持名称、分类、版本、说明和章节结构输入。
+7. API_SPEC、DATABASE_SCHEMA 和 DEV_LOOP_LOG 同步更新。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/api/routes.go
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+git diff --check
+docker compose build backend frontend
+docker compose up -d backend frontend ai-service
+curl http://127.0.0.1:8080/healthz
+curl /api/v1/knowledge/templates
+curl -X POST /api/v1/knowledge/templates ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `git diff --check` 通过。
+4. Docker 重新构建并启动 backend/frontend 成功；backend `/healthz` 返回 ok。
+5. goose 迁移版本为 10。
+6. `GET /knowledge/templates` 初始返回 3 条种子模板。
+7. `POST /knowledge/templates` 创建 `运行时模板验证-1781186252.docx` 成功，返回 id `74259391-ebda-43ac-9acb-2d8929042cab`、category `验证模板`、sections 数量 2。
+8. 再次 `GET /knowledge/templates` 返回 4 条，包含新建模板。
+9. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询 tenant1 新建模板，返回 0。
+
+### 偏离蓝图
+
+1. 当前模板正文以 JSON section 结构保存，尚未关联真实 docx 模板文件和预览。
+2. 还未实现模板编辑、归档、下载和“使用模板创建文档/标书”的业务动作。
+
+### 下一轮建议
+
+继续补知识库管理交互：标签/分类创建编辑删除表单、文档元数据编辑，或将文档模板关联 file_assets 实现模板文件上传/预览。

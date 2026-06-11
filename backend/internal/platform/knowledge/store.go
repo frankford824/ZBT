@@ -169,6 +169,27 @@ type DocumentReference struct {
 	CreatedAt        time.Time      `json:"created_at"`
 }
 
+type DocumentTemplate struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Category    string         `json:"category"`
+	Description string         `json:"description"`
+	Version     string         `json:"version"`
+	Content     map[string]any `json:"content"`
+	UsageCount  int            `json:"usage_count"`
+	Status      string         `json:"status"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+}
+
+type CreateDocumentTemplateRequest struct {
+	Name        string         `json:"name"`
+	Category    string         `json:"category"`
+	Description string         `json:"description"`
+	Version     string         `json:"version"`
+	Content     map[string]any `json:"content"`
+}
+
 type aiTaskAccepted struct {
 	TaskID string         `json:"task_id"`
 	Status string         `json:"status"`
@@ -539,6 +560,68 @@ func (s *Store) DocumentReferences(ctx context.Context, tenantID, id string) ([]
 		return rows.Err()
 	})
 	return references, err
+}
+
+func (s *Store) ListDocumentTemplates(ctx context.Context, tenantID string) ([]DocumentTemplate, error) {
+	templates := []DocumentTemplate{}
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			select id::text, name, category, description, version, content, usage_count, status, created_at, updated_at
+			from document_templates
+			where tenant_id = $1 and status = 'active'
+			order by created_at desc
+			limit 100
+		`, tenantID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			template, err := scanDocumentTemplate(rows)
+			if err != nil {
+				return err
+			}
+			templates = append(templates, template)
+		}
+		return rows.Err()
+	})
+	return templates, err
+}
+
+func (s *Store) CreateDocumentTemplate(ctx context.Context, tenantID string, req CreateDocumentTemplateRequest) (DocumentTemplate, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return DocumentTemplate{}, ErrInvalidRequest
+	}
+	category := strings.TrimSpace(req.Category)
+	if category == "" {
+		category = "通用模板"
+	}
+	version := strings.TrimSpace(req.Version)
+	if version == "" {
+		version = "v1.0"
+	}
+	content := req.Content
+	if content == nil {
+		content = map[string]any{}
+	}
+	contentJSON, _ := json.Marshal(content)
+	var template DocumentTemplate
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		created, err := scanDocumentTemplate(tx.QueryRow(ctx, `
+			insert into document_templates (
+				tenant_id, name, category, description, version, content
+			)
+			values ($1, $2, $3, $4, $5, $6)
+			returning id::text, name, category, description, version, content, usage_count, status, created_at, updated_at
+		`, tenantID, name, category, req.Description, version, contentJSON))
+		if err != nil {
+			return err
+		}
+		template = created
+		return nil
+	})
+	return template, err
 }
 
 func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string) (Task, error) {
@@ -1272,6 +1355,29 @@ func scanDocumentReference(row scanner) (DocumentReference, error) {
 	reference.Metadata = map[string]any{}
 	_ = json.Unmarshal(metadataRaw, &reference.Metadata)
 	return reference, nil
+}
+
+func scanDocumentTemplate(row scanner) (DocumentTemplate, error) {
+	var template DocumentTemplate
+	var contentRaw []byte
+	err := row.Scan(
+		&template.ID,
+		&template.Name,
+		&template.Category,
+		&template.Description,
+		&template.Version,
+		&contentRaw,
+		&template.UsageCount,
+		&template.Status,
+		&template.CreatedAt,
+		&template.UpdatedAt,
+	)
+	if err != nil {
+		return DocumentTemplate{}, err
+	}
+	template.Content = map[string]any{}
+	_ = json.Unmarshal(contentRaw, &template.Content)
+	return template, nil
 }
 
 func inferDocType(filename, contentType string) string {

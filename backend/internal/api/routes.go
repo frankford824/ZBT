@@ -313,6 +313,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/knowledge/documents/:id/preview", rbac.Require("knowledge", rbac.LevelRead), s.previewKnowledgeDocument)
 	group.GET("/knowledge/documents/:id/references", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeDocumentReferences)
 	group.POST("/knowledge/search", rbac.Require("knowledge", rbac.LevelRead), s.searchKnowledge)
+	group.GET("/knowledge/templates", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeTemplates)
+	group.POST("/knowledge/templates", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeTemplate)
 	group.GET("/knowledge/stats", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeStats)
 	group.GET("/bids", rbac.Require("bid", rbac.LevelRead), s.listBids)
 	group.POST("/bids", rbac.Require("bid", rbac.LevelFull), s.createBid)
@@ -366,6 +368,8 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /knowledge/documents/:id/preview":    true,
 		"GET /knowledge/documents/:id/references": true,
 		"POST /knowledge/search":                  true,
+		"GET /knowledge/templates":                true,
+		"POST /knowledge/templates":               true,
 		"GET /knowledge/stats":                    true,
 		"GET /bids":                               true,
 		"POST /bids":                              true,
@@ -659,6 +663,21 @@ func (s *server) searchKnowledge(c *gin.Context) {
 		sourceRefs = append(sourceRefs, result.SourceRef)
 	}
 	respond(c, gin.H{"items": results, "source_refs": sourceRefs}, nil)
+}
+
+func (s *server) listKnowledgeTemplates(c *gin.Context) {
+	result, err := s.knowledgeStore.ListDocumentTemplates(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) createKnowledgeTemplate(c *gin.Context) {
+	var req knowledge.CreateDocumentTemplateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := s.knowledgeStore.CreateDocumentTemplate(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
 }
 
 func (s *server) knowledgeStats(c *gin.Context) {

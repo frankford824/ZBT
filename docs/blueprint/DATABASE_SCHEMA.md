@@ -40,6 +40,8 @@ knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document
 
 `knowledge_references` 是 AI 生成内容引用知识库的反向索引。章节生成引用真实 chunk 时写入 `source_document_id`、`chapter_id`、`chunk_id` 和解析 metadata，`GET /knowledge/documents/:id/references` 据此展示文档被哪些标书章节引用。
 
+`document_templates` 保存租户内文档模板库，包含 name、category、description、version、content、usage_count 和 status。当前前端 `/knowledge/templates` 已接入列表和创建，模板正文先以 JSON section 结构保存，后续可关联 file_assets 或 docx 模板文件。
+
 ## 合规
 
 compliance_checks、compliance_issues、compliance_rules、compliance_reports、compliance_fix_logs。

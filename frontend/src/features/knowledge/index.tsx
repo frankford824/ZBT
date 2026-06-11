@@ -4,15 +4,17 @@ import {
   FileSearchOutlined,
   LinkOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   TagsOutlined,
 } from '@ant-design/icons'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { App as AntApp, Button, Card, Col, Drawer, Input, List, Row, Space, Statistic, Table, Tag, Tree, Upload } from 'antd'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { App as AntApp, Button, Card, Col, Drawer, Form, Input, List, Modal, Row, Space, Statistic, Table, Tag, Tree, Upload } from 'antd'
 import type { UploadProps } from 'antd'
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   confirmFileUpload,
+  createKnowledgeTemplate,
   createPresignedUpload,
   fetchFileURL,
   fetchKnowledgeCategories,
@@ -20,9 +22,11 @@ import {
   fetchKnowledgeDocuments,
   fetchKnowledgeStats,
   fetchKnowledgeTags,
+  fetchKnowledgeTemplates,
   processKnowledgeDocument,
   searchKnowledge,
   uploadToPresignedUrl,
+  type KnowledgeDocumentTemplateDTO,
   type KnowledgeDocumentReferenceDTO,
   type KnowledgeSearchResponseDTO,
   type KnowledgeDocumentDTO,
@@ -349,28 +353,117 @@ function DocumentReferenceDrawer({
 }
 
 export function KnowledgeTemplatesPage() {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [form] = Form.useForm<{
+    name: string
+    category?: string
+    description?: string
+    version?: string
+    sections?: string
+  }>()
+  const templates = useQuery({
+    queryKey: ['knowledge-templates'],
+    queryFn: fetchKnowledgeTemplates,
+  })
+  const createTemplate = useMutation({
+    mutationFn: createKnowledgeTemplate,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['knowledge-templates'] })
+      message.success('模板已创建')
+      setOpen(false)
+      form.resetFields()
+    },
+    onError: () => {
+      message.error('创建模板失败')
+    },
+  })
+
+  const submitTemplate = async () => {
+    const values = await form.validateFields()
+    const sections = (values.sections ?? '')
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    await createTemplate.mutateAsync({
+      name: values.name,
+      category: values.category,
+      description: values.description,
+      version: values.version,
+      content: { sections },
+    })
+  }
+
   return (
     <PageFrame
       module="知识库"
       title="文档模板"
       subtitle="企业内部方案、报告、合同、制度模板"
       tags={['page-knowledge-templates', '/knowledge/templates']}
+      actions={[
+        <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+          新建模板
+        </Button>,
+      ]}
     >
-      <Table
-        rowKey="name"
-        dataSource={[
-          { name: '项目实施方案模板.docx', category: '方案模板', version: 'v3.0', used: 89 },
-          { name: '售后服务承诺模板.docx', category: '报告模板', version: 'v2.1', used: 42 },
-          { name: '数据安全响应模板.docx', category: '制度模板', version: 'v1.4', used: 37 },
-        ]}
+      {templates.isError ? <ErrorBlock /> : null}
+      <Table<KnowledgeDocumentTemplateDTO>
+        rowKey="id"
+        loading={templates.isLoading}
+        dataSource={templates.data ?? []}
+        locale={{ emptyText: '暂无模板' }}
         columns={[
           { title: '模板名称', dataIndex: 'name' },
           { title: '分类', dataIndex: 'category' },
           { title: '版本', dataIndex: 'version' },
-          { title: '使用次数', dataIndex: 'used' },
-          { title: '操作', render: () => <Space><a>预览</a><a>编辑</a><a>下载</a></Space> },
+          { title: '说明', dataIndex: 'description' },
+          { title: '使用次数', dataIndex: 'usage_count' },
+          {
+            title: '章节结构',
+            render: (_, row) => {
+              const sections = Array.isArray(row.content.sections) ? row.content.sections : []
+              return (
+                <Space wrap>
+                  {sections.slice(0, 4).map((section) => (
+                    <Tag key={String(section)}>{String(section)}</Tag>
+                  ))}
+                </Space>
+              )
+            },
+          },
+          {
+            title: '创建时间',
+            render: (_, row) => new Date(row.created_at).toLocaleDateString(),
+          },
         ]}
       />
+      <Modal
+        title="新建文档模板"
+        open={open}
+        onCancel={() => setOpen(false)}
+        onOk={() => void submitTemplate()}
+        confirmLoading={createTemplate.isPending}
+        destroyOnHidden
+      >
+        <Form form={form} layout="vertical" initialValues={{ category: '方案模板', version: 'v1.0' }}>
+          <Form.Item label="模板名称" name="name" rules={[{ required: true, message: '请输入模板名称' }]}>
+            <Input placeholder="例如：项目实施方案模板.docx" />
+          </Form.Item>
+          <Form.Item label="分类" name="category">
+            <Input placeholder="方案模板 / 服务模板 / 制度模板" />
+          </Form.Item>
+          <Form.Item label="版本" name="version">
+            <Input placeholder="v1.0" />
+          </Form.Item>
+          <Form.Item label="说明" name="description">
+            <Input.TextArea rows={3} placeholder="模板用途、适用场景或审核要求" />
+          </Form.Item>
+          <Form.Item label="章节结构" name="sections">
+            <Input.TextArea rows={5} placeholder={'每行一个章节\n项目理解\n总体架构\n实施计划'} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </PageFrame>
   )
 }
