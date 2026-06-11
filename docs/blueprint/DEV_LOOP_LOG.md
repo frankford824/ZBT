@@ -1315,3 +1315,55 @@ curl -X GET /api/v1/ai-call-logs ...
 1. `estimated_cost` 当前仍为 0，尚未按 provider/model 配置单价计算费用。
 2. Python `ModelRouter.log_call()` 仍是轻量内存返回；持久化审计由 Go 在业务回调和 embedding 查询完成后统一落库。
 3. 失败的 Python AI 服务调用当前只有进入 HMAC 回调或成功返回 Go 后才会写日志；HTTP 级不可达失败仍作为调用方错误处理。
+
+## Loop-14 / 标书 PDF 导出闭环 - 2026-06-11
+
+### 本轮目标
+
+1. 补齐 x.md 第 13 节和 Loop-10 中 PDF 导出的硬要求。
+2. 复用现有 Go 编排、Python 导出、MinIO 私有存储、HMAC 回调和 Go 落库链路。
+3. 前端第 7 步导出页支持单个分册 docx / PDF 生成和下载。
+
+### 代码交付
+
+1. Go `platform/bid` 的 `CreateExport` 支持 `export_type=pdf`，按单个 part 汇总章节内容，写入 `bid_exports`、`ai_tasks` 和 `file_assets(content_type='application/pdf')`。
+2. Python AI 服务新增 `/tasks/export/pdf`，先用 `python-docx` 生成 docx 中间文件，再调用 LibreOffice Headless 转换为 PDF 并上传 MinIO。
+3. Python PDF 回调结果包含 export_type、part_count、chapter_count、size_bytes 和 `content_type=application/pdf`。
+4. 前端标书向导第 7 步为每个可导出分册提供 `.docx` 和 `.pdf` 两个动作；导出历史中用类型标签区分 DOCX / PDF / ZIP。
+5. API、数据库和导出设计文档同步更新 PDF 导出状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./...
+cd frontend && pnpm build
+cd ai-service && python3 -m compileall app
+git diff --check
+docker compose build backend frontend ai-service
+docker compose up -d backend frontend ai-service
+./infra/scripts/check.sh
+curl -X POST /api/v1/bids/:bidId/exports -d '{"export_type":"pdf","part_code":"tech"}'
+curl -X GET /api/v1/bid-exports/:exportId ...
+```
+
+结果：
+
+1. backend Go 测试通过。
+2. frontend build 通过；仍有既有大 chunk warning，无失败。
+3. `python3 -m compileall app` 通过。
+4. `git diff --check` 通过。
+5. Docker backend/frontend/ai-service 构建成功，并启动成功。
+6. `./infra/scripts/check.sh` 通过。
+7. 运行时使用 bid `50000000-0000-4000-8000-000000000001` 创建 PDF 导出 `c90cd2aa-40ab-4462-9db7-3929293c681e`，本地任务 `4c0483cc-337f-4824-9e18-427f018c1dba`，外部任务 `task-export-c90cd2aa40ab`。
+8. 运行时 PDF 导出完成为 `done`，文件名为 `智慧交通平台分离标书-技术标.pdf`，file_asset 为 `a4d0c2e5-9bac-47af-ad4c-0a427d711d79`，content_type 为 `application/pdf`，size_bytes 为 34211。
+9. 下载文件头为 `%PDF-`。
+10. 运行时 tenant2/other 访问 tenant1 PDF 导出详情返回 404。
+11. 使用 `zbt_app` 设置 tenant1 RLS 上下文查询该 PDF export 可见 export_type=`pdf`、status=`done`、content_type=`application/pdf`、size_bytes=34211；tenant2 RLS 上下文可见 0 条。
+12. `GET /ai-call-logs` 返回该 PDF document_export 日志，provider=`mock`、model=`docx-export-engine`、status=`done`。
+
+### 偏离蓝图
+
+1. PDF 当前以最小 docx 中间文件转换生成，封面、目录、页眉页脚、水印和模板版式保真仍待增强。
+2. ZIP 当前仍打包 docx 文件，尚未包含 PDF 副本、附件、工程量清单、电子标特殊格式或导出清单 manifest。

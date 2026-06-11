@@ -25,6 +25,7 @@ var (
 
 const (
 	docxContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	pdfContentType  = "application/pdf"
 	zipContentType  = "application/zip"
 )
 
@@ -917,7 +918,7 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 			"object_key":   objectKey,
 			"callback_url": s.cfg.AICallbackURL,
 		}
-		if exportType == "docx" {
+		if exportType != "zip" {
 			part, err := partForExport(ctx, tx, tenantID, bidID, partCode)
 			if err != nil {
 				return err
@@ -1910,7 +1911,7 @@ func normalizeExportType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return "docx"
-	case "docx", "zip":
+	case "docx", "pdf", "zip":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
@@ -1929,6 +1930,9 @@ func normalizePartCode(value string) string {
 func contentTypeForExport(exportType string) string {
 	if exportType == "zip" {
 		return zipContentType
+	}
+	if exportType == "pdf" {
+		return pdfContentType
 	}
 	return docxContentType
 }

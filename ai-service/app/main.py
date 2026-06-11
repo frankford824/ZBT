@@ -14,7 +14,7 @@ from fastapi import BackgroundTasks, FastAPI
 from minio import Minio
 
 from app.gateway.model_router import ModelRouter
-from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_zip
+from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.export import DocumentExportRequest
@@ -208,6 +208,14 @@ async def export_docx(
     return enqueue_document_export("docx", payload, background_tasks)
 
 
+@app.post("/tasks/export/pdf", response_model=TaskAccepted, status_code=202)
+async def export_pdf(
+    payload: DocumentExportRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
+    return enqueue_document_export("pdf", payload, background_tasks)
+
+
 @app.post("/tasks/export/zip", response_model=TaskAccepted, status_code=202)
 async def export_zip(
     payload: DocumentExportRequest,
@@ -235,6 +243,9 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
         if export_type == "zip":
             export_bid_zip(payload.bid_title, payload.parts, output_path)
             content_type = "application/zip"
+        elif export_type == "pdf":
+            export_bid_pdf(payload.bid_title, payload.part_title, payload.chapters, output_path)
+            content_type = "application/pdf"
         else:
             export_bid_docx(payload.bid_title, payload.part_title, payload.chapters, output_path)
         client = minio_client()

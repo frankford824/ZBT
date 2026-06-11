@@ -32,7 +32,7 @@ bid_documents、bid_parts、bid_chapters、bid_chapter_versions、bid_generation
 
 标书类型：combined、separated、custom。bid_parts 支持 combined_body、tech、business、boq、attachment。
 
-`bid_exports` 关联 `file_assets` 保存导出产物，status 为 queued / running / done / failed / cancelled。当前最小实现支持 docx 导出，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
+`bid_exports` 关联 `file_assets` 保存导出产物，export_type 支持 docx / pdf / zip，status 为 queued / running / done / failed / cancelled。当前实现支持 docx、LibreOffice 转 PDF 和 ZIP 打包，导出文件仍通过私有 MinIO 和 Go 鉴权后的预签名 URL 下载。
 
 `bid_templates` 保存租户内标书模板库，包含 name、bid_type、category、description、version、content、usage_count 和 status。当前前端 `/bids/templates` 已接入列表和使用动作；使用模板会创建 draft 标书、初始化默认分册章节，并递增模板 usage_count。
 

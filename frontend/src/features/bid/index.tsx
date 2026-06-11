@@ -2,6 +2,7 @@ import {
   CheckOutlined,
   DiffOutlined,
   DownloadOutlined,
+  FilePdfOutlined,
   FileZipOutlined,
   PlusOutlined,
   SaveOutlined,
@@ -383,7 +384,7 @@ export function BidWizardPage() {
     },
   })
   const exportMutation = useMutation({
-    mutationFn: (payload: { export_type: 'docx' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
+    mutationFn: (payload: { export_type: 'docx' | 'pdf' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
     onSuccess: async () => {
       message.success('导出任务已创建')
       await queryClient.invalidateQueries({ queryKey: ['bid-exports', bidId] })
@@ -450,14 +451,22 @@ export function BidWizardPage() {
             <Space direction="vertical" className="full-width">
               <Space wrap>
                 {exportableParts.map((part) => (
-                  <Button
-                    key={part.id}
-                    icon={<DownloadOutlined />}
-                    loading={exportMutation.isPending}
-                    onClick={() => exportMutation.mutate({ export_type: 'docx', part_code: part.code })}
-                  >
-                    导出{part.title}.docx
-                  </Button>
+                  <Space.Compact key={part.id}>
+                    <Button
+                      icon={<DownloadOutlined />}
+                      loading={exportMutation.isPending}
+                      onClick={() => exportMutation.mutate({ export_type: 'docx', part_code: part.code })}
+                    >
+                      {part.title}.docx
+                    </Button>
+                    <Button
+                      icon={<FilePdfOutlined />}
+                      loading={exportMutation.isPending}
+                      onClick={() => exportMutation.mutate({ export_type: 'pdf', part_code: part.code })}
+                    >
+                      {part.title}.pdf
+                    </Button>
+                  </Space.Compact>
                 ))}
                 <Button
                   icon={<FileZipOutlined />}
@@ -479,7 +488,7 @@ export function BidWizardPage() {
                   {
                     title: '类型',
                     dataIndex: 'part_code',
-                    render: (value: string, row: BidExportDTO) => partCodeLabel(row.export_type === 'zip' ? 'all' : value),
+                    render: (value: string, row: BidExportDTO) => exportTypeLabel(row, value),
                   },
                   { title: '状态', dataIndex: 'status', render: exportStatusTag },
                   {
@@ -516,6 +525,18 @@ function bidStatusLabel(value: string) {
 
 function partCodeLabel(value: string) {
   return { combined_body: '综合标书', tech: '技术标', business: '商务标', all: '全套 ZIP' }[value] ?? value
+}
+
+function exportTypeLabel(row: BidExportDTO, partCode: string) {
+  if (row.export_type === 'zip') {
+    return <Tag color="blue">全套 ZIP</Tag>
+  }
+  return (
+    <Space size={4}>
+      <Tag>{partCodeLabel(partCode)}</Tag>
+      <Tag color={row.export_type === 'pdf' ? 'red' : 'green'}>{row.export_type.toUpperCase()}</Tag>
+    </Space>
+  )
 }
 
 function exportStatusTag(value: BidExportDTO['status']) {
