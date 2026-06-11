@@ -36,6 +36,8 @@ knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document
 
 `knowledge_documents` 关联 `file_assets`，记录文档标题、类型、分类、解析状态、摘要和元数据。`knowledge_categories` / `knowledge_tags` 支撑文档库分类树和标签管理，`knowledge_document_tags` 保存文档与标签关系。`ai_tasks` 记录 Go 编排的 AI/文档处理任务，Python AI 服务只返回任务状态或回调结果，最终由 Go 验签后更新业务状态。
 
+`knowledge_chunks` 保存解析切片正文、页码、section_path、metadata 和 `embedding vector(1024)`。当前最小实现使用 Python MockProvider 生成 embedding，Go 回调写入 pgvector，并通过 `idx_knowledge_chunks_embedding_hnsw` 使用 HNSW cosine 索引支撑租户内语义搜索。
+
 ## 合规
 
 compliance_checks、compliance_issues、compliance_rules、compliance_reports、compliance_fix_logs。

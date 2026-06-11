@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,6 +124,7 @@ type ChunkInput struct {
 	PageStart   *int           `json:"page_start"`
 	PageEnd     *int           `json:"page_end"`
 	Metadata    map[string]any `json:"metadata"`
+	Embedding   []float64      `json:"embedding"`
 }
 
 type SearchRequest struct {
@@ -157,6 +160,19 @@ type aiTaskAccepted struct {
 	TaskID string         `json:"task_id"`
 	Status string         `json:"status"`
 	Route  map[string]any `json:"route"`
+}
+
+type embeddingRequest struct {
+	TenantID string   `json:"tenant_id"`
+	Texts    []string `json:"texts"`
+}
+
+type embeddingResponse struct {
+	Provider   string         `json:"provider"`
+	Model      string         `json:"model"`
+	Dimensions int            `json:"dimensions"`
+	Embeddings [][]float64    `json:"embeddings"`
+	Route      map[string]any `json:"route"`
 }
 
 func NewStore(cfg config.Config, pool *pgxpool.Pool) *Store {
@@ -703,10 +719,20 @@ func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) 
 	if limit <= 0 || limit > 20 {
 		limit = 8
 	}
+	queryEmbedding := ""
+	if query != "" {
+		if embeddings, err := s.embedKnowledgeTexts(ctx, tenantID, []string{query}); err == nil && len(embeddings) > 0 {
+			if literal, err := vectorLiteralFromEmbedding(embeddings[0]); err == nil {
+				queryEmbedding = literal
+			}
+		}
+	}
 	results := []SearchResult{}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			with ranked as (
+			with query_vector as (
+				select nullif($5, '')::vector as embedding
+			), ranked as (
 				select
 					kc.id::text as chunk_id,
 					kc.document_id::text,
@@ -723,9 +749,35 @@ func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) 
 							to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')),
 							plainto_tsquery('simple', $2)
 						)
-					end as rank_score
+					end
+					+ case
+						when $2 <> '' and (
+							kc.title ilike '%' || $2 || '%'
+							or kc.content ilike '%' || $2 || '%'
+							or kc.section_path ilike '%' || $2 || '%'
+						) then 0.35
+						else 0
+					end
+					+ case
+						when $2 <> '' and exists (
+							select 1
+							from unnest(regexp_split_to_array($2, '\s+')) as term(value)
+							where term.value <> ''
+								and (
+									kc.title ilike '%' || term.value || '%'
+									or kc.content ilike '%' || term.value || '%'
+									or kc.section_path ilike '%' || term.value || '%'
+								)
+						) then 0.2
+						else 0
+					end
+					+ case
+						when qv.embedding is not null and kc.embedding is not null then greatest(0, 1 - (kc.embedding <=> qv.embedding))
+						else 0
+					end as score
 				from knowledge_chunks kc
 				join knowledge_documents d on d.id = kc.document_id and d.tenant_id = kc.tenant_id
+				cross join query_vector qv
 					where kc.tenant_id = $1
 						and ($2 = ''
 							or to_tsvector('simple', coalesce(kc.title, '') || ' ' || coalesce(kc.content, '') || ' ' || coalesce(kc.section_path, '')) @@ plainto_tsquery('simple', $2)
@@ -740,12 +792,14 @@ func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) 
 										or kc.content ilike '%' || term.value || '%'
 										or kc.section_path ilike '%' || term.value || '%'
 									)
-							))
+							)
+							or (qv.embedding is not null and kc.embedding is not null)
+						)
 					and ($4 = '' or d.doc_type = $4)
 			)
 			select
 				r.chunk_id, r.document_id, r.title, r.content, r.section_path,
-				r.page_start, r.page_end, r.metadata, r.rank_score, r.created_at,
+				r.page_start, r.page_end, r.metadata, r.score, r.created_at,
 				d.id::text, d.title, d.doc_type, d.parse_status, d.summary, d.metadata,
 				d.processed_at, d.created_at, d.updated_at,
 				fa.id::text, fa.filename, fa.content_type, fa.size_bytes, fa.status,
@@ -766,11 +820,11 @@ func (s *Store) Search(ctx context.Context, tenantID string, req SearchRequest) 
 			left join knowledge_document_tags kdt on kdt.document_id = d.id and kdt.tenant_id = d.tenant_id
 			left join knowledge_tags t on t.id = kdt.tag_id and t.tenant_id = d.tenant_id
 			group by r.chunk_id, r.document_id, r.title, r.content, r.section_path,
-				r.page_start, r.page_end, r.metadata, r.rank_score, r.created_at,
+				r.page_start, r.page_end, r.metadata, r.score, r.created_at,
 				d.id, fa.id, c.id
-			order by r.rank_score desc, r.created_at desc
+			order by r.score desc, r.created_at desc
 			limit $3
-		`, tenantID, query, limit, strings.TrimSpace(req.DocType))
+		`, tenantID, query, limit, strings.TrimSpace(req.DocType), queryEmbedding)
 		if err != nil {
 			return err
 		}
@@ -822,6 +876,41 @@ func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]a
 	return accepted, nil
 }
 
+func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID string, texts []string) ([][]float64, error) {
+	if len(texts) == 0 {
+		return nil, ErrInvalidRequest
+	}
+	body, err := json.Marshal(embeddingRequest{
+		TenantID: tenantID,
+		Texts:    texts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/embeddings/knowledge"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("ai service embedding returned %s", resp.Status)
+	}
+	var decoded embeddingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return nil, err
+	}
+	if len(decoded.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("ai service embedding count mismatch: got %d want %d", len(decoded.Embeddings), len(texts))
+	}
+	return decoded.Embeddings, nil
+}
+
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -860,17 +949,44 @@ func replaceChunks(ctx context.Context, tx pgx.Tx, tenantID, documentID string, 
 		}
 		metadata["chunk_index"] = index
 		metadataJSON, _ := json.Marshal(metadata)
+		embedding, err := vectorLiteralFromEmbedding(chunk.Embedding)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			insert into knowledge_chunks (
 				tenant_id, document_id, title, content, section_path,
-				page_start, page_end, metadata
+				page_start, page_end, metadata, embedding
 			)
-			values ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, tenantID, documentID, title, content, sectionPath, chunk.PageStart, chunk.PageEnd, metadataJSON); err != nil {
+			values ($1, $2, $3, $4, $5, $6, $7, $8, case when $9 = '' then null else $9::vector end)
+		`, tenantID, documentID, title, content, sectionPath, chunk.PageStart, chunk.PageEnd, metadataJSON, embedding); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func vectorLiteralFromEmbedding(values []float64) (string, error) {
+	if len(values) == 0 {
+		return "", nil
+	}
+	if len(values) != 1024 {
+		return "", fmt.Errorf("embedding dimension mismatch: got %d want 1024", len(values))
+	}
+	var builder strings.Builder
+	builder.Grow(len(values) * 10)
+	builder.WriteByte('[')
+	for index, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return "", fmt.Errorf("embedding contains non-finite value at index %d", index)
+		}
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(strconv.FormatFloat(value, 'f', -1, 64))
+	}
+	builder.WriteByte(']')
+	return builder.String(), nil
 }
 
 func documentSelectSQL(suffix string) string {

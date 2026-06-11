@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import math
+import re
+
 from app.schemas.common import SourceRef
 from app.schemas.generation import ChapterGenerateRequest, ChapterGenerateResponse
 
@@ -23,8 +27,17 @@ class MockProvider:
         return True
 
     def embed_text(self, text: str) -> list[float]:
-        seed = float(min(len(text), 100)) / 100
-        return [seed] * 1024
+        dimensions = self.get_dimensions()
+        vector = [0.0] * dimensions
+        for token in _embedding_tokens(text):
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            index = int.from_bytes(digest[:4], "big") % dimensions
+            weight = 1.0 + min(len(token), 8) / 8.0
+            vector[index] += weight
+        norm = math.sqrt(sum(value * value for value in vector))
+        if norm == 0:
+            return self.embed_text("__empty__")
+        return [value / norm for value in vector]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         return [self.embed_text(text) for text in texts]
@@ -99,3 +112,18 @@ class MockProvider:
                 "output_tokens": 256,
             },
         )
+
+
+def _embedding_tokens(text: str) -> list[str]:
+    normalized = text.lower()
+    tokens: list[str] = []
+    tokens.extend(re.findall(r"[a-z0-9]+", normalized))
+    for segment in re.findall(r"[\u4e00-\u9fff]+", normalized):
+        tokens.extend(segment)
+        if len(segment) > 1:
+            tokens.extend(segment[index : index + 2] for index in range(len(segment) - 1))
+        if len(segment) > 2:
+            tokens.extend(segment[index : index + 3] for index in range(len(segment) - 2))
+    if not tokens:
+        tokens.append("__empty__")
+    return tokens

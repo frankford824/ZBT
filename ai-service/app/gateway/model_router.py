@@ -54,6 +54,13 @@ class ModelRouter:
             provider = self.providers["mock"]
         return provider
 
+    def get_embedding(self, task_type: str, tenant_id: str) -> MockProvider:
+        target = self.resolve(task_type, tenant_id)
+        provider = self.providers.get(target.provider)
+        if provider is None:
+            provider = self.providers["mock"]
+        return provider
+
     def log_call(self, **kwargs: object) -> dict[str, object]:
         return {"logged": True, **kwargs}
 

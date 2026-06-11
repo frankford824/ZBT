@@ -19,7 +19,11 @@ from app.pipelines.parse.document_parser import parse_document
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.export import DocumentExportRequest
 from app.schemas.generation import ChapterGenerateRequest
-from app.schemas.knowledge import KnowledgeProcessRequest
+from app.schemas.knowledge import (
+    KnowledgeEmbeddingRequest,
+    KnowledgeEmbeddingResponse,
+    KnowledgeProcessRequest,
+)
 
 CONFIG_PATH = Path(__file__).parent / "config" / "model_routing.yaml"
 
@@ -64,6 +68,20 @@ async def knowledge_process(
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
+@app.post("/embeddings/knowledge", response_model=KnowledgeEmbeddingResponse)
+async def knowledge_embeddings(payload: KnowledgeEmbeddingRequest) -> KnowledgeEmbeddingResponse:
+    route = router.resolve("knowledge_embedding", tenant_id=payload.tenant_id)
+    provider = router.get_embedding("knowledge_embedding", tenant_id=payload.tenant_id)
+    embeddings = provider.embed_batch(payload.texts)
+    return KnowledgeEmbeddingResponse(
+        provider=provider.name,
+        model=route.model,
+        dimensions=provider.get_dimensions(),
+        embeddings=embeddings,
+        route=route.model_dump(),
+    )
+
+
 def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -> None:
     try:
         client = minio_client()
@@ -74,6 +92,17 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
             response.close()
             response.release_conn()
         parsed = parse_document(payload, content)
+        embedding_provider = router.get_embedding("knowledge_embedding", tenant_id=payload.tenant_id)
+        embedding_route = router.resolve("knowledge_embedding", tenant_id=payload.tenant_id)
+        embedding_inputs = [
+            f"{chunk.title}\n{chunk.section_path}\n{chunk.content}" for chunk in parsed.chunks
+        ]
+        embeddings = embedding_provider.embed_batch(embedding_inputs) if embedding_inputs else []
+        for chunk, embedding in zip(parsed.chunks, embeddings, strict=False):
+            chunk.embedding = embedding
+            chunk.metadata["embedding_model"] = embedding_route.model
+            chunk.metadata["embedding_provider"] = embedding_provider.name
+            chunk.metadata["embedding_dimensions"] = embedding_provider.get_dimensions()
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -85,6 +114,9 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
                 "summary": parsed.summary,
                 "metadata": parsed.metadata,
                 "chunk_count": len(parsed.chunks),
+                "embedding_model": embedding_route.model,
+                "embedding_provider": embedding_provider.name,
+                "embedding_dimensions": embedding_provider.get_dimensions(),
             },
         }
     except Exception as exc:  # pragma: no cover - defensive task boundary

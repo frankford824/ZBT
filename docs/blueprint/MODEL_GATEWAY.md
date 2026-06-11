@@ -14,6 +14,8 @@ OCRProvider：parse_pdf、parse_image、extract_layout、extract_tables、health
 
 ModelRouter：resolve、fallback、log_call、enforce_quota。
 
+当前已落地 `/embeddings/knowledge`，Go 后端在知识库搜索时调用该端点获取 query embedding。该端点通过 `knowledge_embedding` 路由解析 Provider，当前使用 Mock embedding，后续可替换为 OpenAI-compatible、DashScope 或 Local BGE。
+
 ## Provider 类型
 
 预留 OpenAI-compatible、Anthropic、DashScope、Gemini、DeepSeek、Local、Mock LLM；OpenAI-compatible、DashScope、Local BGE、Mock embedding；Cohere、Jina、Local BGE、Mock rerank；PaddleOCR、Cloud OCR、Azure Document Intelligence、Mistral OCR、Mock OCR。

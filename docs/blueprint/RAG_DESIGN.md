@@ -16,4 +16,4 @@
 
 生成内容使用类似 {{ref:chunk_id}} 的中间标记，落库时解析为 source_refs。
 
-当前实现状态：text/plain、PDF 和 Word 已具备最小文本抽取、切片和 knowledge_chunks 入库能力，`POST /knowledge/search` 已提供租户内关键词检索并返回 source_refs，支持整句或空格拆分关键词命中。章节重新生成已异步任务化，Go 会在创建任务前检索当前租户 `knowledge_chunks` 并传入 `retrieved_knowledge_refs`；Python 生成完成回调 Go 后保存 AI 返回的 source_refs，若 chunk/document 同租户存在则将 `knowledge_references.source_document_id` 与 `chunk_id` 解析为真实 UUID 并标记 resolved。向量 embedding、pgvector 召回、RRF 和 rerank 仍待实现。
+当前实现状态：text/plain、PDF 和 Word 已具备最小文本抽取、切片和 knowledge_chunks 入库能力。Python 文档处理任务会通过 `knowledge_embedding` 路由生成 MockProvider embedding，Go 回调入库到 `knowledge_chunks.embedding vector(1024)`，并建立 HNSW cosine 索引。`POST /knowledge/search` 会调用 Python `/embeddings/knowledge` 生成 query embedding，在当前租户内将 pgvector cosine 分数与 PostgreSQL 全文/关键词分数融合排序，并返回 items 与 source_refs；AI 服务不可用时仍保留关键词兜底。章节重新生成已异步任务化，Go 会在创建任务前检索当前租户 `knowledge_chunks` 并传入 `retrieved_knowledge_refs`；Python 生成完成回调 Go 后保存 AI 返回的 source_refs，若 chunk/document 同租户存在则将 `knowledge_references.source_document_id` 与 `chunk_id` 解析为真实 UUID 并标记 resolved。RRF、RerankProvider 精排和真实 embedding Provider 仍待实现。

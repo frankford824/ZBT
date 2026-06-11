@@ -609,3 +609,66 @@ docker compose up -d backend frontend ai-service
 ### 下一轮建议
 
 进入 Loop-6：完善知识库三子页面、文档预览、标签/分类管理交互、embedding MockProvider 入库和 pgvector 语义搜索；或继续推进章节 diff 的结构化可视化。
+
+## Loop-6 / Mock embedding 与 pgvector 语义搜索 - 2026-06-11
+
+### 本轮目标
+
+1. 让知识库文档处理结果携带 embedding，并写入 `knowledge_chunks.embedding`。
+2. 为 `knowledge_chunks.embedding` 建立 pgvector 索引。
+3. 将 `/knowledge/search` 从关键词检索推进为租户内语义向量召回 + 关键词融合排序。
+4. 保持所有 embedding 调用经过 Python AI 服务 ModelRouter。
+
+### 代码交付
+
+1. Python AI 服务新增 `/embeddings/knowledge`，通过 `knowledge_embedding` 路由返回 MockProvider 1024 维 embedding。
+2. MockProvider 的 embedding 从长度常量改为确定性 token-hash 向量，并做 L2 归一化，支持基本中文字符/词片相似度冒烟。
+3. `/tasks/knowledge-process` 后台任务在切片后生成 embedding，回调 Go 时每个 chunk 携带 `embedding` 和 embedding 元数据。
+4. Go `platform/knowledge` 在回调写入 chunk 时校验 1024 维向量并写入 pgvector；无 embedding 的旧回调仍可写入 null。
+5. 新增迁移 `00009_knowledge_chunk_embedding_index.sql`，为 `knowledge_chunks.embedding` 创建 HNSW cosine 索引。
+6. `/knowledge/search` 会调用 AI 服务生成 query embedding，将 pgvector cosine 分数与全文/关键词分数融合排序；AI embedding 调用失败时保留关键词兜底。
+7. 新增 Go 单测覆盖向量字面量校验，新增 Python 测试覆盖 Mock embedding 的确定性、维度和基本相似度排序。
+8. AI_PIPELINE、RAG_DESIGN、API_SPEC、DATABASE_SCHEMA、MODEL_GATEWAY 文档同步更新。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m compileall ai-service/app
+cd backend && GOTOOLCHAIN=local go test ./...
+python3 -m pytest app/tests
+docker compose build backend ai-service
+docker compose up -d backend ai-service frontend
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/models/health
+curl -X POST http://127.0.0.1:8000/embeddings/knowledge ...
+./infra/scripts/check.sh
+git diff --check
+```
+
+结果：
+
+1. AI compileall 通过。
+2. backend Go 测试通过，新增 `platform/knowledge` 单测通过。
+3. 本机和 AI 容器均未安装 pytest，`python -m pytest app/tests` 返回 `No module named pytest`；对应 Python 测试已通过 compileall，待后续镜像安装 dev extra 后执行。
+4. 首次 `docker compose build backend ai-service` 因 DockerHub `golang:1.25-alpine` TLS handshake timeout 失败；重试后 backend 与 ai-service 镜像构建成功。
+5. backend、ai-service、frontend 启动成功；backend `/healthz`、AI `/healthz`、AI `/models/health` 均返回 ok。
+6. goose 迁移版本为 9，`idx_knowledge_chunks_embedding_hnsw` 存在。
+7. `/embeddings/knowledge` 返回 provider=mock、model=configurable-embedding-model、dimensions=1024，向量 L2 norm=1.0。
+8. 运行时上传并处理 `zbt-pgvector-semantic.txt`，生成文档 `8057186a-cd9d-4d7d-ae3d-30382e34f592`，该文档 1 个 chunk、1 个 embedding，`vector_dims(embedding)=1024`。
+9. `/knowledge/search` 查询 `星瀚治理` 返回 1 条结果，首条为该上传文档，score=0.176506，source_refs=1；查询词并非原文完整子串，用于验证 pgvector 语义召回参与排序。
+10. 使用 `zbt_app` 设置 tenant2 RLS 上下文查询该文档 chunk，返回 0，确认向量入库后仍受租户隔离约束。
+11. `./infra/scripts/check.sh` 通过；前端构建仍有既有大 chunk warning，无失败。
+12. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮落地的是 Mock embedding + pgvector 最小语义召回，不是生产级 BGE/OpenAI embedding。
+2. 检索排序为 pgvector cosine 分数与关键词分数直接加权，尚未实现正式 RRF 融合和 RerankProvider 精排。
+3. 历史已处理 chunk 没有自动补 embedding；后续可加批量 reindex 任务。
+
+### 下一轮建议
+
+继续 Loop-6：完善知识库三子页面、文档预览、标签/分类管理交互；或进入检索增强的下一步，实现 RRF + RerankProvider 与历史 chunk embedding reindex。
