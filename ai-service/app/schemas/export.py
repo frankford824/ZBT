@@ -14,6 +14,17 @@ class ExportPart(BaseModel):
     chapters: list[ExportChapter] = Field(default_factory=list)
 
 
+class ExportLayoutOptions(BaseModel):
+    template_name: str = "zbt-standard"
+    include_cover: bool = True
+    include_toc: bool = True
+    include_page_numbers: bool = True
+    header_text: str | None = None
+    footer_text: str | None = None
+    watermark_text: str | None = None
+    generated_at: str | None = None
+
+
 class DocumentExportRequest(BaseModel):
     tenant_id: str
     export_id: str
@@ -26,4 +37,5 @@ class DocumentExportRequest(BaseModel):
     object_key: str
     chapters: list[ExportChapter] = Field(default_factory=list)
     parts: list[ExportPart] = Field(default_factory=list)
+    layout: ExportLayoutOptions = Field(default_factory=ExportLayoutOptions)
     callback_url: str | None = None

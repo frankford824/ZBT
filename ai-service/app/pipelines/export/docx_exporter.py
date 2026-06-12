@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
+from xml.sax.saxutils import escape
 
 from docx import Document
+from docx.document import Document as DocxDocument
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import qn
+from docx.section import Section
+from docx.shared import Cm, Pt, RGBColor
 
-from app.schemas.export import ExportChapter, ExportPart
+from app.schemas.export import ExportChapter, ExportLayoutOptions, ExportPart
+
+MARKDOWN_TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
 
 
 def export_minimal_docx(title: str, paragraphs: list[str], output_path: Path) -> Path:
@@ -21,37 +32,52 @@ def export_minimal_docx(title: str, paragraphs: list[str], output_path: Path) ->
     return output_path
 
 
-def export_bid_docx(title: str, part_title: str, chapters: list[ExportChapter], output_path: Path) -> Path:
-    document = Document()
-    document.add_heading(title, level=1)
-    document.add_heading(part_title, level=2)
-    for chapter in chapters:
-        document.add_heading(chapter.title, level=3)
-        text = chapter.plain_text.strip() or "本章节暂无内容，需要人工补充。"
-        for paragraph in text.splitlines():
-            if paragraph.strip():
-                document.add_paragraph(paragraph.strip())
+def export_bid_docx(
+    title: str,
+    part_title: str,
+    chapters: list[ExportChapter],
+    output_path: Path,
+    layout: ExportLayoutOptions | None = None,
+) -> Path:
+    layout = layout or ExportLayoutOptions()
+    document = _new_document()
+    _apply_master_layout(document, title, part_title, layout)
+    _render_cover(document, title, part_title, layout)
+    _render_toc(document, layout)
+    _render_bid_body(document, part_title, chapters)
+    _enable_field_updates(document)
     document.save(output_path)
     return output_path
 
 
-def export_bid_zip(title: str, parts: list[ExportPart], output_path: Path) -> Path:
+def export_bid_zip(
+    title: str,
+    parts: list[ExportPart],
+    output_path: Path,
+    layout: ExportLayoutOptions | None = None,
+) -> Path:
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         with ZipFile(output_path, mode="w", compression=ZIP_DEFLATED) as archive:
             for index, part in enumerate(parts, start=1):
                 docx_name = f"{index:02d}-{_safe_filename(part.title or part.code)}.docx"
                 docx_path = tmp_path / docx_name
-                export_bid_docx(title, part.title, part.chapters, docx_path)
+                export_bid_docx(title, part.title, part.chapters, docx_path, layout=layout)
                 archive.write(docx_path, docx_name)
     return output_path
 
 
-def export_bid_pdf(title: str, part_title: str, chapters: list[ExportChapter], output_path: Path) -> Path:
+def export_bid_pdf(
+    title: str,
+    part_title: str,
+    chapters: list[ExportChapter],
+    output_path: Path,
+    layout: ExportLayoutOptions | None = None,
+) -> Path:
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         docx_path = tmp_path / "source.docx"
-        export_bid_docx(title, part_title, chapters, docx_path)
+        export_bid_docx(title, part_title, chapters, docx_path, layout=layout)
         soffice = os.getenv("LIBREOFFICE_PATH", "soffice")
         completed = subprocess.run(
             [
@@ -75,6 +101,286 @@ def export_bid_pdf(title: str, part_title: str, chapters: list[ExportChapter], o
             raise RuntimeError(message)
         shutil.move(str(pdf_path), output_path)
     return output_path
+
+
+def _new_document() -> DocxDocument:
+    template_path = os.getenv("BID_EXPORT_TEMPLATE_PATH", "").strip()
+    if not template_path:
+        return Document()
+    path = Path(template_path)
+    if not path.exists():
+        raise RuntimeError(f"BID_EXPORT_TEMPLATE_PATH does not exist: {template_path}")
+    return Document(path)
+
+
+def _apply_master_layout(
+    document: DocxDocument,
+    title: str,
+    part_title: str,
+    layout: ExportLayoutOptions,
+) -> None:
+    section = document.sections[0]
+    section.top_margin = Cm(2.6)
+    section.bottom_margin = Cm(2.4)
+    section.left_margin = Cm(2.8)
+    section.right_margin = Cm(2.6)
+    section.header_distance = Cm(1.2)
+    section.footer_distance = Cm(1.2)
+    section.different_first_page_header_footer = layout.include_cover
+    _apply_styles(document)
+    _render_header_footer(section, title, part_title, layout)
+
+
+def _apply_styles(document: DocxDocument) -> None:
+    _set_style_font(document, "Normal", "Times New Roman", "SimSun", 12, RGBColor(0x1F, 0x29, 0x37))
+    normal = document.styles["Normal"]
+    normal.paragraph_format.line_spacing = 1.5
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.first_line_indent = Cm(0.74)
+
+    _set_style_font(document, "Title", "Times New Roman", "Microsoft YaHei", 22, RGBColor(0x11, 0x1B, 0x2E))
+    _set_style_font(document, "Heading 1", "Times New Roman", "Microsoft YaHei", 18, RGBColor(0x11, 0x1B, 0x2E))
+    _set_style_font(document, "Heading 2", "Times New Roman", "Microsoft YaHei", 15, RGBColor(0x1D, 0x4E, 0x89))
+    _set_style_font(document, "Heading 3", "Times New Roman", "Microsoft YaHei", 13, RGBColor(0x1F, 0x29, 0x37))
+    for name in ("Heading 1", "Heading 2", "Heading 3"):
+        style = document.styles[name]
+        style.paragraph_format.first_line_indent = None
+        style.paragraph_format.space_before = Pt(12)
+        style.paragraph_format.space_after = Pt(6)
+
+
+def _set_style_font(
+    document: DocxDocument,
+    style_name: str,
+    ascii_font: str,
+    east_asia_font: str,
+    size: int,
+    color: RGBColor,
+) -> None:
+    style = document.styles[style_name]
+    style.font.name = ascii_font
+    style.font.size = Pt(size)
+    style.font.color.rgb = color
+    if style.element.rPr is None:
+        style.element.get_or_add_rPr()
+    style.element.rPr.rFonts.set(qn("w:eastAsia"), east_asia_font)
+
+
+def _render_header_footer(
+    section: Section,
+    title: str,
+    part_title: str,
+    layout: ExportLayoutOptions,
+) -> None:
+    header_text = layout.header_text or f"{title} - {part_title}"
+    header = section.header
+    header.paragraphs[0].text = header_text
+    header.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _format_runs(header.paragraphs[0], font_size=9, color=RGBColor(0x55, 0x65, 0x74))
+
+    watermark_text = layout.watermark_text or os.getenv("BID_EXPORT_WATERMARK_TEXT", "").strip()
+    if watermark_text:
+        _add_watermark(header, watermark_text)
+        if section.different_first_page_header_footer:
+            _add_watermark(section.first_page_header, watermark_text)
+
+    footer = section.footer
+    paragraph = footer.paragraphs[0]
+    paragraph.text = layout.footer_text or "智标通投标文件导出"
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if layout.include_page_numbers:
+        paragraph.add_run("  |  第 ")
+        _add_field(paragraph, "PAGE", "1")
+        paragraph.add_run(" 页 / 共 ")
+        _add_field(paragraph, "NUMPAGES", "1")
+        paragraph.add_run(" 页")
+    _format_runs(paragraph, font_size=9, color=RGBColor(0x55, 0x65, 0x74))
+
+
+def _add_watermark(header, text: str) -> None:
+    paragraph = header.add_paragraph()
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    watermark_xml = f"""
+    <w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+         xmlns:v="urn:schemas-microsoft-com:vml"
+         xmlns:o="urn:schemas-microsoft-com:office:office">
+      <w:pict>
+        <v:shape id="ZBTWatermark" o:spid="_x0000_s1025" type="#_x0000_t136"
+          style="position:absolute;margin-left:0;margin-top:0;width:420pt;height:120pt;rotation:315;z-index:-251654144;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin"
+          fillcolor="#BFBFBF" stroked="f">
+          <v:fill opacity=".14"/>
+          <v:textpath style="font-family:&quot;Microsoft YaHei&quot;;font-size:1pt" string="{escape(text)}"/>
+        </v:shape>
+      </w:pict>
+    </w:r>
+    """
+    paragraph._p.append(parse_xml(watermark_xml))
+
+
+def _render_cover(
+    document: DocxDocument,
+    title: str,
+    part_title: str,
+    layout: ExportLayoutOptions,
+) -> None:
+    if not layout.include_cover:
+        document.add_heading(title, level=1)
+        document.add_heading(part_title, level=2)
+        return
+    for _ in range(4):
+        document.add_paragraph()
+    title_paragraph = document.add_paragraph(style="Title")
+    title_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_paragraph.add_run(title).bold = True
+    subtitle = document.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle_run = subtitle.add_run(part_title)
+    subtitle_run.bold = True
+    subtitle_run.font.size = Pt(18)
+    document_type = document.add_paragraph()
+    document_type.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    document_type.add_run("投标文件").font.size = Pt(16)
+    if layout.generated_at:
+        generated = document.add_paragraph()
+        generated.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        generated.add_run(layout.generated_at).font.size = Pt(11)
+    document.add_page_break()
+
+
+def _render_toc(document: DocxDocument, layout: ExportLayoutOptions) -> None:
+    if not layout.include_toc:
+        return
+    heading = document.add_paragraph("目录", style="Heading 1")
+    heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph = document.add_paragraph()
+    paragraph.paragraph_format.first_line_indent = None
+    _add_field(paragraph, r'TOC \o "1-3" \h \z \u', "右键更新域以刷新目录")
+    document.add_page_break()
+
+
+def _render_bid_body(
+    document: DocxDocument,
+    part_title: str,
+    chapters: list[ExportChapter],
+) -> None:
+    document.add_heading(part_title, level=1)
+    for chapter in chapters:
+        document.add_heading(chapter.title, level=2)
+        text = chapter.plain_text.strip() or "本章节暂无内容，需要人工补充。"
+        _render_plain_text(document, text)
+
+
+def _render_plain_text(document: DocxDocument, text: str) -> None:
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped:
+            index += 1
+            continue
+        table_rows, next_index = _consume_markdown_table(lines, index)
+        if table_rows:
+            _add_table(document, table_rows)
+            index = next_index
+            continue
+        heading_level, heading_text = _markdown_heading(stripped)
+        if heading_level:
+            document.add_heading(heading_text, level=min(3, heading_level + 2))
+        elif ordered := re.match(r"^\d+[.)、]\s+(.+)$", stripped):
+            document.add_paragraph(ordered.group(1), style=_style_or_normal(document, "List Number"))
+        elif bullet := re.match(r"^[-*•]\s+(.+)$", stripped):
+            document.add_paragraph(bullet.group(1), style=_style_or_normal(document, "List Bullet"))
+        else:
+            document.add_paragraph(stripped)
+        index += 1
+
+
+def _markdown_heading(line: str) -> tuple[int | None, str]:
+    match = re.match(r"^(#{1,3})\s+(.+)$", line)
+    if not match:
+        return None, line
+    return len(match.group(1)), match.group(2).strip()
+
+
+def _consume_markdown_table(lines: list[str], start: int) -> tuple[list[list[str]] | None, int]:
+    if "|" not in lines[start]:
+        return None, start
+    raw_rows: list[list[str]] = []
+    index = start
+    while index < len(lines) and "|" in lines[index]:
+        cells = [cell.strip() for cell in lines[index].strip().strip("|").split("|")]
+        if len(cells) < 2:
+            break
+        raw_rows.append(cells)
+        index += 1
+    rows = [row for row in raw_rows if not all(MARKDOWN_TABLE_SEPARATOR.match(cell) for cell in row)]
+    width = max((len(row) for row in rows), default=0)
+    if len(rows) < 2 or width < 2:
+        return None, start
+    return [row + [""] * (width - len(row)) for row in rows], index
+
+
+def _add_table(document: DocxDocument, rows: list[list[str]]) -> None:
+    table = document.add_table(rows=len(rows), cols=len(rows[0]))
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.style = _table_style(document)
+    for row_index, row in enumerate(rows):
+        for column_index, cell_value in enumerate(row):
+            cell = table.cell(row_index, column_index)
+            cell.text = cell_value
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.first_line_indent = None
+                if row_index == 0:
+                    paragraph.runs[0].bold = True
+    document.add_paragraph()
+
+
+def _table_style(document: DocxDocument) -> str:
+    return "Table Grid" if "Table Grid" in document.styles else "Normal Table"
+
+
+def _style_or_normal(document: DocxDocument, style_name: str) -> str:
+    return style_name if style_name in document.styles else "Normal"
+
+
+def _format_runs(paragraph, font_size: int, color: RGBColor) -> None:
+    for run in paragraph.runs:
+        run.font.size = Pt(font_size)
+        run.font.color.rgb = color
+
+
+def _add_field(paragraph, instruction: str, placeholder: str) -> None:
+    begin = paragraph.add_run()
+    begin_char = OxmlElement("w:fldChar")
+    begin_char.set(qn("w:fldCharType"), "begin")
+    begin._r.append(begin_char)
+
+    instr = paragraph.add_run()
+    instr_text = OxmlElement("w:instrText")
+    instr_text.set(qn("xml:space"), "preserve")
+    instr_text.text = instruction
+    instr._r.append(instr_text)
+
+    separate = paragraph.add_run()
+    separate_char = OxmlElement("w:fldChar")
+    separate_char.set(qn("w:fldCharType"), "separate")
+    separate._r.append(separate_char)
+    paragraph.add_run(placeholder)
+
+    end = paragraph.add_run()
+    end_char = OxmlElement("w:fldChar")
+    end_char.set(qn("w:fldCharType"), "end")
+    end._r.append(end_char)
+
+
+def _enable_field_updates(document: DocxDocument) -> None:
+    settings = document.settings.element
+    for existing in settings.findall(qn("w:updateFields")):
+        settings.remove(existing)
+    update_fields = OxmlElement("w:updateFields")
+    update_fields.set(qn("w:val"), "true")
+    settings.append(update_fields)
 
 
 def _safe_filename(value: str) -> str:

@@ -100,6 +100,8 @@ AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1
 
 知识库解析支持纯文本、PDF 文本层、PDF layout blocks、PDF 表格候选、docx 段落和表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。扫描件可通过 `OCR_HTTP_ENDPOINT` 接入外部 OCR 服务，配置 `OCR_API_KEY` 时会以 Bearer header 传递；未配置 OCR 时，空文本 PDF 会在解析 metadata 中标记 `ocr_required=true` 和 `provider_not_configured`，不会伪装为解析成功。复杂表格语义识别、版面还原和坐标级引用仍需继续增强。
 
+标书导出支持默认 Word 母版：封面、可刷新目录域、页眉页脚、页码、中文字体样式、章节分页、Markdown 表格/列表渲染，并由同一 docx 源转换 PDF。可通过 `BID_EXPORT_TEMPLATE_PATH` 指向企业 docx 样式模板，通过 `BID_EXPORT_WATERMARK_TEXT` 增加水印文字；复杂企业模板占位符、附件清单和电子标专用格式仍需继续增强。
+
 ## 验收定位
 
 最终验收清单见 `x.md` 第 21 节。每轮交付和验证证据记录在 `docs/blueprint/DEV_LOOP_LOG.md`，当前 API 状态见 `docs/blueprint/API_SPEC.md`。

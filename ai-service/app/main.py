@@ -371,13 +371,25 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
     try:
         content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         if export_type == "zip":
-            export_bid_zip(payload.bid_title, payload.parts, output_path)
+            export_bid_zip(payload.bid_title, payload.parts, output_path, layout=payload.layout)
             content_type = "application/zip"
         elif export_type == "pdf":
-            export_bid_pdf(payload.bid_title, payload.part_title, payload.chapters, output_path)
+            export_bid_pdf(
+                payload.bid_title,
+                payload.part_title,
+                payload.chapters,
+                output_path,
+                layout=payload.layout,
+            )
             content_type = "application/pdf"
         else:
-            export_bid_docx(payload.bid_title, payload.part_title, payload.chapters, output_path)
+            export_bid_docx(
+                payload.bid_title,
+                payload.part_title,
+                payload.chapters,
+                output_path,
+                layout=payload.layout,
+            )
         client = minio_client()
         client.fput_object(
             os.getenv("MINIO_BUCKET", "zbt-files"),

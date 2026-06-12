@@ -2173,3 +2173,55 @@ docker compose ps backend ai-service frontend
 
 1. 这仍不是完整 OCR 能力；当前只提供 HTTP OCR 接入点和空文本 PDF 的显式状态标记，真实 OCR 服务、图片预处理、表格结构语义识别和坐标级引用仍需后续实现。
 2. Word/PDF 母版级排版保真本轮未处理。
+
+## Loop-31 / Word PDF 默认母版导出 - 2026-06-11
+
+### 本轮目标
+
+1. 继续处理审查报告中的导出保真缺口，把最小 docx 输出推进到可验收的默认母版。
+2. 在不改变现有 Go -> AI payload 必填字段的前提下，增加可选 layout 配置和企业 docx 样式模板入口。
+3. 保持 docx、pdf、zip 三种导出路径复用同一版式源。
+
+### 代码交付
+
+1. `ExportLayoutOptions` 增加默认 layout 配置，旧请求不传该字段时自动使用 `zbt-standard`。
+2. `export_bid_docx` 新增默认母版：封面、可刷新目录域、页眉页脚、页码域、中文字体样式、章节分页和 Word field 自动更新设置。
+3. 正文渲染增加 Markdown 表格、无序列表、有序列表和简单 heading 识别。
+4. `export_bid_pdf` 和 `export_bid_zip` 复用同一 `export_bid_docx` 母版输出，避免 PDF/ZIP 与单独 docx 版式分叉。
+5. 新增 `BID_EXPORT_TEMPLATE_PATH` 和 `BID_EXPORT_WATERMARK_TEXT` 配置；前者可指向企业 docx 样式模板，后者可写入水印文字。
+6. 新增 `test_docx_exporter.py`，覆盖 docx 母版 XML、ZIP 内 docx 和 PDF 转换前 docx 源复用。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m compileall app
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests/test_docx_exporter.py
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests
+docker compose config >/dev/null
+./infra/scripts/check.sh
+tmp_docker_config="$(mktemp -d)" && DOCKER_CONFIG="$tmp_docker_config" docker compose build ai-service && DOCKER_CONFIG="$tmp_docker_config" docker compose up -d ai-service backend frontend
+docker compose exec -T ai-service python -m pytest app/tests
+curl http://127.0.0.1:8000/models/health
+docker compose ps backend ai-service frontend
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m ruff check app/pipelines/export/docx_exporter.py app/schemas/export.py app/tests/test_docx_exporter.py app/main.py
+```
+
+结果：
+
+1. AI 服务 `compileall` 通过。
+2. 导出器专项测试通过，覆盖目录域、updateFields、页码域、页眉页脚、水印 XML、Markdown 表格和 ZIP/PDF 复用路径。
+3. 挂载当前源码运行完整 AI pytest 通过，16 个测试全部通过。
+4. `docker compose config` 通过，确认导出模板环境变量插值合法。
+5. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 全量测试、AI compileall、Docker compose config、运行中旧 ai-service 容器内 pytest 均成功；前端仍有既有大 chunk 警告。
+6. 使用临时 `DOCKER_CONFIG` 绕过本机缺失 `docker-credential-desktop.exe` 后，ai-service 镜像构建成功，并已重启本地运行栈。
+7. 重建后的 ai-service 容器内 `python -m pytest app/tests` 通过，16 个测试全部通过。
+8. AI `/models/health` 返回 `mock=true`，`openai_compatible_primary=false`、`dashscope=false`、`deepseek=false`，符合当前环境未配置真实 key/base_url 的状态。
+9. `docker compose ps` 显示 backend、ai-service、frontend 均处于 Up 状态。
+10. Ruff 针对本轮改动文件检查通过。
+
+### 偏离蓝图
+
+1. 本轮是默认母版和企业模板路径入口，不是复杂企业模板占位符系统；还不能按任意客户 docx 模板自动定位并替换占位内容。
+2. 附件清单、电子标特殊目录结构、目录页码在 LibreOffice 转 PDF 后的逐页视觉校验仍需后续补端到端样本文档验证。
