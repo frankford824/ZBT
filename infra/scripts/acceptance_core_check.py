@@ -77,10 +77,11 @@ def request_json(
     url: str,
     token: str | None = None,
     payload: object | None = None,
+    headers: dict[str, str] | None = None,
     expected: tuple[int, ...] = (200,),
     timeout: int = 30,
 ) -> object:
-    status, body = request_bytes(method, url, token=token, payload=payload, expected=expected, timeout=timeout)
+    status, body = request_bytes(method, url, token=token, payload=payload, headers=headers, expected=expected, timeout=timeout)
     if status == 204 or not body:
         return {}
     try:
@@ -89,8 +90,15 @@ def request_json(
         raise AcceptanceError(f"{method} {url} returned non-JSON body: {body[:120].decode('utf-8', 'replace')}") from exc
 
 
-def api(method: str, path: str, token: str | None = None, payload: object | None = None, expected: tuple[int, ...] = (200,)) -> object:
-    return request_json(method, f"{API_BASE}{path}", token=token, payload=payload, expected=expected)
+def api(
+    method: str,
+    path: str,
+    token: str | None = None,
+    payload: object | None = None,
+    headers: dict[str, str] | None = None,
+    expected: tuple[int, ...] = (200,),
+) -> object:
+    return request_json(method, f"{API_BASE}{path}", token=token, payload=payload, headers=headers, expected=expected)
 
 
 def ai(method: str, path: str, payload: object | None = None, expected: tuple[int, ...] = (200,)) -> object:
@@ -272,7 +280,10 @@ def check_auth_tenant_rbac(stamp: str) -> tuple[str, dict[str, Any], str, dict[s
     tenant_bid = create_bid(token, f"xmd-core-tenant1-bid-{stamp}", "combined")
     other_token, _ = login(OTHER_EMAIL, OTHER_TENANT_ID)
     api("GET", f"/bids/{tenant_bid['id']}", token=other_token, expected=(404,))
-    ok("8 tenant isolation", {"tenant1_bid": tenant_bid["id"], "tenant2_get": 404})
+    spoofed_admin_read = api("GET", f"/bids/{tenant_bid['id']}", token=token, headers={"X-Tenant-ID": OTHER_TENANT_ID})
+    require(isinstance(spoofed_admin_read, dict) and spoofed_admin_read.get("id") == tenant_bid["id"], "spoofed tenant header overrode authenticated admin tenant")
+    api("GET", f"/bids/{tenant_bid['id']}", token=other_token, headers={"X-Tenant-ID": TENANT_ID}, expected=(404,))
+    ok("8 tenant isolation", {"tenant1_bid": tenant_bid["id"], "tenant2_get": 404, "spoofed_header": "session tenant wins"})
     return token, session, member_token, member
 
 

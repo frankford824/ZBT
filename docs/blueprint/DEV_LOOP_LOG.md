@@ -2038,3 +2038,40 @@ python3 infra/scripts/acceptance_tail_check.py
 ### 偏离蓝图
 
 1. 当前形成的是两个脚本组合覆盖 1-50，而不是单个黄金链路脚本；这样可以保持每个脚本职责清晰，后续如需 CI 夜间验收可再增加一个聚合入口。
+
+## Loop-28 / 审查报告安全收口 - 2026-06-11
+
+### 本轮目标
+
+1. 处理外部代码实现审查报告中可立即落地的高优先级问题。
+2. 移除 RBAC 中容易误导维护者的 demo 全权限残留，确保缺少权限上下文时默认拒绝。
+3. 将伪造 `X-Tenant-ID` 不能越权的判断固化到核心验收脚本，而不是只保留在历史日志和人工审查结论中。
+
+### 代码交付
+
+1. 删除 `backend/internal/platform/rbac/middleware.go` 中未被使用的 `demoPermissions` 和 `DemoPermissions()`，避免后续误用为生产 fallback。
+2. 新增 `backend/internal/platform/rbac/middleware_test.go`，覆盖：缺少权限上下文返回 403、read 权限只能读、full 权限可写。
+3. `infra/scripts/acceptance_core_check.py` 支持请求级附加 headers，并在第 8 项租户隔离验证中新增 `X-Tenant-ID` 伪造头断言：tenant1 token 即使携带 tenant2 header 仍读取 tenant1 数据，tenant2 token 即使携带 tenant1 header 仍无法读取 tenant1 数据。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_core_check.py
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/rbac
+python3 infra/scripts/acceptance_core_check.py
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `rg demoPermissions|DemoPermissions` 未发现残留定义或引用。
+2. RBAC 包测试通过，确认缺失权限上下文默认 403，read/full 级别判断符合预期。
+3. 核心验收脚本通过；第 8 项输出 `spoofed_header=session tenant wins`，证明认证 session 的 tenant 优先于请求头。
+4. 重跑核心验收前发现运行中的 backend 容器未发布 8080 端口，和当前 compose 配置不一致；使用 `docker compose up -d --force-recreate --no-build backend frontend` 重新创建容器后，`127.0.0.1:8080/healthz` 返回 ok。
+5. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 全量测试、AI compileall、Docker compose config、运行中 ai-service 容器内 pytest 均成功；本机 pytest 不可用时按预期跳过。
+
+### 偏离蓝图
+
+1. 本轮只处理审查报告中能快速降低误用风险的安全收口项；真实模型 Provider、OCR/表格解析、Word 排版保真和成本计费仍需要独立设计与分阶段实现。

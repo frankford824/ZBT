@@ -14,17 +14,6 @@ const (
 	LevelFull Level = "full"
 )
 
-var demoPermissions = map[string]Level{
-	"dashboard":  LevelFull,
-	"tender":     LevelFull,
-	"bid":        LevelFull,
-	"compliance": LevelFull,
-	"project":    LevelFull,
-	"cost":       LevelFull,
-	"knowledge":  LevelFull,
-	"team":       LevelFull,
-}
-
 const ContextPermissionsKey = "module_permissions"
 
 func Require(module string, level Level) gin.HandlerFunc {
@@ -46,14 +35,6 @@ func allows(actual, required Level) bool {
 		return true
 	}
 	return actual == LevelRead && required == LevelRead
-}
-
-func DemoPermissions() map[string]Level {
-	copied := make(map[string]Level, len(demoPermissions))
-	for key, value := range demoPermissions {
-		copied[key] = value
-	}
-	return copied
 }
 
 func PermissionsFromContext(c *gin.Context) map[string]Level {
