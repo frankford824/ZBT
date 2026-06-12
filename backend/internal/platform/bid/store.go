@@ -257,8 +257,9 @@ type UseTemplateResult struct {
 }
 
 type CreateExportRequest struct {
-	ExportType string `json:"export_type"`
-	PartCode   string `json:"part_code"`
+	ExportType string         `json:"export_type"`
+	PartCode   string         `json:"part_code"`
+	Layout     map[string]any `json:"layout"`
 }
 
 type UpdateChapterContentRequest struct {
@@ -1971,6 +1972,9 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 			"filename":     filename,
 			"object_key":   objectKey,
 			"callback_url": s.cfg.AICallbackURL,
+		}
+		if len(req.Layout) > 0 {
+			payload["layout"] = req.Layout
 		}
 		if exportType != "zip" {
 			part, err := partForExport(ctx, tx, tenantID, bidID, partCode)

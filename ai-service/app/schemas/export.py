@@ -19,10 +19,12 @@ class ExportLayoutOptions(BaseModel):
     include_cover: bool = True
     include_toc: bool = True
     include_page_numbers: bool = True
+    include_manifest: bool = True
     header_text: str | None = None
     footer_text: str | None = None
     watermark_text: str | None = None
     generated_at: str | None = None
+    context: dict[str, str] = Field(default_factory=dict)
 
 
 class DocumentExportRequest(BaseModel):

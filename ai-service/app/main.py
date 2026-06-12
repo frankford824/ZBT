@@ -414,6 +414,10 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
                 else len(payload.chapters),
                 "size_bytes": output_path.stat().st_size,
                 "content_type": content_type,
+                "layout": payload.layout.model_dump(),
+                "manifest_filename": "manifest.json"
+                if export_type == "zip" and payload.layout.include_manifest
+                else None,
             },
         }
     except Exception as exc:  # pragma: no cover - defensive task boundary

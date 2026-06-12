@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
 import subprocess
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -17,10 +21,17 @@ from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from docx.section import Section
 from docx.shared import Cm, Pt, RGBColor
+from docx.text.paragraph import Paragraph
 
 from app.schemas.export import ExportChapter, ExportLayoutOptions, ExportPart
 
 MARKDOWN_TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
+TEMPLATE_FIELD = re.compile(r"{{\s*([A-Za-z0-9_.-]+)\s*}}")
+ANCHOR_ALIASES = {
+    "cover": {"ZBT_COVER", "zbt_cover", "cover"},
+    "toc": {"ZBT_TOC", "zbt_toc", "toc"},
+    "body": {"ZBT_BODY", "zbt_body", "body"},
+}
 
 
 def export_minimal_docx(title: str, paragraphs: list[str], output_path: Path) -> Path:
@@ -42,9 +53,13 @@ def export_bid_docx(
     layout = layout or ExportLayoutOptions()
     document = _new_document()
     _apply_master_layout(document, title, part_title, layout)
-    _render_cover(document, title, part_title, layout)
-    _render_toc(document, layout)
-    _render_bid_body(document, part_title, chapters)
+    context = _template_context(title, part_title, layout)
+    anchors = _replace_template_fields(document, context)
+    if layout.include_cover:
+        _render_cover(document, title, part_title, layout, anchor=anchors.get("cover"))
+    if layout.include_toc:
+        _render_toc(document, layout, anchor=anchors.get("toc"))
+    _render_bid_body(document, part_title, chapters, anchor=anchors.get("body"))
     _enable_field_updates(document)
     document.save(output_path)
     return output_path
@@ -56,14 +71,42 @@ def export_bid_zip(
     output_path: Path,
     layout: ExportLayoutOptions | None = None,
 ) -> Path:
+    layout = layout or ExportLayoutOptions()
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         with ZipFile(output_path, mode="w", compression=ZIP_DEFLATED) as archive:
+            manifest_parts: list[dict[str, object]] = []
             for index, part in enumerate(parts, start=1):
                 docx_name = f"{index:02d}-{_safe_filename(part.title or part.code)}.docx"
                 docx_path = tmp_path / docx_name
                 export_bid_docx(title, part.title, part.chapters, docx_path, layout=layout)
                 archive.write(docx_path, docx_name)
+                content = docx_path.read_bytes()
+                manifest_parts.append(
+                    {
+                        "code": part.code,
+                        "title": part.title,
+                        "filename": docx_name,
+                        "chapter_count": len(part.chapters),
+                        "size_bytes": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    }
+                )
+            if layout.include_manifest:
+                archive.writestr(
+                    "manifest.json",
+                    json.dumps(
+                        {
+                            "bid_title": title,
+                            "template_name": layout.template_name,
+                            "generated_at": _generated_at(layout),
+                            "part_count": len(manifest_parts),
+                            "parts": manifest_parts,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                )
     return output_path
 
 
@@ -111,6 +154,87 @@ def _new_document() -> DocxDocument:
     if not path.exists():
         raise RuntimeError(f"BID_EXPORT_TEMPLATE_PATH does not exist: {template_path}")
     return Document(path)
+
+
+def _template_context(
+    title: str,
+    part_title: str,
+    layout: ExportLayoutOptions,
+) -> dict[str, str]:
+    context = {
+        "bid_title": title,
+        "title": title,
+        "part_title": part_title,
+        "template_name": layout.template_name,
+        "generated_at": _generated_at(layout),
+        "document_type": "投标文件",
+    }
+    context.update({key: str(value) for key, value in layout.context.items()})
+    return context
+
+
+def _generated_at(layout: ExportLayoutOptions) -> str:
+    return layout.generated_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _replace_template_fields(
+    document: DocxDocument,
+    context: dict[str, str],
+) -> dict[str, Paragraph]:
+    anchors: dict[str, Paragraph] = {}
+    for paragraph in _iter_paragraphs(document):
+        text = paragraph.text
+        if not text:
+            continue
+        for section, aliases in ANCHOR_ALIASES.items():
+            if any(f"{{{{{alias}}}}}" in text or f"{{{{ {alias} }}}}" in text for alias in aliases):
+                anchors[section] = paragraph
+        replaced = TEMPLATE_FIELD.sub(lambda match: context.get(match.group(1), match.group(0)), text)
+        if replaced != text:
+            paragraph.text = replaced
+    return anchors
+
+
+def _iter_paragraphs(document: DocxDocument):
+    yield from document.paragraphs
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from cell.paragraphs
+    for section in document.sections:
+        containers = [
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+            section.even_page_header,
+            section.even_page_footer,
+        ]
+        for container in containers:
+            yield from container.paragraphs
+            for table in container.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        yield from cell.paragraphs
+
+
+def _insert_document_after(anchor: Paragraph, source: DocxDocument) -> None:
+    body_elements = [
+        deepcopy(element)
+        for element in source.element.body
+        if element.tag != qn("w:sectPr")
+    ]
+    for element in reversed(body_elements):
+        anchor._p.addnext(element)
+    parent = anchor._element.getparent()
+    if parent is not None:
+        parent.remove(anchor._element)
+
+
+def _section_document() -> DocxDocument:
+    document = Document()
+    _apply_styles(document)
+    return document
 
 
 def _apply_master_layout(
@@ -222,7 +346,13 @@ def _render_cover(
     title: str,
     part_title: str,
     layout: ExportLayoutOptions,
+    anchor: Paragraph | None = None,
 ) -> None:
+    if anchor is not None:
+        section = _section_document()
+        _render_cover(section, title, part_title, layout)
+        _insert_document_after(anchor, section)
+        return
     if not layout.include_cover:
         document.add_heading(title, level=1)
         document.add_heading(part_title, level=2)
@@ -247,7 +377,16 @@ def _render_cover(
     document.add_page_break()
 
 
-def _render_toc(document: DocxDocument, layout: ExportLayoutOptions) -> None:
+def _render_toc(
+    document: DocxDocument,
+    layout: ExportLayoutOptions,
+    anchor: Paragraph | None = None,
+) -> None:
+    if anchor is not None:
+        section = _section_document()
+        _render_toc(section, layout)
+        _insert_document_after(anchor, section)
+        return
     if not layout.include_toc:
         return
     heading = document.add_paragraph("目录", style="Heading 1")
@@ -262,7 +401,13 @@ def _render_bid_body(
     document: DocxDocument,
     part_title: str,
     chapters: list[ExportChapter],
+    anchor: Paragraph | None = None,
 ) -> None:
+    if anchor is not None:
+        section = _section_document()
+        _render_bid_body(section, part_title, chapters)
+        _insert_document_after(anchor, section)
+        return
     document.add_heading(part_title, level=1)
     for chapter in chapters:
         document.add_heading(chapter.title, level=2)

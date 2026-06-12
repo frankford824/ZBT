@@ -2225,3 +2225,56 @@ docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app lov
 
 1. 本轮是默认母版和企业模板路径入口，不是复杂企业模板占位符系统；还不能按任意客户 docx 模板自动定位并替换占位内容。
 2. 附件清单、电子标特殊目录结构、目录页码在 LibreOffice 转 PDF 后的逐页视觉校验仍需后续补端到端样本文档验证。
+
+## Loop-32 / 企业模板占位符与导出清单 - 2026-06-12
+
+### 本轮目标
+
+1. 继续推进导出保真剩余项，把企业 docx 模板从“样式模板路径”增强为可替换占位符模板。
+2. 给 ZIP 导出增加机器可审计 manifest，支撑后续电子标包清单和验收脚本。
+3. 让后端导出 API 可透传可选 layout，不破坏现有导出按钮和旧 payload。
+
+### 代码交付
+
+1. `ExportLayoutOptions` 增加 `include_manifest` 和 `context`，支持调用方传入自定义模板变量。
+2. `docx_exporter.py` 支持模板标量占位符：`{{ bid_title }}`、`{{ part_title }}`、`{{ generated_at }}`、`{{ template_name }}` 和 layout context 中的自定义 key。
+3. `docx_exporter.py` 支持富文本锚点：`{{ZBT_COVER}}`、`{{ZBT_TOC}}`、`{{ZBT_BODY}}`，可把默认封面、目录域和章节正文插入企业模板指定位置。
+4. ZIP 导出新增 `manifest.json`，记录 bid title、模板名、生成时间、分册文件、章节数、大小和 sha256。
+5. AI 回调结果增加实际 `layout` 和 ZIP `manifest_filename`，Go `CreateExportRequest` 增加可选 `layout` 并透传至 AI 服务。
+6. 前端 `createBidExport` API 类型增加可选 `layout` 字段，为后续 UI 导出设置预留入口。
+7. `test_docx_exporter.py` 新增模板占位符/正文锚点测试，并把 ZIP manifest 纳入断言。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m compileall app
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests
+docker compose config >/dev/null
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid ./internal/api
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m ruff check app/pipelines/export/docx_exporter.py app/schemas/export.py app/tests/test_docx_exporter.py app/main.py
+./infra/scripts/check.sh
+tmp_docker_config="$(mktemp -d)" && DOCKER_CONFIG="$tmp_docker_config" docker compose build ai-service && DOCKER_CONFIG="$tmp_docker_config" docker compose up -d ai-service backend frontend
+docker compose exec -T ai-service python -m pytest app/tests
+curl http://127.0.0.1:8000/models/health
+docker compose ps backend ai-service frontend
+```
+
+结果：
+
+1. AI 服务 `compileall` 通过。
+2. 挂载当前源码运行完整 AI pytest 通过，17 个测试全部通过。
+3. `docker compose config` 通过。
+4. Go bid/api 包测试通过。
+5. Ruff 针对本轮改动文件检查通过。
+6. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 全量测试、AI compileall、Docker compose config、运行中旧 ai-service 容器内 pytest 均成功；前端仍有既有大 chunk 警告。
+7. 使用临时 `DOCKER_CONFIG` 绕过本机缺失 `docker-credential-desktop.exe` 后，ai-service 镜像构建成功，并已重启本地运行栈。
+8. 重建后的 ai-service 容器内 `python -m pytest app/tests` 通过，17 个测试全部通过。
+9. AI `/models/health` 返回 `mock=true`，`openai_compatible_primary=false`、`dashscope=false`、`deepseek=false`，符合当前环境未配置真实 key/base_url 的状态。
+10. `docker compose ps` 显示 backend、ai-service、frontend 均处于 Up 状态。
+
+### 偏离蓝图
+
+1. 本轮支持的是 docx 模板文本占位符和三类富文本锚点，仍不是完整 docxtpl/Jinja 条件循环模板系统。
+2. ZIP manifest 已覆盖生成物清单，但尚未把外部附件、工程量清单、投标软件专用目录结构纳入打包。

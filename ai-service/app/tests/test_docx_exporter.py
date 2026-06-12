@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from zipfile import ZipFile
 
@@ -9,7 +10,8 @@ from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, 
 from app.schemas.export import ExportChapter, ExportLayoutOptions, ExportPart
 
 
-def test_export_bid_docx_applies_master_layout(tmp_path) -> None:
+def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
     output = tmp_path / "bid.docx"
     layout = ExportLayoutOptions(watermark_text="内部评审", generated_at="2026-06-11")
     chapters = [
@@ -51,7 +53,8 @@ def test_export_bid_docx_applies_master_layout(tmp_path) -> None:
     assert "内部评审" in package_xml
 
 
-def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path) -> None:
+def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
     output = tmp_path / "bid.zip"
     parts = [
         ExportPart(
@@ -70,19 +73,56 @@ def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path) -> None:
 
     with ZipFile(output) as archive:
         names = sorted(archive.namelist())
-        assert names == ["01-技术标.docx", "02-商务标.docx"]
-        first_docx = archive.read(names[0])
+        assert names == ["01-技术标.docx", "02-商务标.docx", "manifest.json"]
+        first_docx = archive.read("01-技术标.docx")
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
 
     with ZipFile(BytesIO(first_docx)) as document_archive:
         document_xml = document_archive.read("word/document.xml").decode("utf-8")
         settings_xml = document_archive.read("word/settings.xml").decode("utf-8")
 
+    assert manifest["bid_title"] == "智慧交通平台"
+    assert manifest["part_count"] == 2
+    assert manifest["parts"][0]["filename"] == "01-技术标.docx"
+    assert manifest["parts"][0]["chapter_count"] == 1
+    assert len(manifest["parts"][0]["sha256"]) == 64
     assert "TOC" in document_xml
     assert "实施计划" in document_xml
     assert "updateFields" in settings_xml
 
 
+def test_export_bid_docx_renders_template_placeholders_and_body_anchor(tmp_path, monkeypatch) -> None:
+    template_path = tmp_path / "template.docx"
+    template = Document()
+    template.add_paragraph("项目：{{ bid_title }}")
+    template.add_paragraph("分册：{{ part_title }}")
+    template.add_paragraph("日期：{{ generated_at }}")
+    template.add_paragraph("{{ZBT_BODY}}")
+    template.save(template_path)
+    monkeypatch.setenv("BID_EXPORT_TEMPLATE_PATH", str(template_path))
+    output = tmp_path / "templated.docx"
+
+    export_bid_docx(
+        "智慧交通平台",
+        "技术标",
+        [ExportChapter(title="实施计划", plain_text="模板正文内容。")],
+        output,
+        layout=ExportLayoutOptions(include_cover=False, include_toc=False, generated_at="2026-06-12"),
+    )
+
+    document = Document(output)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "项目：智慧交通平台" in paragraph_text
+    assert "分册：技术标" in paragraph_text
+    assert "日期：2026-06-12" in paragraph_text
+    assert "{{ZBT_BODY}}" not in paragraph_text
+    assert "实施计划" in paragraph_text
+    assert "模板正文内容。" in paragraph_text
+
+
 def test_export_bid_pdf_reuses_master_docx_before_conversion(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
     fake_soffice = tmp_path / "fake-soffice.sh"
     fake_soffice.write_text(
         """#!/bin/sh
