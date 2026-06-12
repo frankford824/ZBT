@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import base64
 import json
 from io import BytesIO
 from zipfile import ZipFile
 
+import fitz
+import pytest
 from docx import Document
 
-from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
-from app.schemas.export import ExportChapter, ExportLayoutOptions, ExportPart
+from app.pipelines.export.docx_exporter import (
+    _validate_pdf_output,
+    export_bid_docx,
+    export_bid_pdf,
+    export_bid_zip,
+)
+from app.schemas.export import ExportAttachment, ExportChapter, ExportLayoutOptions, ExportPart
 
 
 def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
@@ -61,6 +69,13 @@ def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path, monkeypatch) 
             code="tech",
             title="技术标",
             chapters=[ExportChapter(title="实施计划", plain_text="项目实施内容。")],
+            attachments=[
+                ExportAttachment(
+                    filename="技术附件.txt",
+                    content_type="text/plain",
+                    content_base64=_b64("技术附件内容"),
+                )
+            ],
         ),
         ExportPart(
             code="business",
@@ -69,12 +84,37 @@ def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path, monkeypatch) 
         ),
     ]
 
-    export_bid_zip("智慧交通平台", parts, output)
+    export_bid_zip(
+        "智慧交通平台",
+        parts,
+        output,
+        attachments=[
+            ExportAttachment(
+                filename="资质证明.txt",
+                content_type="text/plain",
+                content_base64=_b64("资质证明内容"),
+            )
+        ],
+        boq_files=[
+            ExportAttachment(
+                filename="工程量清单.xlsx",
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                content_base64=_b64("boq"),
+            )
+        ],
+    )
 
     with ZipFile(output) as archive:
         names = sorted(archive.namelist())
-        assert names == ["01-技术标.docx", "02-商务标.docx", "manifest.json"]
-        first_docx = archive.read("01-技术标.docx")
+        assert names == [
+            "01_投标文件/01-技术标.docx",
+            "01_投标文件/02-商务标.docx",
+            "02_附件/tech/技术附件.txt",
+            "02_附件/资质证明.txt",
+            "03_工程量清单/工程量清单.xlsx",
+            "manifest.json",
+        ]
+        first_docx = archive.read("01_投标文件/01-技术标.docx")
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
 
     with ZipFile(BytesIO(first_docx)) as document_archive:
@@ -82,13 +122,43 @@ def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path, monkeypatch) 
         settings_xml = document_archive.read("word/settings.xml").decode("utf-8")
 
     assert manifest["bid_title"] == "智慧交通平台"
+    assert manifest["e_bidding_structure"] == "standard"
     assert manifest["part_count"] == 2
-    assert manifest["parts"][0]["filename"] == "01-技术标.docx"
+    assert manifest["parts"][0]["filename"] == "01_投标文件/01-技术标.docx"
     assert manifest["parts"][0]["chapter_count"] == 1
     assert len(manifest["parts"][0]["sha256"]) == 64
+    assert manifest["parts"][0]["attachments"][0]["filename"] == "02_附件/tech/技术附件.txt"
+    assert manifest["attachments"][0]["filename"] == "02_附件/资质证明.txt"
+    assert manifest["boq_files"][0]["filename"] == "03_工程量清单/工程量清单.xlsx"
     assert "TOC" in document_xml
     assert "实施计划" in document_xml
     assert "updateFields" in settings_xml
+
+
+def test_export_bid_docx_renders_docxtpl_jinja_loops(tmp_path, monkeypatch) -> None:
+    template_path = tmp_path / "jinja-template.docx"
+    template = Document()
+    template.add_paragraph("章节清单：{% for chapter in chapters %}{{ chapter.title }};{% endfor %}")
+    template.save(template_path)
+    monkeypatch.setenv("BID_EXPORT_TEMPLATE_PATH", str(template_path))
+    output = tmp_path / "templated-loop.docx"
+
+    export_bid_docx(
+        "智慧交通平台",
+        "技术标",
+        [
+            ExportChapter(title="实施计划", plain_text="正文一。"),
+            ExportChapter(title="质量保证", plain_text="正文二。"),
+        ],
+        output,
+        layout=ExportLayoutOptions(include_cover=False, include_toc=False, render_body=False),
+    )
+
+    document = Document(output)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "章节清单：实施计划;质量保证;" in paragraph_text
+    assert "正文一。" not in paragraph_text
 
 
 def test_export_bid_docx_renders_template_placeholders_and_body_anchor(tmp_path, monkeypatch) -> None:
@@ -150,10 +220,40 @@ cp "$input" "$outdir/source.pdf"
         "技术标",
         [ExportChapter(title="实施计划", plain_text="项目实施内容。")],
         output,
+        layout=ExportLayoutOptions(validate_pdf=False),
     )
 
     assert output.exists()
     assert "TOC" in _docx_xml(output, "word/document.xml")
+
+
+def test_validate_pdf_output_checks_text_and_rendered_pixels(tmp_path) -> None:
+    valid_pdf = tmp_path / "valid.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "PDF validation sample")
+    pdf.save(valid_pdf)
+    pdf.close()
+
+    result = _validate_pdf_output(valid_pdf)
+
+    assert result["page_count"] == 1
+    assert result["sampled_text_length"] > 0
+
+
+def test_validate_pdf_output_rejects_blank_pdf(tmp_path) -> None:
+    blank_pdf = tmp_path / "blank.pdf"
+    pdf = fitz.open()
+    pdf.new_page()
+    pdf.save(blank_pdf)
+    pdf.close()
+
+    with pytest.raises(RuntimeError, match="no extractable text"):
+        _validate_pdf_output(blank_pdf)
+
+
+def _b64(value: str) -> str:
+    return base64.b64encode(value.encode("utf-8")).decode("ascii")
 
 
 def _package_xml(path) -> str:

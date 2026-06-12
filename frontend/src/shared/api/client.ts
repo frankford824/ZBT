@@ -1511,7 +1511,13 @@ export async function fetchBidExports(bidId: string): Promise<BidExportDTO[]> {
 
 export async function createBidExport(
   bidId: string,
-  payload: { export_type: 'docx' | 'pdf' | 'zip'; part_code: string; layout?: Record<string, unknown> },
+  payload: {
+    export_type: 'docx' | 'pdf' | 'zip'
+    part_code: string
+    layout?: Record<string, unknown>
+    attachments?: Array<Record<string, unknown>>
+    boq_files?: Array<Record<string, unknown>>
+  },
 ): Promise<CreateBidExportDTO> {
   const { data } = await apiClient.post<CreateBidExportDTO>(`/bids/${bidId}/exports`, payload)
   return data

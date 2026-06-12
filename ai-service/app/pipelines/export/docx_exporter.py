@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+from io import BytesIO
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +15,7 @@ from tempfile import TemporaryDirectory
 from zipfile import ZIP_DEFLATED, ZipFile
 from xml.sax.saxutils import escape
 
+import fitz
 from docx import Document
 from docx.document import Document as DocxDocument
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -22,8 +25,9 @@ from docx.oxml.ns import qn
 from docx.section import Section
 from docx.shared import Cm, Pt, RGBColor
 from docx.text.paragraph import Paragraph
+from docxtpl import DocxTemplate
 
-from app.schemas.export import ExportChapter, ExportLayoutOptions, ExportPart
+from app.schemas.export import ExportAttachment, ExportChapter, ExportLayoutOptions, ExportPart
 
 MARKDOWN_TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
 TEMPLATE_FIELD = re.compile(r"{{\s*([A-Za-z0-9_.-]+)\s*}}")
@@ -51,15 +55,16 @@ def export_bid_docx(
     layout: ExportLayoutOptions | None = None,
 ) -> Path:
     layout = layout or ExportLayoutOptions()
-    document = _new_document()
+    context = _template_context(title, part_title, layout, chapters=chapters)
+    document = _new_document(context)
     _apply_master_layout(document, title, part_title, layout)
-    context = _template_context(title, part_title, layout)
     anchors = _replace_template_fields(document, context)
     if layout.include_cover:
         _render_cover(document, title, part_title, layout, anchor=anchors.get("cover"))
     if layout.include_toc:
         _render_toc(document, layout, anchor=anchors.get("toc"))
-    _render_bid_body(document, part_title, chapters, anchor=anchors.get("body"))
+    if layout.render_body:
+        _render_bid_body(document, part_title, chapters, anchor=anchors.get("body"))
     _enable_field_updates(document)
     document.save(output_path)
     return output_path
@@ -70,28 +75,57 @@ def export_bid_zip(
     parts: list[ExportPart],
     output_path: Path,
     layout: ExportLayoutOptions | None = None,
+    attachments: list[ExportAttachment] | None = None,
+    boq_files: list[ExportAttachment] | None = None,
 ) -> Path:
     layout = layout or ExportLayoutOptions()
+    attachments = attachments or []
+    boq_files = boq_files or []
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         with ZipFile(output_path, mode="w", compression=ZIP_DEFLATED) as archive:
             manifest_parts: list[dict[str, object]] = []
+            used_paths: set[str] = set()
             for index, part in enumerate(parts, start=1):
                 docx_name = f"{index:02d}-{_safe_filename(part.title or part.code)}.docx"
                 docx_path = tmp_path / docx_name
                 export_bid_docx(title, part.title, part.chapters, docx_path, layout=layout)
-                archive.write(docx_path, docx_name)
+                zip_name = _dedupe_zip_path(_zip_part_path(layout, docx_name), used_paths)
+                archive.write(docx_path, zip_name)
                 content = docx_path.read_bytes()
+                part_attachments = _write_attachments(
+                    archive,
+                    part.attachments,
+                    layout,
+                    "attachment",
+                    used_paths,
+                    part_code=part.code,
+                )
                 manifest_parts.append(
                     {
                         "code": part.code,
                         "title": part.title,
-                        "filename": docx_name,
+                        "filename": zip_name,
                         "chapter_count": len(part.chapters),
                         "size_bytes": len(content),
                         "sha256": hashlib.sha256(content).hexdigest(),
+                        "attachments": part_attachments,
                     }
                 )
+            manifest_attachments = _write_attachments(
+                archive,
+                attachments,
+                layout,
+                "attachment",
+                used_paths,
+            )
+            manifest_boq_files = _write_attachments(
+                archive,
+                boq_files,
+                layout,
+                "boq",
+                used_paths,
+            )
             if layout.include_manifest:
                 archive.writestr(
                     "manifest.json",
@@ -99,9 +133,12 @@ def export_bid_zip(
                         {
                             "bid_title": title,
                             "template_name": layout.template_name,
+                            "e_bidding_structure": layout.e_bidding_structure,
                             "generated_at": _generated_at(layout),
                             "part_count": len(manifest_parts),
                             "parts": manifest_parts,
+                            "attachments": manifest_attachments,
+                            "boq_files": manifest_boq_files,
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -117,6 +154,7 @@ def export_bid_pdf(
     output_path: Path,
     layout: ExportLayoutOptions | None = None,
 ) -> Path:
+    layout = layout or ExportLayoutOptions()
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         docx_path = tmp_path / "source.docx"
@@ -142,25 +180,39 @@ def export_bid_pdf(
         if completed.returncode != 0 or not pdf_path.exists():
             message = completed.stderr.strip() or completed.stdout.strip() or "LibreOffice PDF conversion failed"
             raise RuntimeError(message)
+        if layout.validate_pdf:
+            _validate_pdf_output(pdf_path)
         shutil.move(str(pdf_path), output_path)
     return output_path
 
 
-def _new_document() -> DocxDocument:
+def _new_document(context: dict[str, object]) -> DocxDocument:
     template_path = os.getenv("BID_EXPORT_TEMPLATE_PATH", "").strip()
     if not template_path:
         return Document()
     path = Path(template_path)
     if not path.exists():
         raise RuntimeError(f"BID_EXPORT_TEMPLATE_PATH does not exist: {template_path}")
-    return Document(path)
+    template = DocxTemplate(str(path))
+    context_with_anchors = {
+        "ZBT_COVER": "{{ZBT_COVER}}",
+        "ZBT_TOC": "{{ZBT_TOC}}",
+        "ZBT_BODY": "{{ZBT_BODY}}",
+        **context,
+    }
+    template.render(context_with_anchors)
+    rendered = BytesIO()
+    template.save(rendered)
+    rendered.seek(0)
+    return Document(rendered)
 
 
 def _template_context(
     title: str,
     part_title: str,
     layout: ExportLayoutOptions,
-) -> dict[str, str]:
+    chapters: list[ExportChapter],
+) -> dict[str, object]:
     context = {
         "bid_title": title,
         "title": title,
@@ -168,8 +220,12 @@ def _template_context(
         "template_name": layout.template_name,
         "generated_at": _generated_at(layout),
         "document_type": "投标文件",
+        "chapters": [
+            {"title": chapter.title, "plain_text": chapter.plain_text}
+            for chapter in chapters
+        ],
     }
-    context.update({key: str(value) for key, value in layout.context.items()})
+    context.update(layout.context)
     return context
 
 
@@ -177,9 +233,107 @@ def _generated_at(layout: ExportLayoutOptions) -> str:
     return layout.generated_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _write_attachments(
+    archive: ZipFile,
+    attachments: list[ExportAttachment],
+    layout: ExportLayoutOptions,
+    category: str,
+    used_paths: set[str],
+    part_code: str | None = None,
+) -> list[dict[str, object]]:
+    manifest_items: list[dict[str, object]] = []
+    for attachment in attachments:
+        content = _attachment_content(attachment)
+        zip_path = _dedupe_zip_path(_zip_attachment_path(layout, attachment, category, part_code), used_paths)
+        archive.writestr(zip_path, content)
+        manifest_items.append(
+            {
+                "filename": zip_path,
+                "original_filename": attachment.filename,
+                "category": attachment.category or category,
+                "content_type": attachment.content_type,
+                "object_key": attachment.object_key,
+                "size_bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        )
+    return manifest_items
+
+
+def _attachment_content(attachment: ExportAttachment) -> bytes:
+    if attachment.content_base64:
+        return base64.b64decode(attachment.content_base64)
+    if attachment.local_path:
+        return Path(attachment.local_path).read_bytes()
+    raise RuntimeError(f"attachment content missing: {attachment.filename}")
+
+
+def _zip_part_path(layout: ExportLayoutOptions, filename: str) -> str:
+    if layout.e_bidding_structure == "flat":
+        return filename
+    return f"01_投标文件/{filename}"
+
+
+def _zip_attachment_path(
+    layout: ExportLayoutOptions,
+    attachment: ExportAttachment,
+    category: str,
+    part_code: str | None,
+) -> str:
+    filename = _safe_filename(attachment.filename)
+    if attachment.zip_path:
+        return attachment.zip_path.strip("/").replace("\\", "/")
+    if layout.e_bidding_structure == "flat":
+        folder = "boq" if category == "boq" else "attachments"
+        return f"{folder}/{filename}"
+    if category == "boq":
+        return f"03_工程量清单/{filename}"
+    if part_code:
+        return f"02_附件/{_safe_filename(part_code)}/{filename}"
+    return f"02_附件/{filename}"
+
+
+def _dedupe_zip_path(path: str, used_paths: set[str]) -> str:
+    cleaned = path.strip("/").replace("\\", "/")
+    candidate = cleaned
+    suffix = 2
+    while candidate in used_paths:
+        path_obj = Path(cleaned)
+        stem = path_obj.stem
+        extension = path_obj.suffix
+        candidate = str(path_obj.with_name(f"{stem}-{suffix}{extension}")).replace("\\", "/")
+        suffix += 1
+    used_paths.add(candidate)
+    return candidate
+
+
+def _validate_pdf_output(path: Path) -> dict[str, object]:
+    try:
+        doc = fitz.open(path)
+    except Exception as exc:
+        raise RuntimeError(f"PDF validation failed: cannot open PDF: {exc}") from exc
+    try:
+        if doc.page_count <= 0:
+            raise RuntimeError("PDF validation failed: no pages")
+        text = "\n".join(
+            doc[index].get_text("text").strip() for index in range(min(doc.page_count, 3))
+        ).strip()
+        if not text:
+            raise RuntimeError("PDF validation failed: no extractable text")
+        first_page = doc[0]
+        pixmap = first_page.get_pixmap(matrix=fitz.Matrix(0.25, 0.25), alpha=False)
+        samples = pixmap.samples
+        stride = max(1, len(samples) // 4096)
+        if len(set(samples[::stride])) < 2:
+            raise RuntimeError("PDF validation failed: first page rendered blank")
+        return {"page_count": doc.page_count, "sampled_text_length": len(text)}
+    finally:
+        doc.close()
+
+
 def _replace_template_fields(
     document: DocxDocument,
-    context: dict[str, str],
+    context: dict[str, object],
 ) -> dict[str, Paragraph]:
     anchors: dict[str, Paragraph] = {}
     for paragraph in _iter_paragraphs(document):

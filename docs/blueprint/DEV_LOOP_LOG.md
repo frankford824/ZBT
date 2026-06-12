@@ -2278,3 +2278,60 @@ docker compose ps backend ai-service frontend
 
 1. 本轮支持的是 docx 模板文本占位符和三类富文本锚点，仍不是完整 docxtpl/Jinja 条件循环模板系统。
 2. ZIP manifest 已覆盖生成物清单，但尚未把外部附件、工程量清单、投标软件专用目录结构纳入打包。
+
+## Loop-33 / 导出剩余缺口收敛 - 2026-06-12
+
+### 本轮目标
+
+1. 补齐上一轮列出的导出侧剩余缺口：docxtpl/Jinja 条件循环模板、附件/工程量清单打包、电子标目录结构、PDF 输出校验。
+2. 保持旧导出 payload 兼容；所有新增能力均为可选字段或默认增强。
+3. 用可重复测试覆盖模板循环、附件清单、电子标目录和 PDF 非空校验。
+
+### 代码交付
+
+1. `ExportLayoutOptions` 增加 `render_body`、`validate_pdf`、`e_bidding_structure` 和任意类型 `context`；`ExportAttachment` 支持 `content_base64`、`local_path`、`object_key`、`zip_path`。
+2. 企业模板改用 `docxtpl.DocxTemplate` 渲染，支持 `chapters` 循环、自定义 `layout.context` 和 `render_body=false` 的纯模板正文模式。
+3. ZIP 导出支持全局 `attachments`、`boq_files` 和分册级 `part.attachments`，默认按 `01_投标文件/`、`02_附件/`、`03_工程量清单/` 结构打包。
+4. `manifest.json` 扩展记录电子标结构、全局附件、分册附件、工程量清单、文件大小和 sha256。
+5. PDF 导出后使用 PyMuPDF 校验：文件可打开、页数大于 0、有可抽取文本、首屏渲染非空。
+6. AI 回调结果增加 `pdf_validation`；Go `CreateExportRequest` 和前端 `createBidExport` API 类型支持 `attachments`、`boq_files` 透传。
+7. `test_docx_exporter.py` 增加 Jinja 循环、附件/工程量清单/电子标目录、PDF 校验通过和空白 PDF 拒绝测试。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m compileall app
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests/test_docx_exporter.py
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m ruff check app/pipelines/export/docx_exporter.py app/schemas/export.py app/tests/test_docx_exporter.py app/main.py
+docker compose config >/dev/null
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid ./internal/api
+cd frontend && pnpm build
+./infra/scripts/check.sh
+tmp_docker_config="$(mktemp -d)" && DOCKER_CONFIG="$tmp_docker_config" docker compose build ai-service && DOCKER_CONFIG="$tmp_docker_config" docker compose up -d ai-service backend frontend
+docker compose exec -T ai-service python -m pytest app/tests
+curl http://127.0.0.1:8000/models/health
+docker compose ps backend ai-service frontend
+```
+
+结果：
+
+1. AI 服务 `compileall` 通过。
+2. 导出器专项测试通过，7 个测试全部通过。
+3. 挂载当前源码运行完整 AI pytest 通过，20 个测试全部通过。
+4. Ruff 针对本轮改动文件检查通过。
+5. `docker compose config` 通过。
+6. Go bid/api 包测试通过。
+7. 前端生产构建通过，仍有既有大 chunk 警告。
+8. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 全量测试、AI compileall、Docker compose config、运行中旧 ai-service 容器内 pytest 均成功；前端仍有既有大 chunk 警告。
+9. 使用临时 `DOCKER_CONFIG` 绕过本机缺失 `docker-credential-desktop.exe` 后，ai-service 镜像构建成功，并已重启本地运行栈。
+10. 重建后的 ai-service 容器内 `python -m pytest app/tests` 通过，20 个测试全部通过。
+11. AI `/models/health` 返回 `mock=true`，`openai_compatible_primary=false`、`dashscope=false`、`deepseek=false`，符合当前环境未配置真实 key/base_url 的状态。
+12. `docker compose ps` 显示 backend、ai-service、frontend 均处于 Up 状态。
+
+### 偏离蓝图
+
+1. 电子标目录结构已具备标准目录和 manifest，但仍不是对接某个具体省市投标软件的专用二进制包格式。
+2. PDF 校验已覆盖文本层和首屏非空，不等同于人工逐页版式审阅；后续若有真实黄金样本，可继续固化像素级对比。

@@ -257,9 +257,11 @@ type UseTemplateResult struct {
 }
 
 type CreateExportRequest struct {
-	ExportType string         `json:"export_type"`
-	PartCode   string         `json:"part_code"`
-	Layout     map[string]any `json:"layout"`
+	ExportType  string           `json:"export_type"`
+	PartCode    string           `json:"part_code"`
+	Layout      map[string]any   `json:"layout"`
+	Attachments []map[string]any `json:"attachments"`
+	BOQFiles    []map[string]any `json:"boq_files"`
 }
 
 type UpdateChapterContentRequest struct {
@@ -1975,6 +1977,12 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		}
 		if len(req.Layout) > 0 {
 			payload["layout"] = req.Layout
+		}
+		if len(req.Attachments) > 0 {
+			payload["attachments"] = req.Attachments
+		}
+		if len(req.BOQFiles) > 0 {
+			payload["boq_files"] = req.BOQFiles
 		}
 		if exportType != "zip" {
 			part, err := partForExport(ctx, tx, tenantID, bidID, partCode)

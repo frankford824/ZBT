@@ -371,7 +371,14 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
     try:
         content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         if export_type == "zip":
-            export_bid_zip(payload.bid_title, payload.parts, output_path, layout=payload.layout)
+            export_bid_zip(
+                payload.bid_title,
+                payload.parts,
+                output_path,
+                layout=payload.layout,
+                attachments=payload.attachments,
+                boq_files=payload.boq_files,
+            )
             content_type = "application/zip"
         elif export_type == "pdf":
             export_bid_pdf(
@@ -418,6 +425,9 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
                 "manifest_filename": "manifest.json"
                 if export_type == "zip" and payload.layout.include_manifest
                 else None,
+                "pdf_validation": "enabled"
+                if export_type == "pdf" and payload.layout.validate_pdf
+                else "disabled",
             },
         }
     except Exception as exc:  # pragma: no cover - defensive task boundary

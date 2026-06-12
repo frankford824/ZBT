@@ -100,7 +100,7 @@ AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1
 
 知识库解析支持纯文本、PDF 文本层、PDF layout blocks、PDF 表格候选、docx 段落和表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。扫描件可通过 `OCR_HTTP_ENDPOINT` 接入外部 OCR 服务，配置 `OCR_API_KEY` 时会以 Bearer header 传递；未配置 OCR 时，空文本 PDF 会在解析 metadata 中标记 `ocr_required=true` 和 `provider_not_configured`，不会伪装为解析成功。复杂表格语义识别、版面还原和坐标级引用仍需继续增强。
 
-标书导出支持默认 Word 母版：封面、可刷新目录域、页眉页脚、页码、中文字体样式、章节分页、Markdown 表格/列表渲染，并由同一 docx 源转换 PDF。可通过 `BID_EXPORT_TEMPLATE_PATH` 指向企业 docx 样式模板，支持 `{{ bid_title }}`、`{{ part_title }}`、`{{ generated_at }}` 等标量占位符，以及 `{{ZBT_COVER}}`、`{{ZBT_TOC}}`、`{{ZBT_BODY}}` 富文本锚点；通过 `BID_EXPORT_WATERMARK_TEXT` 增加水印文字。ZIP 导出会写入 `manifest.json` 清单，记录分册、章节数、大小和 sha256；附件清单、电子标特殊目录结构和 PDF 逐页视觉验收仍需继续增强。
+标书导出支持默认 Word 母版：封面、可刷新目录域、页眉页脚、页码、中文字体样式、章节分页、Markdown 表格/列表渲染，并由同一 docx 源转换 PDF。可通过 `BID_EXPORT_TEMPLATE_PATH` 指向企业 docx/Jinja 模板，支持 `{{ bid_title }}`、`{{ part_title }}`、`{{ generated_at }}`、`chapters` 循环、自定义 `layout.context`，以及 `{{ZBT_COVER}}`、`{{ZBT_TOC}}`、`{{ZBT_BODY}}` 富文本锚点；通过 `BID_EXPORT_WATERMARK_TEXT` 增加水印文字。ZIP 导出支持 `attachments`、`boq_files` 和 `part.attachments`，默认按 `01_投标文件/`、`02_附件/`、`03_工程量清单/` 电子标目录结构打包，并写入 `manifest.json` 记录分册、附件、工程量清单、大小和 sha256；PDF 导出会做可打开、文本层和首屏渲染非空校验。
 
 ## 验收定位
 
