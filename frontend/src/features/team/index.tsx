@@ -1,5 +1,6 @@
 import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import {
   App as AntApp,
   Button,
@@ -40,6 +41,13 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+
+const teamTabs = ['members', 'approvals', 'logs', 'notifications'] as const
+type TeamTab = (typeof teamTabs)[number]
+
+function normalizeTeamTab(value: string | null): TeamTab {
+  return teamTabs.includes(value as TeamTab) ? (value as TeamTab) : 'members'
+}
 
 function statusTag(status: string) {
   const color =
@@ -106,6 +114,8 @@ function formatLatency(value: number) {
 export function TeamPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = normalizeTeamTab(searchParams.get('tab'))
   const [inviteOpen, setInviteOpen] = useState(false)
   const [chainOpen, setChainOpen] = useState(false)
   const [memberOpen, setMemberOpen] = useState(false)
@@ -267,6 +277,8 @@ export function TeamPage() {
       ]}
     >
       <Tabs
+        activeKey={activeTab}
+        onChange={(tab) => setSearchParams({ tab })}
         items={[
           {
             key: 'members',
