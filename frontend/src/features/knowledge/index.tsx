@@ -83,31 +83,38 @@ export function KnowledgeHomePage() {
           loading={searching}
           onSearch={(value) => void runSearch(value)}
         />
-        <Row gutter={[16, 16]}>
-          {[
-            ['总文档', stats.data?.document_count ?? 0],
-            ['待整理', (stats.data?.ready_count ?? 0) + (stats.data?.queued_count ?? 0)],
-            ['已整理', stats.data?.processed_count ?? 0],
-            ['失败', stats.data?.failed_count ?? 0],
-          ].map(([name, value]) => (
-            <Col xs={24} md={12} xl={6} key={name}>
-              <Card title={name}>
-                <Statistic value={value} suffix="个" />
-              </Card>
-            </Col>
-          ))}
-        </Row>
-        <Card title="分类统计">
-          <List
-            loading={stats.isLoading}
-            dataSource={categories.length > 0 ? categories : [['未分类', 0]]}
-            renderItem={(item) => (
-              <List.Item actions={[<Tag key="count">{item[1]} 个文档</Tag>]}>
-                <List.Item.Meta title={item[0]} description="当前企业资料" />
-              </List.Item>
-            )}
-          />
-        </Card>
+        {stats.isError ? (
+          <ErrorBlock description="知识库统计加载失败，请刷新重试" />
+        ) : (
+          <>
+            <Row gutter={[16, 16]}>
+              {[
+                ['总文档', stats.data?.document_count ?? 0],
+                ['待整理', (stats.data?.ready_count ?? 0) + (stats.data?.queued_count ?? 0)],
+                ['已整理', stats.data?.processed_count ?? 0],
+                ['失败', stats.data?.failed_count ?? 0],
+              ].map(([name, value]) => (
+                <Col xs={24} md={12} xl={6} key={name}>
+                  <Card title={name} className="stat-card">
+                    <Statistic value={value} suffix="个" />
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+            <Card title="分类统计">
+              <List
+                loading={stats.isLoading}
+                dataSource={categories}
+                locale={{ emptyText: '暂无分类统计' }}
+                renderItem={(item) => (
+                  <List.Item actions={[<Tag key="count">{item[1]} 个文档</Tag>]}>
+                    <List.Item.Meta title={item[0]} description="当前企业资料" />
+                  </List.Item>
+                )}
+              />
+            </Card>
+          </>
+        )}
         {searchResult ? (
           <Card title="搜索结果">
             <List
@@ -318,15 +325,17 @@ export function KnowledgeDocsPage() {
       subtitle="分类、上传、预览、下载和引用记录"
       tags={['page-knowledge-docs', '/knowledge/docs']}
       actions={[
-        <Button key="upload" type="primary" icon={<CloudUploadOutlined />}>
-          上传文档
-        </Button>,
+        <Upload key="upload" {...uploadProps}>
+          <Button type="primary" icon={<CloudUploadOutlined />}>
+            上传文档
+          </Button>
+        </Upload>,
       ]}
     >
       <Row gutter={16}>
         <Col xs={24} xl={6}>
           <Card
-            title={`文档分类 ${documents.data?.length ?? 0}`}
+            title={`文档分类 ${categories.data?.length ?? 0}`}
             extra={<Button size="small" icon={<PlusOutlined />} onClick={openCreateCategory}>新建</Button>}
           >
             <List
@@ -373,8 +382,16 @@ export function KnowledgeDocsPage() {
               columns={[
                 { title: '文档名', dataIndex: 'title' },
                 { title: '分类', render: (_, row) => row.category?.name ?? '未分类' },
-                { title: '大小', render: (_, row) => formatBytes(row.file.size_bytes) },
-                { title: '类型', dataIndex: 'doc_type' },
+                {
+                  title: '大小',
+                  align: 'right',
+                  render: (_, row) => <span className="data-mono">{formatBytes(row.file.size_bytes)}</span>,
+                },
+                {
+                  title: '类型',
+                  dataIndex: 'doc_type',
+                  render: (value: string) => docTypeLabels[value] ?? value,
+                },
                 {
                   title: '状态',
                   dataIndex: 'parse_status',
@@ -396,8 +413,9 @@ export function KnowledgeDocsPage() {
                 },
                 {
                   title: '操作',
+                  width: 320,
                   render: (_, row) => (
-                    <Space>
+                    <Space wrap size={[8, 6]}>
                       <a href={`/files/${row.file.id}/preview`}>预览</a>
                       <Button
                         size="small"
@@ -455,14 +473,7 @@ export function KnowledgeDocsPage() {
           </Form.Item>
           <Form.Item label="文档类型" name="doc_type" rules={[{ required: true, message: '请选择文档类型' }]}>
             <Select
-              options={[
-                { value: 'general', label: '通用' },
-                { value: 'pdf', label: 'PDF' },
-                { value: 'word', label: 'Word' },
-                { value: 'spreadsheet', label: '表格' },
-                { value: 'presentation', label: '演示文稿' },
-                { value: 'image', label: '图片' },
-              ]}
+              options={Object.entries(docTypeLabels).map(([value, label]) => ({ value, label }))}
             />
           </Form.Item>
           <Form.Item label="分类" name="category_id">
@@ -696,6 +707,7 @@ export function KnowledgeTagsPage() {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [editingTag, setEditingTag] = useState<KnowledgeTagDTO | null>(null)
+  const [selectedTagId, setSelectedTagId] = useState<string | null>(null)
   const [form] = Form.useForm<{ name: string; color?: string }>()
   const tags = useQuery({
     queryKey: ['knowledge-tags'],
@@ -786,8 +798,15 @@ export function KnowledgeTagsPage() {
               locale={{ emptyText: '暂无标签' }}
               renderItem={(item) => (
                 <List.Item
+                  style={{
+                    cursor: 'pointer',
+                    background: selectedTagId === item.id ? 'var(--primary-wash)' : undefined,
+                    borderRadius: 8,
+                    paddingInline: 8,
+                  }}
+                  onClick={() => setSelectedTagId(selectedTagId === item.id ? null : item.id)}
                   actions={[
-                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(item)} />,
+                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(item) }} />,
                     <Popconfirm
                       key="delete"
                       title="删除标签"
@@ -796,7 +815,7 @@ export function KnowledgeTagsPage() {
                       cancelText="取消"
                       onConfirm={() => deleteTag.mutate(item.id)}
                     >
-                      <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} />
                     </Popconfirm>,
                   ]}
                 >
@@ -808,12 +827,28 @@ export function KnowledgeTagsPage() {
           </Card>
         </Col>
         <Col xs={24} md={16}>
-          <Card title="关联文档">
+          <Card
+            title={
+              selectedTagId
+                ? `关联文档 · ${(tags.data ?? []).find((tag) => tag.id === selectedTagId)?.name ?? ''}`
+                : '关联文档（点击左侧标签筛选）'
+            }
+            extra={
+              selectedTagId ? (
+                <Button size="small" type="link" onClick={() => setSelectedTagId(null)}>
+                  清除筛选
+                </Button>
+              ) : null
+            }
+          >
             <Table
               rowKey="id"
               pagination={false}
               loading={documents.isLoading}
-              dataSource={documents.data ?? []}
+              locale={{ emptyText: selectedTagId ? '该标签下暂无文档' : '暂无文档' }}
+              dataSource={(documents.data ?? []).filter(
+                (document) => !selectedTagId || document.tags.some((tag) => tag.id === selectedTagId),
+              )}
               columns={[
                 { title: '关联文档', dataIndex: 'title' },
                 {
@@ -896,6 +931,16 @@ export function FilePreviewPage() {
       ) : null}
     </PageFrame>
   )
+}
+
+const docTypeLabels: Record<string, string> = {
+  general: '通用',
+  won_case: '中标案例',
+  pdf: 'PDF',
+  word: 'Word',
+  spreadsheet: '表格',
+  presentation: '演示文稿',
+  image: '图片',
 }
 
 function statusLabel(status: KnowledgeDocumentDTO['parse_status']) {

@@ -13,10 +13,10 @@ const queryClient = new QueryClient({
   },
 })
 
-// 设计令牌与 index.css 中的 CSS 变量保持一致：
-// 墨 #1A1B33 / 靛 #4F46E5 / 智能紫 #7C3AED / 朱砂 #C8401A（仅品牌印章）/ 纸 #F4F5FA
+// 设计令牌与 index.css 中的 CSS 变量保持一致（晨纸·黛蓝 v2）：
+// 纸 #F6F6F3 / 墨 #20242B / 黛蓝 #2C5FA8 / 鎏金 #B08530（仅品牌签名）/ 智能紫 #7C3AED
 const bodyFont =
-  '"PingFang SC", "Microsoft YaHei", "Noto Sans SC", -apple-system, "Segoe UI", sans-serif'
+  '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif'
 
 export function AppProviders({ children }: PropsWithChildren) {
   return (
@@ -25,55 +25,81 @@ export function AppProviders({ children }: PropsWithChildren) {
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          borderRadius: 6,
-          colorPrimary: '#4F46E5',
-          colorInfo: '#4F46E5',
-          colorSuccess: '#16A34A',
+          borderRadius: 8,
+          colorPrimary: '#2C5FA8',
+          colorInfo: '#2C5FA8',
+          colorLink: '#2C5FA8',
+          colorSuccess: '#2F9E63',
           colorWarning: '#D97706',
-          colorError: '#DC2626',
-          colorText: '#26273D',
-          colorTextSecondary: '#5C5E78',
-          colorTextTertiary: '#8A8CA3',
-          colorBorder: '#DCDEE9',
-          colorBorderSecondary: '#E8EAF2',
-          colorBgLayout: '#F4F5FA',
+          colorError: '#D43030',
+          colorText: '#20242B',
+          colorTextSecondary: '#5B616E',
+          colorTextTertiary: '#8E94A0',
+          colorBorder: '#DDDBD2',
+          colorBorderSecondary: '#ECEAE4',
+          colorBgLayout: '#F6F6F3',
+          colorBgContainer: '#FFFFFF',
           fontFamily: bodyFont,
           fontSize: 14,
         },
         components: {
           Layout: {
-            bodyBg: '#F4F5FA',
-            headerBg: '#FFFFFF',
-            siderBg: '#1A1B33',
+            bodyBg: '#F6F6F3',
+            headerBg: 'transparent',
+            siderBg: '#FFFFFF',
           },
           Menu: {
-            darkItemBg: '#1A1B33',
-            darkSubMenuItemBg: '#14152A',
-            darkItemColor: 'rgba(235, 236, 245, 0.68)',
-            darkItemHoverBg: 'rgba(79, 70, 229, 0.22)',
-            darkItemSelectedBg: '#4F46E5',
-            darkGroupTitleColor: 'rgba(235, 236, 245, 0.38)',
-            itemBorderRadius: 6,
-            itemMarginInline: 10,
+            itemBg: 'transparent',
+            subMenuItemBg: 'transparent',
+            itemColor: '#5B616E',
+            itemHoverBg: '#F1F0EB',
+            itemHoverColor: '#20242B',
+            itemSelectedBg: '#EDF2F9',
+            itemSelectedColor: '#2C5FA8',
+            itemBorderRadius: 8,
+            itemMarginInline: 0,
+            itemHeight: 38,
+            iconMarginInlineEnd: 10,
           },
           Card: {
             headerBg: 'transparent',
-            colorBorderSecondary: '#E8EAF2',
+            colorBorderSecondary: '#ECEAE4',
+            borderRadiusLG: 10,
           },
           Table: {
-            headerBg: '#F7F8FC',
-            headerColor: '#5C5E78',
+            headerBg: 'transparent',
+            headerColor: '#8E94A0',
             headerSplitColor: 'transparent',
+            rowHoverBg: '#F8F8F5',
+            borderColor: '#F0EFEA',
+            cellPaddingBlock: 13,
           },
           Button: {
             controlHeight: 34,
             fontWeight: 500,
+            defaultShadow: 'none',
+            primaryShadow: 'none',
+          },
+          Input: {
+            controlHeight: 36,
+          },
+          Select: {
+            controlHeight: 36,
           },
           Statistic: {
             contentFontSize: 26,
           },
           Tag: {
-            borderRadiusSM: 4,
+            borderRadiusSM: 5,
+          },
+          Tabs: {
+            inkBarColor: '#B08530',
+            itemSelectedColor: '#20242B',
+            itemHoverColor: '#20242B',
+            titleFontSize: 14,
+          },
+          Modal: {
+            borderRadiusLG: 12,
           },
         },
       }}

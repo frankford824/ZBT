@@ -54,6 +54,19 @@ const nextStatus: Partial<Record<ProjectDTO['status'], ProjectDTO['status']>> = 
   submitted: 'closed',
 }
 
+const activityActionLabels: Record<string, string> = {
+  'project.created': '创建项目',
+  'project.updated': '更新项目信息',
+  'project.transitioned': '推进项目阶段',
+  'project.milestone_created': '新增里程碑',
+  'project.milestone_updated': '更新里程碑',
+  'project.milestone_deleted': '删除里程碑',
+  'project.member_added': '加入成员',
+  'project.member_removed': '移除成员',
+  'project.cost_project_created': '创建成本项目',
+  'project.knowledge_case_archived': '中标案例归档至知识库',
+}
+
 function dateText(value?: string | null) {
   return value ? value.slice(0, 10) : '-'
 }
@@ -109,9 +122,9 @@ export function ProjectsPage() {
     if (projects.isError) return <ErrorBlock />
     if (!projects.data?.length) return <EmptyBlock />
     return (
-      <Row gutter={12} className="kanban-row">
+      <Row gutter={[12, 12]} wrap className="kanban-row">
         {statuses.map((status) => (
-          <Col xs={24} md={12} xl={5} key={status}>
+          <Col flex="1 1 220px" style={{ minWidth: 0 }} key={status}>
             <Card title={statusLabels[status]} size="small">
               <Space direction="vertical" className="full-width">
                 {projects.data
@@ -299,7 +312,7 @@ export function ProjectDetailPage() {
             <Timeline
               items={activities.data?.map((activity) => ({
                 color: 'gray',
-                children: `${dateText(activity.created_at)} · ${activity.actor_name || '系统'} · ${activity.action}`,
+                children: `${dateText(activity.created_at)} · ${activity.actor_name || '系统'} · ${activityActionLabels[activity.action] ?? activity.action}`,
               }))}
             />
           </Card>

@@ -121,10 +121,10 @@ export function OnboardingPage() {
         <Typography.Text type="secondary">设置默认部门与知识库分类，团队即可开工</Typography.Text>
       </div>
       <Form layout="vertical">
-        <Form.Item label="默认部门">
+        <Form.Item label="默认部门" name="department">
           <Input placeholder="投标中心" />
         </Form.Item>
-        <Form.Item label="知识库分类">
+        <Form.Item label="知识库分类" name="knowledge_categories">
           <Input placeholder="资质证书、业绩案例、技术方案" />
         </Form.Item>
         <Button type="primary" block>

@@ -81,10 +81,29 @@ export function CostsPage() {
               render: (value, row) => <Link to={`/costs/${row.id}`}>{value}</Link>,
             },
             { title: '关联项目', dataIndex: 'project_name' },
-            { title: '预算(万)', dataIndex: 'total_budget', render: wan },
-            { title: '实际(万)', dataIndex: 'total_actual', render: wan },
-            { title: '利润率', dataIndex: 'margin_rate', render: (value) => `${Number(value || 0).toFixed(2)}%` },
-            { title: '成本项', dataIndex: 'item_count' },
+            {
+              title: '预算(万)',
+              dataIndex: 'total_budget',
+              align: 'right',
+              render: (value) => <span className="data-mono">{wan(value)}</span>,
+            },
+            {
+              title: '实际(万)',
+              dataIndex: 'total_actual',
+              align: 'right',
+              render: (value) => <span className="data-mono">{wan(value)}</span>,
+            },
+            {
+              title: '利润率',
+              dataIndex: 'margin_rate',
+              align: 'right',
+              render: (value) => {
+                const rate = Number(value || 0)
+                const color = rate < 0 ? '#D43030' : rate > 0 ? '#2F9E63' : undefined
+                return <span className="data-mono" style={{ color }}>{`${rate.toFixed(2)}%`}</span>
+              },
+            },
+            { title: '成本项', dataIndex: 'item_count', align: 'right' },
             { title: '状态', dataIndex: 'status', render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
           ]}
         />
@@ -266,8 +285,18 @@ export function CostDetailPage() {
                 columns={[
                   { title: '分类', dataIndex: 'category' },
                   { title: '名称', dataIndex: 'name' },
-                  { title: '预算(万)', dataIndex: 'budget_amount', render: wan },
-                  { title: '实际(万)', dataIndex: 'actual_amount', render: wan },
+                  {
+                    title: '预算(万)',
+                    dataIndex: 'budget_amount',
+                    align: 'right',
+                    render: (value) => <span className="data-mono">{wan(value)}</span>,
+                  },
+                  {
+                    title: '实际(万)',
+                    dataIndex: 'actual_amount',
+                    align: 'right',
+                    render: (value) => <span className="data-mono">{wan(value)}</span>,
+                  },
                   { title: '供应商', dataIndex: 'vendor', render: (value) => value || '-' },
                   { title: '状态', dataIndex: 'status', render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
                 ]}

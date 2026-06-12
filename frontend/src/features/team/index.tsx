@@ -327,7 +327,7 @@ export function TeamPage() {
                           { title: '审批标题', dataIndex: 'title' },
                           { title: '标书', dataIndex: 'bid_title' },
                           { title: '提交人', dataIndex: 'submitted_by_name', render: (value) => value || '-' },
-                          { title: '当前环节', dataIndex: 'current_step' },
+                          { title: '当前环节', dataIndex: 'current_step', render: (value: number) => `第 ${value} 级` },
                           { title: '状态', dataIndex: 'status', render: statusTag },
                           {
                             title: '操作',

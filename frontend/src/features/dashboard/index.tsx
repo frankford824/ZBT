@@ -71,20 +71,20 @@ export function DashboardPage() {
               <ReactECharts
                 style={{ height: 260 }}
                 option={{
-                  color: ['#4F46E5', '#7C3AED'],
+                  color: ['#2C5FA8', '#B08530'],
                   tooltip: {},
                   legend: { top: 0, left: 'center', data: ['标书数', '中标率'] },
                   grid: { left: 40, right: 24, top: 40, bottom: 28 },
                   xAxis: {
                     type: 'category',
                     data: data.trends.map((item) => item.month),
-                    axisLine: { lineStyle: { color: '#DCDEE9' } },
-                    axisLabel: { color: '#5C5E78' },
+                    axisLine: { lineStyle: { color: '#DDDBD2' } },
+                    axisLabel: { color: '#5B616E' },
                   },
                   yAxis: {
                     type: 'value',
-                    splitLine: { lineStyle: { color: '#E8EAF2' } },
-                    axisLabel: { color: '#5C5E78' },
+                    splitLine: { lineStyle: { color: '#ECEAE4' } },
+                    axisLabel: { color: '#5B616E' },
                   },
                   series: [
                     {

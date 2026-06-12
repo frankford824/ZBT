@@ -30,14 +30,18 @@ export function EmptyBlock({ description = '暂无数据' }: { description?: str
   )
 }
 
-export function ErrorBlock() {
+export function ErrorBlock({
+  description = '请刷新页面重试；若多次失败，请联系管理员处理',
+}: {
+  description?: string
+}) {
   return (
     <Alert
       type="error"
       showIcon
       icon={<ExclamationCircleOutlined />}
       message="数据加载失败"
-      description="请刷新页面重试；若多次失败，请联系管理员处理"
+      description={description}
     />
   )
 }

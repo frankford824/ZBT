@@ -36,7 +36,7 @@ import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/St
 const tabParams: Record<string, Parameters<typeof fetchTenders>[0]> = {
   全部: {},
   智能推荐: { recommended: true },
-  监控: { status: 'open' },
+  可投标: { status: 'open' },
   收藏: { favorite: true },
 }
 
@@ -58,10 +58,11 @@ export function TendersPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState('全部')
+  const [keyword, setKeyword] = useState('')
   const [sourceForm] = Form.useForm()
   const tenders = useQuery({
-    queryKey: ['tenders', activeTab],
-    queryFn: () => fetchTenders(tabParams[activeTab]),
+    queryKey: ['tenders', activeTab, keyword],
+    queryFn: () => fetchTenders({ ...tabParams[activeTab], q: keyword || undefined }),
     enabled: activeTab !== '监控设置',
   })
   const sources = useQuery({
@@ -94,10 +95,22 @@ export function TendersPage() {
     onError: () => message.error('检测失败'),
   })
 
-  const tenderTable = () => {
+  const tenderTable = () => (
+    <Space direction="vertical" size={16} className="full-width">
+      <Input.Search
+        allowClear
+        placeholder="搜索标讯名称、招标单位关键词"
+        style={{ maxWidth: 360 }}
+        onSearch={(value) => setKeyword(value.trim())}
+      />
+      {tenderTableBody()}
+    </Space>
+  )
+
+  const tenderTableBody = () => {
     if (tenders.isLoading) return <LoadingBlock />
     if (tenders.isError) return <ErrorBlock />
-    if (!tenders.data?.length) return <EmptyBlock />
+    if (!tenders.data?.length) return <EmptyBlock description={keyword ? `没有匹配「${keyword}」的标讯` : undefined} />
     return (
       <Table
         rowKey="id"
@@ -202,7 +215,7 @@ export function TendersPage() {
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
-        items={['全部', '智能推荐', '监控', '收藏', '监控设置'].map((label) => ({
+        items={['全部', '智能推荐', '可投标', '收藏', '监控设置'].map((label) => ({
           key: label,
           label,
           children: label === '监控设置' ? sourcePanel() : tenderTable(),

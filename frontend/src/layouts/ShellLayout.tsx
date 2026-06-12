@@ -115,7 +115,6 @@ export function ShellLayout() {
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <Menu
               mode="inline"
-              theme="dark"
               selectedKeys={selectedNav ? [selectedNav.key] : []}
               defaultOpenKeys={['bid-root', 'knowledge-root']}
               items={menuItems}
@@ -163,7 +162,7 @@ export function ShellLayout() {
                 }}
               >
                 <Space className="user-menu">
-                  <Avatar style={{ background: '#4F46E5' }}>
+                  <Avatar style={{ background: '#2C5FA8' }}>
                     {(user.name || '用').slice(0, 1)}
                   </Avatar>
                   <Typography.Text>{user.name}</Typography.Text>
@@ -194,7 +193,6 @@ export function ShellLayout() {
         </div>
         <Menu
           mode="inline"
-          theme="dark"
           selectedKeys={selectedNav ? [selectedNav.key] : []}
           defaultOpenKeys={['bid-root', 'knowledge-root']}
           items={menuItems}

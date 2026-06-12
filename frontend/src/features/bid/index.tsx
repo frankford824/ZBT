@@ -22,6 +22,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Form,
   Input,
@@ -157,48 +158,51 @@ export function BidNewPage() {
           >
             <Form.Item
               label="项目名称"
+              htmlFor="bid-project-name"
               validateStatus={errors.projectName ? 'error' : undefined}
               help={errors.projectName?.message}
             >
               <Controller
                 name="projectName"
                 control={control}
-                render={({ field }) => <Input {...field} placeholder="某市智慧交通综合治理平台建设项目" />}
+                render={({ field }) => (
+                  <Input {...field} id="bid-project-name" placeholder="某市智慧交通综合治理平台建设项目" />
+                )}
               />
             </Form.Item>
-            <Form.Item label="招标单位">
+            <Form.Item label="招标单位" htmlFor="bid-tender-org">
               <Controller
                 name="tenderOrg"
                 control={control}
-                render={({ field }) => <Input {...field} placeholder="某市交通运输局" />}
+                render={({ field }) => <Input {...field} id="bid-tender-org" placeholder="某市交通运输局" />}
               />
             </Form.Item>
             <Row gutter={12}>
               <Col span={12}>
-                <Form.Item label="投标截止日期">
+                <Form.Item label="投标截止日期" htmlFor="bid-deadline">
                   <Controller
                     name="deadline"
                     control={control}
-                    render={({ field }) => <Input {...field} placeholder="2026-06-18" />}
+                    render={({ field }) => <Input {...field} id="bid-deadline" placeholder="2026-06-18" />}
                   />
                 </Form.Item>
               </Col>
               <Col span={12}>
-                <Form.Item label="项目预算">
+                <Form.Item label="项目预算" htmlFor="bid-budget">
                   <Controller
                     name="budget"
                     control={control}
-                    render={({ field }) => <Input {...field} placeholder="12800000" />}
+                    render={({ field }) => <Input {...field} id="bid-budget" placeholder="12800000" />}
                   />
                 </Form.Item>
               </Col>
             </Row>
-            <Form.Item label="标书类型">
+            <Form.Item label="标书类型" htmlFor="bid-type">
               <Controller
                 name="bidType"
                 control={control}
                 render={({ field }) => (
-                  <Radio.Group {...field}>
+                  <Radio.Group {...field} id="bid-type">
                     <Radio.Button value="combined">综合标书</Radio.Button>
                     <Radio.Button value="separated">分离标书</Radio.Button>
                     <Radio.Button value="custom">自定义组合</Radio.Button>
@@ -233,9 +237,17 @@ export function BidNewPage() {
   )
 }
 
+const bidStatusFilters: Record<string, string[]> = {
+  全部: [],
+  编制中: ['draft', 'editing'],
+  审批中: ['in_review'],
+  已完成: ['approved', 'submitted'],
+}
+
 export function BidListPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const [statusFilter, setStatusFilter] = useState('全部')
   const bids = useQuery({
     queryKey: ['bids'],
     queryFn: fetchBids,
@@ -259,11 +271,16 @@ export function BidListPage() {
   if (bids.isLoading) return <LoadingBlock />
   if (bids.isError) return <ErrorBlock />
 
+  const activeStatuses = bidStatusFilters[statusFilter] ?? []
+  const visibleBids = (bids.data ?? []).filter(
+    (bid) => activeStatuses.length === 0 || activeStatuses.includes(bid.status),
+  )
+
   return (
     <PageFrame
       module="标书生成"
       title="我的标书"
-      subtitle="状态筛选、批量导出、审批和编辑入口"
+      subtitle="状态筛选、审批和编辑入口"
       tags={['page-generate-list', '/bids']}
       actions={[
         <Button key="new" type="primary" icon={<PlusOutlined />}>
@@ -272,56 +289,77 @@ export function BidListPage() {
       ]}
     >
       <Space direction="vertical" size={16} className="full-width">
-        <Segmented options={['全部', '编制中', '审核中', '已完成']} />
-        <Table
-          rowKey="id"
-          rowSelection={{}}
-          dataSource={bids.data ?? []}
-          columns={[
-            {
-              title: '标书名称',
-              dataIndex: 'title',
-              render: (value: string, row: BidDocumentDTO) => <Link to={`/bids/${row.id}/editor`}>{value}</Link>,
-            },
-            { title: '项目', dataIndex: 'project_name', render: (value: string) => value || '未关联项目' },
-            { title: '类型', dataIndex: 'bid_type', render: bidTypeLabel },
-            { title: '状态', dataIndex: 'status', render: bidStatusLabel },
-            {
-              title: '进度',
-              render: (_, row: BidDocumentDTO) => <Progress percent={row.status === 'editing' ? 72 : 18} size="small" />,
-            },
-            {
-              title: '操作',
-              render: (_, row: BidDocumentDTO) => (
-                <Space>
-                  <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link>
-                  <Link to={`/bids/${row.id}/editor`}>编辑</Link>
-                  <Button
-                    type="link"
-                    size="small"
-                    disabled={row.status === 'in_review' || row.status === 'approved'}
-                    loading={approvalMutation.isPending && approvalMutation.variables === row.id}
-                    onClick={() => approvalMutation.mutate(row.id)}
-                  >
-                    提交审批
-                  </Button>
-                  <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
+        <Segmented
+          options={Object.keys(bidStatusFilters)}
+          value={statusFilter}
+          onChange={(value) => setStatusFilter(String(value))}
+        />
+        {visibleBids.length === 0 ? (
+          <EmptyBlock
+            description={statusFilter === '全部' ? '还没有标书，点击右上角新建' : `没有「${statusFilter}」状态的标书`}
+          />
+        ) : (
+          <Table
+            rowKey="id"
+            dataSource={visibleBids}
+            scroll={{ x: 1120 }}
+            columns={[
+              {
+                title: '标书名称',
+                dataIndex: 'title',
+                width: 260,
+                render: (value: string, row: BidDocumentDTO) => <Link to={`/bids/${row.id}/editor`}>{value}</Link>,
+              },
+              {
+                title: '项目',
+                dataIndex: 'project_name',
+                width: 280,
+                render: (value: string) => value || '未关联项目',
+              },
+              { title: '类型', dataIndex: 'bid_type', width: 92, render: bidTypeLabel },
+              { title: '状态', dataIndex: 'status', width: 96, render: bidStatusLabel },
+              {
+                title: '更新时间',
+                dataIndex: 'updated_at',
+                width: 146,
+                render: (value: string) => (
+                  <span className="data-mono">{value ? new Date(value).toLocaleString('zh-CN') : '-'}</span>
+                ),
+              },
+              {
+                title: '操作',
+                width: 246,
+                render: (_, row: BidDocumentDTO) => (
+                  <Space size={10} wrap={false}>
+                    <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link>
+                    <Link to={`/bids/${row.id}/editor`}>编辑</Link>
                     <Button
                       type="link"
                       size="small"
-                      danger
-                      icon={<DeleteOutlined />}
                       disabled={row.status === 'in_review' || row.status === 'approved'}
-                      loading={archiveMutation.isPending && archiveMutation.variables === row.id}
+                      loading={approvalMutation.isPending && approvalMutation.variables === row.id}
+                      onClick={() => approvalMutation.mutate(row.id)}
                     >
-                      归档
+                      提交审批
                     </Button>
-                  </Popconfirm>
-                </Space>
-              ),
-            },
-          ]}
-        />
+                    <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
+                      <Button
+                        type="link"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined />}
+                        disabled={row.status === 'in_review' || row.status === 'approved'}
+                        loading={archiveMutation.isPending && archiveMutation.variables === row.id}
+                      >
+                        归档
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        )}
       </Space>
     </PageFrame>
   )
@@ -420,7 +458,7 @@ export function BidWizardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const step = Number(searchParams.get('step') || '1')
   const current = Math.min(Math.max(step, 1), 7) - 1
-  const steps = ['项目信息', '文件解读', '目录大纲', '素材选择', '生成正文', '标书编辑', '定稿导出']
+  const steps = ['上传招标文件', '文件解读', '目录大纲', '素材选择', '生成正文', '标书编辑', '定稿导出']
   const [tenderFile, setTenderFile] = useState<File | null>(null)
   const [parseDraftText, setParseDraftText] = useState('')
   const [outlineDrafts, setOutlineDrafts] = useState<Record<string, OutlineDraftChapter[]>>({})
@@ -841,8 +879,7 @@ export function BidWizardPage() {
                     title: '选择',
                     width: 80,
                     render: (_value, row: unknown, index: number) => (
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={materialRefSelected(row)}
                         onChange={(event) => toggleMaterialRef(index, event.target.checked)}
                       />
@@ -1471,7 +1508,7 @@ export function BidEditorPage() {
                 percent={generationPercent}
                 size="small"
                 showInfo={false}
-                strokeColor={{ '0%': '#7C3AED', '100%': '#4F46E5' }}
+                strokeColor={{ '0%': '#7C3AED', '100%': '#2C5FA8' }}
               />
             </div>
             <div className="ai-panel-row">
