@@ -73,14 +73,22 @@ docker compose exec -T ai-service python -m pytest app/tests
 
 后端启动会自动执行嵌入式 goose 迁移。迁移连接使用 `MIGRATION_DATABASE_URL`，业务连接使用非超级账号 `DATABASE_URL=postgres://zbt_app:zbt_app@postgres:5432/zbt?sslmode=disable`，用于确保 RLS 在应用查询中真实生效。
 
-AI 模型名称和 Provider 路由通过 `MODEL_ROUTING_FILE` 指向的 YAML 配置，不写死在代码中。Docker 默认路径为：
+AI 模型名称和 Provider 路由通过 `MODEL_ROUTING_FILE` 指向的 YAML 配置，不写死在代码中。Router 当前支持 `mock` 和 OpenAI-compatible Provider；DeepSeek、DashScope、OpenAI 兼容网关可通过 YAML provider 配置和对应 `*_API_KEY` / `*_BASE_URL` 环境变量启用。Docker 默认路径为：
 
 ```bash
 MODEL_ROUTING_FILE=./app/config/model_routing.yaml
 USE_MOCK_PROVIDERS=true
 ```
 
-没有真实 API Key 时，MockProvider 可以跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。
+没有真实 API Key 时，MockProvider 可以跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。切换真实 Provider 时，把对应 route 的 `provider` 改为已配置的 OpenAI-compatible provider；如果未配置 key/base_url 且未显式设置 fallback，AI 服务会报错而不会静默回退 mock。
+
+AI 调用成本通过后端环境变量 `AI_MODEL_PRICING_JSON` 配置，例如：
+
+```bash
+AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1m":2},"openai_compatible_primary/*":{"input_per_1m":2,"output_per_1m":8}}'
+```
+
+价格可按 `provider/model`、`model`、`provider/*` 或 `*` 匹配；未配置价格时 `estimated_cost` 保持 0。
 
 ## 文件和对象存储
 
@@ -89,6 +97,8 @@ USE_MOCK_PROVIDERS=true
 - `MINIO_ENDPOINT=minio:9000` 用于容器内访问。
 - `MINIO_PUBLIC_ENDPOINT=127.0.0.1:9000` 用于浏览器直连预签名 URL。
 - bucket 保持私有，下载/预览必须经 Go 鉴权后返回预签名 URL。
+
+知识库解析支持纯文本、PDF 文本层、docx 段落和表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。扫描件 OCR、复杂表格结构识别和版面坐标抽取仍需接入专门 OCR/Layout Provider。
 
 ## 验收定位
 

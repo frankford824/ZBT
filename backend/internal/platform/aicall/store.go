@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -39,19 +40,20 @@ type Log struct {
 }
 
 type RecordInput struct {
-	TenantID     string
-	UserID       string
-	TraceID      string
-	TaskType     string
-	Provider     string
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	LatencyMS    int
-	Status       string
-	ErrorMessage string
-	FallbackFrom string
-	BizRef       map[string]any
+	TenantID      string
+	UserID        string
+	TraceID       string
+	TaskType      string
+	Provider      string
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	EstimatedCost float64
+	LatencyMS     int
+	Status        string
+	ErrorMessage  string
+	FallbackFrom  string
+	BizRef        map[string]any
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -104,24 +106,24 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 		created, err := scanLog(tx.QueryRow(ctx, `
 			insert into ai_call_logs (
 				tenant_id, user_id, trace_id, task_type, provider, model,
-				input_tokens, output_tokens, latency_ms, status,
+				input_tokens, output_tokens, estimated_cost, latency_ms, status,
 				error_message, fallback_from, biz_ref
 			)
 			select $1, nullif($2, '')::uuid, $3, $4, $5, $6,
-				$7, $8, $9, $10, nullif($11, ''), nullif($12, ''), $13
+				$7, $8, $9, $10, $11, nullif($12, ''), nullif($13, ''), $14
 			where not exists (
 				select 1
 				from ai_call_logs
 				where tenant_id = $1
 					and trace_id = $3
 					and task_type = $4
-					and coalesce(biz_ref->>'external_task_id', '') = coalesce($14, '')
+					and coalesce(biz_ref->>'external_task_id', '') = coalesce($15, '')
 			)
 			returning id::text, user_id::text, '', trace_id, task_type, provider, model,
 				input_tokens, output_tokens, estimated_cost::float8, latency_ms, status,
 				error_message, fallback_from, biz_ref, created_at
 		`, input.TenantID, input.UserID, input.TraceID, input.TaskType, input.Provider, input.Model,
-			input.InputTokens, input.OutputTokens, input.LatencyMS, input.Status, input.ErrorMessage,
+			input.InputTokens, input.OutputTokens, input.EstimatedCost, input.LatencyMS, input.Status, input.ErrorMessage,
 			input.FallbackFrom, bizRefJSON, stringFromMap(input.BizRef, "external_task_id")))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -257,18 +259,19 @@ func recordFromTask(
 		user = userID.String
 	}
 	return RecordInput{
-		TenantID:     tenantID,
-		UserID:       user,
-		TraceID:      traceID,
-		TaskType:     taskType,
-		Provider:     provider,
-		Model:        model,
-		InputTokens:  intFromMap(tokenUsage, "input_tokens"),
-		OutputTokens: intFromMap(tokenUsage, "output_tokens"),
-		LatencyMS:    latencyMS,
-		Status:       normalizeStatus(status),
-		ErrorMessage: errorMessage,
-		FallbackFrom: stringFromMap(route, "fallback_from"),
+		TenantID:      tenantID,
+		UserID:        user,
+		TraceID:       traceID,
+		TaskType:      taskType,
+		Provider:      provider,
+		Model:         model,
+		InputTokens:   intFromMap(tokenUsage, "input_tokens"),
+		OutputTokens:  intFromMap(tokenUsage, "output_tokens"),
+		EstimatedCost: floatFromMap(modelMetadata, "estimated_cost"),
+		LatencyMS:     latencyMS,
+		Status:        normalizeStatus(status),
+		ErrorMessage:  errorMessage,
+		FallbackFrom:  stringFromMap(route, "fallback_from"),
 		BizRef: map[string]any{
 			"local_task_id":     localTaskID,
 			"external_task_id":  externalTaskID,
@@ -301,10 +304,65 @@ func normalizeRecord(input RecordInput) RecordInput {
 	if input.OutputTokens < 0 {
 		input.OutputTokens = 0
 	}
+	if input.EstimatedCost < 0 {
+		input.EstimatedCost = 0
+	}
+	if input.EstimatedCost == 0 {
+		input.EstimatedCost = estimateCost(input.Provider, input.Model, input.InputTokens, input.OutputTokens)
+	}
 	if input.LatencyMS < 0 {
 		input.LatencyMS = 0
 	}
 	return input
+}
+
+type pricingRate struct {
+	InputPer1K  float64 `json:"input_per_1k"`
+	OutputPer1K float64 `json:"output_per_1k"`
+	InputPer1M  float64 `json:"input_per_1m"`
+	OutputPer1M float64 `json:"output_per_1m"`
+}
+
+func estimateCost(provider, model string, inputTokens, outputTokens int) float64 {
+	if inputTokens <= 0 && outputTokens <= 0 {
+		return 0
+	}
+	rate, ok := pricingFor(provider, model)
+	if !ok {
+		return 0
+	}
+	inputPer1K := rate.InputPer1K
+	outputPer1K := rate.OutputPer1K
+	if inputPer1K == 0 && rate.InputPer1M > 0 {
+		inputPer1K = rate.InputPer1M / 1000
+	}
+	if outputPer1K == 0 && rate.OutputPer1M > 0 {
+		outputPer1K = rate.OutputPer1M / 1000
+	}
+	return (float64(inputTokens)*inputPer1K + float64(outputTokens)*outputPer1K) / 1000
+}
+
+func pricingFor(provider, model string) (pricingRate, bool) {
+	raw := strings.TrimSpace(os.Getenv("AI_MODEL_PRICING_JSON"))
+	if raw == "" {
+		return pricingRate{}, false
+	}
+	var pricing map[string]pricingRate
+	if err := json.Unmarshal([]byte(raw), &pricing); err != nil {
+		return pricingRate{}, false
+	}
+	keys := []string{
+		strings.TrimSpace(provider) + "/" + strings.TrimSpace(model),
+		strings.TrimSpace(model),
+		strings.TrimSpace(provider) + "/*",
+		"*",
+	}
+	for _, key := range keys {
+		if rate, ok := pricing[key]; ok {
+			return rate, true
+		}
+	}
+	return pricingRate{}, false
 }
 
 func normalizeStatus(value string) string {
@@ -409,6 +467,27 @@ func intFromMap(values map[string]any, key string) int {
 	case json.Number:
 		value, _ := typed.Int64()
 		return int(value)
+	default:
+		return 0
+	}
+}
+
+func floatFromMap(values map[string]any, key string) float64 {
+	if values == nil {
+		return 0
+	}
+	switch typed := values[key].(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case json.Number:
+		value, _ := typed.Float64()
+		return value
 	default:
 		return 0
 	}

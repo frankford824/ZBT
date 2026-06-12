@@ -4,7 +4,9 @@ from io import BytesIO
 from pathlib import Path
 
 import fitz
+from openpyxl import load_workbook
 from docx import Document as DocxDocument
+from pptx import Presentation
 
 from app.schemas.knowledge import KnowledgeChunk, KnowledgeProcessRequest, KnowledgeProcessResult
 
@@ -18,6 +20,12 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
     elif "word" in content_type or suffix in {".docx", ".doc"}:
         text, page_count = _parse_docx(content), None
         parser = "python-docx"
+    elif "spreadsheet" in content_type or suffix in {".xlsx", ".xlsm"}:
+        text, page_count = _parse_xlsx(content), None
+        parser = "openpyxl"
+    elif "presentation" in content_type or suffix in {".pptx", ".pptm"}:
+        text, page_count = _parse_pptx(content), None
+        parser = "python-pptx"
     else:
         text, page_count = _parse_text(content), None
         parser = "plain-text"
@@ -60,7 +68,53 @@ def _parse_pdf(content: bytes) -> tuple[str, int]:
 def _parse_docx(content: bytes) -> str:
     document = DocxDocument(BytesIO(content))
     paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
-    return "\n\n".join(paragraphs)
+    table_rows: list[str] = []
+    for table_index, table in enumerate(document.tables, start=1):
+        for row_index, row in enumerate(table.rows, start=1):
+            values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
+            if values:
+                table_rows.append(f"[Table {table_index} Row {row_index}] " + " | ".join(values))
+    return "\n\n".join([*paragraphs, *table_rows])
+
+
+def _parse_xlsx(content: bytes) -> str:
+    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    lines: list[str] = []
+    try:
+        for sheet in workbook.worksheets:
+            lines.append(f"[Sheet] {sheet.title}")
+            for row in sheet.iter_rows(values_only=True):
+                values = [_cell_text(value) for value in row]
+                values = [value for value in values if value]
+                if values:
+                    lines.append(" | ".join(values))
+    finally:
+        workbook.close()
+    return "\n".join(lines)
+
+
+def _parse_pptx(content: bytes) -> str:
+    presentation = Presentation(BytesIO(content))
+    lines: list[str] = []
+    for slide_index, slide in enumerate(presentation.slides, start=1):
+        lines.append(f"[Slide {slide_index}]")
+        for shape in slide.shapes:
+            if getattr(shape, "has_text_frame", False) and shape.text_frame:
+                text = shape.text_frame.text.strip()
+                if text:
+                    lines.append(text)
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
+                    if values:
+                        lines.append(" | ".join(values))
+    return "\n".join(lines)
+
+
+def _cell_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _chunk_text(text: str, filename: str, page_count: int | None) -> list[KnowledgeChunk]:

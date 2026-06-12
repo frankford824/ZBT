@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.gateway.model_router import ModelRouter
 from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef
 
@@ -85,3 +87,64 @@ def test_mock_rerank_prefers_query_overlap() -> None:
     )
 
     assert order[0] == 1
+
+
+def test_openai_compatible_provider_is_registered_but_unhealthy_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+
+    health = router.health_check()
+
+    assert "openai_compatible_primary" in health
+    assert health["openai_compatible_primary"] is False
+
+
+def test_router_uses_explicit_fallback_when_primary_provider_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                    "fallback": [{"provider": "mock", "model": "mock-model"}],
+                }
+            },
+        }
+    )
+
+    target = router.resolve("chapter_generate", tenant_id="tenant-demo")
+
+    assert target.provider == "mock"
+    assert target.fallback_from == "openai_compatible_primary"
+
+
+def test_router_does_not_silently_fallback_to_mock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                }
+            },
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="no configured provider"):
+        router.get_llm("chapter_generate", tenant_id="tenant-demo")

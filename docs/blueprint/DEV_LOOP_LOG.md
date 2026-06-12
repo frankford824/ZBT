@@ -2075,3 +2075,52 @@ python3 infra/scripts/acceptance_core_check.py
 ### 偏离蓝图
 
 1. 本轮只处理审查报告中能快速降低误用风险的安全收口项；真实模型 Provider、OCR/表格解析、Word 排版保真和成本计费仍需要独立设计与分阶段实现。
+
+## Loop-29 / 真实模型兼容 Provider 与解析增量 - 2026-06-11
+
+### 本轮目标
+
+1. 处理审查报告中优先级最高的核心能力缺口，先拆掉 “AI 只能跑 MockProvider” 和 “estimated_cost 恒为 0” 两个底层阻塞。
+2. 在不写入任何 API Key 的前提下，落地 OpenAI-compatible Provider，可通过环境变量接 OpenAI、DeepSeek、DashScope 兼容网关。
+3. 扩展文档解析的低风险格式覆盖：docx 表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。
+
+### 代码交付
+
+1. 新增 `ai-service/app/gateway/openai_compatible_provider.py`，实现 OpenAI-compatible chat completions、JSON 输出、embedding、LLM rerank、章节生成、章节改写和成本建议的统一 Provider。
+2. `ModelRouter` 改为按 `model_routing.yaml` 构建 provider；未知或未配置 provider 不再静默回退 mock，只有 route 显式配置 fallback 时才会降级，并在 route 中写入 `fallback_from`。
+3. `model_routing.yaml` 中的 `openai_compatible_primary` 现在可真实注册；DeepSeek、DashScope 等兼容 provider 通过 `*_API_KEY` 和 `*_BASE_URL` 环境变量启用。
+4. 后端 `aicall.Store` 增加 `AI_MODEL_PRICING_JSON` 计价支持，按 `provider/model`、`model`、`provider/*` 或 `*` 匹配 input/output token 单价，写入 `ai_call_logs.estimated_cost`。
+5. 文档解析增加 docx 表格、xlsx/xlsm、pptx/pptm 抽取，README 明确当前仍未覆盖 OCR、复杂表格结构识别和版面坐标抽取。
+6. `.env.example`、`docker-compose.yml` 和 README 补充真实 Provider 与模型计价配置说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m compileall app
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/aicall
+docker compose config >/dev/null
+./infra/scripts/check.sh
+tmp_docker_config="$(mktemp -d)" && DOCKER_CONFIG="$tmp_docker_config" docker compose build backend ai-service && DOCKER_CONFIG="$tmp_docker_config" docker compose up -d backend ai-service frontend
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8000/models/health
+docker compose exec -T ai-service python -m pytest app/tests
+```
+
+结果：
+
+1. AI 服务 `compileall` 通过。
+2. 挂载当前源码运行 AI 容器 pytest 通过，11 个测试全部通过；新增覆盖 OpenAI-compatible provider 注册、缺 key 不健康、显式 fallback、禁止静默 fallback、docx 表格、xlsx 和 pptx 解析。
+3. 后端 aicall 测试通过，覆盖 provider/model 精确计价、provider 通配计价、未配置价格保持 0。
+4. `docker compose config` 通过，确认新增环境变量插值合法。
+5. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 全量测试、AI compileall、Docker compose config、运行中 ai-service 容器内旧镜像 pytest 均成功。
+6. 使用临时 `DOCKER_CONFIG` 绕过本机缺失 `docker-credential-desktop.exe` 后，backend 和 ai-service 镜像构建成功，并已重启本地运行栈。
+7. 后端 `/healthz` 返回 ok；AI `/models/health` 返回 `mock=true`，`openai_compatible_primary=false`、`dashscope=false`、`deepseek=false`，符合未配置真实 key/base_url 的当前环境。
+8. 新 ai-service 容器内 `python -m pytest app/tests` 通过，11 个测试全部通过。
+
+### 偏离蓝图
+
+1. 本轮完成真实模型兼容接入底座，但没有在仓库中配置真实 API Key，也没有把默认 route 从 mock 切到真实 provider；生产切换仍需在部署环境设置 key/base_url 并修改 `model_routing.yaml` route provider。
+2. 文档解析只补了 Office 文本抽取增量；扫描件 OCR、PDF 表格结构化、版面坐标、页眉页脚/目录/水印级 Word 母版保真仍未完成，需要后续独立实现。

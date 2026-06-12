@@ -236,7 +236,9 @@ async def chapter_generate(
 
 def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> None:
     try:
+        route = router.resolve("chapter_generate", tenant_id=payload.tenant_id)
         provider = router.get_llm("chapter_generate", tenant_id=payload.tenant_id)
+        payload.model_hint = route.model
         generation = provider.generate_chapter(payload)
         callback_payload = {
             "tenant_id": payload.tenant_id,
