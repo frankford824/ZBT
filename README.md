@@ -98,7 +98,7 @@ AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1
 - `MINIO_PUBLIC_ENDPOINT=127.0.0.1:9000` 用于浏览器直连预签名 URL。
 - bucket 保持私有，下载/预览必须经 Go 鉴权后返回预签名 URL。
 
-知识库解析支持纯文本、PDF 文本层、docx 段落和表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。扫描件 OCR、复杂表格结构识别和版面坐标抽取仍需接入专门 OCR/Layout Provider。
+知识库解析支持纯文本、PDF 文本层、PDF layout blocks、PDF 表格候选、docx 段落和表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。扫描件可通过 `OCR_HTTP_ENDPOINT` 接入外部 OCR 服务，配置 `OCR_API_KEY` 时会以 Bearer header 传递；未配置 OCR 时，空文本 PDF 会在解析 metadata 中标记 `ocr_required=true` 和 `provider_not_configured`，不会伪装为解析成功。复杂表格语义识别、版面还原和坐标级引用仍需继续增强。
 
 ## 验收定位
 

@@ -2124,3 +2124,52 @@ docker compose exec -T ai-service python -m pytest app/tests
 
 1. 本轮完成真实模型兼容接入底座，但没有在仓库中配置真实 API Key，也没有把默认 route 从 mock 切到真实 provider；生产切换仍需在部署环境设置 key/base_url 并修改 `model_routing.yaml` route provider。
 2. 文档解析只补了 Office 文本抽取增量；扫描件 OCR、PDF 表格结构化、版面坐标、页眉页脚/目录/水印级 Word 母版保真仍未完成，需要后续独立实现。
+
+## Loop-30 / PDF 版面表格与 OCR 接入点 - 2026-06-11
+
+### 本轮目标
+
+1. 继续处理审查报告中的文档解析核心缺口，把 PDF 从纯文本抽取推进到可审计的版面 metadata 和表格候选。
+2. 为扫描件 OCR 增加可配置接入点；未配置 OCR 时明确标记需要 OCR，不伪装解析成功。
+3. 保持当前知识库处理链路兼容，不改变现有 chunk/embedding/search API。
+
+### 代码交付
+
+1. `document_parser.py` 的 PDF 解析新增 `layout_blocks`、`layout_block_count`、`tables`、`table_count`、`ocr_required` metadata。
+2. PDF 表格提取优先尝试 PyMuPDF `page.find_tables()`，不可用或未识别时回退到文本行分隔启发式候选。
+3. 新增 `OCR_HTTP_ENDPOINT` / `OCR_HTTP_TIMEOUT_S` 接入点：空文本 PDF 会尝试调用 HTTP OCR；配置 `OCR_API_KEY` 时附带 Bearer header；未配置时 metadata 写入 `ocr.status=provider_not_configured`。
+4. `.env.example`、`docker-compose.yml` 和 README 增加 OCR HTTP 配置与能力边界说明。
+5. `test_document_parser.py` 新增 PDF layout/table 候选和空白 PDF OCR required 测试。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m compileall app
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests/test_document_parser.py
+docker run --rm -v /mnt/c/users/wsfwk/downloads/love/ai-service/app:/app/app love-ai-service python -m pytest app/tests
+docker compose config >/dev/null
+./infra/scripts/check.sh
+tmp_docker_config="$(mktemp -d)" && DOCKER_CONFIG="$tmp_docker_config" docker compose build ai-service && DOCKER_CONFIG="$tmp_docker_config" docker compose up -d ai-service backend frontend
+docker compose exec -T ai-service python -m pytest app/tests
+curl http://127.0.0.1:8000/models/health
+docker compose ps backend ai-service frontend
+```
+
+结果：
+
+1. AI 服务 `compileall` 通过。
+2. 挂载当前源码运行 `test_document_parser.py` 通过，5 个解析测试全部通过，覆盖 PDF layout/table、空白 PDF OCR required、docx 表格、xlsx、pptx。
+3. 挂载当前源码运行完整 AI pytest 通过，13 个测试全部通过。
+4. `docker compose config` 通过，确认 OCR 相关环境变量插值合法。
+5. `./infra/scripts/check.sh` 通过：验收脚本语法检查、前端生产构建、Go 全量测试、AI compileall、Docker compose config、运行中 ai-service 容器内 pytest 均成功。
+6. 使用临时 `DOCKER_CONFIG` 绕过本机缺失 `docker-credential-desktop.exe` 后，ai-service 镜像构建成功，并已重启本地运行栈。
+7. 重建后的 ai-service 容器内 `python -m pytest app/tests` 通过，13 个测试全部通过。
+8. AI `/models/health` 返回 `mock=true`，`openai_compatible_primary=false`、`dashscope=false`、`deepseek=false`，符合当前环境未配置真实 key/base_url 的状态。
+9. `docker compose ps` 显示 backend、ai-service、frontend 均处于 Up 状态。
+
+### 偏离蓝图
+
+1. 这仍不是完整 OCR 能力；当前只提供 HTTP OCR 接入点和空文本 PDF 的显式状态标记，真实 OCR 服务、图片预处理、表格结构语义识别和坐标级引用仍需后续实现。
+2. Word/PDF 母版级排版保真本轮未处理。

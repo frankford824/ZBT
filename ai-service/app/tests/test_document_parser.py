@@ -1,11 +1,46 @@
 from io import BytesIO
 
+import fitz
 from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
 
 from app.pipelines.parse.document_parser import parse_document
 from app.schemas.knowledge import KnowledgeProcessRequest
+
+
+def test_pdf_parser_extracts_layout_blocks_and_table_candidates() -> None:
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "Item    Amount")
+    page.insert_text((72, 96), "Equipment    1200")
+    page.insert_text((72, 140), "Implementation plan")
+    content = pdf.tobytes()
+    pdf.close()
+
+    result = parse_document(_request("layout.pdf"), content)
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert result.metadata["parser"] == "pymupdf"
+    assert result.metadata["layout_block_count"] >= 1
+    assert result.metadata["table_count"] >= 1
+    assert result.metadata["ocr_required"] is False
+    assert "Equipment" in text
+
+
+def test_empty_pdf_marks_ocr_required_without_claiming_success(monkeypatch) -> None:
+    monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
+    pdf = fitz.open()
+    pdf.new_page()
+    content = pdf.tobytes()
+    pdf.close()
+
+    result = parse_document(_request("scan.pdf"), content)
+
+    assert result.metadata["parser"] == "pymupdf"
+    assert result.metadata["ocr_required"] is True
+    assert result.metadata["ocr"]["status"] == "provider_not_configured"
+    assert result.chunks[0].metadata["needs_human_input"] is True
 
 
 def test_docx_parser_includes_paragraphs_and_tables() -> None:

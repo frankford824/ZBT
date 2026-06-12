@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import base64
+import json
+import os
+import re
 from io import BytesIO
 from pathlib import Path
+from urllib import request
 
 import fitz
 from openpyxl import load_workbook
@@ -14,8 +19,19 @@ from app.schemas.knowledge import KnowledgeChunk, KnowledgeProcessRequest, Knowl
 def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> KnowledgeProcessResult:
     suffix = Path(payload.filename).suffix.lower()
     content_type = payload.content_type.lower()
+    metadata: dict[str, object] = {
+        "content_type": payload.content_type,
+        "object_key": payload.object_key,
+    }
     if "pdf" in content_type or suffix == ".pdf":
-        text, page_count = _parse_pdf(content)
+        text, page_count, pdf_metadata = _parse_pdf(content)
+        metadata.update(pdf_metadata)
+        if not text.strip():
+            ocr_result = _try_http_ocr(payload, content)
+            if ocr_result["status"] == "done":
+                text = str(ocr_result.get("text") or "")
+                ocr_result = {key: value for key, value in ocr_result.items() if key != "text"}
+            metadata["ocr"] = ocr_result
         parser = "pymupdf"
     elif "word" in content_type or suffix in {".docx", ".doc"}:
         text, page_count = _parse_docx(content), None
@@ -32,17 +48,18 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
 
     chunks = _chunk_text(text, payload.filename, page_count)
     summary = _summary(text, payload.filename)
+    metadata.update(
+        {
+            "parser": parser,
+            "page_count": page_count,
+            "chunk_count": len(chunks),
+        }
+    )
     return KnowledgeProcessResult(
         processed_title=Path(payload.filename).stem or payload.filename,
         summary=summary,
         chunks=chunks,
-        metadata={
-            "parser": parser,
-            "content_type": payload.content_type,
-            "object_key": payload.object_key,
-            "page_count": page_count,
-            "chunk_count": len(chunks),
-        },
+        metadata=metadata,
     )
 
 
@@ -55,14 +72,117 @@ def _parse_text(content: bytes) -> str:
     return content.decode("utf-8", errors="replace")
 
 
-def _parse_pdf(content: bytes) -> tuple[str, int]:
+def _parse_pdf(content: bytes) -> tuple[str, int, dict[str, object]]:
     doc = fitz.open(stream=content, filetype="pdf")
     pages: list[str] = []
+    layout_blocks: list[dict[str, object]] = []
+    tables: list[dict[str, object]] = []
     for page_index, page in enumerate(doc, start=1):
         page_text = page.get_text("text").strip()
         if page_text:
             pages.append(f"[Page {page_index}]\n{page_text}")
-    return "\n\n".join(pages), doc.page_count
+        layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
+        tables.extend(_extract_pdf_tables(page, page_index, page_text))
+    text = "\n\n".join(pages)
+    metadata = {
+        "layout_blocks": layout_blocks[:200],
+        "layout_block_count": len(layout_blocks),
+        "tables": tables[:50],
+        "table_count": len(tables),
+        "ocr_required": not bool(text.strip()),
+    }
+    return text, doc.page_count, metadata
+
+
+def _extract_pdf_layout_blocks(page: fitz.Page, page_index: int) -> list[dict[str, object]]:
+    raw = page.get_text("dict")
+    blocks: list[dict[str, object]] = []
+    for block in raw.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        lines: list[str] = []
+        for line in block.get("lines", []):
+            line_text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+            if line_text:
+                lines.append(line_text)
+        text = "\n".join(lines).strip()
+        if not text:
+            continue
+        blocks.append(
+            {
+                "page": page_index,
+                "bbox": [round(float(value), 2) for value in block.get("bbox", [])],
+                "text": text[:1000],
+            }
+        )
+    return blocks
+
+
+def _extract_pdf_tables(page: fitz.Page, page_index: int, page_text: str) -> list[dict[str, object]]:
+    tables: list[dict[str, object]] = []
+    if hasattr(page, "find_tables"):
+        try:
+            found = page.find_tables()
+            for table_index, table in enumerate(found.tables, start=1):
+                rows = table.extract()
+                cleaned_rows = [
+                    [str(cell or "").strip() for cell in row]
+                    for row in rows
+                    if any(str(cell or "").strip() for cell in row)
+                ]
+                if cleaned_rows:
+                    tables.append({"page": page_index, "index": table_index, "rows": cleaned_rows})
+        except Exception:
+            pass
+    if tables:
+        return tables
+
+    heuristic_rows: list[list[str]] = []
+    for line in page_text.splitlines():
+        cells = [cell.strip() for cell in re.split(r"\t+|\s{2,}|\s*\|\s*", line.strip()) if cell.strip()]
+        if len(cells) >= 2:
+            heuristic_rows.append(cells)
+    if len(heuristic_rows) >= 2:
+        tables.append({"page": page_index, "index": 1, "rows": heuristic_rows, "extraction": "heuristic"})
+    return tables
+
+
+def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str, object]:
+    endpoint = os.getenv("OCR_HTTP_ENDPOINT", "").strip()
+    provider = os.getenv("OCR_PROVIDER", "http_ocr").strip() or "http_ocr"
+    if not endpoint:
+        return {"status": "provider_not_configured", "provider": provider}
+    body = json.dumps(
+        {
+            "filename": payload.filename,
+            "content_type": payload.content_type,
+            "provider": provider,
+            "content_base64": base64.b64encode(content).decode("ascii"),
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    api_key = os.getenv("OCR_API_KEY", "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = request.Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers=headers,
+    )
+    try:
+        with request.urlopen(req, timeout=int(os.getenv("OCR_HTTP_TIMEOUT_S", "120"))) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        text = str(result.get("text") or "")
+        return {
+            "status": "done" if text.strip() else "empty_result",
+            "provider": provider,
+            "text": text,
+            "metadata": result.get("metadata", {}),
+        }
+    except Exception as exc:
+        return {"status": "failed", "provider": provider, "error": str(exc)}
 
 
 def _parse_docx(content: bytes) -> str:
