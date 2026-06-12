@@ -1,5 +1,7 @@
 import { ExclamationCircleOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons'
-import { Alert, Empty, Spin, Typography } from 'antd'
+import { Alert, Spin, Typography } from 'antd'
+
+const emptyIllustration = '/illustrations/zbt-empty-office.png'
 
 export function ForbiddenBlock() {
   return (
@@ -24,8 +26,11 @@ export function LoadingBlock() {
 
 export function EmptyBlock({ description = '暂无数据' }: { description?: string }) {
   return (
-    <div className="state-tile">
-      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={description} />
+    <div className="state-tile state-tile-empty">
+      <img className="state-illustration" src={emptyIllustration} alt="" aria-hidden="true" />
+      <Typography.Text className="state-copy" type="secondary">
+        {description}
+      </Typography.Text>
     </div>
   )
 }

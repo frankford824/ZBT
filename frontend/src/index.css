@@ -423,6 +423,87 @@ a {
   font-size: 12px;
   letter-spacing: 0;
   color: var(--text-secondary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.stat-card .ant-card-body {
+  min-height: 78px;
+}
+
+.stat-card .ant-statistic {
+  min-width: 0;
+}
+
+.stat-card .ant-statistic-content {
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.stat-card-shell {
+  min-width: 0;
+  min-height: 54px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.stat-card-glyph {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--primary-wash);
+  color: var(--primary);
+  box-shadow: inset 0 0 0 1px rgba(44, 95, 168, 0.08);
+}
+
+.stat-card-glyph svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+
+.recent-project-list .ant-list-item {
+  align-items: flex-start;
+}
+
+.recent-project-list .ant-list-item-meta-title {
+  margin-bottom: 8px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.recent-project-meta {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.recent-project-meta > .ant-space-item {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.compact-projects {
+  display: none;
+}
+
+.desktop-projects {
+  display: block;
+}
+
+@media (max-width: 767px) {
+  .compact-projects {
+    display: block;
+  }
+
+  .desktop-projects {
+    display: none;
+  }
 }
 
 /* ---------- 智能元素（仅 AI 功能使用紫） ---------- */
@@ -462,6 +543,27 @@ a {
   border-radius: 10px;
   background: var(--surface);
   color: var(--text-secondary);
+}
+
+.state-tile-empty {
+  min-height: 116px;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+
+.state-illustration {
+  width: 88px;
+  height: 88px;
+  display: block;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.state-copy {
+  max-width: min(100%, 320px);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .state-icon {

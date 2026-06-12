@@ -3,8 +3,9 @@ import ReactECharts from 'echarts-for-react'
 import { Button, Card, Col, List, Row, Skeleton, Space, Statistic, Table, Tag } from 'antd'
 import { Link } from 'react-router-dom'
 import { fetchPlatformSummary } from '../../shared/api/client'
+import { IconfontGlyph, type IconfontGlyphName } from '../../shared/components/IconfontGlyph'
 import { PageFrame } from '../../shared/components/PageFrame'
-import { ErrorBlock } from '../../shared/components/StateBlocks'
+import { EmptyBlock, ErrorBlock } from '../../shared/components/StateBlocks'
 
 const statusLabels: Record<string, string> = {
   opportunity: '商机评估',
@@ -27,14 +28,14 @@ export function DashboardPage() {
 
   const stats = data?.stats
 
-  const statItems = stats
+  const statItems: Array<{ title: string; value: number; suffix?: string; icon: IconfontGlyphName }> = stats
     ? [
-        { title: '进行中项目', value: stats.active_projects },
-        { title: '本月标书', value: stats.monthly_bids },
-        { title: '合规通过率', value: stats.compliance_pass_rate, suffix: '%' },
-        { title: '中标率', value: stats.win_rate, suffix: '%' },
-        { title: '待办', value: stats.pending_tasks },
-        { title: '知识库文档', value: stats.knowledge_docs },
+        { title: '进行中项目', value: stats.active_projects, icon: 'opportunity' },
+        { title: '本月标书', value: stats.monthly_bids, icon: 'upload' },
+        { title: '合规通过率', value: stats.compliance_pass_rate, suffix: '%', icon: 'target' },
+        { title: '中标率', value: stats.win_rate, suffix: '%', icon: 'data' },
+        { title: '待办', value: stats.pending_tasks, icon: 'time' },
+        { title: '知识库文档', value: stats.knowledge_docs, icon: 'mail' },
       ]
     : []
 
@@ -62,7 +63,12 @@ export function DashboardPage() {
           {statItems.map((item) => (
             <Col key={item.title} xs={12} md={8} xl={4}>
               <Card size="small" className="stat-card">
-                <Statistic title={item.title} value={item.value} suffix={item.suffix} />
+                <div className="stat-card-shell">
+                  <Statistic title={item.title} value={item.value} suffix={item.suffix} />
+                  <span className="stat-card-glyph">
+                    <IconfontGlyph name={item.icon} />
+                  </span>
+                </div>
               </Card>
             </Col>
           ))}
@@ -117,7 +123,7 @@ export function DashboardPage() {
             >
               <List
                 dataSource={data.recommended_tenders}
-                locale={{ emptyText: '暂无匹配标讯，可到标讯大厅订阅来源' }}
+                locale={{ emptyText: <EmptyBlock description="暂无匹配标讯，可到标讯大厅订阅来源" /> }}
                 renderItem={(item) => (
                   <List.Item actions={[<Link key="detail" to={`/tenders/${item.id}`}>查看</Link>]}>
                     <List.Item.Meta
@@ -136,7 +142,7 @@ export function DashboardPage() {
             <Card title="待我审批">
               <List
                 dataSource={data.pending_approvals}
-                locale={{ emptyText: '暂无待审批事项' }}
+                locale={{ emptyText: <EmptyBlock description="暂无待审批事项" /> }}
                 renderItem={(item) => (
                   <List.Item actions={[<Link key="team" to="/team?tab=approvals">处理</Link>]}>
                     <List.Item.Meta
@@ -152,7 +158,7 @@ export function DashboardPage() {
             <Card title="通知">
               <List
                 dataSource={data.notifications}
-                locale={{ emptyText: '暂无通知' }}
+                locale={{ emptyText: <EmptyBlock description="暂无通知" /> }}
                 renderItem={(item) => (
                   <List.Item>
                     <List.Item.Meta
@@ -172,36 +178,64 @@ export function DashboardPage() {
             </Card>
           </Col>
           <Col span={24}>
-            <Table
-              rowKey="id"
-              pagination={false}
-              dataSource={data.recent_projects}
-              columns={[
-                {
-                  title: '最近项目',
-                  dataIndex: 'name',
-                  render: (value, row) => <Link to={`/projects/${row.id}`}>{value}</Link>,
-                },
-                {
-                  title: '阶段',
-                  dataIndex: 'status',
-                  render: (value) => <Tag>{statusLabels[value] || value}</Tag>,
-                },
-                { title: '负责人', dataIndex: 'owner_name', render: (value) => value || '-' },
-                {
-                  title: '下一节点',
-                  dataIndex: 'due_date',
-                  className: 'data-mono',
-                  render: formatDate,
-                },
-                {
-                  title: '更新时间',
-                  dataIndex: 'updated_at',
-                  className: 'data-mono',
-                  render: formatDate,
-                },
-              ]}
-            />
+            <Card title="最近项目" className="compact-projects">
+              <List
+                className="recent-project-list"
+                dataSource={data.recent_projects}
+                locale={{ emptyText: <EmptyBlock description="暂无最近项目" /> }}
+                renderItem={(item) => (
+                  <List.Item>
+                    <List.Item.Meta
+                      title={<Link to={`/projects/${item.id}`}>{item.name}</Link>}
+                      description={
+                        <Space size={[6, 6]} wrap className="recent-project-meta">
+                          <Tag>{statusLabels[item.status] || item.status}</Tag>
+                          <span>负责人 {item.owner_name || '-'}</span>
+                          <span>下一节点 {formatDate(item.due_date)}</span>
+                        </Space>
+                      }
+                    />
+                  </List.Item>
+                )}
+              />
+            </Card>
+            <div className="desktop-projects">
+              <Table
+                rowKey="id"
+                pagination={false}
+                scroll={{ x: 760 }}
+                dataSource={data.recent_projects}
+                columns={[
+                  {
+                    title: '最近项目',
+                    dataIndex: 'name',
+                    width: 240,
+                    render: (value, row) => <Link to={`/projects/${row.id}`}>{value}</Link>,
+                  },
+                  {
+                    title: '阶段',
+                    dataIndex: 'status',
+                    width: 110,
+                    render: (value) => <Tag>{statusLabels[value] || value}</Tag>,
+                  },
+                  { title: '负责人', dataIndex: 'owner_name', width: 96, render: (value) => value || '-' },
+                  {
+                    title: '下一节点',
+                    dataIndex: 'due_date',
+                    className: 'data-mono',
+                    width: 120,
+                    render: formatDate,
+                  },
+                  {
+                    title: '更新时间',
+                    dataIndex: 'updated_at',
+                    className: 'data-mono',
+                    width: 180,
+                    render: formatDate,
+                  },
+                ]}
+              />
+            </div>
           </Col>
         </Row>
       )}
