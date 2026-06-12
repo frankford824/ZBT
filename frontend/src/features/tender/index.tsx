@@ -35,13 +35,23 @@ import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/St
 
 const tabParams: Record<string, Parameters<typeof fetchTenders>[0]> = {
   全部: {},
-  AI推荐: { recommended: true },
+  智能推荐: { recommended: true },
   监控: { status: 'open' },
   收藏: { favorite: true },
 }
 
 function dateText(value?: string | null) {
   return value ? value.slice(0, 10) : '-'
+}
+
+function tenderStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    open: '可投标',
+    closed: '已截止',
+    monitored: '已监控',
+    favorite: '已收藏',
+  }
+  return labels[value] || '待确认'
 }
 
 export function TendersPage() {
@@ -71,9 +81,9 @@ export function TendersPage() {
     onSuccess: () => {
       sourceForm.resetFields()
       queryClient.invalidateQueries({ queryKey: ['tender-sources'] })
-      message.success('数据源已创建')
+      message.success('来源已添加')
     },
-    onError: () => message.error('数据源创建失败'),
+    onError: () => message.error('来源添加失败'),
   })
   const verifyMutation = useMutation({
     mutationFn: verifyTenderSource,
@@ -126,25 +136,25 @@ export function TendersPage() {
   const sourcePanel = () => (
     <Row gutter={[16, 16]}>
       <Col xs={24} lg={10}>
-        <Card title="数据源配置">
+        <Card title="标讯来源">
           <Form form={sourceForm} layout="vertical" onFinish={sourceMutation.mutate}>
             <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '平台名称必填' }]}>
               <Input placeholder="中国招标投标公共服务平台" />
             </Form.Item>
-            <Form.Item name="url" label="平台 URL" rules={[{ required: true, message: '平台 URL 必填' }]}>
+            <Form.Item name="url" label="平台网址" rules={[{ required: true, message: '平台网址必填' }]}>
               <Input placeholder="https://www.example.com" />
             </Form.Item>
             <Form.Item name="source_type" label="平台类型" initialValue="政府采购">
               <Select options={['政府采购', '建设工程', '产权交易', '公共资源', '其他'].map((value) => ({ value }))} />
             </Form.Item>
             <Button htmlType="submit" type="primary" loading={sourceMutation.isPending}>
-              新增数据源
+              添加来源
             </Button>
           </Form>
         </Card>
       </Col>
       <Col xs={24} lg={14}>
-        <Card title="已配置数据源">
+        <Card title="已添加来源">
           {sources.isLoading && <LoadingBlock />}
           {sources.isError && <ErrorBlock />}
           {!sources.isLoading && !sources.isError && !sources.data?.length && <EmptyBlock />}
@@ -159,7 +169,7 @@ export function TendersPage() {
                     loading={verifyMutation.isPending && verifyMutation.variables === source.id}
                     onClick={() => verifyMutation.mutate(source.id)}
                   >
-                    URL 可达性检测
+                    检测连接
                   </Button>,
                 ]}
               >
@@ -167,7 +177,9 @@ export function TendersPage() {
                   title={
                     <Space>
                       {source.name}
-                      <Tag color={source.status === 'active' ? 'green' : 'red'}>{source.status}</Tag>
+                      <Tag color={source.status === 'active' ? 'green' : 'red'}>
+                        {source.status === 'active' ? '可用' : '需检查'}
+                      </Tag>
                     </Space>
                   }
                   description={`${source.source_type} · ${source.url} · ${source.last_verify_message || '未检测'}`}
@@ -184,13 +196,13 @@ export function TendersPage() {
     <PageFrame
       module="投标准备"
       title="标讯大厅"
-      subtitle="标讯搜索、AI 推荐、收藏和数据源配置"
+      subtitle="标讯搜索、智能推荐、收藏和来源管理"
       tags={['page-tender', '/tenders']}
     >
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
-        items={['全部', 'AI推荐', '监控', '收藏', '监控设置'].map((label) => ({
+        items={['全部', '智能推荐', '监控', '收藏', '监控设置'].map((label) => ({
           key: label,
           label,
           children: label === '监控设置' ? sourcePanel() : tenderTable(),
@@ -251,7 +263,7 @@ export function TenderDetailPage() {
         <Descriptions.Item label="投标截止">{dateText(tender.data.deadline)}</Descriptions.Item>
         <Descriptions.Item label="匹配度">{tender.data.match_score}%</Descriptions.Item>
         <Descriptions.Item label="地区">{tender.data.region || '-'}</Descriptions.Item>
-        <Descriptions.Item label="状态">{tender.data.status}</Descriptions.Item>
+        <Descriptions.Item label="状态">{tenderStatusLabel(tender.data.status)}</Descriptions.Item>
         <Descriptions.Item label="关键要求" span={2}>
           <Space wrap>
             {tender.data.requirements.map((item) => (

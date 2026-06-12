@@ -93,6 +93,8 @@ class ModelRouter:
             return provider.bind(target)
         return provider
 
+    SUPPORTED_PROVIDER_TYPES = ("mock", "openai_compatible")
+
     def _build_providers(self, provider_config: dict[str, Any]) -> dict[str, object]:
         providers: dict[str, object] = {}
         for name, config in provider_config.items():
@@ -105,6 +107,12 @@ class ModelRouter:
                     base_url_env=str(config.get("base_url_env") or "OPENAI_BASE_URL"),
                     api_key_env=str(config.get("api_key_env") or "OPENAI_API_KEY"),
                     default_base_url=str(config.get("default_base_url") or ""),
+                )
+            else:
+                supported = ", ".join(self.SUPPORTED_PROVIDER_TYPES)
+                raise ValueError(
+                    f"provider '{name}' has unsupported type '{provider_type}'; "
+                    f"supported types: {supported}"
                 )
         if "mock" not in providers:
             providers["mock"] = MockProvider()

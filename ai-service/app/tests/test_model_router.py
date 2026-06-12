@@ -126,6 +126,22 @@ def test_router_uses_explicit_fallback_when_primary_provider_unavailable(monkeyp
     assert target.fallback_from == "openai_compatible_primary"
 
 
+def test_shipped_routing_config_declares_only_buildable_providers() -> None:
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    declared = set(router.config.get("providers", {}).keys())
+    assert declared == set(router.providers.keys())
+
+
+def test_router_rejects_unsupported_provider_type() -> None:
+    with pytest.raises(ValueError, match="unsupported type"):
+        ModelRouter(
+            {
+                "providers": {"acme": {"type": "anthropic"}},
+                "routes": {},
+            }
+        )
+
+
 def test_router_does_not_silently_fallback_to_mock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     router = ModelRouter(

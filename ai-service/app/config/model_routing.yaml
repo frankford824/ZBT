@@ -11,17 +11,10 @@ providers:
     type: openai_compatible
     base_url_env: DASHSCOPE_BASE_URL
     api_key_env: DASHSCOPE_API_KEY
-  anthropic:
-    type: anthropic
-    base_url_env: ANTHROPIC_BASE_URL
-    api_key_env: ANTHROPIC_API_KEY
   deepseek:
     type: openai_compatible
     base_url_env: DEEPSEEK_BASE_URL
     api_key_env: DEEPSEEK_API_KEY
-  local_embedding:
-    type: local
-    endpoint_env: LOCAL_EMBEDDING_ENDPOINT
 
 routes:
   tender_parse:

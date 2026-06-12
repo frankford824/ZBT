@@ -19,11 +19,13 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { EditorContent, useEditor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
+  Alert,
   Button,
   Card,
   Col,
   Form,
   Input,
+  Modal,
   Popconfirm,
   Progress,
   Radio,
@@ -64,6 +66,7 @@ import {
   fetchBidParts,
   fetchBidTemplates,
   fetchBids,
+  fetchChapterDiff,
   fetchChapterVersions,
   generateBid,
   generateBidOutline,
@@ -214,13 +217,13 @@ export function BidNewPage() {
           </Form>
         </Col>
         <Col xs={24} lg={9}>
-          <Card title="生成队列">
+          <Card title="编制流程">
             <Timeline
               items={[
-                { color: 'blue', children: '创建 bid_document 草稿' },
-                { color: 'blue', children: '按类型创建 bid_parts' },
-                { color: 'gray', children: '上传招标文件并触发解析' },
-                { color: 'gray', children: '进入 7 步向导' },
+                { color: 'blue', children: '填写项目与标书类型' },
+                { color: 'blue', children: '准备技术标、商务标或综合标' },
+                { color: 'gray', children: '上传招标文件并解读重点' },
+                { color: 'gray', children: '进入编制流程' },
               ]}
             />
           </Card>
@@ -417,7 +420,7 @@ export function BidWizardPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const step = Number(searchParams.get('step') || '1')
   const current = Math.min(Math.max(step, 1), 7) - 1
-  const steps = ['项目信息', 'AI解析', '目录大纲', '知识库配置', '逐章生成', '标书编辑器', '导出提交']
+  const steps = ['项目信息', '文件解读', '目录大纲', '素材选择', '生成正文', '标书编辑', '定稿导出']
   const [tenderFile, setTenderFile] = useState<File | null>(null)
   const [parseDraftText, setParseDraftText] = useState('')
   const [outlineDrafts, setOutlineDrafts] = useState<Record<string, OutlineDraftChapter[]>>({})
@@ -521,7 +524,7 @@ export function BidWizardPage() {
   const parseTenderMutation = useMutation({
     mutationFn: () => parseBidTender(bidId),
     onSuccess: async () => {
-      message.success('解析任务已完成')
+      message.success('招标文件已解读')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
@@ -541,7 +544,7 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
       ])
     },
-    onError: () => message.error('确认解析结果失败，请检查 JSON 格式'),
+    onError: () => message.error('确认文件信息失败，请重新解读后再试'),
   })
   const generateOutlineMutation = useMutation({
     mutationFn: () => generateBidOutline(bidId),
@@ -580,48 +583,48 @@ export function BidWizardPage() {
   const generateBidMutation = useMutation({
     mutationFn: (partCode?: string) => generateBid(bidId, partCode ? { scope: 'part', part_code: partCode } : { scope: 'full' }),
     onSuccess: async () => {
-      message.success('逐章生成任务已启动')
+      message.success('已开始生成正文')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
       ])
     },
-    onError: () => message.error('启动逐章生成失败'),
+    onError: () => message.error('生成正文失败'),
   })
   const pauseJobMutation = useMutation({
     mutationFn: pauseBidGenerationJob,
     onSuccess: async () => {
-      message.success('生成任务已暂停')
+      message.success('生成已暂停')
       await queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] })
     },
-    onError: () => message.error('暂停生成任务失败'),
+    onError: () => message.error('暂停生成失败'),
   })
   const resumeJobMutation = useMutation({
     mutationFn: resumeBidGenerationJob,
     onSuccess: async () => {
-      message.success('生成任务已继续')
+      message.success('生成已继续')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
       ])
     },
-    onError: () => message.error('继续生成任务失败'),
+    onError: () => message.error('继续生成失败'),
   })
   const cancelJobMutation = useMutation({
     mutationFn: cancelBidGenerationJob,
     onSuccess: async () => {
-      message.success('生成任务已取消')
+      message.success('生成已取消')
       await queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] })
     },
-    onError: () => message.error('取消生成任务失败'),
+    onError: () => message.error('取消生成失败'),
   })
   const exportMutation = useMutation({
     mutationFn: (payload: { export_type: 'docx' | 'pdf' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
     onSuccess: async () => {
-      message.success('导出任务已创建')
+      message.success('已开始生成导出文件')
       await queryClient.invalidateQueries({ queryKey: ['bid-exports', bidId] })
     },
-    onError: () => message.error('创建导出任务失败'),
+    onError: () => message.error('生成导出文件失败'),
   })
   const downloadMutation = useMutation({
     mutationFn: fetchBidExport,
@@ -668,7 +671,7 @@ export function BidWizardPage() {
   return (
     <PageFrame
       module="标书生成"
-      title="标书生成 7 步向导"
+      title="标书编制流程"
       subtitle={bid.data?.title ?? '分离标书支持技术标和商务标独立生成'}
       tags={['page-generate', '/bids/:bidId/wizard?step=1..7']}
     >
@@ -702,7 +705,7 @@ export function BidWizardPage() {
                   loading={uploadTenderMutation.isPending}
                   onClick={() => uploadTenderMutation.mutate()}
                 >
-                  上传并绑定
+                  上传招标文件
                 </Button>
                 <Tag color={parseResult.data?.file_asset_id ? 'green' : 'default'}>
                   {parseResult.data?.file_asset_id ? '已绑定' : '未绑定'}
@@ -722,7 +725,7 @@ export function BidWizardPage() {
                   loading={parseTenderMutation.isPending}
                   onClick={() => parseTenderMutation.mutate()}
                 >
-                  触发解析
+                  开始解读
                 </Button>
                 <Button
                   icon={<CheckOutlined />}
@@ -730,10 +733,10 @@ export function BidWizardPage() {
                   disabled={!parseResult.data}
                   onClick={() => confirmParseMutation.mutate()}
                 >
-                  确认解析结果
+                  确认文件信息
                 </Button>
                 <Tag color={parseResult.data?.status === 'confirmed' ? 'green' : parseResult.data?.status === 'ready' ? 'blue' : 'default'}>
-                  {parseResult.data?.status ?? 'queued'}
+                  {parseStatusLabel(parseResult.data?.status ?? 'queued')}
                 </Tag>
               </Space>
               <Table
@@ -743,13 +746,8 @@ export function BidWizardPage() {
                 dataSource={parseRows}
                 columns={[
                   { title: '字段', dataIndex: 'name', width: 180 },
-                  { title: '解析结果', dataIndex: 'value' },
+                  { title: '文件信息', dataIndex: 'value' },
                 ]}
-              />
-              <Input.TextArea
-                rows={10}
-                value={parseDraftText}
-                onChange={(event) => setParseDraftText(event.target.value)}
               />
             </Space>
           ) : null}
@@ -909,7 +907,9 @@ export function BidWizardPage() {
                             children: (
                               <Space>
                                 <span>{chapter.title}</span>
-                                <Tag color={chapterStatusColor(chapter.status)}>{chapter.status}</Tag>
+                                <Tag color={chapterStatusColor(chapter.status)}>
+                                  {chapterStatusLabels[chapter.status] || chapter.status}
+                                </Tag>
                               </Space>
                             ),
                           }))}
@@ -927,8 +927,7 @@ export function BidWizardPage() {
                 locale={{ emptyText: <EmptyBlock /> }}
                 dataSource={generationJobs.data ?? []}
                 columns={[
-                  { title: '任务', dataIndex: 'id', render: (value: string) => value.slice(0, 8) },
-                  { title: '范围', dataIndex: 'scope' },
+                  { title: '范围', dataIndex: 'scope', render: generationScopeLabel },
                   { title: '状态', dataIndex: 'status', render: generationJobStatusTag },
                   { title: '进度', dataIndex: 'progress', render: (value: number) => <Progress percent={value} size="small" /> },
                   {
@@ -1003,7 +1002,7 @@ export function BidWizardPage() {
                   disabled={exportableParts.length < 2}
                   onClick={() => exportMutation.mutate({ export_type: 'zip', part_code: 'all' })}
                 >
-                  打包全套 ZIP
+                  打包全套文件
                 </Button>
               </Space>
               <Table
@@ -1049,33 +1048,74 @@ function bidTypeLabel(value: BidDocumentDTO['bid_type']) {
 }
 
 function bidStatusLabel(value: string) {
-  return <Tag color={value === 'editing' ? 'blue' : 'default'}>{value}</Tag>
+  const labels: Record<string, string> = {
+    draft: '草稿',
+    editing: '编制中',
+    in_review: '审批中',
+    approved: '已通过',
+    submitted: '已提交',
+    archived: '已归档',
+  }
+  const color = value === 'approved' || value === 'submitted' ? 'green' : value === 'in_review' ? 'orange' : 'blue'
+  return <Tag color={color}>{labels[value] || '编制中'}</Tag>
 }
 
 function partCodeLabel(value: string) {
-  return { combined_body: '综合标书', tech: '技术标', business: '商务标', all: '全套 ZIP' }[value] ?? value
+  return { combined_body: '综合标书', tech: '技术标', business: '商务标', all: '全套文件' }[value] ?? value
 }
 
 function exportTypeLabel(row: BidExportDTO, partCode: string) {
   if (row.export_type === 'zip') {
-    return <Tag color="blue">全套 ZIP</Tag>
+    return <Tag color="blue">全套文件</Tag>
   }
   return (
     <Space size={4}>
       <Tag>{partCodeLabel(partCode)}</Tag>
-      <Tag color={row.export_type === 'pdf' ? 'red' : 'green'}>{row.export_type.toUpperCase()}</Tag>
+      <Tag color={row.export_type === 'pdf' ? 'red' : 'green'}>
+        {row.export_type === 'docx' ? 'Word' : 'PDF'}
+      </Tag>
     </Space>
   )
 }
 
 function exportStatusTag(value: BidExportDTO['status']) {
   const color = value === 'done' ? 'green' : value === 'failed' ? 'red' : 'blue'
-  return <Tag color={color}>{value}</Tag>
+  const labels: Record<BidExportDTO['status'], string> = {
+    queued: '等待生成',
+    running: '生成中',
+    done: '可下载',
+    failed: '生成失败',
+    cancelled: '已取消',
+  }
+  return <Tag color={color}>{labels[value]}</Tag>
 }
 
 function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
   const color = value === 'done' ? 'green' : value === 'failed' || value === 'cancelled' ? 'red' : value === 'paused' ? 'orange' : 'blue'
-  return <Tag color={color}>{value}</Tag>
+  const labels: Record<BidGenerationJobDTO['status'], string> = {
+    queued: '等待中',
+    running: '生成中',
+    paused: '已暂停',
+    done: '已完成',
+    failed: '生成失败',
+    cancelled: '已取消',
+  }
+  return <Tag color={color}>{labels[value]}</Tag>
+}
+
+function generationScopeLabel(value: BidGenerationJobDTO['scope']) {
+  return { full: '整份标书', part: '单个分册', chapter: '单个章节' }[value] ?? '标书内容'
+}
+
+function parseStatusLabel(value: 'queued' | 'processing' | 'ready' | 'confirmed' | 'failed') {
+  const labels = {
+    queued: '等待解读',
+    processing: '解读中',
+    ready: '可确认',
+    confirmed: '已确认',
+    failed: '解读失败',
+  }
+  return labels[value]
 }
 
 function structuredResultRows(result: Record<string, unknown> | undefined) {
@@ -1089,12 +1129,15 @@ function structuredResultRows(result: Record<string, unknown> | undefined) {
   return rows.filter((row) => row.value)
 }
 
-function formatStructuredValue(value: unknown) {
+function formatStructuredValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value.map((item) => String(item)).join('、')
   }
   if (value && typeof value === 'object') {
-    return JSON.stringify(value)
+    return Object.values(value as Record<string, unknown>)
+      .map((item) => formatStructuredValue(item))
+      .filter(Boolean)
+      .join('、')
   }
   return value ? String(value) : ''
 }
@@ -1128,6 +1171,7 @@ export function BidEditorPage() {
   const [regenerateTaskId, setRegenerateTaskId] = useState('')
   const [generationSnapshot, setGenerationSnapshot] = useState<BidGenerationSnapshotDTO | null>(null)
   const [generationStreamStatus, setGenerationStreamStatus] = useState<'connecting' | 'open' | 'error'>('connecting')
+  const [diffOpen, setDiffOpen] = useState(false)
   const partParam = searchParams.get('part') ?? ''
   const chapterParam = searchParams.get('chapter') ?? ''
   const bid = useQuery({
@@ -1152,6 +1196,11 @@ export function BidEditorPage() {
     queryKey: ['chapter-versions', currentChapter?.id],
     queryFn: () => fetchChapterVersions(currentChapter?.id ?? ''),
     enabled: Boolean(currentChapter?.id),
+  })
+  const diffQuery = useQuery({
+    queryKey: ['chapter-diff', currentChapter?.id],
+    queryFn: () => fetchChapterDiff(currentChapter?.id ?? ''),
+    enabled: diffOpen && Boolean(currentChapter?.id),
   })
   const regenerateTask = useQuery({
     queryKey: ['ai-task', regenerateTaskId],
@@ -1181,13 +1230,13 @@ export function BidEditorPage() {
   useEffect(() => {
     if (!regenerateTaskId || !regenerateTaskStatus) return
     if (regenerateTaskStatus === 'done') {
-      message.success('AI 重新生成完成')
+      message.success('本章已重新生成')
       setRegenerateTaskId('')
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
       void queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter?.id] })
     }
     if (regenerateTaskStatus === 'failed' || regenerateTaskStatus === 'cancelled') {
-      message.error('AI 重新生成失败')
+      message.error('重新生成失败')
       setRegenerateTaskId('')
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
     }
@@ -1240,20 +1289,20 @@ export function BidEditorPage() {
     mutationFn: () => regenerateChapter(currentChapter?.id ?? ''),
     onSuccess: async (result) => {
       setRegenerateTaskId(result.task.id)
-      message.success(`AI 重新生成任务已创建：${result.task.external_task_id ?? result.task.id}`)
+      message.success('已开始重新生成本章')
       await invalidateChapterState()
     },
-    onError: () => message.error('AI 重新生成失败'),
+    onError: () => message.error('重新生成失败'),
   })
   const aiActionMutation = useMutation({
     mutationFn: (action: 'optimize' | 'expand' | 'shorten' | 'add_detail' | 'self_check') =>
       chapterAiAction(currentChapter?.id ?? '', { action }),
     onSuccess: async (result) => {
       setRegenerateTaskId(result.task.id)
-      message.success(`AI 章节动作已创建：${result.task.external_task_id ?? result.task.id}`)
+      message.success('已开始处理本章')
       await invalidateChapterState()
     },
-    onError: () => message.error('AI 章节动作失败'),
+    onError: () => message.error('处理本章失败'),
   })
   const isRegenerating = Boolean(
     regenerateMutation.isPending ||
@@ -1265,12 +1314,23 @@ export function BidEditorPage() {
   if (bid.isLoading || parts.isLoading || chapters.isLoading) return <LoadingBlock />
   if (bid.isError || parts.isError || chapters.isError) return <ErrorBlock />
 
+  const acceptedCount = visibleChapters.filter((chapter) => chapter.status === 'accepted').length
+  const acceptedPercent = visibleChapters.length
+    ? Math.round((acceptedCount / visibleChapters.length) * 100)
+    : 0
+  const humanInputItems = currentChapter?.needs_human_input ?? []
+
+  const switchPart = (code: string) => {
+    setSearchParams(code === 'all' ? {} : { part: code })
+  }
+
   return (
     <PageFrame
       module="标书生成"
       title="标书编辑器"
       subtitle={bid.data?.title ?? bidId}
       tags={['/bids/:bidId/editor', 'Tiptap']}
+      bare
       actions={[
         <Button key="save" type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} disabled={!currentChapter} onClick={() => saveMutation.mutate()}>
           保存
@@ -1286,96 +1346,223 @@ export function BidEditorPage() {
         </Button>,
       ]}
     >
-      <Row gutter={16}>
-        <Col xs={24} xl={5}>
-          <Card title="章节大纲">
-            {visibleChapters.length ? (
-              <Timeline
-                items={visibleChapters.map((chapter) => ({
-                  color: chapter.id === currentChapter?.id ? 'blue' : chapter.status === 'accepted' ? 'green' : 'gray',
-                  children: (
-                    <Button
-                      type="link"
-                      onClick={() => setSearchParams({ ...(partParam ? { part: partParam } : {}), chapter: chapter.id })}
-                    >
-                      {chapter.title}
-                    </Button>
-                  ),
-                }))}
-              />
-            ) : (
-              <EmptyBlock />
-            )}
+      <div className="workbench">
+        <Card title="章节大纲" size="small">
+          {(parts.data?.length ?? 0) > 1 ? (
+            <Segmented
+              block
+              size="small"
+              style={{ marginBottom: 12 }}
+              value={activePart?.code ?? 'all'}
+              options={[
+                { label: '全部', value: 'all' },
+                ...(parts.data ?? []).map((part) => ({ label: part.title || part.code, value: part.code })),
+              ]}
+              onChange={(value) => switchPart(String(value))}
+            />
+          ) : null}
+          <div className="outline-progress">
+            <div className="outline-progress-label">
+              <span>已采纳 {acceptedCount}/{visibleChapters.length} 章</span>
+              <span className="data-mono">{acceptedPercent}%</span>
+            </div>
+            <Progress percent={acceptedPercent} size="small" showInfo={false} strokeColor="#16A34A" />
+          </div>
+          {visibleChapters.length ? (
+            <ul className="outline-list">
+              {visibleChapters.map((chapter, index) => (
+                <li key={chapter.id}>
+                  <button
+                    type="button"
+                    className={`outline-item${chapter.id === currentChapter?.id ? ' active' : ''}`}
+                    title={chapterStatusLabels[chapter.status] || chapter.status}
+                    onClick={() =>
+                      setSearchParams({ ...(partParam ? { part: partParam } : {}), chapter: chapter.id })
+                    }
+                  >
+                    <span className="outline-no">{String(index + 1).padStart(2, '0')}</span>
+                    <span className="outline-title">{chapter.title}</span>
+                    <span className={`outline-dot ${chapter.status}`} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyBlock description="本部分还没有章节，先在生成向导中生成大纲" />
+          )}
+        </Card>
+        <div>
+          <Card className="editor-zone">
+            <div className="editor-zone-head">
+              <Typography.Title level={4} className="editor-zone-title">
+                {currentChapter?.title ?? '内容编辑'}
+              </Typography.Title>
+              {currentChapter ? (
+                <Tag color={chapterStatusColor(currentChapter.status)}>
+                  {chapterStatusLabels[currentChapter.status] || currentChapter.status}
+                </Tag>
+              ) : null}
+              {currentChapter ? (
+                <Typography.Text type="secondary" className="data-mono" style={{ fontSize: 12 }}>
+                  {(currentChapter.plain_text ?? '').length} 字
+                </Typography.Text>
+              ) : null}
+            </div>
+            <div className="editor-paper-wrap">
+              <div className="editor-paper">
+                <EditorContent editor={editor} />
+              </div>
+            </div>
           </Card>
-        </Col>
-        <Col xs={24} xl={13}>
-          <Card
-            title={currentChapter?.title ?? '内容编辑'}
-            extra={currentChapter ? <Tag color={chapterStatusColor(currentChapter.status)}>{currentChapter.status}</Tag> : null}
-          >
-            <EditorContent editor={editor} className="editor-surface" />
-          </Card>
-          <Card title="版本记录" className="mt-16">
+          <Card title="版本记录" size="small" style={{ marginTop: 16 }}>
             <Table
               size="small"
               rowKey="id"
               pagination={false}
               loading={versions.isLoading}
-              locale={{ emptyText: <EmptyBlock /> }}
+              locale={{ emptyText: <EmptyBlock description="保存或生成后会在这里留下版本" /> }}
               dataSource={versions.data ?? []}
               columns={[
-                { title: '版本', dataIndex: 'version_no', render: (value) => `v${value}` },
-                { title: '原因', dataIndex: 'change_reason' },
-                { title: '状态', dataIndex: 'status', render: (value) => <Tag>{value}</Tag> },
-                { title: '时间', dataIndex: 'created_at', render: (value) => new Date(value).toLocaleString() },
+                {
+                  title: '版本',
+                  dataIndex: 'version_no',
+                  width: 80,
+                  render: (value) => <span className="data-mono">v{value}</span>,
+                },
+                {
+                  title: '原因',
+                  dataIndex: 'change_reason',
+                  ellipsis: true,
+                  render: (value: string) => changeReasonLabels[value] || value,
+                },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 100,
+                  render: (value) => <Tag>{chapterStatusLabels[value] || value}</Tag>,
+                },
+                {
+                  title: '时间',
+                  dataIndex: 'created_at',
+                  width: 180,
+                  render: (value) => <span className="data-mono">{new Date(value).toLocaleString()}</span>,
+                },
               ]}
             />
           </Card>
-        </Col>
-        <Col xs={24} xl={6}>
-          <Card title="AI 助手">
-            <Space direction="vertical">
-              <Tag color={generationStreamColor(generationStreamStatus)}>SSE: {generationStreamStatus}</Tag>
-              <Progress size="small" percent={generationPercent} />
-              <Typography.Text type="secondary">
-                章节 {completedChapterCount}/{generationSummary?.total_chapters ?? visibleChapters.length} · task done {generationSummary?.done_tasks ?? 0}
-              </Typography.Text>
-              <Tag color="purple">source_refs: {currentChapter?.source_refs.length ?? 0}</Tag>
-              <Tag color="orange">needs_human_input: {currentChapter?.needs_human_input.length ?? 0}</Tag>
-              {(currentChapter?.needs_human_input ?? []).map((item) => (
-                <Typography.Text key={item} type="warning">
-                  {item}
-                </Typography.Text>
-              ))}
-              {regenerateTask.data ? <Tag color="blue">task: {regenerateTask.data.status}</Tag> : null}
-              {latestChapterTask ? <Tag color="cyan">latest: {latestChapterTask.status}</Tag> : null}
-              <Button icon={<SyncOutlined />} loading={isRegenerating} disabled={!currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
-                查找素材并重新生成
+        </div>
+        <Card title="智能助手" className="ai-card" size="small">
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+            <div className="ai-panel-row">
+              <span>
+                <span className={`conn-dot ${generationStreamStatus}`} />
+                协作状态
+              </span>
+              <span>{streamStatusLabels[generationStreamStatus]}</span>
+            </div>
+            <div>
+              <div className="ai-panel-row" style={{ marginBottom: 4 }}>
+                <span>生成进度</span>
+                <span className="ai-panel-value">
+                  {completedChapterCount}/{generationSummary?.total_chapters ?? visibleChapters.length} 章
+                </span>
+              </div>
+              <Progress
+                percent={generationPercent}
+                size="small"
+                showInfo={false}
+                strokeColor={{ '0%': '#7C3AED', '100%': '#4F46E5' }}
+              />
+            </div>
+            <div className="ai-panel-row">
+              <span>本章引用素材</span>
+              <span className="ai-panel-value">{currentChapter?.source_refs.length ?? 0} 处</span>
+            </div>
+            <div className="ai-panel-row">
+              <span>待补充信息</span>
+              <span className="ai-panel-value">{humanInputItems.length} 项</span>
+            </div>
+            {humanInputItems.length ? (
+              <ul className="human-input-list">
+                {humanInputItems.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
+            {isRegenerating || latestChapterTask?.status === 'running' ? (
+              <Alert
+                type="info"
+                showIcon
+                icon={<SyncOutlined spin />}
+                message="正在处理本章，完成后自动刷新"
+              />
+            ) : null}
+            <Button
+              block
+              icon={<SyncOutlined />}
+              loading={isRegenerating}
+              disabled={!currentChapter || isRegenerating}
+              onClick={() => regenerateMutation.mutate()}
+            >
+              查找素材并重新生成
+            </Button>
+            <Space wrap size={[6, 6]}>
+              <Button size="small" icon={<EditOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('optimize')}>
+                优化
               </Button>
-              <Space wrap>
-                <Button size="small" icon={<EditOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('optimize')}>
-                  优化
-                </Button>
-                <Button size="small" icon={<ExpandAltOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('expand')}>
-                  扩写
-                </Button>
-                <Button size="small" icon={<CompressOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('shorten')}>
-                  缩写
-                </Button>
-                <Button size="small" icon={<PlusCircleOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('add_detail')}>
-                  加细节
-                </Button>
-                <Button size="small" icon={<SafetyCertificateOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('self_check')}>
-                  自检
-                </Button>
-              </Space>
-              <Button icon={<DiffOutlined />} disabled={!currentChapter}>
-                查看版本差异
+              <Button size="small" icon={<ExpandAltOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('expand')}>
+                扩写
+              </Button>
+              <Button size="small" icon={<CompressOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('shorten')}>
+                缩写
+              </Button>
+              <Button size="small" icon={<PlusCircleOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('add_detail')}>
+                加细节
+              </Button>
+              <Button size="small" icon={<SafetyCertificateOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('self_check')}>
+                自检
               </Button>
             </Space>
-          </Card>
-        </Col>
-      </Row>
+            <Button block icon={<DiffOutlined />} disabled={!currentChapter} onClick={() => setDiffOpen(true)}>
+              对比上一版本
+            </Button>
+          </Space>
+        </Card>
+      </div>
+      <Modal
+        open={diffOpen}
+        onCancel={() => setDiffOpen(false)}
+        footer={null}
+        width={920}
+        title={`版本对比 · ${currentChapter?.title ?? ''}`}
+      >
+        {diffQuery.isLoading ? (
+          <LoadingBlock />
+        ) : diffQuery.isError ? (
+          <ErrorBlock />
+        ) : diffQuery.data?.previous ? (
+          <div className="diff-grid">
+            <div className="diff-pane previous">
+              <div className="diff-pane-head">
+                上一版本
+                <Tag>v{diffQuery.data.previous.version_no}</Tag>
+              </div>
+              <pre className="diff-pane-body">{diffQuery.data.previous.plain_text || '（无正文）'}</pre>
+            </div>
+            <div className="diff-pane">
+              <div className="diff-pane-head">
+                当前版本
+                <Tag color="blue">
+                  {chapterStatusLabels[diffQuery.data.current.status] || diffQuery.data.current.status}
+                </Tag>
+              </div>
+              <pre className="diff-pane-body">{diffQuery.data.current.plain_text || '（无正文）'}</pre>
+            </div>
+          </div>
+        ) : (
+          <EmptyBlock description="本章还没有历史版本，生成或保存后即可对比" />
+        )}
+      </Modal>
     </PageFrame>
   )
 }
@@ -1393,6 +1580,28 @@ function contentForEditor(chapter: BidChapterDTO) {
   }
 }
 
+const chapterStatusLabels: Record<string, string> = {
+  pending: '待生成',
+  queued: '排队中',
+  generating: '生成中',
+  generated: '已生成',
+  edited: '已编辑',
+  accepted: '已采纳',
+}
+
+const changeReasonLabels: Record<string, string> = {
+  ai_regenerate: '重新生成',
+  ai_action: '智能改写',
+  manual_edit: '手动编辑',
+  accepted: '采纳定稿',
+}
+
+const streamStatusLabels: Record<'connecting' | 'open' | 'error', string> = {
+  connecting: '同步中…',
+  open: '同步正常',
+  error: '同步中断，刷新页面可恢复',
+}
+
 function chapterStatusColor(status: BidChapterDTO['status']) {
   if (status === 'accepted') return 'green'
   if (status === 'edited') return 'orange'
@@ -1404,10 +1613,4 @@ function chapterStatusColor(status: BidChapterDTO['status']) {
 function isRegenerateTaskActive(status: string | undefined, taskId: string) {
   if (!taskId) return false
   return !status || status === 'queued' || status === 'running'
-}
-
-function generationStreamColor(status: 'connecting' | 'open' | 'error') {
-  if (status === 'open') return 'green'
-  if (status === 'error') return 'red'
-  return 'blue'
 }

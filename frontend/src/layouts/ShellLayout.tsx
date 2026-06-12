@@ -5,8 +5,9 @@ import {
   MenuUnfoldOutlined,
   UserOutlined,
 } from '@ant-design/icons'
-import { Avatar, Badge, Button, Dropdown, Flex, Layout, Menu, Space, Typography } from 'antd'
+import { Avatar, Badge, Button, Drawer, Dropdown, Flex, Grid, Layout, Menu, Space, Typography } from 'antd'
 import type { MenuProps } from 'antd'
+import { useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useSessionStore } from '../app/store/session'
 import { navGroups, type NavItem } from '../routes/routeManifest'
@@ -21,17 +22,28 @@ function flattenNav(items: NavItem[]): NavItem[] {
 
 const allNavItems = navGroups.flatMap((group) => flattenNav(group.items))
 
-function useSelectedKeys() {
+const roleLabels: Record<string, string> = {
+  company_admin: '企业管理员',
+  department_admin: '部门管理员',
+  project_manager: '项目经理',
+  bid_specialist: '标书专员',
+  reviewer: '审核员',
+  viewer: '只读成员',
+}
+
+function useSelectedNav() {
   const { pathname } = useLocation()
-  const selected = [...allNavItems]
+  return [...allNavItems]
     .sort((a, b) => b.path.length - a.path.length)
     .find((item) => pathname === item.path || pathname.startsWith(`${item.path}/`))
-  return selected ? [selected.key] : []
 }
 
 export function ShellLayout() {
   const navigate = useNavigate()
-  const selectedKeys = useSelectedKeys()
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
+  const selectedNav = useSelectedNav()
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const collapsed = useSessionStore((state) => state.collapsed)
   const toggleCollapsed = useSessionStore((state) => state.toggleCollapsed)
   const logout = useSessionStore((state) => state.logout)
@@ -39,10 +51,11 @@ export function ShellLayout() {
   const tenant = useSessionStore((state) => state.tenant)
   const permissions = useSessionStore((state) => state.permissions)
 
+  const menuCollapsed = isMobile ? false : collapsed
   const menuItems: MenuProps['items'] = navGroups
     .map((group) => ({
       type: 'group' as const,
-      label: collapsed ? undefined : group.title,
+      label: menuCollapsed ? undefined : group.title,
       children: group.items
         .filter((item) => permissionAllows(permissions[item.module], 'read'))
         .map((item) => ({
@@ -62,7 +75,18 @@ export function ShellLayout() {
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
     const target = allNavItems.find((item) => item.key === key)
-    if (target) navigate(target.path)
+    if (target) {
+      navigate(target.path)
+      setMobileNavOpen(false)
+    }
+  }
+
+  const handleNavButton = () => {
+    if (isMobile) {
+      setMobileNavOpen(true)
+      return
+    }
+    toggleCollapsed()
   }
 
   const handleLogout = async () => {
@@ -76,44 +100,50 @@ export function ShellLayout() {
 
   return (
     <Layout className="shell-layout">
-      <Sider width={244} collapsedWidth={72} collapsed={collapsed} trigger={null}>
-        <div className="brand">
-          <div className="brand-mark">智</div>
-          {!collapsed ? (
-            <div>
-              <Typography.Text className="brand-name">智标通</Typography.Text>
-              <Typography.Text className="brand-subtitle">ZhiBiaoTong</Typography.Text>
-            </div>
-          ) : null}
-        </div>
-        <Menu
-          mode="inline"
-          theme="dark"
-          selectedKeys={selectedKeys}
-          defaultOpenKeys={['bid-root', 'knowledge-root']}
-          items={menuItems}
-          onClick={handleMenuClick}
-        />
+      {!isMobile ? (
+      <Sider width={240} collapsedWidth={72} collapsed={collapsed} trigger={null}>
+        <Flex vertical style={{ height: '100%' }}>
+          <div className="brand">
+            <div className="seal-mark">标</div>
+            {!collapsed ? (
+              <div>
+                <Typography.Text className="brand-name">智标通</Typography.Text>
+                <Typography.Text className="brand-subtitle">ZhiBiaoTong</Typography.Text>
+              </div>
+            ) : null}
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <Menu
+              mode="inline"
+              theme="dark"
+              selectedKeys={selectedNav ? [selectedNav.key] : []}
+              defaultOpenKeys={['bid-root', 'knowledge-root']}
+              items={menuItems}
+              onClick={handleMenuClick}
+            />
+          </div>
+          {!collapsed ? <div className="sider-foot">企业智能投标工作台</div> : null}
+        </Flex>
       </Sider>
+      ) : null}
       <Layout>
         <Header className="topbar">
-          <Flex justify="space-between" align="center">
-            <Space>
+          <Flex justify="space-between" align="center" style={{ height: '100%' }}>
+            <Space size={12}>
               <Button
                 type="text"
-                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                onClick={toggleCollapsed}
+                aria-label={isMobile ? '打开导航' : collapsed ? '展开导航' : '收起导航'}
+                icon={isMobile || collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={handleNavButton}
               />
-              <div>
+              <div className="topbar-context">
                 <Typography.Text strong>{tenant.name}</Typography.Text>
-                <Typography.Text type="secondary" className="tenant-id">
-                  {tenant.id}
-                </Typography.Text>
+                <Typography.Text className="tenant-id">企业投标工作台</Typography.Text>
               </div>
             </Space>
             <Space size={16}>
-              <Badge count={7} size="small">
-                <Button shape="circle" icon={<BellOutlined />} />
+              <Badge dot>
+                <Button shape="circle" aria-label="通知" icon={<BellOutlined />} />
               </Badge>
               <Dropdown
                 menu={{
@@ -121,7 +151,7 @@ export function ShellLayout() {
                     {
                       key: 'profile',
                       icon: <UserOutlined />,
-                      label: user.role,
+                      label: roleLabels[user.role] || '团队成员',
                     },
                     {
                       key: 'logout',
@@ -133,7 +163,9 @@ export function ShellLayout() {
                 }}
               >
                 <Space className="user-menu">
-                  <Avatar icon={<UserOutlined />} />
+                  <Avatar style={{ background: '#4F46E5' }}>
+                    {(user.name || '用').slice(0, 1)}
+                  </Avatar>
                   <Typography.Text>{user.name}</Typography.Text>
                 </Space>
               </Dropdown>
@@ -144,6 +176,31 @@ export function ShellLayout() {
           <Outlet />
         </Content>
       </Layout>
+      <Drawer
+        className="mobile-nav-drawer"
+        placement="left"
+        width={280}
+        open={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        closable={false}
+        destroyOnHidden
+      >
+        <div className="brand">
+          <div className="seal-mark">标</div>
+          <div>
+            <Typography.Text className="brand-name">智标通</Typography.Text>
+            <Typography.Text className="brand-subtitle">ZhiBiaoTong</Typography.Text>
+          </div>
+        </div>
+        <Menu
+          mode="inline"
+          theme="dark"
+          selectedKeys={selectedNav ? [selectedNav.key] : []}
+          defaultOpenKeys={['bid-root', 'knowledge-root']}
+          items={menuItems}
+          onClick={handleMenuClick}
+        />
+      </Drawer>
     </Layout>
   )
 }

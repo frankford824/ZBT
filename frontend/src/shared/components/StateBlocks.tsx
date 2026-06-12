@@ -1,54 +1,15 @@
-import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  ExclamationCircleOutlined,
-  LoadingOutlined,
-} from '@ant-design/icons'
-import { Alert, Col, Empty, Row, Spin, Typography } from 'antd'
+import { ExclamationCircleOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons'
+import { Alert, Empty, Spin, Typography } from 'antd'
 
-type StateBlocksProps = {
-  permission?: boolean
-}
-
-export function StateBlocks({ permission = true }: StateBlocksProps) {
-  if (!permission) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        icon={<CloseCircleOutlined />}
-        message="403"
-        description="当前账号没有访问该模块的权限"
-      />
-    )
-  }
-
+export function ForbiddenBlock() {
   return (
-    <Row gutter={[12, 12]} className="state-strip">
-      <Col xs={24} md={6}>
-        <div className="state-tile">
-          <Spin indicator={<LoadingOutlined spin />} />
-          <Typography.Text>加载中</Typography.Text>
-        </div>
-      </Col>
-      <Col xs={24} md={6}>
-        <div className="state-tile">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
-        </div>
-      </Col>
-      <Col xs={24} md={6}>
-        <div className="state-tile">
-          <ExclamationCircleOutlined className="state-icon warning" />
-          <Typography.Text>请求失败</Typography.Text>
-        </div>
-      </Col>
-      <Col xs={24} md={6}>
-        <div className="state-tile">
-          <CheckCircleOutlined className="state-icon success" />
-          <Typography.Text>权限通过</Typography.Text>
-        </div>
-      </Col>
-    </Row>
+    <Alert
+      type="error"
+      showIcon
+      icon={<StopOutlined />}
+      message="无权访问"
+      description="当前账号未被授予此模块的权限，请联系企业管理员在「团队协作 · 成员管理」中调整角色"
+    />
   )
 }
 
@@ -56,15 +17,15 @@ export function LoadingBlock() {
   return (
     <div className="state-tile">
       <Spin indicator={<LoadingOutlined spin />} />
-      <Typography.Text>加载中</Typography.Text>
+      <Typography.Text>正在加载…</Typography.Text>
     </div>
   )
 }
 
-export function EmptyBlock() {
+export function EmptyBlock({ description = '暂无数据' }: { description?: string }) {
   return (
     <div className="state-tile">
-      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据" />
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={description} />
     </div>
   )
 }
@@ -75,8 +36,8 @@ export function ErrorBlock() {
       type="error"
       showIcon
       icon={<ExclamationCircleOutlined />}
-      message="请求失败"
-      description="请稍后重试或联系管理员"
+      message="数据加载失败"
+      description="请刷新页面重试；若多次失败，请联系管理员处理"
     />
   )
 }

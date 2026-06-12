@@ -137,7 +137,7 @@ export function ProjectsPage() {
     <PageFrame
       module="投标管控"
       title="项目管理"
-      subtitle="看板、列表、里程碑、成员和状态机"
+      subtitle="看板、列表、里程碑、成员和推进记录"
       tags={['page-project', '/projects?view=board|list']}
       actions={[
         <Segmented

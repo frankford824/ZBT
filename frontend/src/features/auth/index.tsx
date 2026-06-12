@@ -18,8 +18,15 @@ export function LoginPage() {
 
   return (
     <Space direction="vertical" size={20} className="auth-stack">
-      <Typography.Paragraph>企业投标团队工作入口</Typography.Paragraph>
-      {mutation.isError ? <Alert type="error" showIcon message="账号或密码错误" /> : null}
+      <div>
+        <Typography.Title level={3} className="auth-form-title">
+          登录工作台
+        </Typography.Title>
+        <Typography.Text type="secondary">使用企业账号进入投标工作台</Typography.Text>
+      </div>
+      {mutation.isError ? (
+        <Alert type="error" showIcon message="登录失败" description="账号或密码不正确，请重新输入" />
+      ) : null}
       <Form
         layout="vertical"
         onFinish={(values) => mutation.mutate(values)}
@@ -31,11 +38,11 @@ export function LoginPage() {
           <Input.Password />
         </Form.Item>
         <Form.Item
-          label="租户 ID"
+          label="企业编号"
           name="tenant_id"
           initialValue="00000000-0000-4000-8000-000000000001"
         >
-          <Input />
+          <Input className="data-mono" />
         </Form.Item>
         <Button
           type="primary"
@@ -47,9 +54,9 @@ export function LoginPage() {
           登录
         </Button>
       </Form>
-      <Space>
+      <Space split={<Typography.Text type="secondary">·</Typography.Text>}>
         <Link to="/register">注册企业</Link>
-        <Link to="/onboarding">租户初始化</Link>
+        <Link to="/onboarding">企业初始化</Link>
       </Space>
     </Space>
   )
@@ -68,8 +75,20 @@ export function RegisterPage() {
 
   return (
     <Space direction="vertical" size={20} className="auth-stack">
-      <Typography.Title level={2}>注册企业</Typography.Title>
-      {mutation.isError ? <Alert type="error" showIcon message="注册失败，请确认邮箱未被占用且密码不少于 8 位" /> : null}
+      <div>
+        <Typography.Title level={3} className="auth-form-title">
+          注册企业
+        </Typography.Title>
+        <Typography.Text type="secondary">创建企业空间，并生成管理员账号</Typography.Text>
+      </div>
+      {mutation.isError ? (
+        <Alert
+          type="error"
+          showIcon
+          message="注册失败"
+          description="请确认邮箱未被占用，且密码不少于 8 位"
+        />
+      ) : null}
       <Form layout="vertical" onFinish={(values) => mutation.mutate(values)}>
         <Form.Item label="企业名称" name="tenant_name" rules={[{ required: true, message: '企业名称必填' }]}>
           <Input placeholder="杭州智建科技有限公司" />
@@ -95,7 +114,12 @@ export function RegisterPage() {
 export function OnboardingPage() {
   return (
     <Space direction="vertical" size={20} className="auth-stack">
-      <Typography.Title level={2}>租户初始化</Typography.Title>
+      <div>
+        <Typography.Title level={3} className="auth-form-title">
+          企业初始化
+        </Typography.Title>
+        <Typography.Text type="secondary">设置默认部门与知识库分类，团队即可开工</Typography.Text>
+      </div>
       <Form layout="vertical">
         <Form.Item label="默认部门">
           <Input placeholder="投标中心" />

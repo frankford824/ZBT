@@ -1504,6 +1504,16 @@ export async function fetchChapterVersions(chapterId: string): Promise<BidChapte
   return data.items
 }
 
+export type BidChapterDiffDTO = {
+  current: BidChapterDTO
+  previous: BidChapterVersionDTO | null
+}
+
+export async function fetchChapterDiff(chapterId: string): Promise<BidChapterDiffDTO> {
+  const { data } = await apiClient.get<BidChapterDiffDTO>(`/chapters/${chapterId}/diff`)
+  return data
+}
+
 export async function fetchBidExports(bidId: string): Promise<BidExportDTO[]> {
   const { data } = await apiClient.get<{ items: BidExportDTO[] }>(`/bids/${bidId}/exports`)
   return data.items

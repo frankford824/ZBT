@@ -10,9 +10,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   App as AntApp,
   Button,
+  Card,
   Checkbox,
   Col,
-  Descriptions,
   Form,
   Input,
   Modal,
@@ -26,6 +26,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd'
 import { useMemo, useState } from 'react'
@@ -57,14 +58,14 @@ const severityOptions: Array<{ label: string; value: ComplianceSeverity }> = [
   { label: '通过', value: 'pass' },
   { label: '警告', value: 'warn' },
   { label: '待人工确认', value: 'fail_candidate' },
-  { label: '确定 fail', value: 'fail' },
+  { label: '废标项', value: 'fail' },
 ]
 
 const severityLabels: Record<string, string> = {
   pass: '通过',
   warn: '警告',
   fail_candidate: '待确认',
-  fail: 'Fail',
+  fail: '废标项',
 }
 
 const statusLabels: Record<string, string> = {
@@ -75,7 +76,20 @@ const statusLabels: Record<string, string> = {
   open: '未处理',
   fixed: '已修复',
   ignored: '已忽略',
-  confirmed_fail: '确认 fail',
+  confirmed_fail: '已判废标',
+}
+
+const verdictText: Record<string, string> = {
+  pass: '可以提交，未发现废标风险',
+  warn: '可以提交，但有警告项建议先处理',
+  fail_candidate: '存在待人工确认的风险项，确认前不建议提交',
+  fail: '存在废标项，必须修复后再提交',
+}
+
+function verdictColor(result: string) {
+  if (result === 'fail') return '#DC2626'
+  if (result === 'fail_candidate' || result === 'warn') return '#D97706'
+  return '#16A34A'
 }
 
 function severityTag(severity: ComplianceSeverity) {
@@ -221,13 +235,19 @@ export function CompliancePage() {
     >
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
-          <Statistic title="检查任务" value={checks.data?.length || 0} />
+          <Card size="small" className="stat-card">
+            <Statistic title="检查任务" value={checks.data?.length || 0} />
+          </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Statistic title="平均得分" value={checks.data?.length ? counts.score / checks.data.length : 0} precision={1} />
+          <Card size="small" className="stat-card">
+            <Statistic title="平均得分" value={checks.data?.length ? counts.score / checks.data.length : 0} precision={1} />
+          </Card>
         </Col>
         <Col xs={24} md={8}>
-          <Statistic title="待处理风险" value={counts.fail + counts.pending} />
+          <Card size="small" className="stat-card">
+            <Statistic title="待处理风险" value={counts.fail + counts.pending} />
+          </Card>
         </Col>
         <Col span={24}>
           <Tabs
@@ -327,8 +347,8 @@ export function CompliancePage() {
           <Form.Item name="name" label="检查名称" rules={[{ required: true, message: '检查名称必填' }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="bid_document_id" label="关联标书 ID">
-            <Input placeholder="可选，留空则执行独立检查" />
+          <Form.Item name="bid_document_id" label="关联标书">
+            <Input placeholder="可选，填写标书编号；留空则执行独立检查" />
           </Form.Item>
           <Form.Item name="levels" label="检查层级">
             <Checkbox.Group options={levelOptions} />
@@ -348,8 +368,8 @@ export function CompliancePage() {
           initialValues={{ level: 'L1', severity: 'warn', enabled: true }}
           onFinish={(values) => createRuleMutation.mutate({ ...values, metadata: {} })}
         >
-          <Form.Item name="code" label="规则编码" rules={[{ required: true, message: '规则编码必填' }]}>
-            <Input placeholder="例如：delivery_clause" />
+          <Form.Item name="code" label="规则编号" rules={[{ required: true, message: '规则编号必填' }]}>
+            <Input placeholder="例如：交付时间要求" />
           </Form.Item>
           <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '规则名称必填' }]}>
             <Input />
@@ -427,20 +447,49 @@ export function ComplianceDetailPage() {
 
   const issueRows = issues.data || []
   const openIssues = issueRows.filter((issue) => issue.status === 'open' || issue.status === 'confirmed_fail').length
+  const severityCounts = issueRows.reduce(
+    (acc, issue) => {
+      acc[issue.severity] = (acc[issue.severity] ?? 0) + 1
+      return acc
+    },
+    {} as Record<string, number>,
+  )
+  const resultStatus = check.data.result_status
+  const scoreColor = verdictColor(resultStatus)
 
   const renderIssueTable = (rows: ComplianceIssueDTO[]) => (
     <Table
       rowKey="id"
       dataSource={rows}
+      scroll={{ x: 960 }}
       columns={[
-        { title: '问题', dataIndex: 'title' },
-        { title: '分类', dataIndex: 'category' },
-        { title: '严重度', dataIndex: 'severity', render: severityTag },
-        { title: '状态', dataIndex: 'status', render: statusTag },
-        { title: '证据', dataIndex: 'evidence' },
-        { title: '修复建议', dataIndex: 'suggestion' },
+        { title: '问题', dataIndex: 'title', width: 220, ellipsis: true },
+        { title: '分类', dataIndex: 'category', width: 110 },
+        { title: '严重度', dataIndex: 'severity', width: 96, render: severityTag },
+        { title: '状态', dataIndex: 'status', width: 96, render: statusTag },
+        {
+          title: '证据',
+          dataIndex: 'evidence',
+          ellipsis: { showTitle: false },
+          render: (value: string) => (
+            <Tooltip title={value} placement="topLeft">
+              <span>{value || '-'}</span>
+            </Tooltip>
+          ),
+        },
+        {
+          title: '修复建议',
+          dataIndex: 'suggestion',
+          ellipsis: { showTitle: false },
+          render: (value: string) => (
+            <Tooltip title={value} placement="topLeft">
+              <span>{value || '-'}</span>
+            </Tooltip>
+          ),
+        },
         {
           title: '操作',
+          width: 280,
           render: (_, row) => {
             const closed = row.status === 'fixed' || row.status === 'ignored'
             const editorPath = editorLocationPath(check.data.bid_document_id, row)
@@ -474,7 +523,7 @@ export function ComplianceDetailPage() {
                     loading={actionMutation.isPending}
                     onClick={() => actionMutation.mutate({ action: 'confirm', issueId: row.id })}
                   >
-                    确认 fail
+                    判定废标
                   </Button>
                 )}
               </Space>
@@ -482,7 +531,7 @@ export function ComplianceDetailPage() {
           },
         },
       ]}
-      locale={{ emptyText: <EmptyBlock /> }}
+      locale={{ emptyText: <EmptyBlock description="该分类下没有发现问题" /> }}
     />
   )
 
@@ -490,7 +539,7 @@ export function ComplianceDetailPage() {
     <PageFrame
       module="合规检查"
       title={check.data.name}
-      subtitle={check.data.bid_title || check.data.id}
+      subtitle={check.data.bid_title || '未关联标书'}
       tags={['/compliance/:checkId']}
       actions={[
         <Button key="report" icon={<CheckCircleOutlined />} loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
@@ -498,35 +547,60 @@ export function ComplianceDetailPage() {
         </Button>,
       ]}
     >
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}>
-          <Statistic title="合规得分" value={check.data.score} suffix="分" />
-        </Col>
-        <Col xs={24} md={8}>
-          <Statistic title="风险项" value={openIssues} />
-        </Col>
-        <Col xs={24} md={8}>
-          <Statistic title="结果" value={severityLabels[check.data.result_status] || check.data.result_status} />
-        </Col>
-        <Col span={24}>
-          <Descriptions bordered column={{ xs: 1, md: 2 }}>
-            <Descriptions.Item label="检查状态">{statusTag(check.data.status)}</Descriptions.Item>
-            <Descriptions.Item label="结果">{severityTag(check.data.result_status)}</Descriptions.Item>
-            <Descriptions.Item label="Task ID">{check.data.task_id || '-'}</Descriptions.Item>
-            <Descriptions.Item label="完成时间">{formatTime(check.data.completed_at)}</Descriptions.Item>
-          </Descriptions>
-        </Col>
-        <Col span={24}>
-          <Typography.Title level={4}>问题清单</Typography.Title>
-          <Tabs
-            items={categories.map((category) => ({
-              key: category,
-              label: category,
-              children: renderIssueTable(category === '全部' ? issueRows : issueRows.filter((issue) => issue.category === category)),
-            }))}
+      <div className="report-head">
+        <div className="report-score">
+          <Progress
+            type="circle"
+            size={108}
+            percent={check.data.score}
+            strokeColor={scoreColor}
+            format={(value) => (
+              <span className="data-mono" style={{ fontSize: 26, fontWeight: 600 }}>
+                {value}
+              </span>
+            )}
           />
-        </Col>
-      </Row>
+        </div>
+        <div className="report-verdict">
+          <p className="report-verdict-title" style={{ color: scoreColor }}>
+            {verdictText[resultStatus] || severityLabels[resultStatus] || resultStatus}
+          </p>
+          <div className="report-meta">
+            <span>检查状态 {statusTag(check.data.status)}</span>
+            <span>结果 {severityTag(resultStatus)}</span>
+            <span>
+              完成时间 <span className="data-mono">{formatTime(check.data.completed_at)}</span>
+            </span>
+          </div>
+        </div>
+        <div className="severity-strip">
+          <span className="severity-pill fail">
+            <span className="data-mono">{severityCounts.fail ?? 0}</span>废标项
+          </span>
+          <span className="severity-pill pending">
+            <span className="data-mono">{severityCounts.fail_candidate ?? 0}</span>待确认
+          </span>
+          <span className="severity-pill warn">
+            <span className="data-mono">{severityCounts.warn ?? 0}</span>警告
+          </span>
+          <span className="severity-pill pass">
+            <span className="data-mono">{severityCounts.pass ?? 0}</span>通过
+          </span>
+        </div>
+      </div>
+      <Typography.Title level={4} style={{ marginTop: 0 }}>
+        问题清单
+        <Typography.Text type="secondary" style={{ fontSize: 13, marginLeft: 10 }}>
+          未处理 {openIssues} 项
+        </Typography.Text>
+      </Typography.Title>
+      <Tabs
+        items={categories.map((category) => ({
+          key: category,
+          label: category,
+          children: renderIssueTable(category === '全部' ? issueRows : issueRows.filter((issue) => issue.category === category)),
+        }))}
+      />
     </PageFrame>
   )
 }

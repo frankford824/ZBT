@@ -141,9 +141,9 @@ export function CostDetailPage() {
     mutationFn: () => createCostAdvice(costProjectId),
     onSuccess: (task) => {
       setAdviceTaskId(task.id)
-      message.success('AI 建议任务已提交')
+      message.success('已开始生成建议')
     },
-    onError: () => message.error('AI 建议生成失败'),
+    onError: () => message.error('生成建议失败'),
   })
   const reportMutation = useMutation({
     mutationFn: () => createCostReport(costProjectId),
@@ -154,11 +154,11 @@ export function CostDetailPage() {
   useEffect(() => {
     if (!adviceTaskId || !adviceTaskStatus) return
     if (adviceTaskStatus === 'done') {
-      message.success(adviceSummary(adviceTask.data?.result) || 'AI 建议已生成')
+      message.success(adviceSummary(adviceTask.data?.result) || '建议已生成')
       void queryClient.invalidateQueries({ queryKey: ['cost-project', costProjectId] })
     }
     if (adviceTaskStatus === 'failed' || adviceTaskStatus === 'cancelled') {
-      message.error('AI 建议生成失败')
+      message.error('生成建议失败')
     }
   }, [adviceTaskId, adviceTaskStatus, adviceTask.data?.result, message, queryClient, costProjectId])
   const adviceBusy = adviceMutation.isPending || adviceTaskStatus === 'queued' || adviceTaskStatus === 'running'
@@ -177,7 +177,7 @@ export function CostDetailPage() {
     <PageFrame
       module="成本管理"
       title={project.data.name}
-      subtitle={project.data.project_name || project.data.project_id}
+      subtitle={project.data.project_name || '未关联项目'}
       tags={['/costs/:costProjectId']}
       actions={[
         <Button key="add" onClick={() => setOpen(true)}>
@@ -187,7 +187,7 @@ export function CostDetailPage() {
           导出成本报告
         </Button>,
         <Button key="ai" type="primary" loading={adviceBusy} onClick={() => adviceMutation.mutate()}>
-          AI 优化建议
+          智能优化建议
         </Button>,
       ]}
     >
@@ -237,9 +237,9 @@ export function CostDetailPage() {
                 </Space>
               </Descriptions.Item>
               {adviceTask.data ? (
-                <Descriptions.Item label="AI 建议">
+                <Descriptions.Item label="智能建议">
                   <Space direction="vertical">
-                    <Tag color={adviceTask.data.status === 'done' ? 'green' : 'blue'}>{adviceTask.data.status}</Tag>
+                    {adviceStatusTag(adviceTask.data.status)}
                     {adviceRecommendations(adviceTask.data.result).map((item) => (
                       <span key={item}>{item}</span>
                     ))}
@@ -332,4 +332,16 @@ function adviceRiskFlags(result: Record<string, unknown> | undefined) {
 function adviceSummary(result: Record<string, unknown> | undefined) {
   if (!result || typeof result.summary !== 'string') return ''
   return result.summary
+}
+
+function adviceStatusTag(status: string) {
+  const labels: Record<string, string> = {
+    queued: '等待生成',
+    running: '生成中',
+    done: '已完成',
+    failed: '生成失败',
+    cancelled: '已取消',
+  }
+  const color = status === 'done' ? 'green' : status === 'failed' || status === 'cancelled' ? 'red' : 'blue'
+  return <Tag color={color}>{labels[status] || '处理中'}</Tag>
 }

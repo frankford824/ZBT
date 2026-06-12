@@ -68,9 +68,18 @@ function statusTag(status: string) {
 
 const taskTypeLabels: Record<string, string> = {
   knowledge_process: '知识库处理',
-  knowledge_embedding: '知识库向量化',
+  knowledge_embedding: '知识库整理',
   chapter_generate: '章节生成',
   document_export: '文档导出',
+}
+
+const resourceLabels: Record<string, string> = {
+  bid: '标书',
+  chapter: '章节',
+  knowledge: '知识库',
+  document: '文档',
+  tender: '标讯',
+  cost: '成本',
 }
 
 function formatTime(value?: string | null) {
@@ -80,8 +89,18 @@ function formatTime(value?: string | null) {
 
 function formatBizRef(value: Record<string, unknown>) {
   const resourceType = typeof value.resource_type === 'string' ? value.resource_type : '-'
-  const resourceId = typeof value.resource_id === 'string' ? value.resource_id : '-'
-  return `${resourceType} · ${resourceId}`
+  return resourceLabels[resourceType] || '相关内容'
+}
+
+function formatUsage(input: number, output: number) {
+  const total = Number(input || 0) + Number(output || 0)
+  if (!total) return '-'
+  return `${total.toLocaleString()} 字`
+}
+
+function formatLatency(value: number) {
+  if (!value) return '-'
+  return value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${value} 毫秒`
 }
 
 export function TeamPage() {
@@ -145,9 +164,9 @@ export function TeamPage() {
       setChainOpen(false)
       chainForm.resetFields()
       queryClient.invalidateQueries({ queryKey: ['team', 'approval-chains'] })
-      message.success('审批链已创建')
+      message.success('审批流程已创建')
     },
-    onError: () => message.error('审批链创建失败'),
+    onError: () => message.error('审批流程创建失败'),
   })
 
   const updateChainMutation = useMutation({
@@ -161,18 +180,18 @@ export function TeamPage() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['team', 'approval-chains'] })
-      message.success('审批链已更新')
+      message.success('审批流程已更新')
     },
-    onError: () => message.error('审批链更新失败'),
+    onError: () => message.error('审批流程更新失败'),
   })
 
   const deleteChainMutation = useMutation({
     mutationFn: deleteApprovalChain,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['team', 'approval-chains'] })
-      message.success('审批链已删除')
+      message.success('审批流程已删除')
     },
-    onError: () => message.error('审批链删除失败'),
+    onError: () => message.error('审批流程删除失败'),
   })
 
   const approvalMutation = useMutation({
@@ -236,11 +255,11 @@ export function TeamPage() {
     <PageFrame
       module="企业管理"
       title="团队协作"
-      subtitle="成员、审批链、审批实例、日志和通知"
+      subtitle="成员、审批流程、待办审批、使用记录和通知"
       tags={['page-team', '/team?tab=members|approvals|logs|notifications']}
       actions={[
         <Button key="chain" icon={<PlusOutlined />} onClick={() => setChainOpen(true)}>
-          审批链
+          审批流程
         </Button>,
         <Button key="invite" type="primary" icon={<TeamOutlined />} onClick={() => setInviteOpen(true)}>
           邀请成员
@@ -296,7 +315,7 @@ export function TeamPage() {
               <Space direction="vertical" size={16} className="full-width">
                 <Row gutter={[16, 16]}>
                   <Col xs={24} xl={14}>
-                    <Typography.Title level={4}>审批实例</Typography.Title>
+                    <Typography.Title level={4}>待办审批</Typography.Title>
                     {approvalsQuery.isLoading && <LoadingBlock />}
                     {approvalsQuery.isError && <ErrorBlock />}
                     {!approvalsQuery.isLoading && !approvalsQuery.isError && !approvalsQuery.data?.length && <EmptyBlock />}
@@ -308,7 +327,7 @@ export function TeamPage() {
                           { title: '审批标题', dataIndex: 'title' },
                           { title: '标书', dataIndex: 'bid_title' },
                           { title: '提交人', dataIndex: 'submitted_by_name', render: (value) => value || '-' },
-                          { title: '当前级次', dataIndex: 'current_step' },
+                          { title: '当前环节', dataIndex: 'current_step' },
                           { title: '状态', dataIndex: 'status', render: statusTag },
                           {
                             title: '操作',
@@ -342,7 +361,7 @@ export function TeamPage() {
                     )}
                   </Col>
                   <Col xs={24} xl={10}>
-                    <Typography.Title level={4}>审批链</Typography.Title>
+                    <Typography.Title level={4}>审批流程</Typography.Title>
                     {chainsQuery.isLoading && <LoadingBlock />}
                     {chainsQuery.isError && <ErrorBlock />}
                     {!chainsQuery.isLoading && !chainsQuery.isError && !chainsQuery.data?.length && <EmptyBlock />}
@@ -354,7 +373,7 @@ export function TeamPage() {
                         columns={[
                           { title: '名称', dataIndex: 'name' },
                           {
-                            title: '级次',
+                            title: '流程',
                             render: (_, row) =>
                               row.steps.map((step) => (
                                 <Tag key={step.order} color={step.required ? 'blue' : 'default'}>
@@ -372,7 +391,7 @@ export function TeamPage() {
                           {
                             title: '操作',
                             render: (_, row) => (
-                              <Popconfirm title="删除审批链" onConfirm={() => deleteChainMutation.mutate(row.id)}>
+                              <Popconfirm title="删除审批流程" onConfirm={() => deleteChainMutation.mutate(row.id)}>
                                 <Button size="small" danger icon={<DeleteOutlined />} />
                               </Popconfirm>
                             ),
@@ -386,8 +405,8 @@ export function TeamPage() {
             ),
           },
           {
-            key: 'logs',
-            label: '日志',
+	            key: 'logs',
+	            label: '使用记录',
             children: aiLogsQuery.isLoading ? (
               <LoadingBlock />
             ) : aiLogsQuery.isError ? (
@@ -397,19 +416,19 @@ export function TeamPage() {
                 rowKey="id"
                 dataSource={aiLogsQuery.data}
                 columns={[
-                  { title: '任务', dataIndex: 'task_type', render: (value) => taskTypeLabels[value] || value },
-                  { title: '模型路由', render: (_, row) => `${row.provider} / ${row.model}` },
-                  { title: '调用人', dataIndex: 'user_name', render: (value) => value || '系统' },
-                  {
-                    title: 'Token',
-                    render: (_, row) => `${row.input_tokens} / ${row.output_tokens}`,
-                  },
-                  { title: '耗时', dataIndex: 'latency_ms', render: (value) => `${value} ms` },
-                  { title: '状态', dataIndex: 'status', render: statusTag },
-                  {
-                    title: '资源',
-                    render: (_, row) => formatBizRef(row.biz_ref),
-                  },
+	                  { title: '事项', dataIndex: 'task_type', render: (value) => taskTypeLabels[value] || '智能处理' },
+	                  { title: '处理方式', render: () => '平台智能处理' },
+	                  { title: '调用人', dataIndex: 'user_name', render: (value) => value || '系统' },
+	                  {
+	                    title: '用量',
+	                    render: (_, row) => formatUsage(row.input_tokens, row.output_tokens),
+	                  },
+	                  { title: '处理时长', dataIndex: 'latency_ms', render: formatLatency },
+	                  { title: '状态', dataIndex: 'status', render: statusTag },
+	                  {
+	                    title: '关联内容',
+	                    render: (_, row) => formatBizRef(row.biz_ref),
+	                  },
                   { title: '时间', dataIndex: 'created_at', render: formatTime },
                 ]}
               />
@@ -490,10 +509,10 @@ export function TeamPage() {
         <Form
           form={chainForm}
           layout="vertical"
-          initialValues={{ name: '标书两级审批链', first_role: 'department_admin', second_role: 'project_manager', executive_enabled: false }}
+          initialValues={{ name: '标书两级审批流程', first_role: 'department_admin', second_role: 'project_manager', executive_enabled: false }}
           onFinish={createChain}
         >
-          <Form.Item label="审批链名称" name="name" rules={[{ required: true, message: '名称必填' }]}>
+          <Form.Item label="流程名称" name="name" rules={[{ required: true, message: '名称必填' }]}>
             <Input />
           </Form.Item>
           <Form.Item label="说明" name="description">

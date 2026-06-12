@@ -73,7 +73,7 @@ export function KnowledgeHomePage() {
     <PageFrame
       module="企业管理"
       title="知识库"
-      subtitle="分类卡、语义搜索、引用统计和中标案例回流"
+      subtitle="资料检索、引用统计和中标案例回流"
       tags={['page-knowledge', '/knowledge']}
     >
       <Space direction="vertical" size={16} className="full-width">
@@ -86,8 +86,8 @@ export function KnowledgeHomePage() {
         <Row gutter={[16, 16]}>
           {[
             ['总文档', stats.data?.document_count ?? 0],
-            ['待处理', (stats.data?.ready_count ?? 0) + (stats.data?.queued_count ?? 0)],
-            ['已处理', stats.data?.processed_count ?? 0],
+            ['待整理', (stats.data?.ready_count ?? 0) + (stats.data?.queued_count ?? 0)],
+            ['已整理', stats.data?.processed_count ?? 0],
             ['失败', stats.data?.failed_count ?? 0],
           ].map(([name, value]) => (
             <Col xs={24} md={12} xl={6} key={name}>
@@ -103,7 +103,7 @@ export function KnowledgeHomePage() {
             dataSource={categories.length > 0 ? categories : [['未分类', 0]]}
             renderItem={(item) => (
               <List.Item actions={[<Tag key="count">{item[1]} 个文档</Tag>]}>
-                <List.Item.Meta title={item[0]} description="当前租户知识库" />
+                <List.Item.Meta title={item[0]} description="当前企业资料" />
               </List.Item>
             )}
           />
@@ -117,7 +117,7 @@ export function KnowledgeHomePage() {
                 <List.Item
                   actions={[
                     <Tag key="ref" color="blue">
-                      {item.source_ref.chunk_id.slice(0, 8)}
+                      {item.page_start ? `第 ${item.page_start} 页` : '相关片段'}
                     </Tag>,
                   ]}
                 >
@@ -249,10 +249,10 @@ export function KnowledgeDocsPage() {
   }
 
   const startProcess = async (documentId: string) => {
-    const task = await processKnowledgeDocument(documentId)
+    await processKnowledgeDocument(documentId)
     await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] })
     await queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] })
-    message.success(`处理任务已创建：${task.external_task_id ?? task.id}`)
+    message.success('已开始整理文档')
   }
   const openCreateCategory = () => {
     setEditingCategory(null)
@@ -315,7 +315,7 @@ export function KnowledgeDocsPage() {
     <PageFrame
       module="知识库"
       title="文档库"
-      subtitle="分类树、上传、预览、下载和引用追踪"
+      subtitle="分类、上传、预览、下载和引用记录"
       tags={['page-knowledge-docs', '/knowledge/docs']}
       actions={[
         <Button key="upload" type="primary" icon={<CloudUploadOutlined />}>
@@ -419,7 +419,7 @@ export function KnowledgeDocsPage() {
                         disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
                         onClick={() => void startProcess(row.id)}
                       >
-                        处理
+                        整理
                       </Button>
                       <Button
                         size="small"
@@ -527,7 +527,7 @@ function DocumentReferenceDrawer({
   return (
     <Drawer
       width={720}
-      title={document ? `${document.title} 的引用追踪` : '引用追踪'}
+      title={document ? `${document.title} 的引用记录` : '引用记录'}
       open={Boolean(document)}
       onClose={onClose}
       destroyOnHidden
@@ -552,15 +552,15 @@ function DocumentReferenceDrawer({
             render: (_, row) => row.chapter_title || row.title,
           },
           {
-            title: 'Chunk',
-            render: (_, row) => row.chunk_id ? <Tag color="blue">{row.chunk_id.slice(0, 8)}</Tag> : <Tag>未解析</Tag>,
+            title: '资料片段',
+            render: (_, row) => row.chunk_id ? <Tag color="blue">已定位</Tag> : <Tag>未整理</Tag>,
           },
           {
-            title: '来源状态',
+            title: '确认状态',
             render: (_, row) => {
               const sourceRef = row.metadata.source_ref as { resolved?: boolean; resolved_by?: string } | undefined
               if (sourceRef?.resolved) {
-                return <Tag color="green">{sourceRef.resolved_by ?? 'resolved'}</Tag>
+                return <Tag color="green">已确认</Tag>
               }
               return <Tag color="orange">待确认</Tag>
             },
@@ -878,7 +878,7 @@ export function FilePreviewPage() {
     <PageFrame
       module="知识库"
       title={preview.data?.file.filename ?? '文件预览'}
-      subtitle={fileId}
+      subtitle="文档预览"
       tags={['/files/:fileId/preview']}
       actions={[
         <Button key="download" icon={<DownloadOutlined />} onClick={() => void openDownload()}>
@@ -900,10 +900,10 @@ export function FilePreviewPage() {
 
 function statusLabel(status: KnowledgeDocumentDTO['parse_status']) {
   const labels: Record<KnowledgeDocumentDTO['parse_status'], string> = {
-    ready: '待处理',
+    ready: '待整理',
     queued: '排队中',
-    processing: '处理中',
-    processed: '已处理',
+    processing: '整理中',
+    processed: '已整理',
     failed: '失败',
   }
   return labels[status]

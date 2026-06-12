@@ -27,6 +27,17 @@ export function DashboardPage() {
 
   const stats = data?.stats
 
+  const statItems = stats
+    ? [
+        { title: '进行中项目', value: stats.active_projects },
+        { title: '本月标书', value: stats.monthly_bids },
+        { title: '合规通过率', value: stats.compliance_pass_rate, suffix: '%' },
+        { title: '中标率', value: stats.win_rate, suffix: '%' },
+        { title: '待办', value: stats.pending_tasks },
+        { title: '知识库文档', value: stats.knowledge_docs },
+      ]
+    : []
+
   return (
     <PageFrame
       module="概览"
@@ -48,62 +59,90 @@ export function DashboardPage() {
         <ErrorBlock />
       ) : (
         <Row gutter={[16, 16]}>
-          <Col xs={24} md={8} xl={4}>
-            <Statistic title="进行中项目" value={stats.active_projects} />
-          </Col>
-          <Col xs={24} md={8} xl={4}>
-            <Statistic title="本月标书" value={stats.monthly_bids} />
-          </Col>
-          <Col xs={24} md={8} xl={4}>
-            <Statistic title="合规通过率" value={stats.compliance_pass_rate} suffix="%" />
-          </Col>
-          <Col xs={24} md={8} xl={4}>
-            <Statistic title="中标率" value={stats.win_rate} suffix="%" />
-          </Col>
-          <Col xs={24} md={8} xl={4}>
-            <Statistic title="待办" value={stats.pending_tasks} />
-          </Col>
-          <Col xs={24} md={8} xl={4}>
-            <Statistic title="知识库文档" value={stats.knowledge_docs} />
-          </Col>
+          {statItems.map((item) => (
+            <Col key={item.title} xs={12} md={8} xl={4}>
+              <Card size="small" className="stat-card">
+                <Statistic title={item.title} value={item.value} suffix={item.suffix} />
+              </Card>
+            </Col>
+          ))}
           <Col xs={24} xl={14}>
-            <Card title="趋势">
+            <Card title="投标趋势">
               <ReactECharts
                 style={{ height: 260 }}
                 option={{
+                  color: ['#4F46E5', '#7C3AED'],
                   tooltip: {},
-                  legend: { data: ['标书数', '中标率'] },
-                  xAxis: { type: 'category', data: data.trends.map((item) => item.month) },
-                  yAxis: { type: 'value' },
+                  legend: { top: 0, left: 'center', data: ['标书数', '中标率'] },
+                  grid: { left: 40, right: 24, top: 40, bottom: 28 },
+                  xAxis: {
+                    type: 'category',
+                    data: data.trends.map((item) => item.month),
+                    axisLine: { lineStyle: { color: '#DCDEE9' } },
+                    axisLabel: { color: '#5C5E78' },
+                  },
+                  yAxis: {
+                    type: 'value',
+                    splitLine: { lineStyle: { color: '#E8EAF2' } },
+                    axisLabel: { color: '#5C5E78' },
+                  },
                   series: [
-                    { name: '标书数', type: 'bar', data: data.trends.map((item) => item.bids) },
-                    { name: '中标率', type: 'line', data: data.trends.map((item) => item.win_rate) },
+                    {
+                      name: '标书数',
+                      type: 'bar',
+                      barWidth: 18,
+                      itemStyle: { borderRadius: [4, 4, 0, 0] },
+                      data: data.trends.map((item) => item.bids),
+                    },
+                    {
+                      name: '中标率',
+                      type: 'line',
+                      smooth: true,
+                      data: data.trends.map((item) => item.win_rate),
+                    },
                   ],
                 }}
               />
             </Card>
           </Col>
           <Col xs={24} xl={10}>
-            <Card title="AI 推荐">
+            <Card
+              className="ai-card"
+              title={
+                <Space>
+                  <span className="ai-chip">智能</span>
+                  推荐标讯
+                </Space>
+              }
+            >
               <List
                 dataSource={data.recommended_tenders}
+                locale={{ emptyText: '暂无匹配标讯，可到标讯大厅订阅来源' }}
                 renderItem={(item) => (
                   <List.Item actions={[<Link key="detail" to={`/tenders/${item.id}`}>查看</Link>]}>
-                    <List.Item.Meta title={item.title} description={`${item.region || item.purchaser || '-'} · 截止 ${formatDate(item.deadline)}`} />
-                    <Tag color="purple">匹配度 {item.match_score}%</Tag>
+                    <List.Item.Meta
+                      title={item.title}
+                      description={`${item.region || item.purchaser || '-'} · 截止 ${formatDate(item.deadline)}`}
+                    />
+                    <Tag color="purple" className="data-mono">
+                      匹配 {item.match_score}%
+                    </Tag>
                   </List.Item>
                 )}
               />
             </Card>
           </Col>
           <Col xs={24} xl={10}>
-            <Card title="待审批">
+            <Card title="待我审批">
               <List
                 dataSource={data.pending_approvals}
-                locale={{ emptyText: '暂无待审批' }}
+                locale={{ emptyText: '暂无待审批事项' }}
                 renderItem={(item) => (
                   <List.Item actions={[<Link key="team" to="/team?tab=approvals">处理</Link>]}>
-                    <List.Item.Meta title={item.title} description={`${item.bid_title || '-'} · 第 ${item.current_step} 级`} />
+                    <List.Item.Meta
+                      title={item.title}
+                      description={`${item.bid_title || '-'} · 第 ${item.current_step} 级`}
+                    />
                   </List.Item>
                 )}
               />
@@ -116,7 +155,17 @@ export function DashboardPage() {
                 locale={{ emptyText: '暂无通知' }}
                 renderItem={(item) => (
                   <List.Item>
-                    <List.Item.Meta title={<Space><Tag color={item.read_at ? 'default' : 'blue'}>{item.read_at ? '已读' : '未读'}</Tag>{item.title}</Space>} description={`${item.body} · ${formatDate(item.created_at)}`} />
+                    <List.Item.Meta
+                      title={
+                        <Space>
+                          <Tag color={item.read_at ? 'default' : 'blue'}>
+                            {item.read_at ? '已读' : '未读'}
+                          </Tag>
+                          {item.title}
+                        </Space>
+                      }
+                      description={`${item.body} · ${formatDate(item.created_at)}`}
+                    />
                   </List.Item>
                 )}
               />
@@ -128,11 +177,29 @@ export function DashboardPage() {
               pagination={false}
               dataSource={data.recent_projects}
               columns={[
-                { title: '最近项目', dataIndex: 'name', render: (value, row) => <Link to={`/projects/${row.id}`}>{value}</Link> },
-                { title: '阶段', dataIndex: 'status', render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
+                {
+                  title: '最近项目',
+                  dataIndex: 'name',
+                  render: (value, row) => <Link to={`/projects/${row.id}`}>{value}</Link>,
+                },
+                {
+                  title: '阶段',
+                  dataIndex: 'status',
+                  render: (value) => <Tag>{statusLabels[value] || value}</Tag>,
+                },
                 { title: '负责人', dataIndex: 'owner_name', render: (value) => value || '-' },
-                { title: '下一节点', dataIndex: 'due_date', render: formatDate },
-                { title: '更新时间', dataIndex: 'updated_at', render: formatDate },
+                {
+                  title: '下一节点',
+                  dataIndex: 'due_date',
+                  className: 'data-mono',
+                  render: formatDate,
+                },
+                {
+                  title: '更新时间',
+                  dataIndex: 'updated_at',
+                  className: 'data-mono',
+                  render: formatDate,
+                },
               ]}
             />
           </Col>
