@@ -23,6 +23,7 @@ import {
   deleteKnowledgeCategory,
   deleteKnowledgeTag,
   fetchFileURL,
+  getApiErrorMessage,
   fetchKnowledgeCategories,
   fetchKnowledgeDocumentReferences,
   fetchKnowledgeDocuments,
@@ -153,6 +154,7 @@ export function KnowledgeDocsPage() {
   const [editingCategory, setEditingCategory] = useState<KnowledgeCategoryDTO | null>(null)
   const [categoryForm] = Form.useForm<{ name: string; description?: string }>()
   const [editingDocument, setEditingDocument] = useState<KnowledgeDocumentDTO | null>(null)
+  const [startingProcessId, setStartingProcessId] = useState<string | null>(null)
   const [documentForm] = Form.useForm<{
     title: string
     doc_type: string
@@ -163,6 +165,10 @@ export function KnowledgeDocsPage() {
   const documents = useQuery({
     queryKey: ['knowledge-documents'],
     queryFn: fetchKnowledgeDocuments,
+    refetchInterval: (query) => {
+      const items = query.state.data ?? []
+      return items.some((item) => item.parse_status === 'queued' || item.parse_status === 'processing') ? 2000 : false
+    },
   })
   const categories = useQuery({
     queryKey: ['knowledge-categories'],
@@ -186,7 +192,7 @@ export function KnowledgeDocsPage() {
       message.success('分类已创建')
       closeCategoryModal()
     },
-    onError: () => message.error('分类创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '分类创建失败')),
   })
   const updateCategory = useMutation({
     mutationFn: ({ id, values }: { id: string; values: { name?: string; description?: string } }) =>
@@ -196,7 +202,7 @@ export function KnowledgeDocsPage() {
       message.success('分类已更新')
       closeCategoryModal()
     },
-    onError: () => message.error('分类更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '分类更新失败')),
   })
   const deleteCategory = useMutation({
     mutationFn: deleteKnowledgeCategory,
@@ -204,7 +210,7 @@ export function KnowledgeDocsPage() {
       await refreshKnowledgeLists()
       message.success('分类已删除')
     },
-    onError: () => message.error('分类删除失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '分类删除失败')),
   })
   const updateDocument = useMutation({
     mutationFn: ({
@@ -225,7 +231,7 @@ export function KnowledgeDocsPage() {
       message.success('文档信息已更新')
       closeDocumentModal()
     },
-    onError: () => message.error('文档信息更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '文档信息更新失败')),
   })
 
   const uploadProps: UploadProps = {
@@ -246,22 +252,33 @@ export function KnowledgeDocsPage() {
         message.success('上传完成')
         onSuccess?.(presigned.file)
       } catch (error) {
-        message.error('上传失败')
+        message.error(getApiErrorMessage(error, '上传失败'))
         onError?.(error as Error)
       }
     },
   }
 
   const openFile = async (fileId: string, mode: 'download' | 'preview') => {
-    const result = await fetchFileURL(fileId, mode)
-    window.open(result.url, '_blank', 'noopener,noreferrer')
+    try {
+      const result = await fetchFileURL(fileId, mode)
+      window.open(result.url, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      message.error(getApiErrorMessage(error, mode === 'download' ? '获取下载链接失败' : '获取预览链接失败'))
+    }
   }
 
   const startProcess = async (documentId: string) => {
-    await processKnowledgeDocument(documentId)
-    await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] })
-    await queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] })
-    message.success('已开始整理文档')
+    setStartingProcessId(documentId)
+    try {
+      await processKnowledgeDocument(documentId)
+      await queryClient.invalidateQueries({ queryKey: ['knowledge-documents'] })
+      await queryClient.invalidateQueries({ queryKey: ['knowledge-stats'] })
+      message.success('已开始整理文档')
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '文档整理启动失败'))
+    } finally {
+      setStartingProcessId((current) => (current === documentId ? null : current))
+    }
   }
   const openCreateCategory = () => {
     setEditingCategory(null)
@@ -438,6 +455,7 @@ export function KnowledgeDocsPage() {
                         {canWrite ? <Button
                           size="small"
                           icon={<PlayCircleOutlined />}
+                          loading={startingProcessId === row.id}
                           disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
                           onClick={() => void startProcess(row.id)}
                         >

@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { isAxiosError } from 'axios'
 import type { LoginSessionPayload, ModulePermission, Tenant } from '../../app/store/session'
 import { expireSessionAndRedirect, getStoredSession } from '../auth/session'
 
@@ -28,6 +28,38 @@ apiClient.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+type ApiErrorBody = {
+  error?: unknown
+  message?: unknown
+}
+
+export function getApiErrorMessage(error: unknown, fallback = '操作失败'): string {
+  if (!isAxiosError(error)) {
+    return fallback
+  }
+
+  if (!error.response) {
+    if (error.code === 'ECONNABORTED') {
+      return '请求超时，请稍后重试'
+    }
+    return '网络连接异常，请检查连接后重试'
+  }
+
+  const data = error.response.data as ApiErrorBody | string | undefined
+  if (typeof data === 'string' && data.trim()) {
+    return data.trim()
+  }
+  if (data && typeof data === 'object') {
+    if (typeof data.error === 'string' && data.error.trim()) {
+      return data.error.trim()
+    }
+    if (typeof data.message === 'string' && data.message.trim()) {
+      return data.message.trim()
+    }
+  }
+  return fallback
+}
 
 export type RoleDTO = {
   id: string
