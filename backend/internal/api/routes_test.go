@@ -6,23 +6,32 @@ import (
 	"testing"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
+	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/gin-gonic/gin"
 )
 
-func TestFileAccessModuleMapsBidFilesToBidPermission(t *testing.T) {
-	for _, bizType := range []string{"bid_tender", "bid_export", " BID_ATTACHMENT "} {
-		if got := fileAccessModule(bizType); got != "bid" {
-			t.Fatalf("expected %q to use bid permission, got %q", bizType, got)
+func TestFileAccessModuleMapsSupportedFileTypes(t *testing.T) {
+	for _, tc := range []struct {
+		bizType string
+		module  string
+	}{
+		{bizType: "", module: "knowledge"},
+		{bizType: "knowledge", module: "knowledge"},
+		{bizType: "knowledge_case", module: "knowledge"},
+		{bizType: "bid_tender", module: "bid"},
+		{bizType: "bid_export", module: "bid"},
+	} {
+		module, ok := platformfile.AccessModuleForBizType(tc.bizType)
+		if !ok || module != tc.module {
+			t.Fatalf("expected %q to use %q permission, got module=%q ok=%v", tc.bizType, tc.module, module, ok)
 		}
 	}
 }
 
-func TestFileAccessModuleDefaultsToKnowledgePermission(t *testing.T) {
-	for _, bizType := range []string{"", "knowledge", "knowledge_case"} {
-		if got := fileAccessModule(bizType); got != "knowledge" {
-			t.Fatalf("expected %q to use knowledge permission, got %q", bizType, got)
-		}
+func TestFileAccessModuleRejectsUnknownFileTypes(t *testing.T) {
+	if _, ok := platformfile.AccessModuleForBizType(" BID_ATTACHMENT "); ok {
+		t.Fatal("expected unsupported file biz type to be rejected")
 	}
 }
 

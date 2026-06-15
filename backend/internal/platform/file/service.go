@@ -27,6 +27,19 @@ var (
 
 const presignTTL = 15 * time.Minute
 
+const (
+	defaultUploadBizType    = "knowledge"
+	defaultGeneratedBizType = "generated"
+)
+
+var bizTypeAccessModules = map[string]string{
+	"knowledge":      "knowledge",
+	"knowledge_case": "knowledge",
+	"generated":      "knowledge",
+	"bid_tender":     "bid",
+	"bid_export":     "bid",
+}
+
 type Service struct {
 	pool     *pgxpool.Pool
 	bucket   string
@@ -119,9 +132,9 @@ func GeneratedObjectKey(tenantID, bizType, bizID string) string {
 }
 
 func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, req PresignUploadRequest) (PresignUploadResponse, error) {
-	bizType := sanitizeSegment(req.BizType)
-	if bizType == "" {
-		bizType = "knowledge"
+	bizType, err := normalizeBizType(req.BizType, defaultUploadBizType)
+	if err != nil {
+		return PresignUploadResponse{}, err
 	}
 	bizID, err := normalizeOptionalUUID(req.BizID)
 	if err != nil {
@@ -177,9 +190,9 @@ func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, re
 }
 
 func (s *Service) CreateGeneratedAsset(ctx context.Context, tenantID, userID string, req GeneratedAssetRequest) (Asset, error) {
-	bizType := sanitizeSegment(req.BizType)
-	if bizType == "" {
-		bizType = "generated"
+	bizType, err := normalizeBizType(req.BizType, defaultGeneratedBizType)
+	if err != nil {
+		return Asset{}, err
 	}
 	bizID, err := normalizeOptionalUUID(req.BizID)
 	if err != nil {
@@ -433,6 +446,26 @@ func normalizeOptionalUUID(value string) (string, error) {
 		return "", err
 	}
 	return value, nil
+}
+
+func normalizeBizType(value, fallback string) (string, error) {
+	bizType := sanitizeSegment(value)
+	if bizType == "" {
+		bizType = fallback
+	}
+	if _, ok := AccessModuleForBizType(bizType); !ok {
+		return "", ErrInvalidRequest
+	}
+	return bizType, nil
+}
+
+func AccessModuleForBizType(bizType string) (string, bool) {
+	normalized := sanitizeSegment(bizType)
+	if normalized == "" {
+		normalized = defaultUploadBizType
+	}
+	module, ok := bizTypeAccessModules[normalized]
+	return module, ok
 }
 
 func validateUUID(value string) error {

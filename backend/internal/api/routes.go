@@ -1936,20 +1936,16 @@ func (s *server) requireExistingFileAccess(c *gin.Context, level rbac.Level) boo
 }
 
 func requireFileAccess(c *gin.Context, bizType string, level rbac.Level) bool {
-	module := fileAccessModule(bizType)
+	module, ok := platformfile.AccessModuleForBizType(bizType)
+	if !ok {
+		respondBadRequest(c)
+		return false
+	}
 	if rbac.Allows(rbac.PermissionsFromContext(c)[module], level) {
 		return true
 	}
 	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "permission_denied", "error": "当前账号没有此操作权限", "module": module})
 	return false
-}
-
-func fileAccessModule(bizType string) string {
-	normalized := strings.ToLower(strings.TrimSpace(bizType))
-	if strings.HasPrefix(normalized, "bid") {
-		return "bid"
-	}
-	return "knowledge"
 }
 
 func (s *server) getAITask(c *gin.Context) {

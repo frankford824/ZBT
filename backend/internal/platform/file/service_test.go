@@ -18,6 +18,49 @@ func TestNormalizeOptionalUUIDTrimsValidValue(t *testing.T) {
 	}
 }
 
+func TestNormalizeBizTypeDefaultsAndRejectsUnsupportedValues(t *testing.T) {
+	got, err := normalizeBizType("", defaultUploadBizType)
+	if err != nil {
+		t.Fatalf("expected default biz type: %v", err)
+	}
+	if got != "knowledge" {
+		t.Fatalf("unexpected default biz type: %q", got)
+	}
+
+	got, err = normalizeBizType(" BID_TENDER ", defaultUploadBizType)
+	if err != nil {
+		t.Fatalf("expected valid bid biz type: %v", err)
+	}
+	if got != "bid_tender" {
+		t.Fatalf("unexpected normalized biz type: %q", got)
+	}
+
+	if _, err := normalizeBizType("project_archive", defaultUploadBizType); err == nil {
+		t.Fatal("expected unsupported biz type to be rejected")
+	}
+}
+
+func TestAccessModuleForBizTypeUsesExplicitAllowList(t *testing.T) {
+	for _, tc := range []struct {
+		bizType string
+		module  string
+	}{
+		{bizType: "", module: "knowledge"},
+		{bizType: "knowledge_case", module: "knowledge"},
+		{bizType: "bid_tender", module: "bid"},
+		{bizType: "bid_export", module: "bid"},
+	} {
+		module, ok := AccessModuleForBizType(tc.bizType)
+		if !ok || module != tc.module {
+			t.Fatalf("expected %q to map to %q, got module=%q ok=%v", tc.bizType, tc.module, module, ok)
+		}
+	}
+
+	if _, ok := AccessModuleForBizType("bid_anything"); ok {
+		t.Fatal("expected unsupported bid-like biz type to be rejected")
+	}
+}
+
 func TestSanitizeFilenameKeepsOnlyBaseName(t *testing.T) {
 	if got := sanitizeFilename(`..\..\bid.docx`); got != "bid.docx" {
 		t.Fatalf("unexpected filename: %q", got)
