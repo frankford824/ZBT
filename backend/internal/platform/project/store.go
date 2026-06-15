@@ -278,6 +278,16 @@ func (s *Store) Delete(ctx context.Context, tenantID, id string) error {
 		return err
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update bid_documents
+			set project_id = null, updated_at = now()
+			where tenant_id = $1 and project_id = $2
+		`, tenantID, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from cost_projects where tenant_id = $1 and project_id = $2`, tenantID, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `delete from projects where tenant_id = $1 and id = $2`, tenantID, id)
 		if err != nil {
 			return err

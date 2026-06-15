@@ -200,6 +200,13 @@ func (s *Store) DeleteChain(ctx context.Context, tenantID, id string) error {
 		return err
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update approval_instances
+			set chain_id = null, updated_at = now()
+			where tenant_id = $1 and chain_id = $2
+		`, tenantID, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `delete from approval_chains where tenant_id = $1 and id = $2`, tenantID, id)
 		if err != nil {
 			return err

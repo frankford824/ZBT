@@ -319,6 +319,13 @@ func (s *Store) UpdateCategory(ctx context.Context, tenantID, id, name, descript
 func (s *Store) DeleteCategory(ctx context.Context, tenantID, id string) error {
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
+			update knowledge_categories
+			set parent_id = null, updated_at = now()
+			where tenant_id = $1 and parent_id = $2
+		`, tenantID, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
 			update knowledge_documents
 			set category_id = null, updated_at = now()
 			where tenant_id = $1 and category_id = $2
@@ -536,6 +543,16 @@ func (s *Store) UpdateDocument(ctx context.Context, tenantID, id string, req Upd
 
 func (s *Store) DeleteDocument(ctx context.Context, tenantID, id string) error {
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update knowledge_references
+			set source_document_id = null, updated_at = now()
+			where tenant_id = $1 and source_document_id = $2
+		`, tenantID, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from knowledge_chunks where tenant_id = $1 and document_id = $2`, tenantID, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `delete from knowledge_documents where tenant_id = $1 and id = $2`, tenantID, id)
 		if err != nil {
 			return err

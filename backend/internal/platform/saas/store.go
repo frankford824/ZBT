@@ -536,6 +536,15 @@ func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, p
 
 func (s *Store) DeleteRole(ctx context.Context, tenantID, roleID string) error {
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `delete from role_permissions where tenant_id = $1 and role_id = $2`, tenantID, roleID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from module_permissions where tenant_id = $1 and role_id = $2`, tenantID, roleID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `delete from tenant_member_roles where tenant_id = $1 and role_id = $2`, tenantID, roleID); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `delete from roles where tenant_id = $1 and id = $2`, tenantID, roleID)
 		if err != nil {
 			return err

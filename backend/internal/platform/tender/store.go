@@ -467,6 +467,13 @@ func (s *Store) DeleteSource(ctx context.Context, tenantID, id string) error {
 		return ErrInvalidRequest
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update tenders
+			set source_id = null, updated_at = now()
+			where tenant_id = $1 and source_id = $2
+		`, tenantID, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `delete from tender_sources where tenant_id = $1 and id = $2`, tenantID, id)
 		if err != nil {
 			return err
