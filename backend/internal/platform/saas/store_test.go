@@ -27,6 +27,25 @@ func TestCreateRoleRejectsBlankCodeOrName(t *testing.T) {
 	}
 }
 
+func TestLoginRejectsInvalidInputBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	for _, req := range []struct {
+		tenantID string
+		email    string
+		password string
+	}{
+		{tenantID: "", email: "admin@example.com", password: "password1"},
+		{tenantID: "not-a-uuid", email: "admin@example.com", password: "password1"},
+		{tenantID: "00000000-0000-4000-8000-000000000001", email: "", password: "password1"},
+		{tenantID: "00000000-0000-4000-8000-000000000001", email: "admin@example.com", password: ""},
+	} {
+		_, err := store.Login(context.Background(), req.tenantID, req.email, req.password)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for login request=%+v, got %v", req, err)
+		}
+	}
+}
+
 func TestCreateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
 	store := NewStore(nil)
 	for _, req := range []struct {

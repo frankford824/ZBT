@@ -153,6 +153,15 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, err
 }
 
 func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Session, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	email = strings.ToLower(strings.TrimSpace(email))
+	password = strings.TrimSpace(password)
+	if tenantID == "" || email == "" || password == "" {
+		return Session{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(tenantID); err != nil {
+		return Session{}, ErrInvalidRequest
+	}
 	var session Session
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `

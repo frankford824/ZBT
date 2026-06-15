@@ -262,6 +262,10 @@ func (s *server) login(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, apiError("invalid_credentials", "账号或密码不正确"))
 		return
 	}
+	if errors.Is(err, saas.ErrInvalidRequest) {
+		respondBadRequest(c)
+		return
+	}
 	if err != nil {
 		respondInternal(c)
 		return
