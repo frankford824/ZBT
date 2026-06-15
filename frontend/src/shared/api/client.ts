@@ -48,17 +48,25 @@ export function getApiErrorMessage(error: unknown, fallback = '操作失败'): s
 
   const data = error.response.data as ApiErrorBody | string | undefined
   if (typeof data === 'string' && data.trim()) {
-    return data.trim()
+    return userFacingMessageOrFallback(data, fallback)
   }
   if (data && typeof data === 'object') {
     if (typeof data.error === 'string' && data.error.trim()) {
-      return data.error.trim()
+      return userFacingMessageOrFallback(data.error, fallback)
     }
     if (typeof data.message === 'string' && data.message.trim()) {
-      return data.message.trim()
+      return userFacingMessageOrFallback(data.message, fallback)
     }
   }
   return fallback
+}
+
+function userFacingMessageOrFallback(message: string, fallback: string): string {
+  const text = message.trim()
+  if (!text) {
+    return fallback
+  }
+  return /[\u4e00-\u9fff]/.test(text) ? text : fallback
 }
 
 export type RoleDTO = {
