@@ -138,12 +138,15 @@ func (s *Store) CreateCheck(ctx context.Context, tenantID string, req CreateChec
 	if name == "" {
 		name = "合规检查"
 	}
-	levels := normalizeLevels(req.Levels)
+	levels, err := normalizeLevels(req.Levels)
+	if err != nil {
+		return CheckSnapshot{}, err
+	}
 	config := map[string]any{"levels": levels}
 	configRaw, _ := json.Marshal(config)
 	taskID := "compliance-check-" + uuid.NewString()
 	var checkID string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		bidID, err := nullableUUID(req.BidDocumentID)
 		if err != nil {
 			return ErrInvalidRequest
@@ -774,22 +777,27 @@ func summarizeIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID string) (
 	return result, score, rows.Err()
 }
 
-func normalizeLevels(levels []string) []string {
+func normalizeLevels(levels []string) ([]string, error) {
 	if len(levels) == 0 {
-		return []string{"L1", "L2", "L3"}
+		return []string{"L1", "L2", "L3"}, nil
 	}
 	allowed := map[string]bool{"L1": true, "L2": true, "L3": true, "L4": true}
 	result := []string{}
 	for _, level := range levels {
 		level = strings.ToUpper(strings.TrimSpace(level))
+		if level == "" {
+			continue
+		}
 		if allowed[level] {
 			result = append(result, level)
+			continue
 		}
+		return nil, ErrInvalidRequest
 	}
 	if len(result) == 0 {
-		return []string{"L1", "L2", "L3"}
+		return []string{"L1", "L2", "L3"}, nil
 	}
-	return result
+	return result, nil
 }
 
 func normalizeRule(req CreateRuleRequest) (CreateRuleRequest, error) {
@@ -802,11 +810,15 @@ func normalizeRule(req CreateRuleRequest) (CreateRuleRequest, error) {
 	if req.Code == "" || req.Name == "" || req.Category == "" {
 		return req, ErrInvalidRequest
 	}
-	if !map[string]bool{"L1": true, "L2": true, "L3": true, "L4": true}[req.Level] {
+	if req.Level == "" {
 		req.Level = "L1"
+	} else if !map[string]bool{"L1": true, "L2": true, "L3": true, "L4": true}[req.Level] {
+		return req, ErrInvalidRequest
 	}
-	if !map[string]bool{"pass": true, "warn": true, "fail_candidate": true, "fail": true}[req.Severity] {
+	if req.Severity == "" {
 		req.Severity = "warn"
+	} else if !map[string]bool{"pass": true, "warn": true, "fail_candidate": true, "fail": true}[req.Severity] {
+		return req, ErrInvalidRequest
 	}
 	if req.Metadata == nil {
 		req.Metadata = map[string]any{}
