@@ -81,7 +81,7 @@ function toSessionState(payload: LoginSessionPayload): Partial<SessionState> {
       role: payload.session.role.name,
     },
     tenant: payload.session.tenant,
-    permissions: payload.session.permissions,
+    permissions: payload.session.permissions ?? {},
   }
 }
 

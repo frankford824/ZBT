@@ -8,7 +8,12 @@ export function getStoredSession() {
   const raw = localStorage.getItem(storageKey)
   if (!raw) return null
   try {
-    return JSON.parse(raw) as LoginSessionPayload
+    const parsed = JSON.parse(raw) as Partial<LoginSessionPayload>
+    if (!isUsableSessionPayload(parsed)) {
+      localStorage.removeItem(storageKey)
+      return null
+    }
+    return parsed
   } catch {
     localStorage.removeItem(storageKey)
     return null
@@ -34,4 +39,13 @@ export function safeReturnPath(raw: string | null | undefined) {
     return '/dashboard'
   }
   return raw
+}
+
+function isUsableSessionPayload(value: Partial<LoginSessionPayload>): value is LoginSessionPayload {
+  return (
+    typeof value.access_token === 'string' &&
+    value.access_token.trim() !== '' &&
+    typeof value.session?.tenant?.id === 'string' &&
+    value.session.tenant.id.trim() !== ''
+  )
 }
