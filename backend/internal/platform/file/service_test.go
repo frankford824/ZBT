@@ -23,3 +23,17 @@ func TestSanitizeFilenameKeepsOnlyBaseName(t *testing.T) {
 		t.Fatalf("unexpected filename: %q", got)
 	}
 }
+
+func TestSanitizeFilenameRemovesControlCharacters(t *testing.T) {
+	got := sanitizeFilename("..\\bad\r\nX-Injected: yes.pdf")
+	if got != "badX-Injected: yes.pdf" {
+		t.Fatalf("unexpected sanitized filename: %q", got)
+	}
+}
+
+func TestContentDispositionUsesHeaderSafeFallbackName(t *testing.T) {
+	header := contentDisposition("attachment", "投标\"\r\n文件\\demo.pdf")
+	if header != `attachment; filename="投标文件demo.pdf"; filename*=UTF-8''%E6%8A%95%E6%A0%87%22%E6%96%87%E4%BB%B6%5Cdemo.pdf` {
+		t.Fatalf("unexpected content disposition: %q", header)
+	}
+}

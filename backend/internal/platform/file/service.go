@@ -407,7 +407,7 @@ func sanitizeFilename(filename string) string {
 	if cleaned == "" {
 		return ""
 	}
-	return path.Base(cleaned)
+	return stripControlChars(path.Base(cleaned))
 }
 
 func sanitizeSegment(value string) string {
@@ -443,9 +443,26 @@ func validateUUID(value string) error {
 }
 
 func contentDisposition(dispositionType, filename string) string {
-	asciiName := strings.ReplaceAll(filename, `"`, "")
-	encoded := url.PathEscape(filename)
+	cleaned := stripControlChars(filename)
+	asciiName := headerFallbackFilename(cleaned)
+	encoded := url.PathEscape(cleaned)
 	return fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, dispositionType, asciiName, encoded)
+}
+
+func stripControlChars(value string) string {
+	return strings.Map(func(ch rune) rune {
+		if ch < 0x20 || ch == 0x7f {
+			return -1
+		}
+		return ch
+	}, value)
+}
+
+func headerFallbackFilename(filename string) string {
+	cleaned := stripControlChars(filename)
+	cleaned = strings.ReplaceAll(cleaned, `"`, "")
+	cleaned = strings.ReplaceAll(cleaned, `\`, "")
+	return cleaned
 }
 
 type assetScanner interface {
