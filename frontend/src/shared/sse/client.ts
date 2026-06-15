@@ -43,9 +43,16 @@ async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSig
     }
   } catch (error) {
     if (!signal.aborted) {
-      handler.onError?.(error instanceof Error ? error : new Error(String(error)))
+      handler.onError?.(toUserFacingSseError(error))
     }
   }
+}
+
+function toUserFacingSseError(error: unknown) {
+  if (error instanceof Error && /[\u4e00-\u9fff]/.test(error.message)) {
+    return error
+  }
+  return new Error('实时更新暂时不可用，请稍后重试')
 }
 
 function parseSse(raw: string) {
