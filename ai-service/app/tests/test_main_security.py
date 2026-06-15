@@ -357,7 +357,10 @@ def test_process_document_export_rejects_cross_tenant_attachment_object_key(monk
     )
 
     assert callbacks[0]["status"] == "failed", callbacks[0]
-    assert "outside tenant scope" in str(callbacks[0]["error_message"])
+    assert callbacks[0]["error_message"] == "导出文件生成失败，请检查内容后重试"
+    assert callbacks[0]["result"]["error"] == "导出文件生成失败，请检查内容后重试"
+    assert callbacks[0]["result"]["export_id"] == "export-demo"
+    assert "outside tenant scope" not in str(callbacks[0])
 
 
 def test_tender_parse_accepts_backend_task_id() -> None:

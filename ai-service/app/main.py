@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -40,6 +41,9 @@ from app.schemas.knowledge import (
     KnowledgeRerankResult,
 )
 from app.schemas.tender import TenderParseRequest
+
+logger = logging.getLogger(__name__)
+
 
 def routing_config_path() -> Path:
     configured = os.getenv("MODEL_ROUTING_FILE", "").strip()
@@ -174,14 +178,13 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                 },
             },
         }
-    except Exception as exc:  # pragma: no cover - defensive task boundary
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "failed",
-            "error_message": str(exc),
-            "result": {"error": str(exc), "bid_id": payload.bid_id, "file_id": payload.file_id},
-        }
+    except Exception:  # pragma: no cover - defensive task boundary
+        callback_payload = task_failure_callback(
+            payload.tenant_id,
+            task_id,
+            "招标文件解读失败，请检查文件后重试",
+            {"bid_id": payload.bid_id, "file_id": payload.file_id},
+        )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
 
@@ -305,14 +308,13 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
                 },
             },
         }
-    except Exception as exc:  # pragma: no cover - defensive task boundary
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "failed",
-            "error_message": str(exc),
-            "result": {"error": str(exc)},
-        }
+    except Exception:  # pragma: no cover - defensive task boundary
+        callback_payload = task_failure_callback(
+            payload.tenant_id,
+            task_id,
+            "知识库文档整理失败，请稍后重试",
+            {},
+        )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
 
@@ -458,14 +460,13 @@ def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> N
             "status": "done",
             "result": generation.model_dump(),
         }
-    except Exception as exc:  # pragma: no cover - defensive task boundary
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "failed",
-            "error_message": str(exc),
-            "result": {"error": str(exc), "chapter_id": payload.chapter_id},
-        }
+    except Exception:  # pragma: no cover - defensive task boundary
+        callback_payload = task_failure_callback(
+            payload.tenant_id,
+            task_id,
+            "章节生成失败，请稍后重试",
+            {"chapter_id": payload.chapter_id},
+        )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
 
@@ -495,14 +496,13 @@ def process_chapter_action(task_id: str, payload: ChapterActionRequest, route_na
             "status": "done",
             "result": generation.model_dump(),
         }
-    except Exception as exc:  # pragma: no cover - defensive task boundary
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "failed",
-            "error_message": str(exc),
-            "result": {"error": str(exc), "chapter_id": payload.chapter_id, "action": payload.action},
-        }
+    except Exception:  # pragma: no cover - defensive task boundary
+        callback_payload = task_failure_callback(
+            payload.tenant_id,
+            task_id,
+            "章节处理失败，请稍后重试",
+            {"chapter_id": payload.chapter_id, "action": payload.action},
+        )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
 
@@ -530,14 +530,13 @@ def process_cost_advice(task_id: str, payload: CostAdviceRequest, model_hint: st
             "status": "done",
             "result": result.model_dump(),
         }
-    except Exception as exc:  # pragma: no cover - defensive task boundary
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "failed",
-            "error_message": str(exc),
-            "result": {"error": str(exc), "cost_project_id": payload.cost_project_id},
-        }
+    except Exception:  # pragma: no cover - defensive task boundary
+        callback_payload = task_failure_callback(
+            payload.tenant_id,
+            task_id,
+            "成本建议生成失败，请稍后重试",
+            {"cost_project_id": payload.cost_project_id},
+        )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
 
@@ -645,16 +644,31 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
                     else "disabled",
                 },
             }
-        except Exception as exc:  # pragma: no cover - defensive task boundary
-            callback_payload = {
-                "tenant_id": payload.tenant_id,
-                "task_id": task_id,
-                "status": "failed",
-                "error_message": str(exc),
-                "result": {"error": str(exc), "export_id": payload.export_id},
-            }
+        except Exception:  # pragma: no cover - defensive task boundary
+            callback_payload = task_failure_callback(
+                payload.tenant_id,
+                task_id,
+                "导出文件生成失败，请检查内容后重试",
+                {"export_id": payload.export_id},
+            )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+def task_failure_callback(
+    tenant_id: str,
+    task_id: str,
+    public_message: str,
+    result_refs: dict[str, object],
+) -> dict[str, object]:
+    logger.exception("AI background task failed: task_id=%s", task_id)
+    return {
+        "tenant_id": tenant_id,
+        "task_id": task_id,
+        "status": "failed",
+        "error_message": public_message,
+        "result": {"error": public_message, **result_refs},
+    }
 
 
 def hydrate_export_attachment_content(client: Minio, payload: DocumentExportRequest) -> DocumentExportRequest:
