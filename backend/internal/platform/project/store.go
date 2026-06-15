@@ -145,7 +145,11 @@ func (s *Store) List(ctx context.Context, tenantID, status string) ([]Project, e
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		args := []any{tenantID}
 		conditions := []string{"p.tenant_id = $1"}
-		if normalized := normalizeStatus(status); normalized != "" {
+		normalized, err := normalizeStatus(status)
+		if err != nil {
+			return err
+		}
+		if normalized != "" {
 			args = append(args, normalized)
 			conditions = append(conditions, fmt.Sprintf("p.status = $%d", len(args)))
 		}
@@ -200,7 +204,10 @@ func (s *Store) Create(ctx context.Context, tenantID, userID string, req CreateP
 	if err != nil {
 		return Project{}, err
 	}
-	result := normalizeResultPointer(req.Result, status)
+	result, err := normalizeResultPointer(req.Result, status)
+	if err != nil {
+		return Project{}, err
+	}
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -239,12 +246,19 @@ func (s *Store) Update(ctx context.Context, tenantID, userID, id string, req Upd
 		}
 		status := current.Status
 		if req.Status != nil {
-			status = normalizeStatus(*req.Status)
+			normalized, err := normalizeStatus(*req.Status)
+			if err != nil {
+				return err
+			}
+			status = normalized
 			if status == "" {
 				return ErrInvalidRequest
 			}
 		}
-		result := normalizeResultPointer(req.Result, status)
+		result, err := normalizeResultPointer(req.Result, status)
+		if err != nil {
+			return err
+		}
 		if req.Result == nil {
 			result = current.Result
 			if status != "closed" {
@@ -307,12 +321,18 @@ func (s *Store) Transition(ctx context.Context, tenantID, userID, id string, req
 	if err := validateUUID(id); err != nil {
 		return Project{}, err
 	}
-	target := normalizeStatus(req.Status)
+	target, err := normalizeStatus(req.Status)
+	if err != nil {
+		return Project{}, err
+	}
 	if target == "" {
 		return Project{}, ErrInvalidRequest
 	}
-	result := normalizeResultValue(req.Result, target)
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	result, err := normalizeResultValue(req.Result, target)
+	if err != nil {
+		return Project{}, err
+	}
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var current string
 		if err := tx.QueryRow(ctx, `select status from projects where tenant_id = $1 and id = $2`, tenantID, id).Scan(&current); err != nil {
 			return err
@@ -374,7 +394,10 @@ func (s *Store) CreateMilestone(ctx context.Context, tenantID, userID, projectID
 	if title == "" {
 		return Milestone{}, ErrInvalidRequest
 	}
-	status := normalizeMilestoneStatus(req.Status)
+	status, err := normalizeMilestoneStatus(req.Status)
+	if err != nil {
+		return Milestone{}, err
+	}
 	dueDate, err := parseOptionalDate(req.DueDate)
 	if err != nil {
 		return Milestone{}, ErrInvalidRequest
@@ -413,7 +436,10 @@ func (s *Store) UpdateMilestone(ctx context.Context, tenantID, userID, projectID
 	if title == "" {
 		return Milestone{}, ErrInvalidRequest
 	}
-	status := normalizeMilestoneStatus(req.Status)
+	status, err := normalizeMilestoneStatus(req.Status)
+	if err != nil {
+		return Milestone{}, err
+	}
 	dueDate, err := parseOptionalDate(req.DueDate)
 	if err != nil {
 		return Milestone{}, ErrInvalidRequest
@@ -1157,12 +1183,15 @@ func nullableUserID(value string) any {
 	return value
 }
 
-func normalizeStatus(value string) string {
+func normalizeStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "opportunity", "bidding", "compliance_review", "submitted", "closed":
-		return strings.ToLower(strings.TrimSpace(value))
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return ""
+		return "", ErrInvalidRequest
 	}
 }
 
@@ -1170,40 +1199,42 @@ func normalizeCreateStatus(value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "opportunity", nil
 	}
-	status := normalizeStatus(value)
-	if status == "" {
-		return "", ErrInvalidRequest
+	status, err := normalizeStatus(value)
+	if err != nil {
+		return "", err
 	}
 	return status, nil
 }
 
-func normalizeResultPointer(value *string, status string) *string {
+func normalizeResultPointer(value *string, status string) (*string, error) {
 	if status != "closed" {
-		return nil
+		return nil, nil
 	}
 	if value == nil {
 		result := "pending"
-		return &result
+		return &result, nil
 	}
-	result := normalizeResultValue(*value, status)
-	if result == nil {
-		fallback := "pending"
-		return &fallback
+	result, err := normalizeResultValue(*value, status)
+	if err != nil {
+		return nil, err
 	}
-	return result
+	return result, nil
 }
 
-func normalizeResultValue(value, status string) *string {
+func normalizeResultValue(value, status string) (*string, error) {
 	if status != "closed" {
-		return nil
+		return nil, nil
+	}
+	if strings.TrimSpace(value) == "" {
+		result := "pending"
+		return &result, nil
 	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "won", "lost", "pending":
 		result := strings.ToLower(strings.TrimSpace(value))
-		return &result
+		return &result, nil
 	default:
-		result := "pending"
-		return &result
+		return nil, ErrInvalidRequest
 	}
 }
 
@@ -1226,11 +1257,16 @@ func allowedTransition(current, target string) bool {
 	return false
 }
 
-func normalizeMilestoneStatus(value string) string {
-	if strings.EqualFold(strings.TrimSpace(value), "done") {
-		return "done"
+func normalizeMilestoneStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "pending", nil
 	}
-	return "pending"
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pending", "done":
+		return strings.ToLower(strings.TrimSpace(value)), nil
+	default:
+		return "", ErrInvalidRequest
+	}
 }
 
 func parseOptionalDate(value string) (any, error) {
