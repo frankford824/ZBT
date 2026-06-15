@@ -97,24 +97,27 @@ def _parse_text(content: bytes) -> str:
 
 def _parse_pdf(content: bytes) -> tuple[str, int, dict[str, object]]:
     doc = fitz.open(stream=content, filetype="pdf")
-    pages: list[str] = []
-    layout_blocks: list[dict[str, object]] = []
-    tables: list[dict[str, object]] = []
-    for page_index, page in enumerate(doc, start=1):
-        page_text = page.get_text("text").strip()
-        if page_text:
-            pages.append(f"[Page {page_index}]\n{page_text}")
-        layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
-        tables.extend(_extract_pdf_tables(page, page_index, page_text))
-    text = "\n\n".join(pages)
-    metadata = {
-        "layout_blocks": layout_blocks[:200],
-        "layout_block_count": len(layout_blocks),
-        "tables": tables[:50],
-        "table_count": len(tables),
-        "ocr_required": not bool(text.strip()),
-    }
-    return text, doc.page_count, metadata
+    try:
+        pages: list[str] = []
+        layout_blocks: list[dict[str, object]] = []
+        tables: list[dict[str, object]] = []
+        for page_index, page in enumerate(doc, start=1):
+            page_text = page.get_text("text").strip()
+            if page_text:
+                pages.append(f"[Page {page_index}]\n{page_text}")
+            layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
+            tables.extend(_extract_pdf_tables(page, page_index, page_text))
+        text = "\n\n".join(pages)
+        metadata = {
+            "layout_blocks": layout_blocks[:200],
+            "layout_block_count": len(layout_blocks),
+            "tables": tables[:50],
+            "table_count": len(tables),
+            "ocr_required": not bool(text.strip()),
+        }
+        return text, doc.page_count, metadata
+    finally:
+        doc.close()
 
 
 def _extract_pdf_layout_blocks(page: fitz.Page, page_index: int) -> list[dict[str, object]]:

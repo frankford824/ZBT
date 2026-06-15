@@ -124,7 +124,8 @@ class OpenAICompatibleProvider:
         indexes = result.get("indexes", [])
         if not isinstance(indexes, list):
             return list(range(len(documents)))
-        return [int(index) for index in indexes if isinstance(index, int | float) and 0 <= int(index) < len(documents)]
+        parsed_indexes = [_parse_rank_index(index, len(documents)) for index in indexes]
+        return [index for index in parsed_indexes if index is not None]
 
     def generate_chapter(self, payload: ChapterGenerateRequest) -> ChapterGenerateResponse:
         prompt = _chapter_prompt(payload)
@@ -229,6 +230,22 @@ def _json_from_text(text: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise RuntimeError("model returned non-object JSON")
     return parsed
+
+
+def _parse_rank_index(value: object, document_count: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        index = value
+    elif isinstance(value, float) and value.is_integer():
+        index = int(value)
+    elif isinstance(value, str) and value.strip().isdigit():
+        index = int(value.strip())
+    else:
+        return None
+    if 0 <= index < document_count:
+        return index
+    return None
 
 
 def _chapter_prompt(payload: ChapterGenerateRequest) -> str:

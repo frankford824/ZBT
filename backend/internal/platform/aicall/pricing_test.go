@@ -82,3 +82,42 @@ func TestRecordFromTaskUsesModelMetadataFallbackAndPricing(t *testing.T) {
 		t.Fatalf("expected estimated cost 0.002, got %.6f", input.EstimatedCost)
 	}
 }
+
+func TestRecordFromTaskParsesStringTokenAndCostFields(t *testing.T) {
+	input := recordFromTask(
+		"tenant-1",
+		"external-task-1",
+		"local-task-1",
+		sql.NullString{},
+		"knowledge_embedding",
+		"done",
+		"knowledge_document",
+		"resource-1",
+		map[string]any{"provider": "openai_compatible_primary", "model": "embedding-model"},
+		map[string]any{
+			"model_metadata": map[string]any{
+				"provider":       "openai_compatible_primary",
+				"model":          "embedding-model",
+				"estimated_cost": "0.0125",
+			},
+			"token_usage": map[string]any{
+				"input_tokens":  "1200",
+				"output_tokens": "0",
+			},
+		},
+		"",
+		time.Unix(100, 0),
+		sql.NullTime{Time: time.Unix(103, 0), Valid: true},
+	)
+	input = normalizeRecord(input)
+
+	if input.InputTokens != 1200 {
+		t.Fatalf("expected string input tokens to parse, got %d", input.InputTokens)
+	}
+	if input.OutputTokens != 0 {
+		t.Fatalf("expected string output tokens to parse, got %d", input.OutputTokens)
+	}
+	if input.EstimatedCost != 0.0125 {
+		t.Fatalf("expected explicit string estimated cost, got %.6f", input.EstimatedCost)
+	}
+}

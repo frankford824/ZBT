@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -467,6 +468,12 @@ func intFromMap(values map[string]any, key string) int {
 	case json.Number:
 		value, _ := typed.Int64()
 		return int(value)
+	case string:
+		value, err := strconv.Atoi(strings.TrimSpace(typed))
+		if err == nil {
+			return value
+		}
+		return 0
 	default:
 		return 0
 	}
@@ -488,6 +495,12 @@ func floatFromMap(values map[string]any, key string) float64 {
 	case json.Number:
 		value, _ := typed.Float64()
 		return value
+	case string:
+		value, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err == nil {
+			return value
+		}
+		return 0
 	default:
 		return 0
 	}
