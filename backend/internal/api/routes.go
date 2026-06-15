@@ -1056,7 +1056,7 @@ func (s *server) streamComplianceCheck(c *gin.Context) {
 	}
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		respondInternal(c)
 		return
 	}
 	c.Header("Content-Type", "text/event-stream")
@@ -1248,7 +1248,7 @@ func (s *server) streamNotifications(c *gin.Context) {
 	}
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		respondInternal(c)
 		return
 	}
 	c.Header("Content-Type", "text/event-stream")
@@ -1677,7 +1677,7 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 	}
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming unsupported"})
+		respondInternal(c)
 		return
 	}
 
