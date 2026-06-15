@@ -196,13 +196,13 @@ func (s *Store) Create(ctx context.Context, tenantID, userID string, req CreateP
 	if name == "" {
 		return Project{}, ErrInvalidRequest
 	}
-	status := normalizeStatus(req.Status)
-	if status == "" {
-		status = "opportunity"
+	status, err := normalizeCreateStatus(req.Status)
+	if err != nil {
+		return Project{}, err
 	}
 	result := normalizeResultPointer(req.Result, status)
 	var id string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			insert into projects (tenant_id, name, status, result)
 			values ($1, $2, $3, $4)
@@ -1164,6 +1164,17 @@ func normalizeStatus(value string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeCreateStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "opportunity", nil
+	}
+	status := normalizeStatus(value)
+	if status == "" {
+		return "", ErrInvalidRequest
+	}
+	return status, nil
 }
 
 func normalizeResultPointer(value *string, status string) *string {
