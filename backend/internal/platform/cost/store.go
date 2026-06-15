@@ -181,13 +181,16 @@ func (s *Store) CreateProject(ctx context.Context, tenantID string, req CreatePr
 	if err := validateUUID(req.ProjectID); err != nil {
 		return Project{}, err
 	}
-	status := normalizeProjectStatus(req.Status)
+	status, err := normalizeProjectStatus(req.Status)
+	if err != nil {
+		return Project{}, err
+	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		name = "成本项目"
 	}
 	var id string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var projectName string
 		if err := tx.QueryRow(ctx, `select name from projects where tenant_id = $1 and id = $2`, tenantID, req.ProjectID).Scan(&projectName); err != nil {
 			return err
@@ -251,7 +254,11 @@ func (s *Store) UpdateProject(ctx context.Context, tenantID, id string, req Upda
 		}
 		status := current.Status
 		if req.Status != nil {
-			status = normalizeProjectStatus(*req.Status)
+			normalized, err := normalizeProjectStatus(*req.Status)
+			if err != nil {
+				return err
+			}
+			status = normalized
 		}
 		budgetAmount := current.BudgetAmount
 		if req.BudgetAmount != nil {
@@ -837,12 +844,17 @@ func ensureCostProject(ctx context.Context, tx pgx.Tx, tenantID, projectID strin
 	return nil
 }
 
-func normalizeProjectStatus(value string) string {
+func normalizeProjectStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "draft", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "active", "closed":
-		return strings.ToLower(strings.TrimSpace(value))
+		return strings.ToLower(strings.TrimSpace(value)), nil
+	case "draft":
+		return "draft", nil
 	default:
-		return "draft"
+		return "", ErrInvalidRequest
 	}
 }
 
