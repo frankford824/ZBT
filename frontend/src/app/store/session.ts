@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { clearStoredSession, getStoredSession, sessionStorageKey } from '../../shared/auth/session'
 
 export type ModulePermission = 'none' | 'read' | 'full'
 
@@ -56,18 +57,9 @@ const fullPermissions = {
   team: 'full',
 } satisfies Record<string, ModulePermission>
 
-const storageKey = 'zbt.session'
-
 function readStoredSession(): Partial<SessionState> {
-  const raw = localStorage.getItem(storageKey)
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw) as LoginSessionPayload
-    return toSessionState(parsed)
-  } catch {
-    localStorage.removeItem(storageKey)
-    return {}
-  }
+  const parsed = getStoredSession()
+  return parsed ? toSessionState(parsed) : {}
 }
 
 function toSessionState(payload: LoginSessionPayload): Partial<SessionState> {
@@ -110,24 +102,24 @@ export const useSessionStore = create<SessionState>((set) => ({
       return { collapsed: next }
     }),
   setSession: (payload) => {
-    localStorage.setItem(storageKey, JSON.stringify(payload))
+    localStorage.setItem(sessionStorageKey, JSON.stringify(payload))
     set(toSessionState(payload))
   },
   setTenant: (tenant) => {
-    const raw = localStorage.getItem(storageKey)
+    const raw = localStorage.getItem(sessionStorageKey)
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as LoginSessionPayload
         parsed.session.tenant = tenant
-        localStorage.setItem(storageKey, JSON.stringify(parsed))
+        localStorage.setItem(sessionStorageKey, JSON.stringify(parsed))
       } catch {
-        localStorage.removeItem(storageKey)
+        clearStoredSession()
       }
     }
     set({ tenant })
   },
   logout: () => {
-    localStorage.removeItem(storageKey)
+    clearStoredSession()
     set({
       isAuthenticated: false,
       token: null,

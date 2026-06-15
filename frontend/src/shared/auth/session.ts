@@ -1,27 +1,27 @@
 import type { LoginSessionPayload } from '../../app/store/session'
 
-const storageKey = 'zbt.session'
+export const sessionStorageKey = 'zbt.session'
 
 let loginRedirectInFlight = false
 
 export function getStoredSession() {
-  const raw = localStorage.getItem(storageKey)
+  const raw = localStorage.getItem(sessionStorageKey)
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as Partial<LoginSessionPayload>
     if (!isUsableSessionPayload(parsed)) {
-      localStorage.removeItem(storageKey)
+      localStorage.removeItem(sessionStorageKey)
       return null
     }
     return parsed
   } catch {
-    localStorage.removeItem(storageKey)
+    localStorage.removeItem(sessionStorageKey)
     return null
   }
 }
 
 export function clearStoredSession() {
-  localStorage.removeItem(storageKey)
+  localStorage.removeItem(sessionStorageKey)
 }
 
 export function expireSessionAndRedirect() {
