@@ -6,6 +6,7 @@ import { fetchPlatformSummary } from '../../shared/api/client'
 import { IconfontGlyph, type IconfontGlyphName } from '../../shared/components/IconfontGlyph'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock } from '../../shared/components/StateBlocks'
+import { formatDateOnly, formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
 const statusLabels: Record<string, string> = {
@@ -17,8 +18,7 @@ const statusLabels: Record<string, string> = {
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return '-'
-  return value.length <= 10 ? value : new Date(value).toLocaleString()
+  return value && value.length <= 10 ? formatDateOnly(value) : formatDateTime(value)
 }
 
 export function DashboardPage() {

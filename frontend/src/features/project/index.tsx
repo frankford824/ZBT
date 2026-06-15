@@ -34,6 +34,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { formatDateOnly } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
 const statuses: ProjectDTO['status'][] = ['opportunity', 'bidding', 'compliance_review', 'submitted', 'closed']
@@ -43,6 +44,9 @@ const statusLabels: Record<ProjectDTO['status'], string> = {
   compliance_review: '合规审核',
   submitted: '投标中',
   closed: '已结果',
+}
+function projectStatusLabel(status: ProjectDTO['status'] | string) {
+  return statusLabels[status as ProjectDTO['status']] ?? status
 }
 const resultLabels: Record<string, string> = {
   won: '中标',
@@ -70,7 +74,7 @@ const activityActionLabels: Record<string, string> = {
 }
 
 function dateText(value?: string | null) {
-  return value ? value.slice(0, 10) : '-'
+  return formatDateOnly(value)
 }
 
 export function ProjectsPage() {
@@ -112,7 +116,7 @@ export function ProjectsPage() {
             width: 240,
             render: (value, row) => <Link to={`/projects/${row.id}`}>{value}</Link>,
           },
-          { title: '状态', dataIndex: 'status', width: 120, render: (value: ProjectDTO['status']) => statusLabels[value] },
+          { title: '状态', dataIndex: 'status', width: 120, render: (value: ProjectDTO['status']) => projectStatusLabel(value) },
           { title: '负责人', dataIndex: 'owner_name', width: 120, render: (value) => value || '-' },
           { title: '标书数', dataIndex: 'bid_count', width: 92 },
           { title: '里程碑', dataIndex: 'milestone_count', width: 92 },
@@ -130,7 +134,7 @@ export function ProjectsPage() {
       <Row gutter={[12, 12]} wrap className="kanban-row">
         {statuses.map((status) => (
           <Col flex="1 1 220px" style={{ minWidth: 0 }} key={status}>
-            <Card title={statusLabels[status]} size="small">
+            <Card title={projectStatusLabel(status)} size="small">
               <Space direction="vertical" className="full-width">
                 {projects.data
                   .filter((project) => project.status === status)
@@ -180,7 +184,7 @@ export function ProjectsPage() {
             <Input placeholder="输入项目名称" />
           </Form.Item>
           <Form.Item name="status" label="初始状态">
-            <Select options={statuses.map((value) => ({ value, label: statusLabels[value] }))} />
+            <Select options={statuses.map((value) => ({ value, label: projectStatusLabel(value) }))} />
           </Form.Item>
         </Form>
       </Modal>
@@ -263,13 +267,13 @@ export function ProjectDetailPage() {
     <PageFrame
       module="项目管理"
       title={project.data.name}
-      subtitle={statusLabels[project.data.status]}
+      subtitle={projectStatusLabel(project.data.status)}
       tags={['/projects/:projectId']}
       bare
       actions={[
         canWrite && next && (
           <Button key="next" loading={transitionMutation.isPending} onClick={() => transitionMutation.mutate({ status: next })}>
-            推进到{statusLabels[next]}
+            推进到{projectStatusLabel(next)}
           </Button>
         ),
         canWrite ? <Button
@@ -292,7 +296,7 @@ export function ProjectDetailPage() {
     >
       <Descriptions bordered column={2}>
         <Descriptions.Item label="项目名称">{project.data.name}</Descriptions.Item>
-        <Descriptions.Item label="状态">{statusLabels[project.data.status]}</Descriptions.Item>
+        <Descriptions.Item label="状态">{projectStatusLabel(project.data.status)}</Descriptions.Item>
         <Descriptions.Item label="负责人">{project.data.owner_name || '-'}</Descriptions.Item>
         <Descriptions.Item label="中标结果">{project.data.result ? resultLabels[project.data.result] : '-'}</Descriptions.Item>
         <Descriptions.Item label="关联标书">{project.data.bid_count}</Descriptions.Item>

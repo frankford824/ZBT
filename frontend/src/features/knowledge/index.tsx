@@ -45,6 +45,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { formatDateOnly, formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
 export function KnowledgeHomePage() {
@@ -602,7 +603,7 @@ function DocumentReferenceDrawer({
           },
           {
             title: '引用时间',
-            render: (_, row) => new Date(row.created_at).toLocaleString(),
+            render: (_, row) => formatDateTime(row.created_at),
           },
         ]}
       />
@@ -693,7 +694,7 @@ export function KnowledgeTemplatesPage() {
           },
           {
             title: '创建时间',
-            render: (_, row) => new Date(row.created_at).toLocaleDateString(),
+            render: (_, row) => formatDateOnly(row.created_at),
           },
         ]}
       />
@@ -985,7 +986,7 @@ function statusLabel(status: KnowledgeDocumentDTO['parse_status']) {
     processed: '已整理',
     failed: '失败',
   }
-  return labels[status]
+  return labels[status] ?? '状态未知'
 }
 
 function statusColor(status: KnowledgeDocumentDTO['parse_status']) {

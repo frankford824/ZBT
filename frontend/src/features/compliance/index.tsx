@@ -52,6 +52,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
 const levelOptions = ['L1', 'L2', 'L3', 'L4'].map((value) => ({ label: value, value }))
@@ -105,8 +106,7 @@ function statusTag(status: string) {
 }
 
 function formatTime(value?: string | null) {
-  if (!value) return '-'
-  return new Date(value).toLocaleString()
+  return formatDateTime(value)
 }
 
 function issueCounts(checks: ComplianceCheckDTO[]) {

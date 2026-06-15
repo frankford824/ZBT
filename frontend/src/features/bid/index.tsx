@@ -93,6 +93,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 import { openSse } from '../../shared/sse/client'
 
@@ -333,9 +334,7 @@ export function BidListPage() {
                 title: '更新时间',
                 dataIndex: 'updated_at',
                 width: 146,
-                render: (value: string) => (
-                  <span className="data-mono">{value ? new Date(value).toLocaleString('zh-CN') : '-'}</span>
-                ),
+                render: (value: string) => <span className="data-mono">{formatDateTime(value)}</span>,
               },
               {
                 title: '操作',
@@ -1175,7 +1174,7 @@ function exportStatusTag(value: BidExportDTO['status']) {
     failed: '生成失败',
     cancelled: '已取消',
   }
-  return <Tag color={color}>{labels[value]}</Tag>
+  return <Tag color={color}>{labels[value] ?? '状态未知'}</Tag>
 }
 
 function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
@@ -1188,7 +1187,7 @@ function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
     failed: '生成失败',
     cancelled: '已取消',
   }
-  return <Tag color={color}>{labels[value]}</Tag>
+  return <Tag color={color}>{labels[value] ?? '状态未知'}</Tag>
 }
 
 function generationScopeLabel(value: BidGenerationJobDTO['scope']) {
@@ -1203,7 +1202,7 @@ function parseStatusLabel(value: 'queued' | 'processing' | 'ready' | 'confirmed'
     confirmed: '已确认',
     failed: '解读失败',
   }
-  return labels[value]
+  return labels[value] ?? '状态未知'
 }
 
 function parseStatusColor(value: 'queued' | 'processing' | 'ready' | 'confirmed' | 'failed') {
@@ -1554,7 +1553,7 @@ export function BidEditorPage() {
                   title: '时间',
                   dataIndex: 'created_at',
                   width: 180,
-                  render: (value) => <span className="data-mono">{new Date(value).toLocaleString()}</span>,
+                  render: (value) => <span className="data-mono">{formatDateTime(value)}</span>,
                 },
               ]}
             />
