@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -397,11 +398,17 @@ func (s *Store) CreateSource(ctx context.Context, tenantID string, req CreateSou
 		return tx.QueryRow(ctx, `
 			insert into tender_sources (tenant_id, name, source_type, url, status, config)
 			values ($1, $2, $3, $4, $5, $6)
+			on conflict (tenant_id, name) do update
+			set source_type = excluded.source_type,
+				url = excluded.url,
+				status = excluded.status,
+				config = excluded.config,
+				updated_at = now()
 			returning id::text
 		`, tenantID, name, defaultString(req.SourceType, "其他"), url, status, config).Scan(&id)
 	})
 	if err != nil {
-		return Source{}, err
+		return Source{}, normalizeSourceWriteError(err)
 	}
 	return s.GetSource(ctx, tenantID, id)
 }
@@ -457,7 +464,7 @@ func (s *Store) UpdateSource(ctx context.Context, tenantID, id string, req Updat
 		return Source{}, ErrNotFound
 	}
 	if err != nil {
-		return Source{}, err
+		return Source{}, normalizeSourceWriteError(err)
 	}
 	return s.GetSource(ctx, tenantID, id)
 }
@@ -536,6 +543,17 @@ func (s *Store) VerifySource(ctx context.Context, tenantID, id string) (Source, 
 		return Source{}, err
 	}
 	return s.GetSource(ctx, tenantID, id)
+}
+
+func normalizeSourceWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503", "23505":
+			return ErrInvalidRequest
+		}
+	}
+	return err
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {

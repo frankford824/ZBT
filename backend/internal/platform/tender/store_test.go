@@ -1,8 +1,11 @@
 package tender
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestValidHTTPURLAcceptsPublicHTTPHosts(t *testing.T) {
@@ -49,6 +52,15 @@ func TestPublicNetIPRejectsNonPublicRanges(t *testing.T) {
 	} {
 		if publicNetIP(netip.MustParseAddr(value)) {
 			t.Fatalf("expected %s to be rejected", value)
+		}
+	}
+}
+
+func TestNormalizeSourceWriteErrorMapsConstraintFailures(t *testing.T) {
+	for _, code := range []string{"23503", "23505"} {
+		err := normalizeSourceWriteError(&pgconn.PgError{Code: code})
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected %s to map to ErrInvalidRequest, got %v", code, err)
 		}
 	}
 }

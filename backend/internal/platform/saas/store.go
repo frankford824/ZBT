@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -149,7 +149,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, err
 		}
 		return nil
 	})
-	return session, err
+	return session, normalizeSaaSWriteError(err)
 }
 
 func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Session, error) {
@@ -307,8 +307,11 @@ func (s *Store) ListMembers(ctx context.Context, tenantID string) ([]Member, err
 }
 
 func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCode, initialPassword string) (Member, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	name = strings.TrimSpace(name)
+	roleCode = strings.TrimSpace(roleCode)
 	initialPassword = strings.TrimSpace(initialPassword)
-	if len(initialPassword) < 8 {
+	if email == "" || name == "" || len(initialPassword) < 8 {
 		return Member{}, ErrInvalidRequest
 	}
 	if roleCode == "" {
@@ -348,7 +351,10 @@ func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCod
 		member.Roles = []Role{role}
 		return nil
 	})
-	return member, err
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Member{}, ErrInvalidRequest
+	}
+	return member, normalizeSaaSWriteError(err)
 }
 
 func (s *Store) UpdateMember(ctx context.Context, tenantID, memberID string, req UpdateMemberRequest) (Member, error) {
@@ -487,6 +493,11 @@ func (s *Store) ListRoles(ctx context.Context, tenantID string) ([]Role, error) 
 }
 
 func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, permissions map[string]rbac.Level) (Role, error) {
+	code = strings.TrimSpace(code)
+	name = strings.TrimSpace(name)
+	if code == "" || name == "" {
+		return Role{}, ErrInvalidRequest
+	}
 	var role Role
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -502,7 +513,7 @@ func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, per
 		role.Permissions = permissions
 		return nil
 	})
-	return role, err
+	return role, normalizeSaaSWriteError(err)
 }
 
 func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, permissions map[string]rbac.Level) (Role, error) {
@@ -652,7 +663,7 @@ func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID s
 	}
 	for module, level := range permissions {
 		if !validLevel(level) {
-			return fmt.Errorf("invalid permission level %q for module %s", level, module)
+			return ErrInvalidRequest
 		}
 		if _, err := tx.Exec(ctx, `
 			insert into module_permissions (tenant_id, role_id, module, level)
@@ -666,6 +677,17 @@ func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID s
 
 func validLevel(level rbac.Level) bool {
 	return level == rbac.LevelNone || level == rbac.LevelRead || level == rbac.LevelFull
+}
+
+func normalizeSaaSWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503", "23505":
+			return ErrInvalidRequest
+		}
+	}
+	return err
 }
 
 func seedDefaultRoles(ctx context.Context, tx pgx.Tx, tenantID string) (string, error) {
