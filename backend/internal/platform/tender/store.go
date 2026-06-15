@@ -133,7 +133,11 @@ func (s *Store) List(ctx context.Context, tenantID, userID string, filter ListFi
 			args = append(args, region)
 			conditions = append(conditions, fmt.Sprintf("t.region = $%d", len(args)))
 		}
-		if status := normalizeTenderStatus(filter.Status); status != "" {
+		status, err := normalizeTenderStatus(filter.Status)
+		if err != nil {
+			return err
+		}
+		if status != "" {
 			args = append(args, status)
 			conditions = append(conditions, fmt.Sprintf("t.status = $%d", len(args)))
 		}
@@ -211,7 +215,10 @@ func (s *Store) Create(ctx context.Context, tenantID, userID string, req CreateT
 	if title == "" {
 		return Tender{}, ErrInvalidRequest
 	}
-	status := normalizeTenderStatus(req.Status)
+	status, err := normalizeTenderStatus(req.Status)
+	if err != nil {
+		return Tender{}, err
+	}
 	if status == "" {
 		status = "open"
 	}
@@ -262,7 +269,10 @@ func (s *Store) Update(ctx context.Context, tenantID, userID, id string, req Upd
 	if title == "" {
 		return Tender{}, ErrInvalidRequest
 	}
-	status := normalizeTenderStatus(req.Status)
+	status, err := normalizeTenderStatus(req.Status)
+	if err != nil {
+		return Tender{}, err
+	}
 	if status == "" {
 		status = "open"
 	}
@@ -391,10 +401,13 @@ func (s *Store) CreateSource(ctx context.Context, tenantID string, req CreateSou
 	if name == "" || !validHTTPURL(url) {
 		return Source{}, ErrInvalidRequest
 	}
-	status := normalizeSourceStatus(req.Status)
+	status, err := normalizeSourceStatus(req.Status)
+	if err != nil {
+		return Source{}, err
+	}
 	config, _ := json.Marshal(req.Config)
 	var id string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			insert into tender_sources (tenant_id, name, source_type, url, status, config)
 			values ($1, $2, $3, $4, $5, $6)
@@ -445,13 +458,17 @@ func (s *Store) UpdateSource(ctx context.Context, tenantID, id string, req Updat
 	if name == "" || !validHTTPURL(url) {
 		return Source{}, ErrInvalidRequest
 	}
+	status, err := normalizeSourceStatus(req.Status)
+	if err != nil {
+		return Source{}, err
+	}
 	config, _ := json.Marshal(req.Config)
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			update tender_sources
 			set name = $3, source_type = $4, url = $5, status = $6, config = $7, updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, id, name, defaultString(req.SourceType, "其他"), url, normalizeSourceStatus(req.Status), config)
+		`, tenantID, id, name, defaultString(req.SourceType, "其他"), url, status, config)
 		if err != nil {
 			return err
 		}
@@ -628,21 +645,27 @@ func scanSource(row scanner) (Source, error) {
 	return source, err
 }
 
-func normalizeTenderStatus(value string) string {
+func normalizeTenderStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "open", "closed", "awarded", "cancelled":
-		return strings.ToLower(strings.TrimSpace(value))
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return ""
+		return "", ErrInvalidRequest
 	}
 }
 
-func normalizeSourceStatus(value string) string {
+func normalizeSourceStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "active", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "inactive", "failed":
-		return strings.ToLower(strings.TrimSpace(value))
+	case "active", "inactive", "failed":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "active"
+		return "", ErrInvalidRequest
 	}
 }
 

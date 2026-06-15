@@ -64,3 +64,47 @@ func TestNormalizeSourceWriteErrorMapsConstraintFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeTenderStatusRejectsUnsupportedValues(t *testing.T) {
+	status, err := normalizeTenderStatus(" ")
+	if err != nil {
+		t.Fatalf("expected blank tender status to be accepted: %v", err)
+	}
+	if status != "" {
+		t.Fatalf("expected blank tender status to stay empty for caller defaulting, got %q", status)
+	}
+
+	status, err = normalizeTenderStatus(" AWARDED ")
+	if err != nil {
+		t.Fatalf("expected known tender status to normalize: %v", err)
+	}
+	if status != "awarded" {
+		t.Fatalf("expected known tender status to normalize to awarded, got %q", status)
+	}
+
+	if _, err := normalizeTenderStatus("unknown"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected unsupported tender status to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeSourceStatusDefaultsOnlyBlankStatus(t *testing.T) {
+	status, err := normalizeSourceStatus(" ")
+	if err != nil {
+		t.Fatalf("expected blank source status to default: %v", err)
+	}
+	if status != "active" {
+		t.Fatalf("expected blank source status to default to active, got %q", status)
+	}
+
+	status, err = normalizeSourceStatus(" FAILED ")
+	if err != nil {
+		t.Fatalf("expected known source status to normalize: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("expected known source status to normalize to failed, got %q", status)
+	}
+
+	if _, err := normalizeSourceStatus("unknown"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected unsupported source status to be rejected, got %v", err)
+	}
+}
