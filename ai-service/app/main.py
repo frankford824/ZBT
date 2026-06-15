@@ -63,6 +63,7 @@ DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
 DEFAULT_MINIO_ACCESS_KEY = "zbt_minio"
 DEFAULT_MINIO_SECRET_KEY = "zbt_minio_secret"
 DEFAULT_CALLBACK_ALLOWED_HOSTS = {"backend", "localhost", "127.0.0.1", "host.docker.internal"}
+DEFAULT_EMBEDDING_BATCH_SIZE = 32
 
 
 @app.middleware("http")
@@ -269,9 +270,11 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
         embedding_inputs = [
             f"{chunk.title}\n{chunk.section_path}\n{chunk.content}" for chunk in parsed.chunks
         ]
-        embeddings = embedding_provider.embed_batch(embedding_inputs) if embedding_inputs else []
+        embeddings = embed_knowledge_inputs(embedding_provider, embedding_inputs)
         input_tokens = sum(estimate_tokens(text) for text in embedding_inputs)
-        for chunk, embedding in zip(parsed.chunks, embeddings, strict=False):
+        if len(embeddings) != len(parsed.chunks):
+            raise RuntimeError(f"embedding count mismatch: got {len(embeddings)} want {len(parsed.chunks)}")
+        for chunk, embedding in zip(parsed.chunks, embeddings, strict=True):
             chunk.embedding = embedding
             chunk.metadata["embedding_model"] = embedding_route.model
             chunk.metadata["embedding_provider"] = embedding_provider.name
@@ -311,6 +314,42 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
         }
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+def embed_knowledge_inputs(provider: object, texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
+    batch_size = embedding_batch_size()
+    expected_dimensions = provider.get_dimensions() if hasattr(provider, "get_dimensions") else 0
+    embeddings: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        batch = texts[start : start + batch_size]
+        batch_embeddings = provider.embed_batch(batch)
+        if len(batch_embeddings) != len(batch):
+            raise RuntimeError(
+                f"embedding batch count mismatch: got {len(batch_embeddings)} want {len(batch)}"
+            )
+        if expected_dimensions:
+            for index, embedding in enumerate(batch_embeddings):
+                if len(embedding) != expected_dimensions:
+                    absolute_index = start + index
+                    raise RuntimeError(
+                        "embedding dimension mismatch: "
+                        f"chunk {absolute_index} got {len(embedding)} want {expected_dimensions}"
+                    )
+        embeddings.extend(batch_embeddings)
+    return embeddings
+
+
+def embedding_batch_size() -> int:
+    configured = os.getenv("KNOWLEDGE_EMBEDDING_BATCH_SIZE", "").strip()
+    if not configured:
+        return DEFAULT_EMBEDDING_BATCH_SIZE
+    try:
+        value = int(configured)
+    except ValueError:
+        return DEFAULT_EMBEDDING_BATCH_SIZE
+    return min(max(value, 1), DEFAULT_EMBEDDING_BATCH_SIZE)
 
 
 def post_callback(callback_url: str, payload: dict[str, object]) -> None:

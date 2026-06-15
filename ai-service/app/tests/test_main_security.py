@@ -11,9 +11,11 @@ from app.main import (
     DEFAULT_MINIO_SECRET_KEY,
     ai_service_hmac_secret,
     callback_allowed_hosts,
+    embed_knowledge_inputs,
     ensure_callback_url_allowed,
     export_docx,
     knowledge_process,
+    process_knowledge_document,
     process_tender_parse,
     production_mode,
     safe_output_filename,
@@ -109,6 +111,99 @@ def test_knowledge_process_accepts_backend_task_id() -> None:
     accepted = asyncio.run(knowledge_process(payload, BackgroundTasks()))
 
     assert accepted.task_id == "task-knowledge-backend-owned"
+
+
+def test_process_knowledge_document_batches_embeddings(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return b"large document"
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class FakeEmbeddingProvider:
+        name = "fake-embedding"
+
+        def __init__(self) -> None:
+            self.batch_sizes: list[int] = []
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            self.batch_sizes.append(len(texts))
+            return [[1.0] + [0.0] * 1023 for _ in texts]
+
+        def get_dimensions(self) -> int:
+            return 1024
+
+    provider = FakeEmbeddingProvider()
+
+    class FakeRouter:
+        def resolve(self, _task_type: str, tenant_id: str) -> RouteTarget:
+            assert tenant_id == "tenant-demo"
+            return RouteTarget(provider="fake-embedding", model="fake-embedding-model", dimensions=1024)
+
+        def get_embedding(self, _task_type: str, tenant_id: str) -> FakeEmbeddingProvider:
+            assert tenant_id == "tenant-demo"
+            return provider
+
+    chunks = [
+        KnowledgeChunk(title=f"chunk {index}", content=f"content {index}", section_path="section")
+        for index in range(65)
+    ]
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr(
+        "app.main.parse_document",
+        lambda _payload, _content: KnowledgeProcessResult(
+            processed_title="large",
+            summary="large summary",
+            metadata={"parser": "test"},
+            chunks=chunks,
+        ),
+    )
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_knowledge_document(
+        "task-knowledge-demo",
+        KnowledgeProcessRequest(
+            tenant_id="tenant-demo",
+            document_id="doc-demo",
+            file_id="file-demo",
+            object_key="tenant/knowledge/file-demo",
+            filename="large.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert provider.batch_sizes == [32, 32, 1]
+    assert callbacks[0]["status"] == "done", callbacks[0]
+    result = callbacks[0]["result"]
+    assert isinstance(result, dict)
+    assert result["chunk_count"] == 65
+    callback_chunks = callbacks[0]["chunks"]
+    assert isinstance(callback_chunks, list)
+    assert all(chunk["embedding"] for chunk in callback_chunks)
+
+
+def test_embed_knowledge_inputs_rejects_dimension_mismatch() -> None:
+    class BadProvider:
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+        def get_dimensions(self) -> int:
+            return 1024
+
+    with pytest.raises(RuntimeError, match="dimension mismatch"):
+        embed_knowledge_inputs(BadProvider(), ["a", "b"])
 
 
 def test_document_export_accepts_backend_task_id() -> None:
