@@ -42,10 +42,35 @@ export function safeReturnPath(raw: string | null | undefined) {
 }
 
 function isUsableSessionPayload(value: Partial<LoginSessionPayload>): value is LoginSessionPayload {
+  const session = value.session
   return (
-    typeof value.access_token === 'string' &&
-    value.access_token.trim() !== '' &&
-    typeof value.session?.tenant?.id === 'string' &&
-    value.session.tenant.id.trim() !== ''
+    isNonEmptyString(value.access_token) &&
+    Boolean(session) &&
+    isObject(session) &&
+    isObject(session.user) &&
+    isNonEmptyString(session.user.id) &&
+    typeof session.user.email === 'string' &&
+    typeof session.user.name === 'string' &&
+    isObject(session.tenant) &&
+    isNonEmptyString(session.tenant.id) &&
+    typeof session.tenant.name === 'string' &&
+    isObject(session.role) &&
+    isNonEmptyString(session.role.id) &&
+    isNonEmptyString(session.role.code) &&
+    typeof session.role.name === 'string' &&
+    isPermissionRecord(session.permissions)
   )
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+function isPermissionRecord(value: unknown): value is LoginSessionPayload['session']['permissions'] {
+  if (!isObject(value)) return false
+  return Object.values(value).every((level) => level === 'none' || level === 'read' || level === 'full')
 }
