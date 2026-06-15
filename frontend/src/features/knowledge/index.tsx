@@ -955,10 +955,10 @@ export function FilePreviewPage() {
       {preview.isLoading ? <LoadingBlock /> : null}
       {preview.isError ? <ErrorBlock /> : null}
       {preview.data ? (
-        <Card>
+        <div className="file-preview-shell">
           <FileSearchOutlined className="preview-icon" />
           <iframe title={preview.data.file.filename} src={preview.data.url} className="file-preview-frame" />
-        </Card>
+        </div>
       ) : null}
     </PageFrame>
   )

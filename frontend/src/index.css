@@ -1220,6 +1220,12 @@ a {
   margin-bottom: 12px;
 }
 
+.file-preview-shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .file-preview-frame {
   width: 100%;
   min-height: 640px;
