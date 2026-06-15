@@ -861,8 +861,16 @@ func normalizeProjectStatus(value string) (string, error) {
 func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 	req.Category = strings.TrimSpace(req.Category)
 	req.Name = strings.TrimSpace(req.Name)
-	req.CostType = normalizeCostType(req.CostType)
-	req.Status = normalizeItemStatus(req.Status)
+	costType, err := normalizeCostType(req.CostType)
+	if err != nil {
+		return req, err
+	}
+	status, err := normalizeItemStatus(req.Status)
+	if err != nil {
+		return req, err
+	}
+	req.CostType = costType
+	req.Status = status
 	req.Vendor = strings.TrimSpace(req.Vendor)
 	req.Note = strings.TrimSpace(req.Note)
 	req.BudgetAmount = math.Max(req.BudgetAmount, 0)
@@ -876,21 +884,27 @@ func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 	return req, nil
 }
 
-func normalizeCostType(value string) string {
+func normalizeCostType(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "other", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "labor", "material", "equipment", "service":
-		return strings.ToLower(strings.TrimSpace(value))
+	case "labor", "material", "equipment", "service", "other":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "other"
+		return "", ErrInvalidRequest
 	}
 }
 
-func normalizeItemStatus(value string) string {
+func normalizeItemStatus(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "planned", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "committed", "actual":
-		return strings.ToLower(strings.TrimSpace(value))
+	case "planned", "committed", "actual":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "planned"
+		return "", ErrInvalidRequest
 	}
 }
 
