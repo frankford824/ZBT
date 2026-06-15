@@ -5,7 +5,7 @@ from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
 
-from app.pipelines.parse.document_parser import parse_document
+from app.pipelines.parse.document_parser import _env_int, parse_document
 from app.schemas.knowledge import KnowledgeProcessRequest
 
 
@@ -148,6 +148,17 @@ def test_pptx_parser_extracts_slide_text() -> None:
     assert result.metadata["parser"] == "python-pptx"
     assert "实施路线" in text
     assert "里程碑计划" in text
+
+
+def test_timeout_env_parsing_falls_back_for_invalid_values(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_TIMEOUT_S", "bad")
+    assert _env_int("OCR_HTTP_TIMEOUT_S", 120) == 120
+
+    monkeypatch.setenv("OCR_HTTP_TIMEOUT_S", "0")
+    assert _env_int("OCR_HTTP_TIMEOUT_S", 120) == 120
+
+    monkeypatch.setenv("OCR_HTTP_TIMEOUT_S", "30")
+    assert _env_int("OCR_HTTP_TIMEOUT_S", 120) == 30
 
 
 def _request(filename: str) -> KnowledgeProcessRequest:

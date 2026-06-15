@@ -27,6 +27,17 @@ LEGACY_OFFICE_TARGETS = {
 }
 
 
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
 def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> KnowledgeProcessResult:
     suffix = Path(payload.filename).suffix.lower()
     content_type = payload.content_type.lower()
@@ -198,7 +209,7 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         headers=headers,
     )
     try:
-        with request.urlopen(req, timeout=int(os.getenv("OCR_HTTP_TIMEOUT_S", "120"))) as response:
+        with request.urlopen(req, timeout=_env_int("OCR_HTTP_TIMEOUT_S", 120)) as response:
             result = json.loads(response.read().decode("utf-8"))
         text = str(result.get("text") or "")
         return {
@@ -295,7 +306,7 @@ def _convert_with_libreoffice(filename: str, content: bytes, target_suffix: str)
     if not executable:
         return {"status": "converter_not_configured", "target_suffix": target_suffix}
     source_name = Path(filename).name or f"input{target_suffix}"
-    timeout = int(os.getenv("LIBREOFFICE_CONVERT_TIMEOUT_S", "120"))
+    timeout = _env_int("LIBREOFFICE_CONVERT_TIMEOUT_S", 120)
     with TemporaryDirectory(prefix="zbt-ai-parse-") as tmpdir:
         source_path = Path(tmpdir) / source_name
         source_path.write_bytes(content)
