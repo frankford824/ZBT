@@ -24,6 +24,12 @@ var (
 	ErrInvalidRequest = errors.New("invalid tender request")
 )
 
+const (
+	sourceVerifySuccessMessage     = "检测通过"
+	sourceVerifyUnavailableMessage = "来源暂时无法访问，请稍后重试"
+	sourceVerifyFailedMessage      = "来源响应异常，请稍后重试"
+)
+
 type Store struct {
 	pool   *pgxpool.Pool
 	client *http.Client
@@ -521,8 +527,6 @@ func (s *Store) VerifySource(ctx context.Context, tenantID, id string) (Source, 
 	if !validHTTPURL(source.URL) {
 		return Source{}, ErrInvalidRequest
 	}
-	status := "ok"
-	message := ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, source.URL, nil)
 	if err != nil {
 		return Source{}, ErrInvalidRequest
@@ -536,18 +540,7 @@ func (s *Store) VerifySource(ctx context.Context, tenantID, id string) (Source, 
 	if err == nil && resp != nil {
 		defer resp.Body.Close()
 	}
-	if err != nil {
-		status = "failed"
-		message = err.Error()
-	} else if resp == nil {
-		status = "failed"
-		message = "no response"
-	} else {
-		message = resp.Status
-		if resp.StatusCode >= 400 {
-			status = "failed"
-		}
-	}
+	status, message := sourceVerifyOutcome(resp, err)
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			update tender_sources
@@ -787,4 +780,14 @@ func mapVerifyStatusToSourceStatus(value string) string {
 		return "failed"
 	}
 	return "active"
+}
+
+func sourceVerifyOutcome(resp *http.Response, err error) (string, string) {
+	if err != nil || resp == nil {
+		return "failed", sourceVerifyUnavailableMessage
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		return "failed", sourceVerifyFailedMessage
+	}
+	return "ok", sourceVerifySuccessMessage
 }

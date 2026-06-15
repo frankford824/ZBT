@@ -2,6 +2,7 @@ package tender
 
 import (
 	"errors"
+	"net/http"
 	"net/netip"
 	"testing"
 
@@ -106,5 +107,49 @@ func TestNormalizeSourceStatusDefaultsOnlyBlankStatus(t *testing.T) {
 
 	if _, err := normalizeSourceStatus("unknown"); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("expected unsupported source status to be rejected, got %v", err)
+	}
+}
+
+func TestSourceVerifyOutcomeUsesUserFacingMessages(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		resp        *http.Response
+		err         error
+		wantStatus  string
+		wantMessage string
+	}{
+		{
+			name:        "transport error",
+			err:         errors.New("dial tcp 10.0.0.1:443: connect: connection refused"),
+			wantStatus:  "failed",
+			wantMessage: sourceVerifyUnavailableMessage,
+		},
+		{
+			name:        "no response",
+			wantStatus:  "failed",
+			wantMessage: sourceVerifyUnavailableMessage,
+		},
+		{
+			name:        "bad status",
+			resp:        &http.Response{StatusCode: http.StatusInternalServerError, Status: "500 Internal Server Error"},
+			wantStatus:  "failed",
+			wantMessage: sourceVerifyFailedMessage,
+		},
+		{
+			name:        "success",
+			resp:        &http.Response{StatusCode: http.StatusOK, Status: "200 OK"},
+			wantStatus:  "ok",
+			wantMessage: sourceVerifySuccessMessage,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, message := sourceVerifyOutcome(tc.resp, tc.err)
+			if status != tc.wantStatus {
+				t.Fatalf("expected status %q, got %q", tc.wantStatus, status)
+			}
+			if message != tc.wantMessage {
+				t.Fatalf("expected message %q, got %q", tc.wantMessage, message)
+			}
+		})
 	}
 }
