@@ -97,6 +97,7 @@ services:
       BID_EXPORT_TEMPLATE_PATH: ${BID_EXPORT_TEMPLATE_PATH:-}
       BID_EXPORT_WATERMARK_TEXT: ${BID_EXPORT_WATERMARK_TEXT:-}
       AI_SERVICE_HMAC_SECRET: ${AI_SERVICE_HMAC_SECRET:-dev-only-zbt-ai-callback-secret}
+      AI_CALLBACK_ALLOWED_HOSTS: ${AI_CALLBACK_ALLOWED_HOSTS:-backend,localhost,127.0.0.1,host.docker.internal}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-zbt_minio}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-zbt_minio_secret}

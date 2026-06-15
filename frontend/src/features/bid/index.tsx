@@ -500,11 +500,6 @@ export function BidWizardPage() {
     queryFn: () => fetchBidMaterialSelection(bidId),
     enabled: Boolean(bidId),
   })
-  const parseServerText = useMemo(
-    () => (parseResult.data ? JSON.stringify(parseResult.data.structured_result ?? {}, null, 2) : ''),
-    [parseResult.data],
-  )
-  const parseDraftText = parseServerText
   const outlineSourceKey = useMemo(() => {
     if (!parts.data || !chapters.data) return ''
     return [
@@ -620,8 +615,7 @@ export function BidWizardPage() {
   })
   const confirmParseMutation = useMutation({
     mutationFn: () => {
-      const structured = parseDraftText.trim() ? (JSON.parse(parseDraftText) as Record<string, unknown>) : undefined
-      return confirmBidParseResult(bidId, { structured_result: structured })
+      return confirmBidParseResult(bidId, { structured_result: parseResult.data?.structured_result })
     },
     onSuccess: async () => {
       message.success('解析结果已确认')

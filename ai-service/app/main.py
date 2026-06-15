@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib import request
+from urllib.parse import urlparse
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from minio import Minio
@@ -20,6 +21,7 @@ from starlette.responses import JSONResponse
 from app.gateway.model_router import ModelRouter
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
+from app.pipelines.parse.tender_parser import build_tender_structured_result
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.cost import CostAdviceRequest
 from app.schemas.export import DocumentExportRequest
@@ -32,6 +34,7 @@ from app.schemas.knowledge import (
     KnowledgeRerankResponse,
     KnowledgeRerankResult,
 )
+from app.schemas.tender import TenderParseRequest
 
 def routing_config_path() -> Path:
     configured = os.getenv("MODEL_ROUTING_FILE", "").strip()
@@ -55,6 +58,7 @@ PUBLIC_PATHS = {"/healthz", "/models/health"}
 DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
 DEFAULT_MINIO_ACCESS_KEY = "zbt_minio"
 DEFAULT_MINIO_SECRET_KEY = "zbt_minio_secret"
+DEFAULT_CALLBACK_ALLOWED_HOSTS = {"backend", "localhost", "127.0.0.1", "host.docker.internal"}
 
 
 @app.middleware("http")
@@ -102,9 +106,64 @@ async def model_health() -> dict[str, object]:
 
 
 @app.post("/tasks/tender-parse", response_model=TaskAccepted, status_code=202)
-async def tender_parse() -> TaskAccepted:
-    route = router.resolve("tender_parse", tenant_id="tenant-demo")
-    return TaskAccepted(task_id="task-tender-parse-demo", status="queued", route=route.model_dump())
+async def tender_parse(
+    payload: TenderParseRequest,
+    background_tasks: BackgroundTasks,
+) -> TaskAccepted:
+    route = router.resolve("tender_parse", tenant_id=payload.tenant_id)
+    task_suffix = (payload.bid_id or payload.file_id).replace("-", "")[:12]
+    task_id = payload.task_id or f"task-tender-parse-{task_suffix}-{uuid.uuid4().hex[:8]}"
+    background_tasks.add_task(process_tender_parse, task_id, payload)
+    return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
+
+
+def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
+    try:
+        client = minio_client()
+        response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), payload.object_key)
+        try:
+            content = response.read()
+        finally:
+            response.close()
+            response.release_conn()
+        parse_payload = KnowledgeProcessRequest(
+            tenant_id=payload.tenant_id,
+            document_id=payload.bid_id or payload.file_id,
+            file_id=payload.file_id,
+            object_key=payload.object_key,
+            filename=payload.filename,
+            content_type=payload.content_type,
+        )
+        parsed = parse_document(parse_payload, content)
+        structured = build_tender_structured_result(payload, parsed)
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "done",
+            "result": {
+                "bid_id": payload.bid_id,
+                "file_id": payload.file_id,
+                "filename": payload.filename,
+                "structured_result": structured,
+                "summary": parsed.summary,
+                "metadata": parsed.metadata,
+                "chunk_count": len(parsed.chunks),
+                "token_usage": {
+                    "input_tokens": estimate_tokens("\n".join(chunk.content for chunk in parsed.chunks)),
+                    "output_tokens": 0,
+                },
+            },
+        }
+    except Exception as exc:  # pragma: no cover - defensive task boundary
+        callback_payload = {
+            "tenant_id": payload.tenant_id,
+            "task_id": task_id,
+            "status": "failed",
+            "error_message": str(exc),
+            "result": {"error": str(exc), "bid_id": payload.bid_id, "file_id": payload.file_id},
+        }
+    if payload.callback_url:
+        post_callback(payload.callback_url, callback_payload)
 
 
 @app.post("/tasks/knowledge-process", response_model=TaskAccepted, status_code=202)
@@ -237,6 +296,7 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
 
 
 def post_callback(callback_url: str, payload: dict[str, object]) -> None:
+    ensure_callback_url_allowed(callback_url)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     timestamp = str(int(time.time()))
     secret = ai_service_hmac_secret()
@@ -253,6 +313,30 @@ def post_callback(callback_url: str, payload: dict[str, object]) -> None:
     )
     with request.urlopen(req, timeout=10) as response:
         response.read()
+
+
+def ensure_callback_url_allowed(callback_url: str) -> None:
+    parsed = urlparse(callback_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RuntimeError("callback_url must be an absolute http(s) URL")
+    host = parsed.hostname.rstrip(".").lower()
+    if host not in callback_allowed_hosts():
+        raise RuntimeError(f"callback_url host is not allowed: {host}")
+
+
+def callback_allowed_hosts() -> set[str]:
+    configured = os.getenv("AI_CALLBACK_ALLOWED_HOSTS", "").strip()
+    if not configured:
+        return set(DEFAULT_CALLBACK_ALLOWED_HOSTS)
+    hosts: set[str] = set()
+    for item in configured.split(","):
+        value = item.strip()
+        if not value:
+            continue
+        parsed = urlparse(value if "://" in value else f"//{value}", scheme="http")
+        host = parsed.hostname or value
+        hosts.add(host.rstrip(".").lower())
+    return hosts
 
 
 def verify_request_signature(
