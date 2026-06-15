@@ -75,37 +75,42 @@ export function CostsPage() {
         <Table
           rowKey="id"
           dataSource={projects.data}
+          scroll={{ x: 900 }}
           columns={[
             {
               title: '项目',
               dataIndex: 'name',
+              width: 220,
               render: (value, row) => <Link to={`/costs/${row.id}`}>{value}</Link>,
             },
-            { title: '关联项目', dataIndex: 'project_name' },
+            { title: '关联项目', dataIndex: 'project_name', width: 220 },
             {
               title: '预算(万)',
               dataIndex: 'total_budget',
               align: 'right',
+              width: 120,
               render: (value) => <span className="data-mono">{wan(value)}</span>,
             },
             {
               title: '实际(万)',
               dataIndex: 'total_actual',
               align: 'right',
+              width: 120,
               render: (value) => <span className="data-mono">{wan(value)}</span>,
             },
             {
               title: '利润率',
               dataIndex: 'margin_rate',
               align: 'right',
+              width: 110,
               render: (value) => {
                 const rate = Number(value || 0)
                 const color = rate < 0 ? '#D43030' : rate > 0 ? '#2F9E63' : undefined
                 return <span className="data-mono" style={{ color }}>{`${rate.toFixed(2)}%`}</span>
               },
             },
-            { title: '成本项', dataIndex: 'item_count', align: 'right' },
-            { title: '状态', dataIndex: 'status', render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
+            { title: '成本项', dataIndex: 'item_count', align: 'right', width: 90 },
+            { title: '状态', dataIndex: 'status', width: 90, render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
           ]}
         />
       )}
@@ -284,23 +289,26 @@ export function CostDetailPage() {
               <Table
                 rowKey="id"
                 dataSource={items.data}
+                scroll={{ x: 820 }}
                 columns={[
-                  { title: '分类', dataIndex: 'category' },
-                  { title: '名称', dataIndex: 'name' },
+                  { title: '分类', dataIndex: 'category', width: 120 },
+                  { title: '名称', dataIndex: 'name', width: 220 },
                   {
                     title: '预算(万)',
                     dataIndex: 'budget_amount',
                     align: 'right',
+                    width: 120,
                     render: (value) => <span className="data-mono">{wan(value)}</span>,
                   },
                   {
                     title: '实际(万)',
                     dataIndex: 'actual_amount',
                     align: 'right',
+                    width: 120,
                     render: (value) => <span className="data-mono">{wan(value)}</span>,
                   },
-                  { title: '供应商', dataIndex: 'vendor', render: (value) => value || '-' },
-                  { title: '状态', dataIndex: 'status', render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
+                  { title: '供应商', dataIndex: 'vendor', width: 160, render: (value) => value || '-' },
+                  { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
                 ]}
               />
             )}

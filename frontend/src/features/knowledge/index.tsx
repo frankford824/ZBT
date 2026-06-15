@@ -336,29 +336,29 @@ export function KnowledgeDocsPage() {
     >
       <Row gutter={16}>
         <Col xs={24} xl={6}>
-	          <Card
-	            title={`文档分类 ${categories.data?.length ?? 0}`}
-	            extra={canWrite ? <Button size="small" icon={<PlusOutlined />} onClick={openCreateCategory}>新建</Button> : null}
-	          >
+            <Card
+              title={`文档分类 ${categories.data?.length ?? 0}`}
+              extra={canWrite ? <Button size="small" icon={<PlusOutlined />} onClick={openCreateCategory}>新建</Button> : null}
+            >
             <List
               loading={categories.isLoading}
               dataSource={categories.data ?? []}
               locale={{ emptyText: '暂无分类' }}
               renderItem={(item) => (
                 <List.Item
-	                  actions={canWrite ? [
-	                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEditCategory(item)} />,
-	                    <Popconfirm
-	                      key="delete"
+                    actions={canWrite ? [
+                      <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEditCategory(item)} />,
+                      <Popconfirm
+                        key="delete"
                       title="删除分类"
                       description="关联文档会变为未分类。"
                       okText="删除"
                       cancelText="取消"
                       onConfirm={() => deleteCategory.mutate(item.id)}
-	                    >
-	                      <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-	                    </Popconfirm>,
-	                  ] : []}
+                      >
+                        <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                      </Popconfirm>,
+                    ] : []}
                 >
                   <List.Item.Meta title={item.name} description={item.description || '无说明'} />
                 </List.Item>
@@ -368,12 +368,12 @@ export function KnowledgeDocsPage() {
         </Col>
         <Col xs={24} xl={18}>
           <Space direction="vertical" className="full-width">
-	            {canWrite ? (
-	              <Upload.Dragger {...uploadProps}>
-	                <CloudUploadOutlined />
-	                <p>拖拽上传 PDF、Word、Excel、PPT、图片或压缩包</p>
-	              </Upload.Dragger>
-	            ) : null}
+              {canWrite ? (
+                <Upload.Dragger {...uploadProps}>
+                  <CloudUploadOutlined />
+                  <p>拖拽上传 PDF、Word、Excel、PPT、图片或压缩包</p>
+                </Upload.Dragger>
+              ) : null}
             {documents.isLoading ? <LoadingBlock /> : null}
             {documents.isError ? <ErrorBlock /> : null}
             {!documents.isLoading && !documents.isError && documents.data?.length === 0 ? (
@@ -421,13 +421,13 @@ export function KnowledgeDocsPage() {
                   render: (_, row) => (
                     <Space wrap size={[8, 6]}>
                       <a href={`/files/${row.file.id}/preview`}>预览</a>
-	                      {canWrite ? <Button
-	                        size="small"
-	                        icon={<EditOutlined />}
-	                        onClick={() => openEditDocument(row)}
-	                      >
-	                        编辑
-	                      </Button> : null}
+                        {canWrite ? <Button
+                          size="small"
+                          icon={<EditOutlined />}
+                          onClick={() => openEditDocument(row)}
+                        >
+                          编辑
+                        </Button> : null}
                       <Button
                         size="small"
                         icon={<LinkOutlined />}
@@ -435,14 +435,14 @@ export function KnowledgeDocsPage() {
                       >
                         引用
                       </Button>
-	                      {canWrite ? <Button
-	                        size="small"
-	                        icon={<PlayCircleOutlined />}
-	                        disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
-	                        onClick={() => void startProcess(row.id)}
-	                      >
-	                        整理
-	                      </Button> : null}
+                        {canWrite ? <Button
+                          size="small"
+                          icon={<PlayCircleOutlined />}
+                          disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
+                          onClick={() => void startProcess(row.id)}
+                        >
+                          整理
+                        </Button> : null}
                       <Button
                         size="small"
                         icon={<DownloadOutlined />}
@@ -811,19 +811,19 @@ export function KnowledgeTagsPage() {
                     paddingInline: 8,
                   }}
                   onClick={() => setSelectedTagId(selectedTagId === item.id ? null : item.id)}
-	                  actions={canWrite ? [
-	                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(item) }} />,
-	                    <Popconfirm
-	                      key="delete"
+                  actions={canWrite ? [
+                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(item) }} />,
+                    <Popconfirm
+                      key="delete"
                       title="删除标签"
                       description="关联文档会移除此标签。"
                       okText="删除"
                       cancelText="取消"
                       onConfirm={() => deleteTag.mutate(item.id)}
-	                    >
-	                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} />
-	                    </Popconfirm>,
-	                  ] : []}
+                    >
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} />
+                    </Popconfirm>,
+                  ] : []}
                 >
                   <Tag color={item.color}>{item.name}</Tag>
                   <span>{documentsByTag(item).length} 个文档</span>
@@ -852,13 +852,15 @@ export function KnowledgeTagsPage() {
               pagination={false}
               loading={documents.isLoading}
               locale={{ emptyText: selectedTagId ? '该标签下暂无文档' : '暂无文档' }}
+              scroll={{ x: 620 }}
               dataSource={(documents.data ?? []).filter(
                 (document) => !selectedTagId || document.tags.some((tag) => tag.id === selectedTagId),
               )}
               columns={[
-                { title: '关联文档', dataIndex: 'title' },
+                { title: '关联文档', dataIndex: 'title', width: 260 },
                 {
                   title: '标签',
+                  width: 360,
                   render: (_, row: KnowledgeDocumentDTO) => (
                     <Space wrap>
                       {row.tags.map((tag) => <Tag key={tag.id} color={tag.color}>{tag.name}</Tag>)}

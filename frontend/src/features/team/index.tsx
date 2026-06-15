@@ -303,29 +303,36 @@ export function TeamPage() {
               <Table
                 rowKey="id"
                 dataSource={membersQuery.data}
+                scroll={{ x: 760 }}
                 columns={[
-                  { title: '姓名', dataIndex: ['user', 'name'] },
-                  { title: '邮箱', dataIndex: ['user', 'email'] },
+                  { title: '姓名', dataIndex: ['user', 'name'], width: 120 },
+                  { title: '邮箱', dataIndex: ['user', 'email'], width: 220 },
                   {
                     title: '角色',
-                    render: (_, record) => record.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>),
+                    width: 220,
+                    render: (_, record) => (
+                      <Space wrap size={[4, 4]}>
+                        {record.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>)}
+                      </Space>
+                    ),
                   },
-                  { title: '状态', dataIndex: 'status', render: statusTag },
-	                  {
-	                    title: '操作',
-	                    render: (_, record) => canWrite ? (
-	                      <Space>
-	                        <Button size="small" icon={<EditOutlined />} onClick={() => openMemberEditor(record)}>
+                  { title: '状态', dataIndex: 'status', width: 100, render: statusTag },
+                  {
+                    title: '操作',
+                    width: 150,
+                    render: (_, record) => canWrite ? (
+                      <Space size={8} wrap={false}>
+                        <Button size="small" icon={<EditOutlined />} onClick={() => openMemberEditor(record)}>
                           编辑
                         </Button>
                         <Popconfirm title="禁用该成员" onConfirm={() => deleteMemberMutation.mutate(record.id)}>
                           <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMemberMutation.isPending}>
                             禁用
                           </Button>
-	                        </Popconfirm>
-	                      </Space>
-	                    ) : '-',
-	                  },
+                        </Popconfirm>
+                      </Space>
+                    ) : '-',
+                  },
                 ]}
               />
             ) : (
@@ -347,17 +354,19 @@ export function TeamPage() {
                       <Table
                         rowKey="id"
                         dataSource={approvalsQuery.data}
+                        scroll={{ x: 840 }}
                         columns={[
-                          { title: '审批标题', dataIndex: 'title' },
-                          { title: '标书', dataIndex: 'bid_title' },
-                          { title: '提交人', dataIndex: 'submitted_by_name', render: (value) => value || '-' },
-                          { title: '当前环节', dataIndex: 'current_step', render: (value: number) => `第 ${value} 级` },
-                          { title: '状态', dataIndex: 'status', render: statusTag },
+                          { title: '审批标题', dataIndex: 'title', width: 220 },
+                          { title: '标书', dataIndex: 'bid_title', width: 220 },
+                          { title: '提交人', dataIndex: 'submitted_by_name', width: 110, render: (value) => value || '-' },
+                          { title: '当前环节', dataIndex: 'current_step', width: 110, render: (value: number) => `第 ${value} 级` },
+                          { title: '状态', dataIndex: 'status', width: 100, render: statusTag },
                           {
                             title: '操作',
+                            width: 150,
                             render: (_, row) =>
-	                              row.status === 'pending' && canWrite ? (
-	                                <Space>
+                              row.status === 'pending' && canWrite ? (
+                                <Space size={8} wrap={false}>
                                   <Button
                                     size="small"
                                     icon={<CheckOutlined />}
@@ -394,32 +403,40 @@ export function TeamPage() {
                         rowKey="id"
                         dataSource={chainsQuery.data}
                         pagination={false}
+                        scroll={{ x: 640 }}
                         columns={[
-                          { title: '名称', dataIndex: 'name' },
+                          { title: '名称', dataIndex: 'name', width: 160 },
                           {
                             title: '流程',
+                            width: 300,
                             render: (_, row) =>
-                              row.steps.map((step) => (
-                                <Tag key={step.order} color={step.required ? 'blue' : 'default'}>
-                                  {step.order}.{step.name}
-                                </Tag>
-                              )),
+                              (
+                                <Space wrap size={[4, 4]}>
+                                  {row.steps.map((step) => (
+                                    <Tag key={step.order} color={step.required ? 'blue' : 'default'}>
+                                      {step.order}.{step.name}
+                                    </Tag>
+                                  ))}
+                                </Space>
+                              ),
                           },
                           {
                             title: '启用',
                             dataIndex: 'enabled',
-	                            render: (enabled, row) => (
-	                              <Switch size="small" checked={enabled} disabled={!canWrite} onChange={(checked) => updateChainMutation.mutate({ ...row, enabled: checked })} />
-	                            ),
-	                          },
-	                          {
-	                            title: '操作',
-	                            render: (_, row) => canWrite ? (
-	                              <Popconfirm title="删除审批流程" onConfirm={() => deleteChainMutation.mutate(row.id)}>
-	                                <Button size="small" danger icon={<DeleteOutlined />} />
-	                              </Popconfirm>
-	                            ) : '-',
-	                          },
+                            width: 80,
+                            render: (enabled, row) => (
+                              <Switch size="small" checked={enabled} disabled={!canWrite} onChange={(checked) => updateChainMutation.mutate({ ...row, enabled: checked })} />
+                            ),
+                          },
+                          {
+                            title: '操作',
+                            width: 80,
+                            render: (_, row) => canWrite ? (
+                              <Popconfirm title="删除审批流程" onConfirm={() => deleteChainMutation.mutate(row.id)}>
+                                <Button size="small" danger icon={<DeleteOutlined />} />
+                              </Popconfirm>
+                            ) : '-',
+                          },
                         ]}
                       />
                     )}
@@ -429,8 +446,8 @@ export function TeamPage() {
             ),
           },
           {
-	            key: 'logs',
-	            label: '使用记录',
+            key: 'logs',
+            label: '使用记录',
             children: aiLogsQuery.isLoading ? (
               <LoadingBlock />
             ) : aiLogsQuery.isError ? (
@@ -439,21 +456,24 @@ export function TeamPage() {
               <Table
                 rowKey="id"
                 dataSource={aiLogsQuery.data}
+                scroll={{ x: 920 }}
                 columns={[
-	                  { title: '事项', dataIndex: 'task_type', render: (value) => taskTypeLabels[value] || '智能处理' },
-	                  { title: '处理方式', render: () => '平台智能处理' },
-	                  { title: '调用人', dataIndex: 'user_name', render: (value) => value || '系统' },
-	                  {
-	                    title: '用量',
-	                    render: (_, row) => formatUsage(row.input_tokens, row.output_tokens),
-	                  },
-	                  { title: '处理时长', dataIndex: 'latency_ms', render: formatLatency },
-	                  { title: '状态', dataIndex: 'status', render: statusTag },
-	                  {
-	                    title: '关联内容',
-	                    render: (_, row) => formatBizRef(row.biz_ref),
-	                  },
-                  { title: '时间', dataIndex: 'created_at', render: formatTime },
+                  { title: '事项', dataIndex: 'task_type', width: 150, render: (value) => taskTypeLabels[value] || '智能处理' },
+                  { title: '处理方式', width: 130, render: () => '平台智能处理' },
+                  { title: '调用人', dataIndex: 'user_name', width: 120, render: (value) => value || '系统' },
+                  {
+                    title: '用量',
+                    width: 110,
+                    render: (_, row) => formatUsage(row.input_tokens, row.output_tokens),
+                  },
+                  { title: '处理时长', dataIndex: 'latency_ms', width: 110, render: formatLatency },
+                  { title: '状态', dataIndex: 'status', width: 90, render: statusTag },
+                  {
+                    title: '关联内容',
+                    width: 120,
+                    render: (_, row) => formatBizRef(row.biz_ref),
+                  },
+                  { title: '时间', dataIndex: 'created_at', width: 190, render: formatTime },
                 ]}
               />
             ) : (
@@ -476,11 +496,12 @@ export function TeamPage() {
                   rowKey="id"
                   dataSource={notificationsQuery.data ?? []}
                   locale={{ emptyText: <EmptyBlock /> }}
+                  scroll={{ x: 820 }}
                   columns={[
-                    { title: '标题', dataIndex: 'title', render: (value, row) => <Tag color={row.read_at ? 'default' : 'blue'}>{value}</Tag> },
-                    { title: '内容', dataIndex: 'body' },
-                    { title: '时间', dataIndex: 'created_at', render: formatTime },
-                    { title: '状态', dataIndex: 'read_at', render: (value) => (value ? <Tag>已读</Tag> : <Tag color="blue">未读</Tag>) },
+                    { title: '标题', dataIndex: 'title', width: 220, render: (value, row) => <Tag color={row.read_at ? 'default' : 'blue'}>{value}</Tag> },
+                    { title: '内容', dataIndex: 'body', width: 360, ellipsis: true },
+                    { title: '时间', dataIndex: 'created_at', width: 160, render: formatTime },
+                    { title: '状态', dataIndex: 'read_at', width: 80, render: (value) => (value ? <Tag>已读</Tag> : <Tag color="blue">未读</Tag>) },
                   ]}
                 />
               </Space>

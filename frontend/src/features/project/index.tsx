@@ -103,17 +103,19 @@ export function ProjectsPage() {
       <Table
         rowKey="id"
         dataSource={projects.data}
+        scroll={{ x: 820 }}
         columns={[
           {
             title: '项目名称',
             dataIndex: 'name',
+            width: 240,
             render: (value, row) => <Link to={`/projects/${row.id}`}>{value}</Link>,
           },
-          { title: '状态', dataIndex: 'status', render: (value: ProjectDTO['status']) => statusLabels[value] },
-          { title: '负责人', dataIndex: 'owner_name', render: (value) => value || '-' },
-          { title: '标书数', dataIndex: 'bid_count' },
-          { title: '里程碑', dataIndex: 'milestone_count' },
-          { title: '更新时间', dataIndex: 'updated_at', render: dateText },
+          { title: '状态', dataIndex: 'status', width: 120, render: (value: ProjectDTO['status']) => statusLabels[value] },
+          { title: '负责人', dataIndex: 'owner_name', width: 120, render: (value) => value || '-' },
+          { title: '标书数', dataIndex: 'bid_count', width: 92 },
+          { title: '里程碑', dataIndex: 'milestone_count', width: 92 },
+          { title: '更新时间', dataIndex: 'updated_at', width: 150, render: dateText },
         ]}
       />
     )

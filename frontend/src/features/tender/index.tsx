@@ -115,22 +115,26 @@ export function TendersPage() {
       <Table
         rowKey="id"
         dataSource={tenders.data}
+        scroll={{ x: 860 }}
         columns={[
           {
             title: '标讯名称',
             dataIndex: 'title',
+            width: 280,
             render: (value, row) => <Link to={`/tenders/${row.id}`}>{value}</Link>,
           },
-          { title: '地区', dataIndex: 'region' },
-          { title: '预算', dataIndex: 'budget_text' },
+          { title: '地区', dataIndex: 'region', width: 120 },
+          { title: '预算', dataIndex: 'budget_text', width: 140 },
           {
             title: '匹配度',
             dataIndex: 'match_score',
+            width: 100,
             render: (value) => <Tag color="purple">{value}%</Tag>,
           },
-          { title: '截止日期', dataIndex: 'deadline', render: dateText },
+          { title: '截止日期', dataIndex: 'deadline', width: 120, render: dateText },
           {
             title: '操作',
+            width: 100,
             render: (_, row) => (
               <Button
                 type="link"

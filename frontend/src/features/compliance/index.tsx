@@ -266,18 +266,20 @@ export function CompliancePage() {
                       <Table
                         rowKey="id"
                         dataSource={checks.data}
+                        scroll={{ x: 920 }}
                         columns={[
                           {
                             title: '检查名称',
                             dataIndex: 'name',
+                            width: 220,
                             render: (value, row) => <Link to={`/compliance/${row.id}`}>{value}</Link>,
                           },
-                          { title: '标书', dataIndex: 'bid_title', render: (value) => value || '-' },
-                          { title: '结果', dataIndex: 'result_status', render: severityTag },
-                          { title: '得分', dataIndex: 'score', render: (value) => <Progress percent={value} size="small" /> },
-                          { title: '问题数', dataIndex: 'issue_count' },
-                          { title: '状态', dataIndex: 'status', render: statusTag },
-                          { title: '创建时间', dataIndex: 'created_at', render: formatTime },
+                          { title: '标书', dataIndex: 'bid_title', width: 220, render: (value) => value || '-' },
+                          { title: '结果', dataIndex: 'result_status', width: 110, render: severityTag },
+                          { title: '得分', dataIndex: 'score', width: 150, render: (value) => <Progress percent={value} size="small" /> },
+                          { title: '问题数', dataIndex: 'issue_count', width: 86 },
+                          { title: '状态', dataIndex: 'status', width: 96, render: statusTag },
+                          { title: '创建时间', dataIndex: 'created_at', width: 190, render: formatTime },
                         ]}
                       />
                     )}
@@ -296,34 +298,37 @@ export function CompliancePage() {
                       <Table
                         rowKey="id"
                         dataSource={rules.data}
+                        scroll={{ x: 820 }}
                         columns={[
-                          { title: '编码', dataIndex: 'code' },
-                          { title: '名称', dataIndex: 'name' },
-                          { title: '分类', dataIndex: 'category' },
-                          { title: '层级', dataIndex: 'level', render: (value) => <Tag>{value}</Tag> },
-                          { title: '严重度', dataIndex: 'severity', render: severityTag },
+                          { title: '编码', dataIndex: 'code', width: 170 },
+                          { title: '名称', dataIndex: 'name', width: 180 },
+                          { title: '分类', dataIndex: 'category', width: 130 },
+                          { title: '层级', dataIndex: 'level', width: 80, render: (value) => <Tag>{value}</Tag> },
+                          { title: '严重度', dataIndex: 'severity', width: 120, render: severityTag },
                           {
                             title: '启用',
                             dataIndex: 'enabled',
+                            width: 80,
                             render: (enabled, row) => (
-	                              <Switch
-	                                checked={enabled}
-	                                size="small"
-	                                disabled={!canWrite}
-	                                onChange={(checked) => updateRuleMutation.mutate({ ...row, enabled: checked })}
-	                              />
+                              <Switch
+                                checked={enabled}
+                                size="small"
+                                disabled={!canWrite}
+                                onChange={(checked) => updateRuleMutation.mutate({ ...row, enabled: checked })}
+                              />
                             ),
                           },
                           {
                             title: '操作',
-	                            render: (_, row) => canWrite ? (
-	                              <Popconfirm title="删除规则" description="确认删除该合规规则？" onConfirm={() => deleteRuleMutation.mutate(row.id)}>
-	                                <Button size="small" danger icon={<DeleteOutlined />}>
-	                                  删除
-	                                </Button>
-	                              </Popconfirm>
-	                            ) : '-',
-	                          },
+                            width: 110,
+                            render: (_, row) => canWrite ? (
+                              <Popconfirm title="删除规则" description="确认删除该合规规则？" onConfirm={() => deleteRuleMutation.mutate(row.id)}>
+                                <Button size="small" danger icon={<DeleteOutlined />}>
+                                  删除
+                                </Button>
+                              </Popconfirm>
+                            ) : '-',
+                          },
                         ]}
                       />
                     )}
@@ -503,28 +508,28 @@ export function ComplianceDetailPage() {
                   定位
                 </Button>
                 <Button
-	                  size="small"
-	                  icon={<ToolOutlined />}
-	                  disabled={!canWrite || closed}
-	                  loading={actionMutation.isPending}
+                    size="small"
+                    icon={<ToolOutlined />}
+                    disabled={!canWrite || closed}
+                    loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'autofix', issueId: row.id })}
                 >
                   一键修复
                 </Button>
-	                <Button
-	                  size="small"
-	                  disabled={!canWrite || closed}
-	                  loading={actionMutation.isPending}
+                  <Button
+                    size="small"
+                    disabled={!canWrite || closed}
+                    loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'ignore', issueId: row.id })}
                 >
                   忽略
                 </Button>
                 {row.severity === 'fail_candidate' && (
                   <Button
-	                    size="small"
-	                    danger
-	                    disabled={!canWrite || closed}
-	                    loading={actionMutation.isPending}
+                      size="small"
+                      danger
+                      disabled={!canWrite || closed}
+                      loading={actionMutation.isPending}
                     onClick={() => actionMutation.mutate({ action: 'confirm', issueId: row.id })}
                   >
                     判定废标

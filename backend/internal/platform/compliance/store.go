@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -349,6 +350,9 @@ func (s *Store) CreateRule(ctx context.Context, tenantID string, req CreateRuleR
 	metadata, _ := json.Marshal(normalized.Metadata)
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := ensureUniqueRuleCode(ctx, tx, tenantID, normalized.Code, ""); err != nil {
+			return err
+		}
 		return tx.QueryRow(ctx, `
 			insert into compliance_rules (tenant_id, code, name, category, level, severity, description, enabled, metadata)
 			values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -356,7 +360,7 @@ func (s *Store) CreateRule(ctx context.Context, tenantID string, req CreateRuleR
 		`, tenantID, normalized.Code, normalized.Name, normalized.Category, normalized.Level, normalized.Severity, normalized.Description, normalized.Enabled, metadata).Scan(&id)
 	})
 	if err != nil {
-		return Rule{}, err
+		return Rule{}, normalizeRuleWriteError(err)
 	}
 	return s.GetRule(ctx, tenantID, id)
 }
@@ -371,6 +375,16 @@ func (s *Store) UpdateRule(ctx context.Context, tenantID, id string, req UpdateR
 	}
 	metadata, _ := json.Marshal(normalized.Metadata)
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var exists bool
+		if err := tx.QueryRow(ctx, `select exists(select 1 from compliance_rules where tenant_id = $1 and id = $2)`, tenantID, id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return pgx.ErrNoRows
+		}
+		if err := ensureUniqueRuleCode(ctx, tx, tenantID, normalized.Code, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			update compliance_rules
 			set code = $3, name = $4, category = $5, level = $6, severity = $7, description = $8, enabled = $9, metadata = $10, updated_at = now()
@@ -388,7 +402,7 @@ func (s *Store) UpdateRule(ctx context.Context, tenantID, id string, req UpdateR
 		return Rule{}, ErrNotFound
 	}
 	if err != nil {
-		return Rule{}, err
+		return Rule{}, normalizeRuleWriteError(err)
 	}
 	return s.GetRule(ctx, tenantID, id)
 }
@@ -398,6 +412,13 @@ func (s *Store) DeleteRule(ctx context.Context, tenantID, id string) error {
 		return err
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update compliance_issues
+			set rule_id = null, updated_at = now()
+			where tenant_id = $1 and rule_id = $2
+		`, tenantID, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `delete from compliance_rules where tenant_id = $1 and id = $2`, tenantID, id)
 		if err != nil {
 			return err
@@ -409,6 +430,34 @@ func (s *Store) DeleteRule(ctx context.Context, tenantID, id string) error {
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
+	}
+	return normalizeRuleWriteError(err)
+}
+
+func ensureUniqueRuleCode(ctx context.Context, tx pgx.Tx, tenantID, code, excludeID string) error {
+	var exists bool
+	var err error
+	if excludeID == "" {
+		err = tx.QueryRow(ctx, `select exists(select 1 from compliance_rules where tenant_id = $1 and code = $2)`, tenantID, code).Scan(&exists)
+	} else {
+		err = tx.QueryRow(ctx, `select exists(select 1 from compliance_rules where tenant_id = $1 and code = $2 and id <> $3::uuid)`, tenantID, code, excludeID).Scan(&exists)
+	}
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func normalizeRuleWriteError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503", "23505":
+			return ErrInvalidRequest
+		}
 	}
 	return err
 }

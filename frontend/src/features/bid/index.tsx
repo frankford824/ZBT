@@ -338,33 +338,33 @@ export function BidListPage() {
               {
                 title: '操作',
                 width: 246,
-	                render: (_, row: BidDocumentDTO) => (
-	                  <Space size={10} wrap={false}>
-	                    {canWrite ? <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link> : null}
-	                    <Link to={`/bids/${row.id}/editor`}>{canWrite ? '编辑' : '查看'}</Link>
-	                    {canWrite ? <Button
-	                      type="link"
-	                      size="small"
-	                      disabled={row.status === 'in_review' || row.status === 'approved'}
+                render: (_, row: BidDocumentDTO) => (
+                  <Space size={10} wrap={false}>
+                    {canWrite ? <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link> : null}
+                    <Link to={`/bids/${row.id}/editor`}>{canWrite ? '编辑' : '查看'}</Link>
+                    {canWrite ? <Button
+                      type="link"
+                      size="small"
+                      disabled={row.status === 'in_review' || row.status === 'approved'}
                       loading={approvalMutation.isPending && approvalMutation.variables === row.id}
                       onClick={() => approvalMutation.mutate(row.id)}
-	                    >
-	                      提交审批
-	                    </Button> : null}
-	                    {canWrite ? <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
-	                      <Button
-	                        type="link"
+                    >
+                      提交审批
+                    </Button> : null}
+                    {canWrite ? <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
+                      <Button
+                        type="link"
                         size="small"
                         danger
                         icon={<DeleteOutlined />}
                         disabled={row.status === 'in_review' || row.status === 'approved'}
                         loading={archiveMutation.isPending && archiveMutation.variables === row.id}
-	                      >
-	                        归档
-	                      </Button>
-	                    </Popconfirm> : null}
-	                  </Space>
-	                ),
+                      >
+                        归档
+                      </Button>
+                    </Popconfirm> : null}
+                  </Space>
+                ),
               },
             ]}
           />
@@ -417,12 +417,12 @@ export function BidTemplatesPage() {
         <Row gutter={[16, 16]}>
           {templates.data?.map((template) => (
             <Col xs={24} md={12} xl={6} key={template.id}>
-	              <Card
-	                title={template.name}
-	                actions={[
-	                  canWrite ? <Button
-	                    key="use"
-	                    type="link"
+                <Card
+                  title={template.name}
+                  actions={[
+                    canWrite ? <Button
+                      key="use"
+                      type="link"
                     loading={mutation.isPending && mutation.variables?.templateId === template.id}
                     onClick={() =>
                       mutation.mutate({
@@ -430,13 +430,13 @@ export function BidTemplatesPage() {
                         title: `${template.name}生成标书`,
                       })
                     }
-	                  >
-	                    使用模板
-	                  </Button> : null,
-	                  canWrite ? <Link key="blank" to="/bids/new">
-	                    新建空白
-	                  </Link> : null,
-	                ]}
+                    >
+                      使用模板
+                    </Button> : null,
+                    canWrite ? <Link key="blank" to="/bids/new">
+                      新建空白
+                    </Link> : null,
+                  ]}
               >
                 <Space direction="vertical" size={8}>
                   <Space wrap>
