@@ -1,6 +1,9 @@
 import asyncio
 import hashlib
 import hmac
+import json
+from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi import BackgroundTasks
@@ -15,6 +18,7 @@ from app.main import (
     ensure_callback_url_allowed,
     export_docx,
     knowledge_process,
+    process_document_export,
     process_knowledge_document,
     process_tender_parse,
     production_mode,
@@ -25,7 +29,7 @@ from app.main import (
 )
 from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.parse.tender_parser import build_tender_structured_result, merge_tender_structured_result
-from app.schemas.export import DocumentExportRequest
+from app.schemas.export import DocumentExportRequest, ExportAttachment, ExportChapter, ExportPart
 from app.schemas.knowledge import KnowledgeChunk, KnowledgeProcessRequest, KnowledgeProcessResult
 from app.schemas.tender import TenderParseRequest
 
@@ -222,6 +226,138 @@ def test_document_export_accepts_backend_task_id() -> None:
     accepted = asyncio.run(export_docx(payload, BackgroundTasks()))
 
     assert accepted.task_id == "task-export-backend-owned"
+
+
+def test_process_document_export_hydrates_object_key_attachments(monkeypatch, tmp_path) -> None:
+    callbacks: list[dict[str, object]] = []
+    stored: dict[str, bytes] = {}
+    objects = {
+        "tenant-demo/assets/qualification.txt": "资质文件内容".encode(),
+        "tenant-demo/assets/boq.xlsx": b"boq-content",
+    }
+
+    class FakeResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+
+        def read(self) -> bytes:
+            return self.content
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, object_key: str) -> FakeResponse:
+            return FakeResponse(objects[object_key])
+
+        def fput_object(
+            self,
+            _bucket: str,
+            object_key: str,
+            file_path: str,
+            content_type: str | None = None,
+        ) -> None:
+            stored[object_key] = Path(file_path).read_bytes()
+            assert content_type == "application/zip"
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_document_export(
+        "task-export-zip",
+        DocumentExportRequest(
+            tenant_id="tenant-demo",
+            export_id="export-demo",
+            bid_id="bid-demo",
+            bid_title="测试项目",
+            export_type="zip",
+            part_code="all",
+            part_title="投标文件全套",
+            filename="测试项目.zip",
+            object_key="tenant-demo/bid_export/export.zip",
+            parts=[
+                ExportPart(
+                    code="tech",
+                    title="技术标",
+                    chapters=[ExportChapter(title="实施计划", plain_text="实施正文")],
+                    attachments=[
+                        ExportAttachment(
+                            filename="资质文件.txt",
+                            object_key="tenant-demo/assets/qualification.txt",
+                        )
+                    ],
+                )
+            ],
+            boq_files=[
+                ExportAttachment(filename="清单.xlsx", object_key="tenant-demo/assets/boq.xlsx")
+            ],
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+        "zip",
+    )
+
+    assert callbacks[0]["status"] == "done", callbacks[0]
+    output_path = tmp_path / "stored.zip"
+    output_path.write_bytes(stored["tenant-demo/bid_export/export.zip"])
+    with ZipFile(output_path) as archive:
+        names = set(archive.namelist())
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert "02_附件/tech/资质文件.txt" in names
+        assert "03_工程量清单/清单.xlsx" in names
+        assert archive.read("02_附件/tech/资质文件.txt") == objects["tenant-demo/assets/qualification.txt"]
+        assert archive.read("03_工程量清单/清单.xlsx") == objects["tenant-demo/assets/boq.xlsx"]
+        assert manifest["parts"][0]["attachments"][0]["object_key"] == "tenant-demo/assets/qualification.txt"
+        assert manifest["boq_files"][0]["object_key"] == "tenant-demo/assets/boq.xlsx"
+
+
+def test_process_document_export_rejects_cross_tenant_attachment_object_key(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> object:
+            raise AssertionError("cross-tenant object should be rejected before MinIO fetch")
+
+        def fput_object(self, *_args, **_kwargs) -> None:
+            raise AssertionError("failed export must not upload an output file")
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_document_export(
+        "task-export-zip",
+        DocumentExportRequest(
+            tenant_id="tenant-demo",
+            export_id="export-demo",
+            bid_id="bid-demo",
+            bid_title="测试项目",
+            export_type="zip",
+            part_code="all",
+            part_title="投标文件全套",
+            filename="测试项目.zip",
+            object_key="tenant-demo/bid_export/export.zip",
+            parts=[
+                ExportPart(
+                    code="tech",
+                    title="技术标",
+                    chapters=[ExportChapter(title="实施计划", plain_text="实施正文")],
+                    attachments=[
+                        ExportAttachment(
+                            filename="跨租户文件.txt",
+                            object_key="other-tenant/assets/secret.txt",
+                        )
+                    ],
+                )
+            ],
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+        "zip",
+    )
+
+    assert callbacks[0]["status"] == "failed", callbacks[0]
+    assert "outside tenant scope" in str(callbacks[0]["error_message"])
 
 
 def test_tender_parse_accepts_backend_task_id() -> None:

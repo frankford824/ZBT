@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -28,7 +29,7 @@ from app.pipelines.parse.tender_parser import (
 )
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.cost import CostAdviceRequest
-from app.schemas.export import DocumentExportRequest
+from app.schemas.export import DocumentExportRequest, ExportAttachment
 from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest
 from app.schemas.knowledge import (
     KnowledgeEmbeddingRequest,
@@ -581,6 +582,9 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
     with TemporaryDirectory(prefix="zbt-ai-export-") as tmpdir:
         output_path = Path(tmpdir) / safe_output_filename(payload.filename, export_type)
         try:
+            client = minio_client()
+            ensure_export_object_key_allowed(payload.tenant_id, payload.object_key)
+            payload = hydrate_export_attachment_content(client, payload)
             content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             if export_type == "zip":
                 export_bid_zip(
@@ -609,7 +613,6 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
                     output_path,
                     layout=payload.layout,
                 )
-            client = minio_client()
             client.fput_object(
                 os.getenv("MINIO_BUCKET", "zbt-files"),
                 payload.object_key,
@@ -652,6 +655,62 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
             }
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+def hydrate_export_attachment_content(client: Minio, payload: DocumentExportRequest) -> DocumentExportRequest:
+    return payload.model_copy(
+        update={
+            "attachments": [
+                hydrate_export_attachment(client, payload.tenant_id, attachment)
+                for attachment in payload.attachments
+            ],
+            "boq_files": [
+                hydrate_export_attachment(client, payload.tenant_id, attachment)
+                for attachment in payload.boq_files
+            ],
+            "parts": [
+                part.model_copy(
+                    update={
+                        "attachments": [
+                            hydrate_export_attachment(client, payload.tenant_id, attachment)
+                            for attachment in part.attachments
+                        ]
+                    }
+                )
+                for part in payload.parts
+            ],
+        }
+    )
+
+
+def hydrate_export_attachment(
+    client: Minio,
+    tenant_id: str,
+    attachment: ExportAttachment,
+) -> ExportAttachment:
+    if attachment.object_key:
+        ensure_export_object_key_allowed(tenant_id, attachment.object_key)
+    if attachment.content_base64 or attachment.local_path or not attachment.object_key:
+        return attachment
+    return attachment.model_copy(
+        update={"content_base64": download_minio_object_base64(client, attachment.object_key)}
+    )
+
+
+def ensure_export_object_key_allowed(tenant_id: str, object_key: str) -> None:
+    expected_prefix = tenant_id.strip().rstrip("/") + "/"
+    if not expected_prefix.strip("/") or not object_key.startswith(expected_prefix):
+        raise RuntimeError("attachment object_key is outside tenant scope")
+
+
+def download_minio_object_base64(client: Minio, object_key: str) -> str:
+    response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), object_key)
+    try:
+        content = response.read()
+    finally:
+        response.close()
+        response.release_conn()
+    return base64.b64encode(content).decode("ascii")
 
 
 def safe_output_filename(filename: str, export_type: str) -> str:
