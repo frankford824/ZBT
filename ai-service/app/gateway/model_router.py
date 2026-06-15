@@ -75,7 +75,7 @@ class ModelRouter:
         return {name: provider.health_check() for name, provider in self.providers.items()}
 
     def provider_backed_mock_routes(self) -> list[str]:
-        provider_backed_routes = self.LLM_ROUTES | self.EMBEDDING_ROUTES | self.RERANK_ROUTES
+        provider_backed_routes = self.LLM_ROUTES | self.EMBEDDING_ROUTES | self.RERANK_ROUTES | self.OCR_ROUTES
         mock_routes: list[str] = []
         for task_type, route in self.config.get("routes", {}).items():
             if task_type not in provider_backed_routes:
@@ -145,6 +145,7 @@ class ModelRouter:
     }
     EMBEDDING_ROUTES = {"knowledge_embedding"}
     RERANK_ROUTES = {"knowledge_rerank"}
+    OCR_ROUTES = {"document_ocr"}
 
     def _apply_provider_mode(self, config: dict[str, Any]) -> dict[str, Any]:
         effective = deepcopy(config)
@@ -188,6 +189,8 @@ class ModelRouter:
             return "EMBEDDING"
         if task_type in self.RERANK_ROUTES:
             return "RERANK"
+        if task_type in self.OCR_ROUTES:
+            return "OCR"
         return ""
 
     def _route_env(self, task_type: str, suffix: str) -> str:
