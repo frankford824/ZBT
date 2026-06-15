@@ -114,7 +114,7 @@ async def knowledge_process(
 ) -> TaskAccepted:
     route = router.resolve("knowledge_process", tenant_id=payload.tenant_id)
     task_suffix = payload.document_id.replace("-", "")[:12]
-    task_id = f"task-knowledge-{task_suffix}"
+    task_id = payload.task_id or f"task-knowledge-{task_suffix}"
     background_tasks.add_task(process_knowledge_document, task_id, payload)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
@@ -431,7 +431,7 @@ def enqueue_document_export(
 ) -> TaskAccepted:
     route = router.resolve("document_export", tenant_id=payload.tenant_id)
     task_suffix = payload.export_id.replace("-", "")[:12]
-    task_id = f"task-export-{task_suffix}"
+    task_id = payload.task_id or f"task-export-{task_suffix}"
     background_tasks.add_task(process_document_export, task_id, payload, export_type)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 

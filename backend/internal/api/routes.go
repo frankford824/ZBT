@@ -39,11 +39,12 @@ type routeSpec struct {
 }
 
 type routeInfo struct {
-	Method   string     `json:"method"`
-	Path     string     `json:"path"`
-	Module   string     `json:"module"`
-	Required rbac.Level `json:"required"`
-	Async    bool       `json:"async"`
+	Method        string     `json:"method"`
+	Path          string     `json:"path"`
+	Module        string     `json:"module"`
+	Required      rbac.Level `json:"required"`
+	Async         bool       `json:"async"`
+	DynamicModule bool       `json:"dynamic_module,omitempty"`
 }
 
 type server struct {
@@ -496,7 +497,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/files/:id/confirm", s.confirmFileUpload)
 	group.GET("/files/:id/download-url", s.fileDownloadURL)
 	group.GET("/files/:id/preview-url", s.filePreviewURL)
-	group.GET("/ai-tasks/:taskId", rbac.Require("dashboard", rbac.LevelRead), s.getAITask)
+	group.GET("/ai-tasks/:taskId", s.getAITask)
 	group.GET("/approval-chains", rbac.Require("team", rbac.LevelRead), s.listApprovalChains)
 	group.POST("/approval-chains", rbac.Require("team", rbac.LevelFull), s.createApprovalChain)
 	group.PATCH("/approval-chains/:id", rbac.Require("team", rbac.LevelFull), s.updateApprovalChain)
@@ -1953,7 +1954,50 @@ func fileAccessModule(bizType string) string {
 
 func (s *server) getAITask(c *gin.Context) {
 	result, err := s.knowledgeStore.GetTask(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("taskId"))
+	if err != nil {
+		respond(c, result, err)
+		return
+	}
+	if !requireAITaskAccess(c, result.ResourceType, result.TaskType) {
+		return
+	}
 	respond(c, result, err)
+}
+
+func requireAITaskAccess(c *gin.Context, resourceType, taskType string) bool {
+	module := aiTaskAccessModule(resourceType, taskType)
+	if rbac.Allows(rbac.PermissionsFromContext(c)[module], rbac.LevelRead) {
+		return true
+	}
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "permission_denied", "error": "当前账号没有此操作权限", "module": module})
+	return false
+}
+
+func aiTaskAccessModule(resourceType, taskType string) string {
+	resourceType = strings.ToLower(strings.TrimSpace(resourceType))
+	taskType = strings.ToLower(strings.TrimSpace(taskType))
+	switch {
+	case strings.HasPrefix(resourceType, "knowledge"):
+		return "knowledge"
+	case strings.HasPrefix(resourceType, "bid"):
+		return "bid"
+	case strings.HasPrefix(resourceType, "cost"):
+		return "cost"
+	case strings.HasPrefix(resourceType, "compliance"):
+		return "compliance"
+	}
+	switch taskType {
+	case "knowledge_process", "knowledge_embedding", "knowledge_rerank":
+		return "knowledge"
+	case "tender_parse", "outline_generate", "chapter_generate", "chapter_ai_action", "document_export":
+		return "bid"
+	case "cost_advice":
+		return "cost"
+	case "compliance_check":
+		return "compliance"
+	default:
+		return "dashboard"
+	}
 }
 
 func (s *server) aiTaskCallback(c *gin.Context) {
@@ -2054,14 +2098,19 @@ func routeInfos() []routeInfo {
 	routes := make([]routeInfo, 0, len(routeSpecs))
 	for _, spec := range routeSpecs {
 		routes = append(routes, routeInfo{
-			Method:   spec.Method,
-			Path:     spec.Path,
-			Module:   spec.Module,
-			Required: requiredLevel(spec),
-			Async:    spec.Async,
+			Method:        spec.Method,
+			Path:          spec.Path,
+			Module:        spec.Module,
+			Required:      requiredLevel(spec),
+			Async:         spec.Async,
+			DynamicModule: isDynamicModuleRoute(spec),
 		})
 	}
 	return routes
+}
+
+func isDynamicModuleRoute(spec routeSpec) bool {
+	return spec.Method == http.MethodGet && spec.Path == "/ai-tasks/:taskId"
 }
 
 func routeKey(spec routeSpec) string {

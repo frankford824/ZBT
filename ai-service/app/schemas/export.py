@@ -44,6 +44,7 @@ class ExportLayoutOptions(BaseModel):
 
 
 class DocumentExportRequest(BaseModel):
+    task_id: str | None = None
     tenant_id: str
     export_id: str
     bid_id: str

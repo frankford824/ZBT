@@ -1965,8 +1965,10 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		fileID := uuid.NewString()
 		filename := exportFilename(document.Title, partCode, exportType)
 		objectKey := platformfile.ObjectKey(tenantID, "bid_export")
+		externalTaskID := "task-export-" + strings.ReplaceAll(exportID, "-", "")[:12]
 		var bidPartID any
 		payload = map[string]any{
+			"task_id":      externalTaskID,
 			"tenant_id":    tenantID,
 			"export_id":    exportID,
 			"bid_id":       bidID,
@@ -2057,13 +2059,13 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		createdTask, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status,
-				resource_type, resource_id, payload, route
+				external_task_id, resource_type, resource_id, payload, route
 			)
-			values ($1, $2, 'document_export', 'queued', 'bid_export', $3, $4, '{}')
+			values ($1, $2, 'document_export', 'queued', $3, 'bid_export', $4, $5, '{}')
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, tenantID, userID, exportID, payloadJSON))
+		`, tenantID, userID, externalTaskID, exportID, payloadJSON))
 		if err != nil {
 			return err
 		}

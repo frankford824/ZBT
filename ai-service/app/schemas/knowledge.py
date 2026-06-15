@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class KnowledgeProcessRequest(BaseModel):
+    task_id: str | None = None
     tenant_id: str
     document_id: str
     file_id: str

@@ -1,19 +1,25 @@
+import asyncio
 import hashlib
 import hmac
 
 import pytest
+from fastapi import BackgroundTasks
 
 from app.main import (
     DEFAULT_AI_HMAC_SECRET,
     DEFAULT_MINIO_ACCESS_KEY,
     DEFAULT_MINIO_SECRET_KEY,
     ai_service_hmac_secret,
+    export_docx,
+    knowledge_process,
     production_mode,
     safe_output_filename,
     validate_production_config,
     verify_request_signature,
 )
 from app.gateway.model_router import ModelRouter
+from app.schemas.export import DocumentExportRequest
+from app.schemas.knowledge import KnowledgeProcessRequest
 
 
 def test_safe_output_filename_keeps_task_output_in_temp_directory() -> None:
@@ -61,6 +67,40 @@ def test_ai_service_hmac_secret_allows_override(monkeypatch) -> None:
     monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "custom-secret")
 
     assert ai_service_hmac_secret() == "custom-secret"
+
+
+def test_knowledge_process_accepts_backend_task_id() -> None:
+    payload = KnowledgeProcessRequest(
+        task_id="task-knowledge-backend-owned",
+        tenant_id="tenant-demo",
+        document_id="doc-demo",
+        file_id="file-demo",
+        object_key="demo/doc.pdf",
+        filename="doc.pdf",
+        content_type="application/pdf",
+    )
+
+    accepted = asyncio.run(knowledge_process(payload, BackgroundTasks()))
+
+    assert accepted.task_id == "task-knowledge-backend-owned"
+
+
+def test_document_export_accepts_backend_task_id() -> None:
+    payload = DocumentExportRequest(
+        task_id="task-export-backend-owned",
+        tenant_id="tenant-demo",
+        export_id="export-demo",
+        bid_id="bid-demo",
+        bid_title="测试项目",
+        part_code="tech",
+        part_title="技术标",
+        filename="测试项目.docx",
+        object_key="tenant/bid_export/demo.docx",
+    )
+
+    accepted = asyncio.run(export_docx(payload, BackgroundTasks()))
+
+    assert accepted.task_id == "task-export-backend-owned"
 
 
 def test_production_mode_detects_release_environment(monkeypatch) -> None:

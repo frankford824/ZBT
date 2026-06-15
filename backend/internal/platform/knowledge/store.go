@@ -658,6 +658,8 @@ func (s *Store) CreateDocumentTemplate(ctx context.Context, tenantID string, req
 
 func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string) (Task, error) {
 	var task Task
+	var payload map[string]any
+	externalTaskID := "task-knowledge-" + uuid.NewString()
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var doc Document
 		var objectKey string
@@ -672,7 +674,8 @@ func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string
 		if err := row.Scan(&doc.ID, &doc.Title, &doc.DocType, &doc.ParseStatus, &doc.File.ID, &objectKey, &doc.File.Filename, &doc.File.ContentType); err != nil {
 			return err
 		}
-		payload := map[string]any{
+		payload = map[string]any{
+			"task_id":      externalTaskID,
 			"tenant_id":    tenantID,
 			"document_id":  doc.ID,
 			"file_id":      doc.File.ID,
@@ -681,22 +684,17 @@ func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string
 			"content_type": doc.File.ContentType,
 			"callback_url": s.cfg.AICallbackURL,
 		}
-		accepted, err := s.submitKnowledgeProcess(ctx, payload)
-		if err != nil {
-			return err
-		}
 		payloadJSON, _ := json.Marshal(payload)
-		routeJSON, _ := json.Marshal(accepted.Route)
 		created, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status, external_task_id,
 				resource_type, resource_id, payload, route
 			)
-			values ($1, $2, 'knowledge_process', $3, $4, 'knowledge_document', $5, $6, $7)
+			values ($1, $2, 'knowledge_process', 'queued', $3, 'knowledge_document', $4, $5, '{}')
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, tenantID, userID, accepted.Status, accepted.TaskID, id, payloadJSON, routeJSON))
+		`, tenantID, userID, externalTaskID, id, payloadJSON))
 		if err != nil {
 			return err
 		}
@@ -713,7 +711,18 @@ func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Task{}, ErrNotFound
 	}
-	return task, err
+	if err != nil {
+		return Task{}, err
+	}
+	accepted, err := s.submitKnowledgeProcess(ctx, payload)
+	if err != nil {
+		_ = s.markKnowledgeProcessFailed(ctx, tenantID, task.ID, task.ResourceID, err.Error())
+		return Task{}, err
+	}
+	if err := s.applyAcceptedKnowledgeTask(ctx, tenantID, task.ID, accepted); err != nil {
+		return Task{}, err
+	}
+	return s.GetTask(ctx, tenantID, task.ID)
 }
 
 func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (Task, error) {
@@ -1120,6 +1129,54 @@ func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]a
 		accepted.Route = map[string]any{}
 	}
 	return accepted, nil
+}
+
+func (s *Store) applyAcceptedKnowledgeTask(ctx context.Context, tenantID, taskID string, accepted aiTaskAccepted) error {
+	status := normalizeTaskStatus(accepted.Status)
+	if status == "" {
+		status = "queued"
+	}
+	routeJSON, _ := json.Marshal(accepted.Route)
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = case when status in ('done', 'failed', 'cancelled') then status else $3 end,
+				external_task_id = $4,
+				route = $5,
+				started_at = coalesce(started_at, now()),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, status, accepted.TaskID, routeJSON)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return pgx.ErrNoRows
+		}
+		return nil
+	})
+}
+
+func (s *Store) markKnowledgeProcessFailed(ctx context.Context, tenantID, taskID, documentID, message string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = 'failed',
+				error_message = $3,
+				completed_at = now(),
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, message); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+			update knowledge_documents
+			set parse_status = 'failed',
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, documentID)
+		return err
+	})
 }
 
 func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string, texts []string) (embeddingResponse, error) {
