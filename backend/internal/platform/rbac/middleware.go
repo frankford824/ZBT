@@ -16,6 +16,17 @@ const (
 
 const ContextPermissionsKey = "module_permissions"
 
+var supportedModules = map[string]struct{}{
+	"dashboard":  {},
+	"tender":     {},
+	"bid":        {},
+	"compliance": {},
+	"project":    {},
+	"cost":       {},
+	"knowledge":  {},
+	"team":       {},
+}
+
 func Require(module string, level Level) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		permissions := PermissionsFromContext(c)
@@ -44,4 +55,9 @@ func PermissionsFromContext(c *gin.Context) map[string]Level {
 		}
 	}
 	return map[string]Level{}
+}
+
+func ValidModule(module string) bool {
+	_, ok := supportedModules[module]
+	return ok
 }

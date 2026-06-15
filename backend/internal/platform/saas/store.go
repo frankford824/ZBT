@@ -498,6 +498,9 @@ func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, per
 	if code == "" || name == "" {
 		return Role{}, ErrInvalidRequest
 	}
+	if err := validateModulePermissions(permissions); err != nil {
+		return Role{}, err
+	}
 	var role Role
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -517,6 +520,11 @@ func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, per
 }
 
 func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, permissions map[string]rbac.Level) (Role, error) {
+	if permissions != nil {
+		if err := validateModulePermissions(permissions); err != nil {
+			return Role{}, err
+		}
+	}
 	var role Role
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -658,18 +666,27 @@ func loadRolePermissions(ctx context.Context, tx pgx.Tx, roleID string) (map[str
 }
 
 func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID string, permissions map[string]rbac.Level) error {
+	if err := validateModulePermissions(permissions); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `delete from module_permissions where tenant_id = $1 and role_id = $2`, tenantID, roleID); err != nil {
 		return err
 	}
 	for module, level := range permissions {
-		if !validLevel(level) {
-			return ErrInvalidRequest
-		}
 		if _, err := tx.Exec(ctx, `
 			insert into module_permissions (tenant_id, role_id, module, level)
 			values ($1, $2, $3, $4)
 		`, tenantID, roleID, module, level); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateModulePermissions(permissions map[string]rbac.Level) error {
+	for module, level := range permissions {
+		if !rbac.ValidModule(module) || !validLevel(level) {
+			return ErrInvalidRequest
 		}
 	}
 	return nil

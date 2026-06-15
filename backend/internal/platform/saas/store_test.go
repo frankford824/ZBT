@@ -27,6 +27,35 @@ func TestCreateRoleRejectsBlankCodeOrName(t *testing.T) {
 	}
 }
 
+func TestCreateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	for _, req := range []struct {
+		name        string
+		permissions map[string]rbac.Level
+	}{
+		{name: "unknown module", permissions: map[string]rbac.Level{"admin": rbac.LevelFull}},
+		{name: "unknown level", permissions: map[string]rbac.Level{"team": rbac.Level("owner")}},
+	} {
+		_, err := store.CreateRole(context.Background(), "tenant-id", "manager", req.name, req.permissions)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for %s, got %v", req.name, err)
+		}
+	}
+}
+
+func TestUpdateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	for _, permissions := range []map[string]rbac.Level{
+		{"admin": rbac.LevelFull},
+		{"team": rbac.Level("owner")},
+	} {
+		_, err := store.UpdateRole(context.Background(), "tenant-id", "role-id", "Manager", permissions)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for permissions=%v, got %v", permissions, err)
+		}
+	}
+}
+
 func TestInviteMemberRejectsBlankIdentity(t *testing.T) {
 	store := NewStore(nil)
 	for _, req := range []struct {
