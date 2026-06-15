@@ -281,6 +281,10 @@ func (s *Service) ConfirmUpload(ctx context.Context, tenantID, fileID string) (A
 	return asset, err
 }
 
+func (s *Service) GetAsset(ctx context.Context, tenantID, fileID string) (Asset, error) {
+	return s.assetByID(ctx, tenantID, fileID)
+}
+
 func (s *Service) ListAssets(ctx context.Context, tenantID, bizType string) ([]Asset, error) {
 	assets := []Asset{}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {

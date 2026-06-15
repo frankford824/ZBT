@@ -19,7 +19,7 @@ const ContextPermissionsKey = "module_permissions"
 func Require(module string, level Level) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		permissions := PermissionsFromContext(c)
-		if allows(permissions[module], level) {
+		if Allows(permissions[module], level) {
 			c.Next()
 			return
 		}
@@ -27,7 +27,7 @@ func Require(module string, level Level) gin.HandlerFunc {
 	}
 }
 
-func allows(actual, required Level) bool {
+func Allows(actual, required Level) bool {
 	if required == LevelNone {
 		return true
 	}

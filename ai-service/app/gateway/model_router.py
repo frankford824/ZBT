@@ -74,6 +74,20 @@ class ModelRouter:
     def health_check(self) -> dict[str, bool]:
         return {name: provider.health_check() for name, provider in self.providers.items()}
 
+    def provider_backed_mock_routes(self) -> list[str]:
+        provider_backed_routes = self.LLM_ROUTES | self.EMBEDDING_ROUTES | self.RERANK_ROUTES
+        mock_routes: list[str] = []
+        for task_type, route in self.config.get("routes", {}).items():
+            if task_type not in provider_backed_routes:
+                continue
+            primary = route.get("primary", {})
+            if primary.get("provider") == "mock":
+                mock_routes.append(f"{task_type}.primary")
+            for index, fallback in enumerate(route.get("fallback", []), start=1):
+                if fallback.get("provider") == "mock":
+                    mock_routes.append(f"{task_type}.fallback[{index}]")
+        return mock_routes
+
     def _route_target(self, route: dict[str, Any]) -> RouteTarget:
         return RouteTarget(
             provider=route["provider"],
@@ -158,7 +172,12 @@ class ModelRouter:
             primary["provider"] = provider
             primary["model"] = model
             fallback = route.setdefault("fallback", [])
-            if not any(item.get("provider") == "mock" for item in fallback):
+            allow_mock_fallback = os.getenv("ALLOW_MOCK_FALLBACK", "true").strip().lower() not in {
+                "0",
+                "false",
+                "no",
+            }
+            if allow_mock_fallback and not any(item.get("provider") == "mock" for item in fallback):
                 fallback.append(mock_primary)
         return effective
 

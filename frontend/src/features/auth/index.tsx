@@ -10,6 +10,8 @@ type LoginLocationState = {
   from?: string
 }
 
+const showDemoLogin = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true'
+
 export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -42,10 +44,10 @@ export function LoginPage() {
         <Alert type="warning" showIcon message="登录状态已过期" description="请重新登录后继续处理刚才的事项" />
       ) : null}
       <Form layout="vertical" onFinish={(values) => mutation.mutate(values)}>
-        <Form.Item label="账号" name="email" initialValue="admin@zbt.local">
+        <Form.Item label="账号" name="email" initialValue={showDemoLogin ? 'admin@zbt.local' : undefined}>
           <Input />
         </Form.Item>
-        <Form.Item label="密码" name="password" initialValue="demo-password">
+        <Form.Item label="密码" name="password" initialValue={showDemoLogin ? 'demo-password' : undefined}>
           <Input.Password />
         </Form.Item>
         <Form.Item hidden name="tenant_id" initialValue={tenantId}>

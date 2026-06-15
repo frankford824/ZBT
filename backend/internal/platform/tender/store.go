@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 
@@ -111,10 +114,8 @@ type UpdateSourceRequest = CreateSourceRequest
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{
-		pool: pool,
-		client: &http.Client{
-			Timeout: 6 * time.Second,
-		},
+		pool:   pool,
+		client: newVerificationHTTPClient(),
 	}
 }
 
@@ -661,8 +662,68 @@ func clampScore(value int) int {
 }
 
 func validHTTPURL(value string) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return publicNetIP(addr)
+	}
+	return strings.Contains(host, ".")
+}
+
+func newVerificationHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return &http.Client{
+		Timeout: 6 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(address)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+				if err != nil {
+					return nil, err
+				}
+				if len(ips) == 0 {
+					return nil, ErrInvalidRequest
+				}
+				for _, ip := range ips {
+					if !publicNetIP(ip) {
+						return nil, ErrInvalidRequest
+					}
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+			},
+		},
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if !validHTTPURL(req.URL.String()) {
+				return ErrInvalidRequest
+			}
+			return nil
+		},
+	}
+}
+
+func publicNetIP(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsValid() &&
+		addr.IsGlobalUnicast() &&
+		!addr.IsPrivate() &&
+		!addr.IsLoopback() &&
+		!addr.IsLinkLocalUnicast() &&
+		!addr.IsLinkLocalMulticast() &&
+		!addr.IsMulticast() &&
+		!addr.IsUnspecified()
 }
 
 func defaultString(value, fallback string) string {

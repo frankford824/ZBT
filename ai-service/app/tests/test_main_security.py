@@ -5,12 +5,15 @@ import pytest
 
 from app.main import (
     DEFAULT_AI_HMAC_SECRET,
+    DEFAULT_MINIO_ACCESS_KEY,
+    DEFAULT_MINIO_SECRET_KEY,
     ai_service_hmac_secret,
     production_mode,
     safe_output_filename,
     validate_production_config,
     verify_request_signature,
 )
+from app.gateway.model_router import ModelRouter
 
 
 def test_safe_output_filename_keeps_task_output_in_temp_directory() -> None:
@@ -74,8 +77,63 @@ def test_validate_production_config_rejects_development_secret(monkeypatch) -> N
         validate_production_config()
 
 
-def test_validate_production_config_allows_explicit_secret(monkeypatch) -> None:
-    monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret")
+def test_validate_production_config_rejects_development_minio_credentials(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("MINIO_ACCESS_KEY", DEFAULT_MINIO_ACCESS_KEY)
+    monkeypatch.setenv("MINIO_SECRET_KEY", DEFAULT_MINIO_SECRET_KEY)
+
+    with pytest.raises(RuntimeError, match="MINIO_ACCESS_KEY"):
+        validate_production_config()
+
+
+def test_validate_production_config_rejects_mock_provider_mode(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")
+
+    with pytest.raises(RuntimeError, match="USE_MOCK_PROVIDERS"):
+        validate_production_config()
+
+
+def test_validate_production_config_rejects_mock_model_routes(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+
+    with pytest.raises(RuntimeError, match="MockProvider"):
+        validate_production_config()
+
+
+def test_validate_production_config_allows_explicit_production_config(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+    monkeypatch.setattr(
+        "app.main.router",
+        ModelRouter(
+            {
+                "providers": {
+                    "openai_compatible_primary": {
+                        "type": "openai_compatible",
+                        "base_url_env": "OPENAI_BASE_URL",
+                        "api_key_env": "OPENAI_API_KEY",
+                        "default_base_url": "https://example.test/v1",
+                    }
+                },
+                "routes": {
+                    "chapter_generate": {
+                        "primary": {"provider": "openai_compatible_primary", "model": "real-model"}
+                    }
+                },
+            }
+        ),
+    )
 
     validate_production_config()
+
+
+def _set_production_security_env(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "prod-minio-access")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "prod-minio-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "prod-openai-key")

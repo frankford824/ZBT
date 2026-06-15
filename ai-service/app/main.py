@@ -53,6 +53,8 @@ app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0", lifespan=lifespan
 router = ModelRouter.from_yaml(CONFIG_PATH)
 PUBLIC_PATHS = {"/healthz", "/models/health"}
 DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
+DEFAULT_MINIO_ACCESS_KEY = "zbt_minio"
+DEFAULT_MINIO_SECRET_KEY = "zbt_minio_secret"
 
 
 @app.middleware("http")
@@ -536,6 +538,20 @@ def validate_production_config() -> None:
         return
     if ai_service_hmac_secret() == DEFAULT_AI_HMAC_SECRET:
         raise RuntimeError("AI_SERVICE_HMAC_SECRET must be set to a non-development value in production")
+    if insecure_config_value(os.getenv("MINIO_ACCESS_KEY", DEFAULT_MINIO_ACCESS_KEY), DEFAULT_MINIO_ACCESS_KEY):
+        raise RuntimeError("MINIO_ACCESS_KEY must be set to a non-development value in production")
+    if insecure_config_value(os.getenv("MINIO_SECRET_KEY", DEFAULT_MINIO_SECRET_KEY), DEFAULT_MINIO_SECRET_KEY):
+        raise RuntimeError("MINIO_SECRET_KEY must be set to a non-development value in production")
+    if allow_mock_providers_in_production():
+        return
+    if os.getenv("USE_MOCK_PROVIDERS", "true").strip().lower() not in {"0", "false", "no"}:
+        raise RuntimeError("USE_MOCK_PROVIDERS must be false in production")
+    if os.getenv("ALLOW_MOCK_FALLBACK", "true").strip().lower() not in {"0", "false", "no"}:
+        raise RuntimeError("ALLOW_MOCK_FALLBACK must be false in production")
+    mock_routes = router.provider_backed_mock_routes()
+    if mock_routes:
+        preview = ", ".join(mock_routes[:8])
+        raise RuntimeError(f"MockProvider is not allowed in production model routes: {preview}")
 
 
 def production_mode() -> bool:
@@ -543,3 +559,12 @@ def production_mode() -> bool:
         os.getenv(key, "").strip().lower() in {"prod", "production", "release"}
         for key in ("APP_ENV", "ZBT_ENV", "ENVIRONMENT", "GIN_MODE")
     )
+
+
+def allow_mock_providers_in_production() -> bool:
+    return os.getenv("ALLOW_MOCK_PROVIDERS_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes"}
+
+
+def insecure_config_value(value: str, development_default: str) -> bool:
+    value = value.strip()
+    return value == "" or value == development_default

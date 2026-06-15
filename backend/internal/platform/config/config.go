@@ -9,6 +9,8 @@ import (
 const (
 	DefaultAIServiceHMACSecret = "dev-only-zbt-ai-callback-secret"
 	DefaultJWTSecret           = "dev-only-zbt-jwt-secret"
+	DefaultMinIOAccessKey      = "zbt_minio"
+	DefaultMinIOSecretKey      = "zbt_minio_secret"
 )
 
 type Config struct {
@@ -41,8 +43,8 @@ func Load() Config {
 		AICallbackURL:        env("AI_CALLBACK_URL", "http://backend:8080/api/v1/ai/callbacks/tasks"),
 		MinIOEndpoint:        env("MINIO_ENDPOINT", "minio:9000"),
 		MinIOPublicEndpoint:  env("MINIO_PUBLIC_ENDPOINT", env("MINIO_ENDPOINT", "minio:9000")),
-		MinIOAccessKey:       env("MINIO_ACCESS_KEY", "zbt_minio"),
-		MinIOSecretKey:       env("MINIO_SECRET_KEY", "zbt_minio_secret"),
+		MinIOAccessKey:       env("MINIO_ACCESS_KEY", DefaultMinIOAccessKey),
+		MinIOSecretKey:       env("MINIO_SECRET_KEY", DefaultMinIOSecretKey),
 		MinIOUseSSL:          envBool("MINIO_USE_SSL", false),
 		MinIORegion:          env("MINIO_REGION", "us-east-1"),
 		MinIOBucket:          env("MINIO_BUCKET", "zbt-files"),
@@ -63,6 +65,12 @@ func (cfg Config) Validate() error {
 	}
 	if insecureSecret(cfg.AIServiceHMACSecret, DefaultAIServiceHMACSecret) {
 		return errors.New("AI_SERVICE_HMAC_SECRET must be set to a non-development value in production")
+	}
+	if insecureSecret(cfg.MinIOAccessKey, DefaultMinIOAccessKey) {
+		return errors.New("MINIO_ACCESS_KEY must be set to a non-development value in production")
+	}
+	if insecureSecret(cfg.MinIOSecretKey, DefaultMinIOSecretKey) {
+		return errors.New("MINIO_SECRET_KEY must be set to a non-development value in production")
 	}
 	return nil
 }

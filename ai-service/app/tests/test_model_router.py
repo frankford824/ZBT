@@ -204,6 +204,38 @@ def test_use_mock_providers_false_rewrites_mock_primary_to_real_provider(
     assert router.config["routes"]["chapter_generate"]["fallback"][0]["provider"] == "mock"
 
 
+def test_use_mock_providers_false_can_disable_mock_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+    monkeypatch.setenv("AI_LLM_PROVIDER", "openai_compatible_primary")
+    monkeypatch.setenv("AI_LLM_MODEL", "real-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "mock", "model": "mock-model"},
+                }
+            },
+        }
+    )
+
+    assert router.resolve("chapter_generate", tenant_id="tenant-demo").provider == "openai_compatible_primary"
+    assert router.config["routes"]["chapter_generate"].get("fallback", []) == []
+    assert router.provider_backed_mock_routes() == []
+
+
 def test_use_mock_providers_false_requires_real_route_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

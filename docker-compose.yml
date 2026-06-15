@@ -29,8 +29,8 @@ services:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: zbt_minio
-      MINIO_ROOT_PASSWORD: zbt_minio_secret
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-zbt_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-zbt_minio_secret}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -56,8 +56,8 @@ services:
       AI_MODEL_PRICING_JSON: ${AI_MODEL_PRICING_JSON:-{}}
       MINIO_ENDPOINT: minio:9000
       MINIO_PUBLIC_ENDPOINT: 127.0.0.1:9000
-      MINIO_ACCESS_KEY: zbt_minio
-      MINIO_SECRET_KEY: zbt_minio_secret
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-zbt_minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-zbt_minio_secret}
       MINIO_REGION: us-east-1
       MINIO_BUCKET: zbt-files
     depends_on:
@@ -98,8 +98,8 @@ services:
       BID_EXPORT_WATERMARK_TEXT: ${BID_EXPORT_WATERMARK_TEXT:-}
       AI_SERVICE_HMAC_SECRET: ${AI_SERVICE_HMAC_SECRET:-dev-only-zbt-ai-callback-secret}
       MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: zbt_minio
-      MINIO_SECRET_KEY: zbt_minio_secret
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-zbt_minio}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-zbt_minio_secret}
       MINIO_BUCKET: zbt-files
     ports:
       - "8000:8000"

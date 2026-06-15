@@ -492,10 +492,10 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/bids/:id/exports", rbac.Require("bid", rbac.LevelRead), s.listBidExports)
 	group.GET("/bid-exports/:exportId", rbac.Require("bid", rbac.LevelRead), s.getBidExport)
 	group.POST("/bids/:id/submit-for-approval", rbac.Require("bid", rbac.LevelFull), s.submitBidForApproval)
-	group.POST("/files/presign-upload", rbac.Require("knowledge", rbac.LevelFull), s.presignFileUpload)
-	group.POST("/files/:id/confirm", rbac.Require("knowledge", rbac.LevelFull), s.confirmFileUpload)
-	group.GET("/files/:id/download-url", rbac.Require("knowledge", rbac.LevelRead), s.fileDownloadURL)
-	group.GET("/files/:id/preview-url", rbac.Require("knowledge", rbac.LevelRead), s.filePreviewURL)
+	group.POST("/files/presign-upload", s.presignFileUpload)
+	group.POST("/files/:id/confirm", s.confirmFileUpload)
+	group.GET("/files/:id/download-url", s.fileDownloadURL)
+	group.GET("/files/:id/preview-url", s.filePreviewURL)
 	group.GET("/ai-tasks/:taskId", rbac.Require("dashboard", rbac.LevelRead), s.getAITask)
 	group.GET("/approval-chains", rbac.Require("team", rbac.LevelRead), s.listApprovalChains)
 	group.POST("/approval-chains", rbac.Require("team", rbac.LevelFull), s.createApprovalChain)
@@ -1878,12 +1878,23 @@ func (s *server) presignFileUpload(c *gin.Context) {
 		respondBadRequest(c)
 		return
 	}
+	if !requireFileAccess(c, req.BizType, rbac.LevelFull) {
+		return
+	}
 	userID, _ := c.Get("user_id")
 	result, err := s.fileService.PresignUpload(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req)
 	respondStatus(c, http.StatusCreated, result, err)
 }
 
 func (s *server) confirmFileUpload(c *gin.Context) {
+	asset, err := s.fileService.GetAsset(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	if !requireFileAccess(c, asset.BizType, rbac.LevelFull) {
+		return
+	}
 	result, err := s.fileService.ConfirmUpload(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	if err != nil {
 		respond(c, nil, err)
@@ -1898,13 +1909,45 @@ func (s *server) confirmFileUpload(c *gin.Context) {
 }
 
 func (s *server) fileDownloadURL(c *gin.Context) {
+	if !s.requireExistingFileAccess(c, rbac.LevelRead) {
+		return
+	}
 	result, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), false)
 	respond(c, result, err)
 }
 
 func (s *server) filePreviewURL(c *gin.Context) {
+	if !s.requireExistingFileAccess(c, rbac.LevelRead) {
+		return
+	}
 	result, err := s.fileService.DownloadURL(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), true)
 	respond(c, result, err)
+}
+
+func (s *server) requireExistingFileAccess(c *gin.Context, level rbac.Level) bool {
+	asset, err := s.fileService.GetAsset(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return false
+	}
+	return requireFileAccess(c, asset.BizType, level)
+}
+
+func requireFileAccess(c *gin.Context, bizType string, level rbac.Level) bool {
+	module := fileAccessModule(bizType)
+	if rbac.Allows(rbac.PermissionsFromContext(c)[module], level) {
+		return true
+	}
+	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "permission_denied", "error": "当前账号没有此操作权限", "module": module})
+	return false
+}
+
+func fileAccessModule(bizType string) string {
+	normalized := strings.ToLower(strings.TrimSpace(bizType))
+	if strings.HasPrefix(normalized, "bid") {
+		return "bid"
+	}
+	return "knowledge"
 }
 
 func (s *server) getAITask(c *gin.Context) {

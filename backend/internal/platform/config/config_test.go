@@ -46,11 +46,25 @@ func TestValidateAllowsProductionOverrides(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("JWT_SECRET", "prod-jwt-secret")
 	t.Setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret")
+	t.Setenv("MINIO_ACCESS_KEY", "prod-minio-access")
+	t.Setenv("MINIO_SECRET_KEY", "prod-minio-secret")
 	cfg := Load()
 	cfg.DatabaseURL = "postgres://example"
 
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected production config with explicit secrets to validate: %v", err)
+	}
+}
+
+func TestValidateRejectsDevelopmentMinIOCredentialsInProduction(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("JWT_SECRET", "prod-jwt-secret")
+	t.Setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret")
+	cfg := Load()
+	cfg.DatabaseURL = "postgres://example"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected production config with development MinIO credentials to be rejected")
 	}
 }
 
