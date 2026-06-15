@@ -28,6 +28,7 @@ import {
   fetchProjectActivities,
   fetchProjectMilestones,
   fetchProjects,
+  getApiErrorMessage,
   transitionProject,
   type ProjectDTO,
 } from '../../shared/api/client'
@@ -92,7 +93,7 @@ export function ProjectsPage() {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       message.success('项目已创建')
     },
-    onError: () => message.error('项目创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '项目创建失败')),
   })
 
   const table = () => {
@@ -218,7 +219,7 @@ export function ProjectDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] })
       message.success('项目状态已更新')
     },
-    onError: () => message.error('状态更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '状态更新失败')),
   })
   const milestoneMutation = useMutation({
     mutationFn: (payload: { title: string; status?: 'pending' | 'done'; due_date?: string; sort_order?: number; note?: string }) =>
@@ -230,7 +231,7 @@ export function ProjectDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['project-activities', projectId] })
       message.success('里程碑已创建')
     },
-    onError: () => message.error('里程碑创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '里程碑创建失败')),
   })
   const costMutation = useMutation({
     mutationFn: () => createCostProject(projectId),
@@ -238,7 +239,7 @@ export function ProjectDetailPage() {
       message.success('成本项目已创建')
       navigate(`/costs/${cost.id}`)
     },
-    onError: () => message.error('仅中标项目可创建成本项目'),
+    onError: (error) => message.error(getApiErrorMessage(error, '仅中标项目可创建成本项目')),
   })
   const archiveCaseMutation = useMutation({
     mutationFn: () => archiveProjectCase(projectId),
@@ -247,7 +248,7 @@ export function ProjectDetailPage() {
       message.success(`${result.case.title}已回流知识库`)
       navigate('/knowledge/docs')
     },
-    onError: () => message.error('仅中标项目可回流知识库'),
+    onError: (error) => message.error(getApiErrorMessage(error, '仅中标项目可回流知识库')),
   })
 
   if (project.isLoading) return <LoadingBlock />

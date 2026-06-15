@@ -25,6 +25,7 @@ import {
   fetchTender,
   fetchTenderSources,
   fetchTenders,
+  getApiErrorMessage,
   unfavoriteTender,
   verifyTenderSource,
   type TenderDTO,
@@ -75,7 +76,7 @@ export function TendersPage() {
       queryClient.invalidateQueries({ queryKey: ['tenders'] })
       message.success('收藏状态已更新')
     },
-    onError: () => message.error('收藏更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '收藏更新失败')),
   })
   const sourceMutation = useMutation({
     mutationFn: createTenderSource,
@@ -84,7 +85,7 @@ export function TendersPage() {
       queryClient.invalidateQueries({ queryKey: ['tender-sources'] })
       message.success('来源已添加')
     },
-    onError: () => message.error('来源添加失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '来源添加失败')),
   })
   const verifyMutation = useMutation({
     mutationFn: verifyTenderSource,
@@ -92,7 +93,7 @@ export function TendersPage() {
       queryClient.invalidateQueries({ queryKey: ['tender-sources'] })
       message.success('检测完成')
     },
-    onError: () => message.error('检测失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '检测失败')),
   })
 
   const tenderTable = () => (
@@ -244,7 +245,7 @@ export function TenderDetailPage() {
       message.success('项目已创建')
       navigate(`/projects/${project.id}`)
     },
-    onError: () => message.error('创建项目失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '创建项目失败')),
   })
   const bidMutation = useMutation({
     mutationFn: () => createBidFromTender(tenderId || ''),
@@ -252,7 +253,7 @@ export function TenderDetailPage() {
       message.success('标书已创建')
       navigate(`/bids/${bid.id}/wizard?step=1`)
     },
-    onError: () => message.error('生成标书失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '生成标书失败')),
   })
 
   if (tender.isLoading) return <LoadingBlock />

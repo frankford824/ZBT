@@ -30,6 +30,7 @@ import {
   fetchMembers,
   fetchNotifications,
   fetchRoles,
+  getApiErrorMessage,
   inviteMember,
   markNotificationsRead,
   rejectApproval,
@@ -153,7 +154,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'members'] })
       message.success('成员已邀请')
     },
-    onError: () => message.error('邀请成员失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '邀请成员失败')),
   })
 
   const updateMemberMutation = useMutation({
@@ -168,7 +169,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'members'] })
       message.success('成员已更新')
     },
-    onError: () => message.error('成员更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '成员更新失败')),
   })
 
   const deleteMemberMutation = useMutation({
@@ -177,7 +178,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'members'] })
       message.success('成员已禁用')
     },
-    onError: () => message.error('成员禁用失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '成员禁用失败')),
   })
 
   const createChainMutation = useMutation({
@@ -188,7 +189,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'approval-chains'] })
       message.success('审批流程已创建')
     },
-    onError: () => message.error('审批流程创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '审批流程创建失败')),
   })
 
   const updateChainMutation = useMutation({
@@ -204,7 +205,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'approval-chains'] })
       message.success('审批流程已更新')
     },
-    onError: () => message.error('审批流程更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '审批流程更新失败')),
   })
 
   const deleteChainMutation = useMutation({
@@ -213,7 +214,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'approval-chains'] })
       message.success('审批流程已删除')
     },
-    onError: () => message.error('审批流程删除失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '审批流程删除失败')),
   })
 
   const approvalMutation = useMutation({
@@ -224,7 +225,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'notifications'] })
       message.success('审批状态已更新')
     },
-    onError: () => message.error('审批操作失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '审批操作失败')),
   })
 
   const readMutation = useMutation({
@@ -233,7 +234,7 @@ export function TeamPage() {
       queryClient.invalidateQueries({ queryKey: ['team', 'notifications'] })
       message.success(`已读 ${result.updated} 条通知`)
     },
-    onError: () => message.error('通知状态更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '通知状态更新失败')),
   })
 
   const createChain = (values: {

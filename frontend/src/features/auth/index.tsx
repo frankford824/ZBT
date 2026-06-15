@@ -3,7 +3,7 @@ import { Alert, Button, Form, Input, message, Space, Typography } from 'antd'
 import { useMutation } from '@tanstack/react-query'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
-import { createKnowledgeCategory, login, registerTenant, updateTenant } from '../../shared/api/client'
+import { createKnowledgeCategory, getApiErrorMessage, login, registerTenant, updateTenant } from '../../shared/api/client'
 import { safeReturnPath } from '../../shared/auth/session'
 
 type LoginLocationState = {
@@ -146,7 +146,7 @@ export function OnboardingPage() {
       message.success('初始化已完成')
       navigate('/dashboard', { replace: true })
     },
-    onError: () => message.error('初始化失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '初始化失败')),
   })
 
   if (!isAuthenticated) {

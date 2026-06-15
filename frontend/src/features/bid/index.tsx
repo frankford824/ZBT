@@ -69,6 +69,7 @@ import {
   fetchBids,
   fetchChapterDiff,
   fetchChapterVersions,
+  getApiErrorMessage,
   generateBid,
   generateBidOutline,
   cancelBidGenerationJob,
@@ -127,7 +128,7 @@ export function BidNewPage() {
       message.success('标书已创建')
       navigate(`/bids/${bid.id}/wizard?step=1`)
     },
-    onError: () => message.error('创建标书失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '创建标书失败')),
   })
   const {
     control,
@@ -267,7 +268,7 @@ export function BidListPage() {
       message.success('已提交审批')
       await queryClient.invalidateQueries({ queryKey: ['bids'] })
     },
-    onError: () => message.error('提交审批失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '提交审批失败')),
   })
   const archiveMutation = useMutation({
     mutationFn: deleteBid,
@@ -275,7 +276,7 @@ export function BidListPage() {
       message.success('标书已归档')
       await queryClient.invalidateQueries({ queryKey: ['bids'] })
     },
-    onError: () => message.error('标书归档失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '标书归档失败')),
   })
   if (bids.isLoading) return <LoadingBlock />
   if (bids.isError) return <ErrorBlock />
@@ -388,7 +389,7 @@ export function BidTemplatesPage() {
       message.success('已按模板创建标书')
       navigate(`/bids/${bid.id}/wizard?step=1`)
     },
-    onError: () => message.error('模板使用失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '模板使用失败')),
   })
 
   const renderSections = (template: BidTemplateDTO) => {
@@ -604,7 +605,7 @@ export function BidWizardPage() {
       setTenderFile(null)
       await queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] })
     },
-    onError: () => message.error('上传招标文件失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '上传招标文件失败')),
   })
   const parseTenderMutation = useMutation({
     mutationFn: () => parseBidTender(bidId),
@@ -615,7 +616,7 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
       ])
     },
-    onError: () => message.error('解析招标文件失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '解析招标文件失败')),
   })
   const confirmParseMutation = useMutation({
     mutationFn: () => {
@@ -628,7 +629,7 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
       ])
     },
-    onError: () => message.error('确认文件信息失败，请重新解读后再试'),
+    onError: (error) => message.error(getApiErrorMessage(error, '确认文件信息失败，请重新解读后再试')),
   })
   const generateOutlineMutation = useMutation({
     mutationFn: () => generateBidOutline(bidId),
@@ -639,7 +640,7 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
       ])
     },
-    onError: () => message.error('生成目录大纲失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '生成目录大纲失败')),
   })
   const saveOutlineMutation = useMutation({
     mutationFn: (partId: string) =>
@@ -650,7 +651,7 @@ export function BidWizardPage() {
       message.success('目录已保存')
       await queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
     },
-    onError: () => message.error('保存目录失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '保存目录失败')),
   })
   const saveMaterialMutation = useMutation({
     mutationFn: () =>
@@ -662,7 +663,7 @@ export function BidWizardPage() {
       message.success('素材选择已保存')
       await queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] })
     },
-    onError: () => message.error('保存素材选择失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '保存素材选择失败')),
   })
   const generateBidMutation = useMutation({
     mutationFn: (partCode?: string) => generateBid(bidId, partCode ? { scope: 'part', part_code: partCode } : { scope: 'full' }),
@@ -673,7 +674,7 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
       ])
     },
-    onError: () => message.error('生成正文失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '生成正文失败')),
   })
   const pauseJobMutation = useMutation({
     mutationFn: pauseBidGenerationJob,
@@ -681,7 +682,7 @@ export function BidWizardPage() {
       message.success('生成已暂停')
       await queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] })
     },
-    onError: () => message.error('暂停生成失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '暂停生成失败')),
   })
   const resumeJobMutation = useMutation({
     mutationFn: resumeBidGenerationJob,
@@ -692,7 +693,7 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
       ])
     },
-    onError: () => message.error('继续生成失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '继续生成失败')),
   })
   const cancelJobMutation = useMutation({
     mutationFn: cancelBidGenerationJob,
@@ -700,7 +701,7 @@ export function BidWizardPage() {
       message.success('生成已取消')
       await queryClient.invalidateQueries({ queryKey: ['bid-generation-jobs', bidId] })
     },
-    onError: () => message.error('取消生成失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '取消生成失败')),
   })
   const exportMutation = useMutation({
     mutationFn: (payload: { export_type: 'docx' | 'pdf' | 'zip'; part_code: string }) => createBidExport(bidId, payload),
@@ -708,7 +709,7 @@ export function BidWizardPage() {
       message.success('已开始生成导出文件')
       await queryClient.invalidateQueries({ queryKey: ['bid-exports', bidId] })
     },
-    onError: () => message.error('生成导出文件失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '生成导出文件失败')),
   })
   const downloadMutation = useMutation({
     mutationFn: fetchBidExport,
@@ -719,7 +720,7 @@ export function BidWizardPage() {
       }
       window.open(detail.download.url, '_blank', 'noopener,noreferrer')
     },
-    onError: () => message.error('获取下载链接失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '获取下载链接失败')),
   })
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
@@ -1380,7 +1381,7 @@ export function BidEditorPage() {
       message.success('章节已保存')
       await invalidateChapterState()
     },
-    onError: () => message.error('保存章节失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '保存章节失败')),
   })
   const acceptMutation = useMutation({
     mutationFn: () => acceptChapter(currentChapter?.id ?? ''),
@@ -1388,7 +1389,7 @@ export function BidEditorPage() {
       message.success('章节已采纳')
       await invalidateChapterState()
     },
-    onError: () => message.error('采纳章节失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '采纳章节失败')),
   })
   const regenerateMutation = useMutation({
     mutationFn: () => regenerateChapter(currentChapter?.id ?? ''),
@@ -1397,7 +1398,7 @@ export function BidEditorPage() {
       message.success('已开始重新生成本章')
       await invalidateChapterState()
     },
-    onError: () => message.error('重新生成失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '重新生成失败')),
   })
   const aiActionMutation = useMutation({
     mutationFn: (action: 'optimize' | 'expand' | 'shorten' | 'add_detail' | 'self_check') =>
@@ -1407,7 +1408,7 @@ export function BidEditorPage() {
       message.success('已开始处理本章')
       await invalidateChapterState()
     },
-    onError: () => message.error('处理本章失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '处理本章失败')),
   })
   const isRegenerating = Boolean(
     regenerateMutation.isPending ||

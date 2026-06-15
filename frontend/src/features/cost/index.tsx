@@ -28,6 +28,7 @@ import {
   fetchCostItems,
   fetchCostProject,
   fetchCostProjects,
+  getApiErrorMessage,
   type CostItemDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
@@ -161,7 +162,7 @@ export function CostDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['cost-analysis', costProjectId] })
       message.success('成本项已新增')
     },
-    onError: () => message.error('成本项新增失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '成本项新增失败')),
   })
   const adviceMutation = useMutation({
     mutationFn: () => createCostAdvice(costProjectId),
@@ -169,12 +170,12 @@ export function CostDetailPage() {
       setAdviceTaskId(task.id)
       message.success('已开始生成建议')
     },
-    onError: () => message.error('生成建议失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '生成建议失败')),
   })
   const reportMutation = useMutation({
     mutationFn: () => createCostReport(costProjectId),
     onSuccess: (report) => message.success(report.summary || '报告已生成'),
-    onError: () => message.error('报告生成失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '报告生成失败')),
   })
   const adviceTaskStatus = adviceTask.data?.status
   useEffect(() => {

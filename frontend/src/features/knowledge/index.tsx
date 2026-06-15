@@ -64,8 +64,8 @@ export function KnowledgeHomePage() {
     setSearching(true)
     try {
       setSearchResult(await searchKnowledge({ query, limit: 8 }))
-    } catch {
-      message.error('搜索失败')
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '搜索失败'))
     } finally {
       setSearching(false)
     }
@@ -632,8 +632,8 @@ export function KnowledgeTemplatesPage() {
       setOpen(false)
       form.resetFields()
     },
-    onError: () => {
-      message.error('创建模板失败')
+    onError: (error) => {
+      message.error(getApiErrorMessage(error, '创建模板失败'))
     },
   })
 
@@ -755,7 +755,7 @@ export function KnowledgeTagsPage() {
       message.success('标签已创建')
       closeModal()
     },
-    onError: () => message.error('标签创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '标签创建失败')),
   })
   const updateTag = useMutation({
     mutationFn: ({ id, values }: { id: string; values: { name?: string; color?: string } }) =>
@@ -765,7 +765,7 @@ export function KnowledgeTagsPage() {
       message.success('标签已更新')
       closeModal()
     },
-    onError: () => message.error('标签更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '标签更新失败')),
   })
   const deleteTag = useMutation({
     mutationFn: deleteKnowledgeTag,
@@ -773,7 +773,7 @@ export function KnowledgeTagsPage() {
       await refreshTags()
       message.success('标签已删除')
     },
-    onError: () => message.error('标签删除失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '标签删除失败')),
   })
   const documentsByTag = (tag: KnowledgeTagDTO) =>
     (documents.data ?? []).filter((document) => document.tags.some((item) => item.id === tag.id))

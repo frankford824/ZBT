@@ -42,6 +42,7 @@ import {
   fetchComplianceChecks,
   fetchComplianceIssues,
   fetchComplianceRules,
+  getApiErrorMessage,
   ignoreComplianceIssue,
   updateComplianceRule,
   type ComplianceCheckDTO,
@@ -175,7 +176,7 @@ export function CompliancePage() {
       message.success('合规检查已完成')
       navigate(`/compliance/${snapshot.check.id}`)
     },
-    onError: () => message.error('合规检查创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '合规检查创建失败')),
   })
 
   const createRuleMutation = useMutation({
@@ -186,7 +187,7 @@ export function CompliancePage() {
       queryClient.invalidateQueries({ queryKey: ['compliance-rules'] })
       message.success('规则已创建')
     },
-    onError: () => message.error('规则创建失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '规则创建失败')),
   })
 
   const updateRuleMutation = useMutation({
@@ -205,7 +206,7 @@ export function CompliancePage() {
       queryClient.invalidateQueries({ queryKey: ['compliance-rules'] })
       message.success('规则已更新')
     },
-    onError: () => message.error('规则更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '规则更新失败')),
   })
 
   const deleteRuleMutation = useMutation({
@@ -214,7 +215,7 @@ export function CompliancePage() {
       queryClient.invalidateQueries({ queryKey: ['compliance-rules'] })
       message.success('规则已删除')
     },
-    onError: () => message.error('规则删除失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '规则删除失败')),
   })
 
   return (
@@ -436,13 +437,13 @@ export function ComplianceDetailPage() {
       refresh()
       message.success('问题状态已更新')
     },
-    onError: () => message.error('问题状态更新失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '问题状态更新失败')),
   })
 
   const reportMutation = useMutation({
     mutationFn: () => createComplianceReport(checkId),
     onSuccess: (report) => message.success(report.summary || '报告已生成'),
-    onError: () => message.error('报告生成失败'),
+    onError: (error) => message.error(getApiErrorMessage(error, '报告生成失败')),
   })
 
   const categories = useMemo(() => {
