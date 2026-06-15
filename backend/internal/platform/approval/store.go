@@ -285,13 +285,17 @@ func (s *Store) SubmitBid(ctx context.Context, tenantID, userID, bidID string) (
 }
 
 func (s *Store) ListInstances(ctx context.Context, tenantID, status string) ([]Instance, error) {
+	status, err := normalizeInstanceStatusFilter(status)
+	if err != nil {
+		return nil, err
+	}
 	instances := []Instance{}
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, instanceSelectSQL()+`
 			where ai.tenant_id = $1 and ($2 = '' or ai.status = $2)
 			order by ai.created_at desc
 			limit 100
-		`, tenantID, strings.TrimSpace(status))
+		`, tenantID, status)
 		if err != nil {
 			return err
 		}
@@ -671,4 +675,16 @@ func validateUUID(value string) error {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func normalizeInstanceStatusFilter(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pending", "approved", "rejected", "cancelled":
+		return strings.ToLower(strings.TrimSpace(value)), nil
+	default:
+		return "", ErrInvalidRequest
+	}
 }
