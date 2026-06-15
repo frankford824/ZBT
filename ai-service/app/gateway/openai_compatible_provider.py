@@ -109,10 +109,7 @@ class OpenAICompatibleProvider:
     def get_dimensions(self) -> int:
         if self.target and self.target.dimensions:
             return self.target.dimensions
-        configured = os.getenv(f"{self.name.upper()}_EMBEDDING_DIMENSIONS", "").strip()
-        if configured.isdigit():
-            return int(configured)
-        return 1024
+        return _env_positive_int(f"{self.name.upper()}_EMBEDDING_DIMENSIONS", 1024)
 
     def rerank(self, query: str, documents: list[str]) -> list[int]:
         prompt = {
@@ -177,7 +174,7 @@ class OpenAICompatibleProvider:
     def _timeout(self) -> int:
         if self.target and self.target.timeout_s:
             return self.target.timeout_s
-        return int(os.getenv("OPENAI_COMPATIBLE_TIMEOUT_S", "120"))
+        return _env_positive_int("OPENAI_COMPATIBLE_TIMEOUT_S", 120)
 
     def _api_key(self) -> str:
         return os.getenv(self.api_key_env, "").strip()
@@ -219,6 +216,17 @@ def _choice_text(data: dict[str, Any]) -> str:
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("chat completion returned empty content")
     return content
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def _json_from_text(text: str) -> dict[str, object]:
