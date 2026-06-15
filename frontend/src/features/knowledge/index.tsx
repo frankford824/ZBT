@@ -921,6 +921,7 @@ export function KnowledgeTagsPage() {
 }
 
 export function FilePreviewPage() {
+  const { message } = AntApp.useApp()
   const { fileId } = useParams()
   const preview = useQuery({
     queryKey: ['file-preview', fileId],
@@ -931,8 +932,12 @@ export function FilePreviewPage() {
     if (!fileId) {
       return
     }
-    const result = await fetchFileURL(fileId, 'download')
-    window.open(result.url, '_blank', 'noopener,noreferrer')
+    try {
+      const result = await fetchFileURL(fileId, 'download')
+      window.open(result.url, '_blank', 'noopener,noreferrer')
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '获取下载链接失败'))
+    }
   }
 
   return (
@@ -942,7 +947,7 @@ export function FilePreviewPage() {
       subtitle="文档预览"
       tags={['/files/:fileId/preview']}
       actions={[
-        <Button key="download" icon={<DownloadOutlined />} onClick={() => void openDownload()}>
+        <Button key="download" icon={<DownloadOutlined />} disabled={!fileId} onClick={() => void openDownload()}>
           下载
         </Button>,
       ]}
