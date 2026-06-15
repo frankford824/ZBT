@@ -1,22 +1,29 @@
 import { LoginOutlined, UserAddOutlined } from '@ant-design/icons'
 import { Alert, Button, Form, Input, Space, Typography } from 'antd'
 import { useMutation } from '@tanstack/react-query'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
 import { login, registerTenant } from '../../shared/api/client'
 import { safeReturnPath } from '../../shared/auth/session'
 
+type LoginLocationState = {
+  from?: string
+}
+
 export function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const setSession = useSessionStore((state) => state.setSession)
   const sessionExpired = searchParams.get('session') === 'expired'
   const tenantId = searchParams.get('tenant') ?? undefined
+  const locationState = location.state as LoginLocationState | null
+  const returnPath = safeReturnPath(searchParams.get('from') || locationState?.from)
   const mutation = useMutation({
     mutationFn: login,
     onSuccess: (payload) => {
       setSession(payload)
-      navigate(safeReturnPath(searchParams.get('from')), { replace: true })
+      navigate(returnPath, { replace: true })
     },
   })
 

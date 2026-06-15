@@ -29,7 +29,7 @@ export function expireSessionAndRedirect() {
   window.location.assign(`/login?session=expired&from=${from}`)
 }
 
-export function safeReturnPath(raw: string | null) {
+export function safeReturnPath(raw: string | null | undefined) {
   if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/login')) {
     return '/dashboard'
   }

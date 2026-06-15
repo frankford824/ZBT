@@ -7,6 +7,7 @@ import os
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -41,7 +42,14 @@ def routing_config_path() -> Path:
 
 CONFIG_PATH = routing_config_path()
 
-app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    validate_production_config()
+    yield
+
+
+app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0", lifespan=lifespan)
 router = ModelRouter.from_yaml(CONFIG_PATH)
 PUBLIC_PATHS = {"/healthz", "/models/health"}
 DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
@@ -521,3 +529,17 @@ def safe_output_filename(filename: str, export_type: str) -> str:
     if len(basename) > 120:
         basename = Path(basename).stem[: 120 - len(suffix)] + suffix
     return basename
+
+
+def validate_production_config() -> None:
+    if not production_mode():
+        return
+    if ai_service_hmac_secret() == DEFAULT_AI_HMAC_SECRET:
+        raise RuntimeError("AI_SERVICE_HMAC_SECRET must be set to a non-development value in production")
+
+
+def production_mode() -> bool:
+    return any(
+        os.getenv(key, "").strip().lower() in {"prod", "production", "release"}
+        for key in ("APP_ENV", "ZBT_ENV", "ENVIRONMENT", "GIN_MODE")
+    )

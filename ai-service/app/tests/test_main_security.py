@@ -1,7 +1,16 @@
 import hashlib
 import hmac
 
-from app.main import DEFAULT_AI_HMAC_SECRET, ai_service_hmac_secret, safe_output_filename, verify_request_signature
+import pytest
+
+from app.main import (
+    DEFAULT_AI_HMAC_SECRET,
+    ai_service_hmac_secret,
+    production_mode,
+    safe_output_filename,
+    validate_production_config,
+    verify_request_signature,
+)
 
 
 def test_safe_output_filename_keeps_task_output_in_temp_directory() -> None:
@@ -49,3 +58,24 @@ def test_ai_service_hmac_secret_allows_override(monkeypatch) -> None:
     monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "custom-secret")
 
     assert ai_service_hmac_secret() == "custom-secret"
+
+
+def test_production_mode_detects_release_environment(monkeypatch) -> None:
+    monkeypatch.setenv("GIN_MODE", "release")
+
+    assert production_mode()
+
+
+def test_validate_production_config_rejects_development_secret(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("AI_SERVICE_HMAC_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="AI_SERVICE_HMAC_SECRET"):
+        validate_production_config()
+
+
+def test_validate_production_config_allows_explicit_secret(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret")
+
+    validate_production_config()

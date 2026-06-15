@@ -1,8 +1,15 @@
 package config
 
-import "os"
+import (
+	"errors"
+	"os"
+	"strings"
+)
 
-const DefaultAIServiceHMACSecret = "dev-only-zbt-ai-callback-secret"
+const (
+	DefaultAIServiceHMACSecret = "dev-only-zbt-ai-callback-secret"
+	DefaultJWTSecret           = "dev-only-zbt-jwt-secret"
+)
 
 type Config struct {
 	HTTPAddr             string
@@ -39,9 +46,41 @@ func Load() Config {
 		MinIOUseSSL:          envBool("MINIO_USE_SSL", false),
 		MinIORegion:          env("MINIO_REGION", "us-east-1"),
 		MinIOBucket:          env("MINIO_BUCKET", "zbt-files"),
-		JWTSecret:            env("JWT_SECRET", "dev-only-zbt-jwt-secret"),
+		JWTSecret:            env("JWT_SECRET", DefaultJWTSecret),
 		DefaultTenantID:      env("DEFAULT_TENANT_ID", "00000000-0000-4000-8000-000000000001"),
 	}
+}
+
+func (cfg Config) Validate() error {
+	if strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return errors.New("DATABASE_URL is required")
+	}
+	if !ProductionMode() {
+		return nil
+	}
+	if insecureSecret(cfg.JWTSecret, DefaultJWTSecret) {
+		return errors.New("JWT_SECRET must be set to a non-development value in production")
+	}
+	if insecureSecret(cfg.AIServiceHMACSecret, DefaultAIServiceHMACSecret) {
+		return errors.New("AI_SERVICE_HMAC_SECRET must be set to a non-development value in production")
+	}
+	return nil
+}
+
+func ProductionMode() bool {
+	for _, key := range []string{"APP_ENV", "ZBT_ENV", "ENVIRONMENT", "GIN_MODE"} {
+		value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+		switch value {
+		case "prod", "production", "release":
+			return true
+		}
+	}
+	return false
+}
+
+func insecureSecret(value, developmentDefault string) bool {
+	value = strings.TrimSpace(value)
+	return value == "" || value == developmentDefault
 }
 
 func env(key, fallback string) string {

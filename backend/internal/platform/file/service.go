@@ -123,6 +123,10 @@ func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, re
 	if bizType == "" {
 		bizType = "knowledge"
 	}
+	bizID, err := normalizeOptionalUUID(req.BizID)
+	if err != nil {
+		return PresignUploadResponse{}, err
+	}
 	if req.SizeBytes < 0 {
 		return PresignUploadResponse{}, ErrInvalidRequest
 	}
@@ -152,7 +156,7 @@ func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, re
 			returning
 				id::text, biz_type, coalesce(biz_id::text, ''), object_key,
 				filename, content_type, size_bytes, status, created_at, updated_at
-		`, tenantID, userID, bizType, req.BizID, objectKey, filename, contentType, req.SizeBytes))
+		`, tenantID, userID, bizType, bizID, objectKey, filename, contentType, req.SizeBytes))
 		if err != nil {
 			return err
 		}
@@ -177,6 +181,10 @@ func (s *Service) CreateGeneratedAsset(ctx context.Context, tenantID, userID str
 	if bizType == "" {
 		bizType = "generated"
 	}
+	bizID, err := normalizeOptionalUUID(req.BizID)
+	if err != nil {
+		return Asset{}, err
+	}
 	filename := sanitizeFilename(req.Filename)
 	if filename == "" || len(req.Content) == 0 {
 		return Asset{}, ErrInvalidRequest
@@ -185,12 +193,12 @@ func (s *Service) CreateGeneratedAsset(ctx context.Context, tenantID, userID str
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	objectKey := GeneratedObjectKey(tenantID, bizType, req.BizID)
+	objectKey := GeneratedObjectKey(tenantID, bizType, bizID)
 	if _, err := s.internal.PutObject(ctx, s.bucket, objectKey, bytes.NewReader(req.Content), int64(len(req.Content)), minio.PutObjectOptions{ContentType: contentType}); err != nil {
 		return Asset{}, err
 	}
 	var asset Asset
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		created, err := scanAsset(tx.QueryRow(ctx, `
 			insert into file_assets (
 				tenant_id, owner_user_id, biz_type, biz_id,
@@ -211,7 +219,7 @@ func (s *Service) CreateGeneratedAsset(ctx context.Context, tenantID, userID str
 			returning
 				id::text, biz_type, coalesce(biz_id::text, ''), object_key,
 				filename, content_type, size_bytes, status, created_at, updated_at
-		`, tenantID, userID, bizType, req.BizID, objectKey, filename, contentType, int64(len(req.Content))))
+			`, tenantID, userID, bizType, bizID, objectKey, filename, contentType, int64(len(req.Content))))
 		if err != nil {
 			return err
 		}
@@ -340,6 +348,9 @@ func (s *Service) ensureBucket(ctx context.Context) error {
 }
 
 func (s *Service) assetByID(ctx context.Context, tenantID, fileID string) (Asset, error) {
+	if err := validateUUID(fileID); err != nil {
+		return Asset{}, err
+	}
 	var asset Asset
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		found, err := scanAsset(tx.QueryRow(ctx, `
@@ -407,6 +418,24 @@ func sanitizeSegment(value string) string {
 		}
 	}
 	return builder.String()
+}
+
+func normalizeOptionalUUID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if err := validateUUID(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func validateUUID(value string) error {
+	if _, err := uuid.Parse(strings.TrimSpace(value)); err != nil {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func contentDisposition(dispositionType, filename string) string {
