@@ -1140,15 +1140,16 @@ func (s *server) listMembers(c *gin.Context) {
 
 func (s *server) inviteMember(c *gin.Context) {
 	var req struct {
-		Email    string `json:"email" binding:"required"`
-		Name     string `json:"name" binding:"required"`
-		RoleCode string `json:"role_code"`
+		Email           string `json:"email" binding:"required"`
+		Name            string `json:"name" binding:"required"`
+		RoleCode        string `json:"role_code"`
+		InitialPassword string `json:"initial_password" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c)
 		return
 	}
-	result, err := s.store.InviteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Email, req.Name, req.RoleCode)
+	result, err := s.store.InviteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Email, req.Name, req.RoleCode, req.InitialPassword)
 	respondStatus(c, http.StatusCreated, result, err)
 }
 
@@ -2121,7 +2122,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return
 	}
-	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) {
+	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
 	}

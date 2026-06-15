@@ -23,6 +23,7 @@ type SessionState = {
   permissions: Record<string, ModulePermission>
   toggleCollapsed: () => void
   setSession: (payload: LoginSessionPayload) => void
+  setTenant: (tenant: Tenant) => void
   logout: () => void
 }
 
@@ -111,6 +112,19 @@ export const useSessionStore = create<SessionState>((set) => ({
   setSession: (payload) => {
     localStorage.setItem(storageKey, JSON.stringify(payload))
     set(toSessionState(payload))
+  },
+  setTenant: (tenant) => {
+    const raw = localStorage.getItem(storageKey)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as LoginSessionPayload
+        parsed.session.tenant = tenant
+        localStorage.setItem(storageKey, JSON.stringify(parsed))
+      } catch {
+        localStorage.removeItem(storageKey)
+      }
+    }
+    set({ tenant })
   },
   logout: () => {
     localStorage.removeItem(storageKey)

@@ -306,7 +306,11 @@ func (s *Store) ListMembers(ctx context.Context, tenantID string) ([]Member, err
 	return members, err
 }
 
-func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCode string) (Member, error) {
+func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCode, initialPassword string) (Member, error) {
+	initialPassword = strings.TrimSpace(initialPassword)
+	if len(initialPassword) < 8 {
+		return Member{}, ErrInvalidRequest
+	}
 	if roleCode == "" {
 		roleCode = "viewer"
 	}
@@ -319,10 +323,10 @@ func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCod
 		var user User
 		if err := tx.QueryRow(ctx, `
 			insert into users (email, name, password_hash)
-			values ($1, $2, crypt('demo-password', gen_salt('bf')))
+			values ($1, $2, crypt($3, gen_salt('bf')))
 			on conflict (email) do update set name = excluded.name, updated_at = now()
 			returning id::text, email, name
-		`, email, name).Scan(&user.ID, &user.Email, &user.Name); err != nil {
+		`, email, name, initialPassword).Scan(&user.ID, &user.Email, &user.Name); err != nil {
 			return err
 		}
 		if err := tx.QueryRow(ctx, `

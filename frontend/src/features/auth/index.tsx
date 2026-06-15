@@ -1,13 +1,18 @@
 import { LoginOutlined, UserAddOutlined } from '@ant-design/icons'
-import { Alert, Button, Form, Input, Space, Typography } from 'antd'
+import { Alert, Button, Form, Input, message, Space, Typography } from 'antd'
 import { useMutation } from '@tanstack/react-query'
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
-import { login, registerTenant } from '../../shared/api/client'
+import { createKnowledgeCategory, login, registerTenant, updateTenant } from '../../shared/api/client'
 import { safeReturnPath } from '../../shared/auth/session'
 
 type LoginLocationState = {
   from?: string
+}
+
+type OnboardingValues = {
+  tenant_name?: string
+  knowledge_categories?: string
 }
 
 const showDemoLogin = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true'
@@ -121,26 +126,71 @@ export function RegisterPage() {
 }
 
 export function OnboardingPage() {
+  const navigate = useNavigate()
+  const isAuthenticated = useSessionStore((state) => state.isAuthenticated)
+  const tenant = useSessionStore((state) => state.tenant)
+  const setTenant = useSessionStore((state) => state.setTenant)
+  const mutation = useMutation({
+    mutationFn: async (values: OnboardingValues) => {
+      const tenantName = values.tenant_name?.trim()
+      let updatedTenant: Awaited<ReturnType<typeof updateTenant>> | null = null
+      if (tenantName && tenantName !== tenant.name) {
+        updatedTenant = await updateTenant({ name: tenantName })
+      }
+      const categories = categoryNames(values.knowledge_categories)
+      await Promise.all(categories.map((name) => createKnowledgeCategory({ name })))
+      return { updatedTenant }
+    },
+    onSuccess: ({ updatedTenant }) => {
+      if (updatedTenant) setTenant(updatedTenant)
+      message.success('初始化已完成')
+      navigate('/dashboard', { replace: true })
+    },
+    onError: () => message.error('初始化失败'),
+  })
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+
   return (
     <Space direction="vertical" size={20} className="auth-stack">
       <div>
         <Typography.Title level={3} className="auth-form-title">
           企业初始化
         </Typography.Title>
-        <Typography.Text type="secondary">设置默认部门与知识库分类，团队即可开工</Typography.Text>
+        <Typography.Text type="secondary">确认企业名称与资料分类，团队即可开工</Typography.Text>
       </div>
-      <Form layout="vertical">
-        <Form.Item label="默认部门" name="department">
-          <Input placeholder="投标中心" />
+      <Form
+        layout="vertical"
+        initialValues={{
+          tenant_name: tenant.name,
+          knowledge_categories: '资质证书、业绩案例、技术方案',
+        }}
+        onFinish={(values) => mutation.mutate(values)}
+      >
+        <Form.Item label="企业名称" name="tenant_name" rules={[{ required: true, message: '企业名称必填' }]}>
+          <Input placeholder="杭州智建科技有限公司" />
         </Form.Item>
-        <Form.Item label="知识库分类" name="knowledge_categories">
+        <Form.Item label="资料分类" name="knowledge_categories">
           <Input placeholder="资质证书、业绩案例、技术方案" />
         </Form.Item>
-        <Button type="primary" block>
+        <Button type="primary" htmlType="submit" block loading={mutation.isPending}>
           完成初始化
         </Button>
       </Form>
       <Link to="/dashboard">进入工作台</Link>
     </Space>
+  )
+}
+
+function categoryNames(value?: string) {
+  return Array.from(
+    new Set(
+      (value ?? '')
+        .split(/[,\n，、]/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
   )
 }

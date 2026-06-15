@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { LoginSessionPayload, ModulePermission } from '../../app/store/session'
+import type { LoginSessionPayload, ModulePermission, Tenant } from '../../app/store/session'
 import { expireSessionAndRedirect, getStoredSession } from '../auth/session'
 
 export const apiClient = axios.create({
@@ -773,6 +773,11 @@ export async function logoutSession(): Promise<{ status: string }> {
   return data
 }
 
+export async function updateTenant(payload: { name: string }): Promise<Tenant> {
+  const { data } = await apiClient.patch<Tenant>('/tenant', payload)
+  return data
+}
+
 export async function fetchMembers(): Promise<MemberDTO[]> {
   const { data } = await apiClient.get<{ items: MemberDTO[] }>('/tenant/members')
   return data.items
@@ -782,6 +787,7 @@ export async function inviteMember(payload: {
   email: string
   name: string
   role_code?: string
+  initial_password: string
 }): Promise<MemberDTO> {
   const { data } = await apiClient.post<MemberDTO>('/tenant/members/invite', payload)
   return data

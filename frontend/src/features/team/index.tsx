@@ -496,6 +496,9 @@ export function TeamPage() {
           <Form.Item label="邮箱" name="email" rules={[{ required: true, message: '邮箱必填' }]}>
             <Input placeholder="member@example.com" />
           </Form.Item>
+          <Form.Item label="初始密码" name="initial_password" rules={[{ required: true, min: 8, message: '密码至少 8 位' }]}>
+            <Input.Password placeholder="至少 8 位" />
+          </Form.Item>
           <Form.Item label="角色" name="role_code">
             <Select options={roleOptions} loading={rolesQuery.isLoading} />
           </Form.Item>

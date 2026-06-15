@@ -260,7 +260,18 @@ def check_auth_tenant_rbac(stamp: str) -> tuple[str, dict[str, Any], str, dict[s
     require(isinstance(updated_role, dict) and updated_role.get("permissions", {}).get("compliance") == "full", "update role did not persist permissions")
 
     member_email = f"xmd-core-member-{stamp}@example.test"
-    member = api("POST", "/tenant/members/invite", token=token, payload={"email": member_email, "name": "XMD Core Member", "role_code": role_code}, expected=(201,))
+    member = api(
+        "POST",
+        "/tenant/members/invite",
+        token=token,
+        payload={
+            "email": member_email,
+            "name": "XMD Core Member",
+            "role_code": role_code,
+            "initial_password": PASSWORD,
+        },
+        expected=(201,),
+    )
     require(isinstance(member, dict) and member.get("id") and member.get("user", {}).get("id"), "invite member did not return member and user")
     patched = api("PATCH", f"/tenant/members/{member['id']}", token=token, payload={"role_codes": [role_code], "status": "active"})
     require(isinstance(patched, dict) and any(role.get("code") == role_code for role in patched.get("roles", [])), "patch member did not attach custom role")
