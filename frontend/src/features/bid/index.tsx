@@ -152,6 +152,7 @@ export function BidNewPage() {
       subtitle="创建综合标书、分离标书或自定义组合"
       tags={['page-generate-new', '/bids/new']}
       permission={canWrite}
+      bare
     >
       <Row gutter={16}>
         <Col xs={24} lg={15}>
@@ -410,6 +411,7 @@ export function BidTemplatesPage() {
       title="标书模板"
       subtitle="行业分类、预览和使用"
       tags={['page-generate-templates', '/bids/templates']}
+      bare
     >
       {templates.isLoading && <LoadingBlock />}
       {templates.isError && <ErrorBlock />}
@@ -760,6 +762,7 @@ export function BidWizardPage() {
       subtitle={bid.data?.title ?? '分离标书支持技术标和商务标独立生成'}
       tags={['page-generate', '/bids/:bidId/wizard?step=1..7']}
       permission={canWrite}
+      bare
     >
       <Space direction="vertical" size={20} className="full-width">
         <Steps

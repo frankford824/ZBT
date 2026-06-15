@@ -157,6 +157,7 @@ export function ProjectsPage() {
       title="项目管理"
       subtitle="看板、列表、里程碑、成员和推进记录"
       tags={['page-project', '/projects?view=board|list']}
+      bare
       actions={[
         <Segmented
           key="view"
@@ -264,6 +265,7 @@ export function ProjectDetailPage() {
       title={project.data.name}
       subtitle={statusLabels[project.data.status]}
       tags={['/projects/:projectId']}
+      bare
       actions={[
         canWrite && next && (
           <Button key="next" loading={transitionMutation.isPending} onClick={() => transitionMutation.mutate({ status: next })}>

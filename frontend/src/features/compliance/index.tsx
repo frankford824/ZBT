@@ -224,6 +224,7 @@ export function CompliancePage() {
       title="合规检查"
       subtitle="四层规则检查、人工确认和修复闭环"
       tags={['page-compliance', '/compliance']}
+      bare
       actions={[
         <Button key="refresh" icon={<ReloadOutlined />} onClick={() => checks.refetch()}>
           刷新

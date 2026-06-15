@@ -77,6 +77,7 @@ export function KnowledgeHomePage() {
       title="知识库"
       subtitle="资料检索、引用统计和中标案例回流"
       tags={['page-knowledge', '/knowledge']}
+      bare
     >
       <Space direction="vertical" size={16} className="full-width">
         <Input.Search
@@ -343,6 +344,7 @@ export function KnowledgeDocsPage() {
       title="文档库"
       subtitle="分类、上传、预览、下载和引用记录"
       tags={['page-knowledge-docs', '/knowledge/docs']}
+      bare
       actions={[
         canWrite ? <Upload key="upload" {...uploadProps}>
           <Button type="primary" icon={<CloudUploadOutlined />}>
@@ -807,6 +809,7 @@ export function KnowledgeTagsPage() {
       title="标签管理"
       subtitle="标签颜色、关联文档和删除确认"
       tags={['page-knowledge-tags', '/knowledge/tags']}
+      bare
       actions={[
         canWrite ? <Button key="new" type="primary" icon={<TagsOutlined />} onClick={openCreate}>
           新建标签

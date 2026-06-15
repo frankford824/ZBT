@@ -206,6 +206,7 @@ export function CostDetailPage() {
       title={project.data.name}
       subtitle={project.data.project_name || '未关联项目'}
       tags={['/costs/:costProjectId']}
+      bare
       actions={[
         canWrite ? <Button key="add" onClick={() => setOpen(true)}>
           新增成本项
