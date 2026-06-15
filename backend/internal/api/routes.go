@@ -2027,7 +2027,7 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
 		respond(c, result, err)
-	case "bid_export", "bid_chapter":
+	case "bid_export", "bid_chapter", "bid_parse_result":
 		result, err := s.bidStore.ApplyCallback(c.Request.Context(), bid.CallbackPayload{
 			TenantID:     payload.TenantID,
 			TaskID:       payload.TaskID,

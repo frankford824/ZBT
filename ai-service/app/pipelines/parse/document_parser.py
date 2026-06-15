@@ -4,8 +4,11 @@ import base64
 import json
 import os
 import re
+import shutil
+import subprocess
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib import request
 
 import fitz
@@ -14,6 +17,14 @@ from docx import Document as DocxDocument
 from pptx import Presentation
 
 from app.schemas.knowledge import KnowledgeChunk, KnowledgeProcessRequest, KnowledgeProcessResult
+
+
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+LEGACY_OFFICE_TARGETS = {
+    ".doc": ".docx",
+    ".xls": ".xlsx",
+    ".ppt": ".pptx",
+}
 
 
 def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> KnowledgeProcessResult:
@@ -33,7 +44,11 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
                 ocr_result = {key: value for key, value in ocr_result.items() if key != "text"}
             metadata["ocr"] = ocr_result
         parser = "pymupdf"
-    elif "word" in content_type or suffix in {".docx", ".doc"}:
+    elif suffix in LEGACY_OFFICE_TARGETS:
+        text, page_count, legacy_metadata = _parse_legacy_office(payload, content, suffix)
+        metadata.update(legacy_metadata)
+        parser = str(legacy_metadata.get("parser") or "libreoffice-conversion")
+    elif "word" in content_type or suffix == ".docx":
         text, page_count = _parse_docx(content), None
         parser = "python-docx"
     elif "spreadsheet" in content_type or suffix in {".xlsx", ".xlsm"}:
@@ -42,6 +57,13 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
     elif "presentation" in content_type or suffix in {".pptx", ".pptm"}:
         text, page_count = _parse_pptx(content), None
         parser = "python-pptx"
+    elif content_type.startswith("image/") or suffix in IMAGE_SUFFIXES:
+        ocr_result = _try_http_ocr(payload, content)
+        text = str(ocr_result.get("text") or "") if ocr_result["status"] == "done" else ""
+        metadata["ocr"] = {key: value for key, value in ocr_result.items() if key != "text"}
+        metadata["ocr_required"] = True
+        page_count = None
+        parser = "image-ocr"
     else:
         text, page_count = _parse_text(content), None
         parser = "plain-text"
@@ -229,6 +251,85 @@ def _parse_pptx(content: bytes) -> str:
                     if values:
                         lines.append(" | ".join(values))
     return "\n".join(lines)
+
+
+def _parse_legacy_office(
+    payload: KnowledgeProcessRequest,
+    content: bytes,
+    suffix: str,
+) -> tuple[str, int | None, dict[str, object]]:
+    target_suffix = LEGACY_OFFICE_TARGETS[suffix]
+    conversion = _convert_with_libreoffice(payload.filename, content, target_suffix)
+    metadata: dict[str, object] = {"legacy_conversion": conversion}
+    if conversion.get("status") != "done":
+        metadata["parser"] = "legacy-office-unconverted"
+        metadata["needs_human_input"] = True
+        return "", None, metadata
+    converted = conversion.get("content")
+    if not isinstance(converted, bytes):
+        metadata["parser"] = "legacy-office-unconverted"
+        metadata["needs_human_input"] = True
+        return "", None, metadata
+    conversion = {key: value for key, value in conversion.items() if key != "content"}
+    metadata["legacy_conversion"] = conversion
+    if target_suffix == ".docx":
+        metadata["parser"] = "libreoffice-python-docx"
+        return _parse_docx(converted), None, metadata
+    if target_suffix == ".xlsx":
+        metadata["parser"] = "libreoffice-openpyxl"
+        return _parse_xlsx(converted), None, metadata
+    if target_suffix == ".pptx":
+        metadata["parser"] = "libreoffice-python-pptx"
+        return _parse_pptx(converted), None, metadata
+    metadata["parser"] = "legacy-office-unconverted"
+    metadata["needs_human_input"] = True
+    return "", None, metadata
+
+
+def _convert_with_libreoffice(filename: str, content: bytes, target_suffix: str) -> dict[str, object]:
+    executable = os.getenv("LIBREOFFICE_BIN", "").strip() or shutil.which("soffice") or shutil.which("libreoffice")
+    if not executable:
+        return {"status": "converter_not_configured", "target_suffix": target_suffix}
+    source_name = Path(filename).name or f"input{target_suffix}"
+    timeout = int(os.getenv("LIBREOFFICE_CONVERT_TIMEOUT_S", "120"))
+    with TemporaryDirectory(prefix="zbt-ai-parse-") as tmpdir:
+        source_path = Path(tmpdir) / source_name
+        source_path.write_bytes(content)
+        try:
+            completed = subprocess.run(
+                [
+                    executable,
+                    "--headless",
+                    "--convert-to",
+                    target_suffix.lstrip("."),
+                    "--outdir",
+                    tmpdir,
+                    str(source_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except Exception as exc:
+            return {"status": "failed", "target_suffix": target_suffix, "error": str(exc)}
+        if completed.returncode != 0:
+            message = completed.stderr.strip() or completed.stdout.strip() or "LibreOffice conversion failed"
+            return {"status": "failed", "target_suffix": target_suffix, "error": message[:500]}
+        converted_files = [
+            path
+            for path in Path(tmpdir).iterdir()
+            if path.suffix.lower() == target_suffix and path.name != source_path.name
+        ]
+        if not converted_files:
+            return {"status": "failed", "target_suffix": target_suffix, "error": "converted file not found"}
+        converted_path = max(converted_files, key=lambda path: path.stat().st_mtime)
+        return {
+            "status": "done",
+            "target_suffix": target_suffix,
+            "filename": converted_path.name,
+            "content": converted_path.read_bytes(),
+        }
 
 
 def _cell_text(value: object) -> str:

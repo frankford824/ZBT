@@ -494,6 +494,10 @@ export function BidWizardPage() {
     queryKey: ['bid-parse-result', bidId],
     queryFn: () => fetchBidParseResult(bidId),
     enabled: Boolean(bidId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'queued' || status === 'processing' ? 2000 : false
+    },
   })
   const materialSelection = useQuery({
     queryKey: ['bid-material-selection', bidId],
@@ -605,7 +609,7 @@ export function BidWizardPage() {
   const parseTenderMutation = useMutation({
     mutationFn: () => parseBidTender(bidId),
     onSuccess: async () => {
-      message.success('招标文件已解读')
+      message.success('已开始解读招标文件')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
@@ -767,7 +771,7 @@ export function BidWizardPage() {
             <Space direction="vertical" size={16} className="full-width">
               <Space wrap>
                 <Upload
-                  accept=".pdf,.doc,.docx,.txt"
+                  accept=".pdf,.doc,.docx,.txt,.xlsx,.xlsm,.xls,.pptx,.pptm,.ppt,.png,.jpg,.jpeg,.webp,.tif,.tiff"
                   maxCount={1}
                   beforeUpload={(file) => {
                     setTenderFile(file)
@@ -793,7 +797,7 @@ export function BidWizardPage() {
                 </Tag>
               </Space>
               <Typography.Text type="secondary">
-                {tenderFile ? `${tenderFile.name} · ${Math.ceil(tenderFile.size / 1024)} KB` : '支持 PDF、Word 或文本文件'}
+                {tenderFile ? `${tenderFile.name} · ${Math.ceil(tenderFile.size / 1024)} KB` : '支持招标文件、清单表格、演示文稿或扫描图片'}
               </Typography.Text>
             </Space>
           ) : null}
@@ -811,12 +815,12 @@ export function BidWizardPage() {
                 <Button
                   icon={<CheckOutlined />}
                   loading={confirmParseMutation.isPending}
-                  disabled={!parseResult.data}
+                  disabled={!parseResult.data || !['ready', 'confirmed'].includes(parseResult.data.status)}
                   onClick={() => confirmParseMutation.mutate()}
                 >
                   确认文件信息
                 </Button>
-                <Tag color={parseResult.data?.status === 'confirmed' ? 'green' : parseResult.data?.status === 'ready' ? 'blue' : 'default'}>
+                <Tag color={parseStatusColor(parseResult.data?.status ?? 'queued')}>
                   {parseStatusLabel(parseResult.data?.status ?? 'queued')}
                 </Tag>
               </Space>
@@ -1196,6 +1200,17 @@ function parseStatusLabel(value: 'queued' | 'processing' | 'ready' | 'confirmed'
     failed: '解读失败',
   }
   return labels[value]
+}
+
+function parseStatusColor(value: 'queued' | 'processing' | 'ready' | 'confirmed' | 'failed') {
+  const colors = {
+    queued: 'default',
+    processing: 'blue',
+    ready: 'cyan',
+    confirmed: 'green',
+    failed: 'red',
+  }
+  return colors[value]
 }
 
 function structuredResultRows(result: Record<string, unknown> | undefined) {

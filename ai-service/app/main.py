@@ -21,7 +21,11 @@ from starlette.responses import JSONResponse
 from app.gateway.model_router import ModelRouter
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
-from app.pipelines.parse.tender_parser import build_tender_structured_result
+from app.pipelines.parse.tender_parser import (
+    build_tender_parse_prompt,
+    build_tender_structured_result,
+    merge_tender_structured_result,
+)
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.cost import CostAdviceRequest
 from app.schemas.export import DocumentExportRequest
@@ -135,7 +139,15 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
             content_type=payload.content_type,
         )
         parsed = parse_document(parse_payload, content)
-        structured = build_tender_structured_result(payload, parsed)
+        route = router.resolve("tender_parse", tenant_id=payload.tenant_id)
+        provider = router.get_llm("tender_parse", tenant_id=payload.tenant_id)
+        base_structured = build_tender_structured_result(payload, parsed)
+        prompt = build_tender_parse_prompt(payload, parsed, base_structured)
+        model_result = provider.generate_json(prompt, route.schema_name or "TenderParseResult")
+        structured = merge_tender_structured_result(base_structured, model_result)
+        output_text = json.dumps(structured, ensure_ascii=False)
+        input_tokens = provider.count_tokens(prompt) if hasattr(provider, "count_tokens") else estimate_tokens(prompt)
+        output_tokens = provider.count_tokens(output_text) if hasattr(provider, "count_tokens") else estimate_tokens(output_text)
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -148,9 +160,15 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                 "summary": parsed.summary,
                 "metadata": parsed.metadata,
                 "chunk_count": len(parsed.chunks),
+                "model_metadata": {
+                    "provider": provider.name,
+                    "model": route.model,
+                    "fallback_from": route.fallback_from,
+                    "parser": parsed.metadata.get("parser"),
+                },
                 "token_usage": {
-                    "input_tokens": estimate_tokens("\n".join(chunk.content for chunk in parsed.chunks)),
-                    "output_tokens": 0,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
                 },
             },
         }

@@ -14,14 +14,15 @@ from app.main import (
     ensure_callback_url_allowed,
     export_docx,
     knowledge_process,
+    process_tender_parse,
     production_mode,
     safe_output_filename,
     tender_parse,
     validate_production_config,
     verify_request_signature,
 )
-from app.gateway.model_router import ModelRouter
-from app.pipelines.parse.tender_parser import build_tender_structured_result
+from app.gateway.model_router import ModelRouter, RouteTarget
+from app.pipelines.parse.tender_parser import build_tender_structured_result, merge_tender_structured_result
 from app.schemas.export import DocumentExportRequest
 from app.schemas.knowledge import KnowledgeChunk, KnowledgeProcessRequest, KnowledgeProcessResult
 from app.schemas.tender import TenderParseRequest
@@ -183,6 +184,98 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
     assert result["invalid_clause_risks"]
     assert result["scoring_points"]
     assert isinstance(result["outline"], dict)
+
+
+def test_merge_tender_structured_result_preserves_source_file_and_uses_model_fields() -> None:
+    base = {
+        "project_name": "基础项目",
+        "bid_type": "combined",
+        "source_file": {"file_asset_id": "file-demo"},
+        "qualification_requirements": ["基础资格"],
+    }
+    merged = merge_tender_structured_result(
+        base,
+        {
+            "project_name": "模型项目",
+            "source_file": {"file_asset_id": "malicious-overwrite"},
+            "qualification_requirements": ["模型资格"],
+            "empty_value": "",
+        },
+    )
+
+    assert merged["project_name"] == "模型项目"
+    assert merged["qualification_requirements"] == ["模型资格"]
+    assert merged["source_file"] == {"file_asset_id": "file-demo"}
+
+
+def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return (
+                "项目名称：桥梁检查服务\n"
+                "投标截止时间：2026年7月20日\n"
+                "资格要求：具备桥梁检测资质\n"
+            ).encode()
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class FakeProvider:
+        name = "fake-llm"
+
+        def generate_json(self, _prompt: str, schema_name: str) -> dict[str, object]:
+            assert schema_name == "TenderParseResult"
+            return {
+                "project_name": "模型增强桥梁检查服务",
+                "qualification_requirements": ["模型识别资质要求"],
+            }
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
+    class FakeRouter:
+        def resolve(self, _task_type: str, tenant_id: str) -> RouteTarget:
+            assert tenant_id == "tenant-demo"
+            return RouteTarget(provider="fake-llm", model="fake-model", schema_name="TenderParseResult")
+
+        def get_llm(self, _task_type: str, tenant_id: str) -> FakeProvider:
+            assert tenant_id == "tenant-demo"
+            return FakeProvider()
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="tenant/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks
+    assert callbacks[0]["status"] == "done", callbacks[0]
+    result = callbacks[0]["result"]
+    assert isinstance(result, dict)
+    assert result["structured_result"]["project_name"] == "模型增强桥梁检查服务"
+    assert result["model_metadata"]["provider"] == "fake-llm"
+    assert result["model_metadata"]["model"] == "fake-model"
+    assert result["token_usage"]["input_tokens"] > 0
 
 
 def test_production_mode_detects_release_environment(monkeypatch) -> None:

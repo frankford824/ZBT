@@ -43,6 +43,29 @@ def test_empty_pdf_marks_ocr_required_without_claiming_success(monkeypatch) -> N
     assert result.chunks[0].metadata["needs_human_input"] is True
 
 
+def test_image_parser_uses_ocr_boundary_without_falling_back_to_plain_text(monkeypatch) -> None:
+    monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
+
+    result = parse_document(_request("scan.png"), b"not-a-real-image")
+
+    assert result.metadata["parser"] == "image-ocr"
+    assert result.metadata["ocr_required"] is True
+    assert result.metadata["ocr"]["status"] == "provider_not_configured"
+    assert result.chunks[0].metadata["needs_human_input"] is True
+
+
+def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> None:
+    monkeypatch.delenv("LIBREOFFICE_BIN", raising=False)
+    monkeypatch.setattr("app.pipelines.parse.document_parser.shutil.which", lambda _name: None)
+
+    result = parse_document(_request("legacy.doc"), b"legacy-binary")
+
+    assert result.metadata["parser"] == "legacy-office-unconverted"
+    assert result.metadata["legacy_conversion"]["status"] == "converter_not_configured"
+    assert result.metadata["needs_human_input"] is True
+    assert result.chunks[0].metadata["needs_human_input"] is True
+
+
 def test_docx_parser_includes_paragraphs_and_tables() -> None:
     document = Document()
     document.add_paragraph("项目总体方案")

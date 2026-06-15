@@ -290,6 +290,7 @@ type TenderFile struct {
 	ID            string    `json:"id"`
 	BidDocumentID string    `json:"bid_document_id"`
 	FileAssetID   string    `json:"file_asset_id"`
+	ObjectKey     string    `json:"object_key"`
 	Filename      string    `json:"filename"`
 	ContentType   string    `json:"content_type"`
 	SizeBytes     int64     `json:"size_bytes"`
@@ -408,6 +409,18 @@ type chapterGenerateRequest struct {
 	RetrievedKnowledgeRefs []retrievedKnowledgeRef `json:"retrieved_knowledge_refs"`
 	CallbackURL            string                  `json:"callback_url,omitempty"`
 	ModelHint              *string                 `json:"model_hint,omitempty"`
+}
+
+type tenderParseRequest struct {
+	TaskID      string `json:"task_id,omitempty"`
+	TenantID    string `json:"tenant_id"`
+	BidID       string `json:"bid_id,omitempty"`
+	BidTitle    string `json:"bid_title,omitempty"`
+	FileID      string `json:"file_id"`
+	ObjectKey   string `json:"object_key"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	CallbackURL string `json:"callback_url,omitempty"`
 }
 
 type chapterActionRequest struct {
@@ -761,7 +774,7 @@ func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID st
 				returning id, bid_document_id, file_asset_id, status, created_at, updated_at
 			)
 			select u.id::text, u.bid_document_id::text, u.file_asset_id::text,
-				f.filename, f.content_type, f.size_bytes,
+				f.object_key, f.filename, f.content_type, f.size_bytes,
 				u.status, u.created_at, u.updated_at
 			from upserted u
 			join file_assets f on f.tenant_id = $1 and f.id = u.file_asset_id
@@ -789,6 +802,7 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 	}
 
 	var result ParseTenderResponse
+	var requestPayload tenderParseRequest
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		document, err := bidForExport(ctx, tx, tenantID, bidID)
 		if err != nil {
@@ -802,43 +816,35 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 			return err
 		}
 		structured := defaultTenderStructuredResult(document, file)
-		parseResult, err := upsertParseResult(ctx, tx, tenantID, bidID, file.FileAssetID, "ready", structured, "")
+		parseResult, err := upsertParseResult(ctx, tx, tenantID, bidID, file.FileAssetID, "queued", structured, "")
 		if err != nil {
 			return err
 		}
-		payload := map[string]any{
-			"tenant_id":       tenantID,
-			"bid_document_id": bidID,
-			"file_asset_id":   file.FileAssetID,
-			"filename":        file.Filename,
-			"mode":            "deterministic_bootstrap",
-		}
-		payloadJSON, _ := json.Marshal(payload)
-		resultJSON, _ := json.Marshal(structured)
-		routeJSON, _ := json.Marshal(map[string]any{"route": "local.tender_parse"})
 		externalTaskID := "task-tender-parse-" + uuid.NewString()
+		requestPayload = tenderParseRequest{
+			TaskID:      externalTaskID,
+			TenantID:    tenantID,
+			BidID:       bidID,
+			BidTitle:    document.Title,
+			FileID:      file.FileAssetID,
+			ObjectKey:   file.ObjectKey,
+			Filename:    file.Filename,
+			ContentType: file.ContentType,
+			CallbackURL: s.cfg.AICallbackURL,
+		}
+		payloadJSON, _ := json.Marshal(requestPayload)
 		task, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status, external_task_id,
-				resource_type, resource_id, payload, route, result, started_at, completed_at
+				resource_type, resource_id, payload, route
 			)
-			values ($1, nullif($2, '')::uuid, 'tender_parse', 'done', $3,
-				'bid_parse_result', $4, $5, $6, $7, now(), now())
+			values ($1, nullif($2, '')::uuid, 'tender_parse', 'queued', $3,
+				'bid_parse_result', $4, $5, '{}')
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, tenantID, userID, externalTaskID, parseResult.ID, payloadJSON, routeJSON, resultJSON))
+		`, tenantID, userID, externalTaskID, parseResult.ID, payloadJSON))
 		if err != nil {
-			return err
-		}
-		if err := ensureMaterialSelection(ctx, tx, tenantID, bidID, userID, defaultMaterialRefs(structured), ""); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			update bid_documents
-			set status = 'editing', updated_at = now()
-			where tenant_id = $1 and id = $2
-		`, tenantID, bidID); err != nil {
 			return err
 		}
 		result = ParseTenderResponse{Task: task, ParseResult: parseResult}
@@ -847,7 +853,34 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ParseTenderResponse{}, ErrNotFound
 	}
-	return result, err
+	if err != nil {
+		return ParseTenderResponse{}, err
+	}
+	accepted, err := s.submitTenderParse(ctx, requestPayload)
+	if err != nil {
+		_ = s.markTenderParseFailed(ctx, tenantID, result.Task.ID, result.ParseResult.ID, err.Error())
+		return ParseTenderResponse{}, err
+	}
+	updatedTask, err := s.bindAcceptedTask(ctx, tenantID, result.ParseResult.ID, result.Task.ID, accepted, requestPayload, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			update bid_parse_results
+			set status = 'processing',
+				error_message = null,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, result.ParseResult.ID)
+		return err
+	})
+	if err != nil {
+		return ParseTenderResponse{}, err
+	}
+	result.Task = updatedTask
+	parseResult, err := s.GetParseResult(ctx, tenantID, bidID)
+	if err != nil {
+		return ParseTenderResponse{}, err
+	}
+	result.ParseResult = parseResult
+	return result, nil
 }
 
 func (s *Store) GetParseResult(ctx context.Context, tenantID, bidID string) (ParseResult, error) {
@@ -2134,6 +2167,60 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 		}
 		task = updated
 		switch task.ResourceType {
+		case "bid_parse_result":
+			switch status {
+			case "done":
+				structured, ok := tenderStructuredResultFromCallback(payload.Result)
+				if !ok {
+					return ErrInvalidRequest
+				}
+				structuredJSON, _ := json.Marshal(structured)
+				var bidID string
+				if err := tx.QueryRow(ctx, `
+					update bid_parse_results
+					set status = 'ready',
+						structured_result = $3,
+						error_message = null,
+						updated_at = now()
+					where tenant_id = $1 and id = $2
+					returning bid_document_id::text
+				`, payload.TenantID, task.ResourceID, structuredJSON).Scan(&bidID); err != nil {
+					return err
+				}
+				if err := ensureMaterialSelection(ctx, tx, payload.TenantID, bidID, "", defaultMaterialRefs(structured), ""); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `
+					update bid_documents
+					set status = 'editing', updated_at = now()
+					where tenant_id = $1 and id = $2
+				`, payload.TenantID, bidID); err != nil {
+					return err
+				}
+			case "failed", "cancelled":
+				if _, err := tx.Exec(ctx, `
+					update bid_parse_results
+					set status = 'failed',
+						error_message = nullif($3, ''),
+						updated_at = now()
+					where tenant_id = $1 and id = $2
+				`, payload.TenantID, task.ResourceID, payload.ErrorMessage); err != nil {
+					return err
+				}
+			case "queued", "running":
+				parseStatus := "queued"
+				if status == "running" {
+					parseStatus = "processing"
+				}
+				if _, err := tx.Exec(ctx, `
+					update bid_parse_results
+					set status = $3,
+						updated_at = now()
+					where tenant_id = $1 and id = $2
+				`, payload.TenantID, task.ResourceID, parseStatus); err != nil {
+					return err
+				}
+			}
 		case "bid_export":
 			if status == "done" {
 				sizeBytes := int64(0)
@@ -2233,6 +2320,28 @@ func chapterGenerationFromResult(result map[string]any) (chapterGenerateResponse
 		return chapterGenerateResponse{}, ErrInvalidRequest
 	}
 	return generation, nil
+}
+
+func tenderStructuredResultFromCallback(result map[string]any) (map[string]any, bool) {
+	if result == nil {
+		return nil, false
+	}
+	value, ok := result["structured_result"]
+	if !ok {
+		return nil, false
+	}
+	if structured, ok := value.(map[string]any); ok {
+		return structured, true
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	var structured map[string]any
+	if err := json.Unmarshal(body, &structured); err != nil {
+		return nil, false
+	}
+	return structured, structured != nil
 }
 
 func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID string, generation chapterGenerateResponse, changeReason string) error {
@@ -2534,12 +2643,68 @@ func (s *Store) markExportFailed(ctx context.Context, tenantID, exportID, taskID
 	})
 }
 
+func (s *Store) markTenderParseFailed(ctx context.Context, tenantID, taskID, parseResultID, message string) error {
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			update ai_tasks
+			set status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID, message); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `
+			update bid_parse_results
+			set status = 'failed',
+				error_message = $3,
+				updated_at = now()
+			where tenant_id = $1 and id = $2
+		`, tenantID, parseResultID, message)
+		return err
+	})
+}
+
 func (s *Store) submitDocumentExport(ctx context.Context, exportType string, payload map[string]any) (aiTaskAccepted, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return aiTaskAccepted{}, err
 	}
 	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/export/" + exportType
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	aihttp.Sign(req, body, s.cfg.AIServiceHMACSecret)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
+	}
+	var accepted aiTaskAccepted
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		return aiTaskAccepted{}, err
+	}
+	if accepted.TaskID == "" {
+		return aiTaskAccepted{}, ErrInvalidRequest
+	}
+	if accepted.Status == "" {
+		accepted.Status = "queued"
+	}
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	return accepted, nil
+}
+
+func (s *Store) submitTenderParse(ctx context.Context, payload tenderParseRequest) (aiTaskAccepted, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return aiTaskAccepted{}, err
+	}
+	url := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/tasks/tender-parse"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return aiTaskAccepted{}, err
@@ -2971,7 +3136,7 @@ type outlineChapterSpec struct {
 func latestTenderFileForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (TenderFile, error) {
 	return scanTenderFile(tx.QueryRow(ctx, `
 		select btf.id::text, btf.bid_document_id::text, btf.file_asset_id::text,
-			f.filename, f.content_type, f.size_bytes,
+			f.object_key, f.filename, f.content_type, f.size_bytes,
 			btf.status, btf.created_at, btf.updated_at
 		from bid_tender_files btf
 		join file_assets f on f.tenant_id = btf.tenant_id and f.id = btf.file_asset_id
@@ -3110,6 +3275,7 @@ func defaultTenderStructuredResult(document Document, file TenderFile) map[strin
 	if file.FileAssetID != "" {
 		sourceFile = map[string]any{
 			"file_asset_id": file.FileAssetID,
+			"object_key":    file.ObjectKey,
 			"filename":      file.Filename,
 			"content_type":  file.ContentType,
 			"size_bytes":    file.SizeBytes,
@@ -3729,7 +3895,7 @@ func scanTenderFile(row scanner) (TenderFile, error) {
 	var file TenderFile
 	err := row.Scan(
 		&file.ID, &file.BidDocumentID, &file.FileAssetID,
-		&file.Filename, &file.ContentType, &file.SizeBytes,
+		&file.ObjectKey, &file.Filename, &file.ContentType, &file.SizeBytes,
 		&file.Status, &file.CreatedAt, &file.UpdatedAt,
 	)
 	return file, err

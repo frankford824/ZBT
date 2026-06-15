@@ -659,6 +659,7 @@ export type BidTenderFileDTO = {
   id: string
   bid_document_id: string
   file_asset_id: string
+  object_key: string
   filename: string
   content_type: string
   size_bytes: number

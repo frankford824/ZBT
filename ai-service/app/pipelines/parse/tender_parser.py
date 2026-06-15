@@ -1,10 +1,23 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from app.schemas.knowledge import KnowledgeProcessResult
 from app.schemas.tender import TenderParseRequest
+
+
+MERGEABLE_TOP_LEVEL_FIELDS = {
+    "project_name",
+    "bid_type",
+    "deadline",
+    "qualification_requirements",
+    "invalid_clause_risks",
+    "scoring_points",
+    "outline",
+    "material_suggestions",
+}
 
 
 def build_tender_structured_result(
@@ -70,6 +83,84 @@ def build_tender_structured_result(
             "ocr": parsed.metadata.get("ocr"),
         },
     }
+
+
+def build_tender_parse_prompt(
+    payload: TenderParseRequest,
+    parsed: KnowledgeProcessResult,
+    base_result: dict[str, object],
+) -> str:
+    source_text = "\n\n".join(chunk.content for chunk in parsed.chunks)[:24000]
+    return json.dumps(
+        {
+            "task": "Extract a bid tender parse result from the source document.",
+            "bid_title": payload.bid_title,
+            "filename": payload.filename,
+            "deterministic_result": base_result,
+            "source_excerpt": source_text,
+            "output_contract": {
+                "project_name": "string",
+                "bid_type": "combined | separated | custom",
+                "deadline": "YYYY-MM-DD or null",
+                "qualification_requirements": ["string"],
+                "invalid_clause_risks": ["string"],
+                "scoring_points": ["string"],
+                "outline": {
+                    "parts": [
+                        {
+                            "code": "string",
+                            "title": "string",
+                            "sort_order": 10,
+                            "chapters": [
+                                {
+                                    "title": "string",
+                                    "plain_text": "string",
+                                    "sort_order": 10,
+                                }
+                            ],
+                        }
+                    ]
+                },
+                "material_suggestions": [
+                    {
+                        "title": "string",
+                        "ref_type": "qualification | case | solution | other",
+                        "reason": "string",
+                        "selected": True,
+                    }
+                ],
+            },
+            "rules": [
+                "Return only JSON.",
+                "Use source facts first and keep uncertain values conservative.",
+                "Do not invent dates, certificates, prices, or names that are not in the source.",
+                "Keep chapter titles concise and business-facing.",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def merge_tender_structured_result(
+    base_result: dict[str, object],
+    model_result: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(base_result)
+    for key in MERGEABLE_TOP_LEVEL_FIELDS:
+        value = model_result.get(key)
+        if _usable_model_value(value):
+            merged[key] = value
+    return merged
+
+
+def _usable_model_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list | dict):
+        return bool(value)
+    return True
 
 
 def _first_content_line(text: str) -> str:
