@@ -3,7 +3,7 @@ import { Alert, Button, Form, Input, message, Space, Typography } from 'antd'
 import { useMutation } from '@tanstack/react-query'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
-import { createKnowledgeCategory, getApiErrorMessage, login, registerTenant, updateTenant } from '../../shared/api/client'
+import { createKnowledgeCategory, fetchKnowledgeCategories, getApiErrorMessage, login, registerTenant, updateTenant } from '../../shared/api/client'
 import { safeReturnPath } from '../../shared/auth/session'
 
 type LoginLocationState = {
@@ -138,7 +138,11 @@ export function OnboardingPage() {
         updatedTenant = await updateTenant({ name: tenantName })
       }
       const categories = categoryNames(values.knowledge_categories)
-      await Promise.all(categories.map((name) => createKnowledgeCategory({ name })))
+      if (categories.length > 0) {
+        const existing = new Set((await fetchKnowledgeCategories()).map((category) => category.name.trim()))
+        const missing = categories.filter((name) => !existing.has(name))
+        await Promise.all(missing.map((name) => createKnowledgeCategory({ name })))
+      }
       return { updatedTenant }
     },
     onSuccess: ({ updatedTenant }) => {

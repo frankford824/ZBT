@@ -277,13 +277,19 @@ func (s *Store) ListCategories(ctx context.Context, tenantID string) ([]Category
 }
 
 func (s *Store) CreateCategory(ctx context.Context, tenantID, name, description string) (Category, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Category{}, ErrInvalidRequest
+	}
 	var category Category
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		created, err := scanCategory(tx.QueryRow(ctx, `
 			insert into knowledge_categories (tenant_id, name, description)
 			values ($1, $2, $3)
+			on conflict (tenant_id, name) do update
+			set description = knowledge_categories.description
 			returning id::text, name, description, parent_id::text, created_at, updated_at
-		`, tenantID, strings.TrimSpace(name), description))
+		`, tenantID, name, description))
 		if err != nil {
 			return err
 		}
@@ -369,6 +375,10 @@ func (s *Store) ListTags(ctx context.Context, tenantID string) ([]Tag, error) {
 }
 
 func (s *Store) CreateTag(ctx context.Context, tenantID, name, color string) (Tag, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Tag{}, ErrInvalidRequest
+	}
 	if color == "" {
 		color = "blue"
 	}
@@ -377,8 +387,10 @@ func (s *Store) CreateTag(ctx context.Context, tenantID, name, color string) (Ta
 		created, err := scanTag(tx.QueryRow(ctx, `
 			insert into knowledge_tags (tenant_id, name, color)
 			values ($1, $2, $3)
+			on conflict (tenant_id, name) do update
+			set color = knowledge_tags.color
 			returning id::text, name, color, created_at, updated_at
-		`, tenantID, strings.TrimSpace(name), color))
+		`, tenantID, name, color))
 		if err != nil {
 			return err
 		}
@@ -662,6 +674,8 @@ func (s *Store) CreateDocumentTemplate(ctx context.Context, tenantID string, req
 				tenant_id, name, category, description, version, content
 			)
 			values ($1, $2, $3, $4, $5, $6)
+			on conflict (tenant_id, name, version) do update
+			set content = document_templates.content
 			returning id::text, name, category, description, version, content, usage_count, status, created_at, updated_at
 		`, tenantID, name, category, req.Description, version, contentJSON))
 		if err != nil {
