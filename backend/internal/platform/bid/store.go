@@ -529,7 +529,10 @@ func (s *Store) UseTemplate(ctx context.Context, tenantID, templateID string, re
 		if title == "" {
 			title = template.Name
 		}
-		bidType := normalizeBidType(template.BidType)
+		bidType, err := normalizeBidType(template.BidType)
+		if err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `
 			insert into bid_documents (tenant_id, title, bid_type, status)
 			values ($1, $2, $3, 'draft')
@@ -623,9 +626,12 @@ func (s *Store) CreateDocument(ctx context.Context, tenantID string, req CreateD
 	if title == "" {
 		return Document{}, ErrInvalidRequest
 	}
-	bidType := normalizeBidType(req.BidType)
+	bidType, err := normalizeBidType(req.BidType)
+	if err != nil {
+		return Document{}, err
+	}
 	var id string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			insert into bid_documents (tenant_id, title, bid_type, status)
 			values ($1, $2, $3, 'draft')
@@ -1378,8 +1384,14 @@ func (s *Store) GenerateBid(ctx context.Context, tenantID, userID, bidID string,
 	if _, err := uuid.Parse(bidID); err != nil {
 		return GenerationJobDetail{}, ErrInvalidRequest
 	}
-	scope := normalizeGenerationScope(req.Scope)
-	partCode := normalizeGenerationPartCode(req.PartCode)
+	scope, err := normalizeGenerationScope(req.Scope)
+	if err != nil {
+		return GenerationJobDetail{}, err
+	}
+	partCode, err := normalizeGenerationPartCode(req.PartCode)
+	if err != nil {
+		return GenerationJobDetail{}, err
+	}
 	chapterFilter := map[string]bool{}
 	for _, id := range req.ChapterIDs {
 		id = strings.TrimSpace(id)
@@ -1399,7 +1411,7 @@ func (s *Store) GenerateBid(ctx context.Context, tenantID, userID, bidID string,
 	}
 
 	var jobID string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
 			return err
 		}
@@ -1983,9 +1995,15 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 	if err := validateExportAttachments(tenantID, req.Attachments, req.BOQFiles); err != nil {
 		return CreateExportResponse{}, err
 	}
-	partCode := normalizePartCode(req.PartCode)
+	partCode := "all"
 	if exportType == "zip" {
 		partCode = "all"
+	} else {
+		normalizedPartCode, err := normalizeRequestedPartCode(req.PartCode)
+		if err != nil {
+			return CreateExportResponse{}, err
+		}
+		partCode = normalizedPartCode
 	}
 
 	var export Export
@@ -4071,12 +4089,15 @@ func sanitizeFilename(value string) string {
 	return replacer.Replace(value)
 }
 
-func normalizeBidType(value string) string {
+func normalizeBidType(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "combined", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "separated", "custom":
-		return strings.ToLower(strings.TrimSpace(value))
+	case "combined", "separated", "custom":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "combined"
+		return "", ErrInvalidRequest
 	}
 }
 
@@ -4154,21 +4175,39 @@ func normalizePartCode(value string) string {
 	}
 }
 
-func normalizeGenerationScope(value string) string {
+func normalizeRequestedPartCode(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "combined_body", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "part", "chapter":
-		return strings.ToLower(strings.TrimSpace(value))
+	case "combined_body", "tech", "business", "boq", "attachment":
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return "full"
+		return "", ErrInvalidRequest
 	}
 }
 
-func normalizeGenerationPartCode(value string) string {
+func normalizeGenerationScope(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "full", nil
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "full", "part", "chapter":
+		return strings.ToLower(strings.TrimSpace(value)), nil
+	default:
+		return "", ErrInvalidRequest
+	}
+}
+
+func normalizeGenerationPartCode(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "combined_body", "tech", "business", "boq", "attachment":
-		return strings.ToLower(strings.TrimSpace(value))
+		return strings.ToLower(strings.TrimSpace(value)), nil
 	default:
-		return ""
+		return "", ErrInvalidRequest
 	}
 }
 

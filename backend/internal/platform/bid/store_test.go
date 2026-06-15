@@ -86,3 +86,89 @@ func TestValidateExportAttachmentsRejectsUnsafeInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeBidTypeDefaultsOnlyBlankType(t *testing.T) {
+	bidType, err := normalizeBidType(" ")
+	if err != nil {
+		t.Fatalf("expected blank bid type to default: %v", err)
+	}
+	if bidType != "combined" {
+		t.Fatalf("expected blank bid type to default to combined, got %q", bidType)
+	}
+
+	bidType, err = normalizeBidType(" SEPARATED ")
+	if err != nil {
+		t.Fatalf("expected known bid type to normalize: %v", err)
+	}
+	if bidType != "separated" {
+		t.Fatalf("expected known bid type to normalize to separated, got %q", bidType)
+	}
+
+	if _, err := normalizeBidType("unknown"); err != ErrInvalidRequest {
+		t.Fatalf("expected unsupported bid type to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeRequestedPartCodeDefaultsOnlyBlankPartCode(t *testing.T) {
+	partCode, err := normalizeRequestedPartCode(" ")
+	if err != nil {
+		t.Fatalf("expected blank part code to default: %v", err)
+	}
+	if partCode != "combined_body" {
+		t.Fatalf("expected blank part code to default to combined_body, got %q", partCode)
+	}
+
+	partCode, err = normalizeRequestedPartCode(" TECH ")
+	if err != nil {
+		t.Fatalf("expected known part code to normalize: %v", err)
+	}
+	if partCode != "tech" {
+		t.Fatalf("expected known part code to normalize to tech, got %q", partCode)
+	}
+
+	if _, err := normalizeRequestedPartCode("unknown"); err != ErrInvalidRequest {
+		t.Fatalf("expected unsupported part code to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeGenerationInputsRejectUnsupportedValues(t *testing.T) {
+	scope, err := normalizeGenerationScope(" ")
+	if err != nil {
+		t.Fatalf("expected blank generation scope to default: %v", err)
+	}
+	if scope != "full" {
+		t.Fatalf("expected blank generation scope to default to full, got %q", scope)
+	}
+
+	scope, err = normalizeGenerationScope(" CHAPTER ")
+	if err != nil {
+		t.Fatalf("expected known generation scope to normalize: %v", err)
+	}
+	if scope != "chapter" {
+		t.Fatalf("expected known generation scope to normalize to chapter, got %q", scope)
+	}
+
+	if _, err := normalizeGenerationScope("unknown"); err != ErrInvalidRequest {
+		t.Fatalf("expected unsupported generation scope to be rejected, got %v", err)
+	}
+
+	partCode, err := normalizeGenerationPartCode(" ")
+	if err != nil {
+		t.Fatalf("expected blank generation part code to be accepted: %v", err)
+	}
+	if partCode != "" {
+		t.Fatalf("expected blank generation part code to stay empty, got %q", partCode)
+	}
+
+	partCode, err = normalizeGenerationPartCode(" BUSINESS ")
+	if err != nil {
+		t.Fatalf("expected known generation part code to normalize: %v", err)
+	}
+	if partCode != "business" {
+		t.Fatalf("expected known generation part code to normalize to business, got %q", partCode)
+	}
+
+	if _, err := normalizeGenerationPartCode("unknown"); err != ErrInvalidRequest {
+		t.Fatalf("expected unsupported generation part code to be rejected, got %v", err)
+	}
+}
