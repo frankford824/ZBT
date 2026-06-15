@@ -62,6 +62,7 @@ def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
     assert "PAGE" in package_xml
     assert "NUMPAGES" in package_xml
     assert "内部评审" in package_xml
+    assert "右键更新域以刷新目录" not in package_xml
 
 
 def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path, monkeypatch) -> None:

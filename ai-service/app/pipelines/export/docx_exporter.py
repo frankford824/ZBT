@@ -571,7 +571,7 @@ def _render_toc(
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph = document.add_paragraph()
     paragraph.paragraph_format.first_line_indent = None
-    _add_field(paragraph, r'TOC \o "1-3" \h \z \u', "右键更新域以刷新目录")
+    _add_field(paragraph, r'TOC \o "1-3" \h \z \u', "目录")
     document.add_page_break()
 
 
