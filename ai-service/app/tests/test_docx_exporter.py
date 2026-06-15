@@ -11,6 +11,7 @@ from docx import Document
 
 from app.pipelines.export.docx_exporter import (
     _attachment_content,
+    _replace_template_fields,
     _safe_zip_path,
     _validate_pdf_output,
     export_bid_docx,
@@ -191,6 +192,20 @@ def test_export_bid_docx_renders_template_placeholders_and_body_anchor(tmp_path,
     assert "{{ZBT_BODY}}" not in paragraph_text
     assert "实施计划" in paragraph_text
     assert "模板正文内容。" in paragraph_text
+
+
+def test_template_field_replacement_stringifies_non_string_context() -> None:
+    document = Document()
+    document.add_paragraph("轮次：{{ review_round }}")
+    document.add_paragraph("密封：{{ sealed }}")
+    document.add_paragraph("备注：{{ note }}")
+
+    _replace_template_fields(document, {"review_round": 2, "sealed": True, "note": None})
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "轮次：2" in paragraph_text
+    assert "密封：True" in paragraph_text
+    assert "备注：" in paragraph_text
 
 
 def test_export_bid_pdf_reuses_master_docx_before_conversion(tmp_path, monkeypatch) -> None:

@@ -357,10 +357,20 @@ def _replace_template_fields(
         for section, aliases in ANCHOR_ALIASES.items():
             if any(f"{{{{{alias}}}}}" in text or f"{{{{ {alias} }}}}" in text for alias in aliases):
                 anchors[section] = paragraph
-        replaced = TEMPLATE_FIELD.sub(lambda match: context.get(match.group(1), match.group(0)), text)
+        replaced = TEMPLATE_FIELD.sub(lambda match: _template_replacement(context, match), text)
         if replaced != text:
             paragraph.text = replaced
     return anchors
+
+
+def _template_replacement(context: dict[str, object], match: re.Match[str]) -> str:
+    key = match.group(1)
+    if key not in context:
+        return match.group(0)
+    value = context[key]
+    if value is None:
+        return ""
+    return str(value)
 
 
 def _iter_paragraphs(document: DocxDocument):
