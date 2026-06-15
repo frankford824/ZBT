@@ -32,6 +32,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 const statusLabels: Record<string, string> = {
   draft: '草稿',
@@ -116,6 +117,7 @@ export function CostDetailPage() {
   const { costProjectId = '' } = useParams()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('cost', 'full')
   const [open, setOpen] = useState(false)
   const [adviceTaskId, setAdviceTaskId] = useState('')
   const [form] = Form.useForm()
@@ -199,15 +201,15 @@ export function CostDetailPage() {
       subtitle={project.data.project_name || '未关联项目'}
       tags={['/costs/:costProjectId']}
       actions={[
-        <Button key="add" onClick={() => setOpen(true)}>
+        canWrite ? <Button key="add" onClick={() => setOpen(true)}>
           新增成本项
-        </Button>,
-        <Button key="report" loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
+        </Button> : null,
+        canWrite ? <Button key="report" loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
           导出成本报告
-        </Button>,
-        <Button key="ai" type="primary" loading={adviceBusy} onClick={() => adviceMutation.mutate()}>
+        </Button> : null,
+        canWrite ? <Button key="ai" type="primary" loading={adviceBusy} onClick={() => adviceMutation.mutate()}>
           智能优化建议
-        </Button>,
+        </Button> : null,
       ]}
     >
       <Row gutter={[16, 16]}>

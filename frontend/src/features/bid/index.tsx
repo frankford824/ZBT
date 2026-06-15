@@ -43,7 +43,7 @@ import {
   App as AntApp,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
@@ -92,6 +92,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 import { openSse } from '../../shared/sse/client'
 
 const bidSchema = z.object({
@@ -111,9 +112,15 @@ type OutlineDraftChapter = {
   sort_order: number
 }
 
+type DraftState<T> = {
+  sourceKey: string
+  value: T
+}
+
 export function BidNewPage() {
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
+  const canWrite = useCanAccess('bid', 'full')
   const mutation = useMutation({
     mutationFn: createBid,
     onSuccess: (bid) => {
@@ -143,6 +150,7 @@ export function BidNewPage() {
       title="新建标书"
       subtitle="创建综合标书、分离标书或自定义组合"
       tags={['page-generate-new', '/bids/new']}
+      permission={canWrite}
     >
       <Row gutter={16}>
         <Col xs={24} lg={15}>
@@ -248,6 +256,7 @@ export function BidListPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('全部')
+  const canWrite = useCanAccess('bid', 'full')
   const bids = useQuery({
     queryKey: ['bids'],
     queryFn: fetchBids,
@@ -283,9 +292,9 @@ export function BidListPage() {
       subtitle="状态筛选、审批和编辑入口"
       tags={['page-generate-list', '/bids']}
       actions={[
-        <Button key="new" type="primary" icon={<PlusOutlined />}>
+        canWrite ? <Button key="new" type="primary" icon={<PlusOutlined />}>
           <Link to="/bids/new">新建标书</Link>
-        </Button>,
+        </Button> : null,
       ]}
     >
       <Space direction="vertical" size={16} className="full-width">
@@ -329,33 +338,33 @@ export function BidListPage() {
               {
                 title: '操作',
                 width: 246,
-                render: (_, row: BidDocumentDTO) => (
-                  <Space size={10} wrap={false}>
-                    <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link>
-                    <Link to={`/bids/${row.id}/editor`}>编辑</Link>
-                    <Button
-                      type="link"
-                      size="small"
-                      disabled={row.status === 'in_review' || row.status === 'approved'}
+	                render: (_, row: BidDocumentDTO) => (
+	                  <Space size={10} wrap={false}>
+	                    {canWrite ? <Link to={`/bids/${row.id}/wizard?step=5`}>生成</Link> : null}
+	                    <Link to={`/bids/${row.id}/editor`}>{canWrite ? '编辑' : '查看'}</Link>
+	                    {canWrite ? <Button
+	                      type="link"
+	                      size="small"
+	                      disabled={row.status === 'in_review' || row.status === 'approved'}
                       loading={approvalMutation.isPending && approvalMutation.variables === row.id}
                       onClick={() => approvalMutation.mutate(row.id)}
-                    >
-                      提交审批
-                    </Button>
-                    <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
-                      <Button
-                        type="link"
+	                    >
+	                      提交审批
+	                    </Button> : null}
+	                    {canWrite ? <Popconfirm title="归档该标书" onConfirm={() => archiveMutation.mutate(row.id)}>
+	                      <Button
+	                        type="link"
                         size="small"
                         danger
                         icon={<DeleteOutlined />}
                         disabled={row.status === 'in_review' || row.status === 'approved'}
                         loading={archiveMutation.isPending && archiveMutation.variables === row.id}
-                      >
-                        归档
-                      </Button>
-                    </Popconfirm>
-                  </Space>
-                ),
+	                      >
+	                        归档
+	                      </Button>
+	                    </Popconfirm> : null}
+	                  </Space>
+	                ),
               },
             ]}
           />
@@ -368,6 +377,7 @@ export function BidListPage() {
 export function BidTemplatesPage() {
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
+  const canWrite = useCanAccess('bid', 'full')
   const templates = useQuery({
     queryKey: ['bid-templates'],
     queryFn: fetchBidTemplates,
@@ -407,12 +417,12 @@ export function BidTemplatesPage() {
         <Row gutter={[16, 16]}>
           {templates.data?.map((template) => (
             <Col xs={24} md={12} xl={6} key={template.id}>
-              <Card
-                title={template.name}
-                actions={[
-                  <Button
-                    key="use"
-                    type="link"
+	              <Card
+	                title={template.name}
+	                actions={[
+	                  canWrite ? <Button
+	                    key="use"
+	                    type="link"
                     loading={mutation.isPending && mutation.variables?.templateId === template.id}
                     onClick={() =>
                       mutation.mutate({
@@ -420,13 +430,13 @@ export function BidTemplatesPage() {
                         title: `${template.name}生成标书`,
                       })
                     }
-                  >
-                    使用模板
-                  </Button>,
-                  <Link key="blank" to="/bids/new">
-                    新建空白
-                  </Link>,
-                ]}
+	                  >
+	                    使用模板
+	                  </Button> : null,
+	                  canWrite ? <Link key="blank" to="/bids/new">
+	                    新建空白
+	                  </Link> : null,
+	                ]}
               >
                 <Space direction="vertical" size={8}>
                   <Space wrap>
@@ -455,15 +465,16 @@ export function BidWizardPage() {
   const { bidId = '' } = useParams()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('bid', 'full')
   const [searchParams, setSearchParams] = useSearchParams()
   const step = Number(searchParams.get('step') || '1')
   const current = Math.min(Math.max(step, 1), 7) - 1
   const steps = ['上传招标文件', '文件解读', '目录大纲', '素材选择', '生成正文', '标书编辑', '定稿导出']
   const [tenderFile, setTenderFile] = useState<File | null>(null)
-  const [parseDraftText, setParseDraftText] = useState('')
-  const [outlineDrafts, setOutlineDrafts] = useState<Record<string, OutlineDraftChapter[]>>({})
-  const [materialDraft, setMaterialDraft] = useState<unknown[]>([])
-  const [materialNotes, setMaterialNotes] = useState('')
+  const [outlineDraftState, setOutlineDraftState] = useState<DraftState<Record<string, OutlineDraftChapter[]>> | null>(null)
+  const [materialDraftState, setMaterialDraftState] = useState<
+    DraftState<{ selectedRefs: unknown[]; notes: string }> | null
+  >(null)
   const bid = useQuery({
     queryKey: ['bid', bidId],
     queryFn: () => fetchBid(bidId),
@@ -489,12 +500,20 @@ export function BidWizardPage() {
     queryFn: () => fetchBidMaterialSelection(bidId),
     enabled: Boolean(bidId),
   })
-  useEffect(() => {
-    if (!parseResult.data) return
-    setParseDraftText(JSON.stringify(parseResult.data.structured_result ?? {}, null, 2))
-  }, [parseResult.data?.updated_at])
-  useEffect(() => {
-    if (!parts.data || !chapters.data) return
+  const parseServerText = useMemo(
+    () => (parseResult.data ? JSON.stringify(parseResult.data.structured_result ?? {}, null, 2) : ''),
+    [parseResult.data],
+  )
+  const parseDraftText = parseServerText
+  const outlineSourceKey = useMemo(() => {
+    if (!parts.data || !chapters.data) return ''
+    return [
+      ...parts.data.map((part) => `${part.id}:${part.updated_at ?? ''}:${part.title}`),
+      ...chapters.data.map((chapter) => `${chapter.id}:${chapter.updated_at}:${chapter.title}:${chapter.sort_order}`),
+    ].join('|')
+  }, [parts.data, chapters.data])
+  const outlineServerDrafts = useMemo(() => {
+    if (!parts.data || !chapters.data) return {}
     const next: Record<string, OutlineDraftChapter[]> = {}
     for (const part of parts.data) {
       next[part.id] = chapters.data
@@ -506,13 +525,42 @@ export function BidWizardPage() {
           sort_order: chapter.sort_order,
         }))
     }
-    setOutlineDrafts(next)
+    return next
   }, [parts.data, chapters.data])
-  useEffect(() => {
-    if (!materialSelection.data) return
-    setMaterialDraft(materialSelection.data.selected_refs ?? [])
-    setMaterialNotes(materialSelection.data.notes ?? '')
-  }, [materialSelection.data?.updated_at])
+  const outlineDrafts =
+    outlineDraftState?.sourceKey === outlineSourceKey ? outlineDraftState.value : outlineServerDrafts
+  const setOutlineDrafts = (updater: SetStateAction<Record<string, OutlineDraftChapter[]>>) => {
+    setOutlineDraftState((currentDraft) => {
+      const currentValue = currentDraft?.sourceKey === outlineSourceKey ? currentDraft.value : outlineServerDrafts
+      const value = typeof updater === 'function' ? updater(currentValue) : updater
+      return { sourceKey: outlineSourceKey, value }
+    })
+  }
+  const materialSourceKey = materialSelection.data ? `${materialSelection.data.id}:${materialSelection.data.updated_at}` : ''
+  const materialServerDraft = useMemo(
+    () => ({
+      selectedRefs: materialSelection.data?.selected_refs ?? [],
+      notes: materialSelection.data?.notes ?? '',
+    }),
+    [materialSelection.data],
+  )
+  const materialDraft =
+    materialDraftState?.sourceKey === materialSourceKey ? materialDraftState.value.selectedRefs : materialServerDraft.selectedRefs
+  const materialNotes =
+    materialDraftState?.sourceKey === materialSourceKey ? materialDraftState.value.notes : materialServerDraft.notes
+  const setMaterialDraft = (updater: SetStateAction<unknown[]>) => {
+    setMaterialDraftState((currentDraft) => {
+      const currentValue = currentDraft?.sourceKey === materialSourceKey ? currentDraft.value : materialServerDraft
+      const selectedRefs = typeof updater === 'function' ? updater(currentValue.selectedRefs) : updater
+      return { sourceKey: materialSourceKey, value: { ...currentValue, selectedRefs } }
+    })
+  }
+  const setMaterialNotes = (notes: string) => {
+    setMaterialDraftState((currentDraft) => {
+      const currentValue = currentDraft?.sourceKey === materialSourceKey ? currentDraft.value : materialServerDraft
+      return { sourceKey: materialSourceKey, value: { ...currentValue, notes } }
+    })
+  }
   const exportsQuery = useQuery({
     queryKey: ['bid-exports', bidId],
     queryFn: () => fetchBidExports(bidId),
@@ -712,6 +760,7 @@ export function BidWizardPage() {
       title="标书编制流程"
       subtitle={bid.data?.title ?? '分离标书支持技术标和商务标独立生成'}
       tags={['page-generate', '/bids/:bidId/wizard?step=1..7']}
+      permission={canWrite}
     >
       <Space direction="vertical" size={20} className="full-width">
         <Steps
@@ -1205,6 +1254,7 @@ export function BidEditorPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('bid', 'full')
   const [regenerateTaskId, setRegenerateTaskId] = useState('')
   const [generationSnapshot, setGenerationSnapshot] = useState<BidGenerationSnapshotDTO | null>(null)
   const [generationStreamStatus, setGenerationStreamStatus] = useState<'connecting' | 'open' | 'error'>('connecting')
@@ -1256,31 +1306,40 @@ export function BidEditorPage() {
     ? Math.round((completedChapterCount / generationSummary.total_chapters) * 100)
     : 0
   const latestChapterTask = generationSnapshot?.tasks.find((task) => task.chapter_id === currentChapter?.id)
+  const editorDirtyRef = useRef(false)
+  const loadedEditorSourceRef = useRef('')
+  const editorSourceKey = currentChapter ? `${currentChapter.id}:${currentChapter.updated_at}` : ''
   const editor = useEditor({
     extensions: [StarterKit],
     content: '<p>请选择章节</p>',
+    editable: canWrite,
+    onUpdate: () => {
+      editorDirtyRef.current = true
+    },
   })
   useEffect(() => {
     if (!editor || !currentChapter) return
+    if (loadedEditorSourceRef.current === editorSourceKey) return
+    const chapterChanged = !loadedEditorSourceRef.current.startsWith(`${currentChapter.id}:`)
+    if (!chapterChanged && editorDirtyRef.current) return
     editor.commands.setContent(contentForEditor(currentChapter))
-  }, [editor, currentChapter?.id, currentChapter?.updated_at])
+    loadedEditorSourceRef.current = editorSourceKey
+    editorDirtyRef.current = false
+  }, [editor, currentChapter, editorSourceKey])
   useEffect(() => {
     if (!regenerateTaskId || !regenerateTaskStatus) return
     if (regenerateTaskStatus === 'done') {
       message.success('本章已重新生成')
-      setRegenerateTaskId('')
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
       void queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter?.id] })
     }
     if (regenerateTaskStatus === 'failed' || regenerateTaskStatus === 'cancelled') {
       message.error('重新生成失败')
-      setRegenerateTaskId('')
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
     }
   }, [regenerateTaskId, regenerateTaskStatus, message, queryClient, bidId, currentChapter?.id])
   useEffect(() => {
     if (!bidId) return
-    setGenerationStreamStatus('connecting')
     return openSse<BidGenerationSnapshotDTO>(`/bids/${bidId}/generation/stream`, {
       onOpen: () => setGenerationStreamStatus('open'),
       onMessage: (snapshot, event) => {
@@ -1369,17 +1428,17 @@ export function BidEditorPage() {
       tags={['/bids/:bidId/editor', 'Tiptap']}
       bare
       actions={[
-        <Button key="save" type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} disabled={!currentChapter} onClick={() => saveMutation.mutate()}>
+        <Button key="save" type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} disabled={!canWrite || !currentChapter} onClick={() => saveMutation.mutate()}>
           保存
         </Button>,
-        <Button key="accept" icon={<CheckOutlined />} loading={acceptMutation.isPending} disabled={!currentChapter} onClick={() => acceptMutation.mutate()}>
+        <Button key="accept" icon={<CheckOutlined />} loading={acceptMutation.isPending} disabled={!canWrite || !currentChapter} onClick={() => acceptMutation.mutate()}>
           采纳
         </Button>,
-        <Button key="regen" icon={<SyncOutlined />} loading={isRegenerating} disabled={!currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
+        <Button key="regen" icon={<SyncOutlined />} loading={isRegenerating} disabled={!canWrite || !currentChapter || isRegenerating} onClick={() => regenerateMutation.mutate()}>
           重新生成
         </Button>,
-        <Button key="export" icon={<DownloadOutlined />}>
-          <Link to={`/bids/${bidId}/wizard?step=7`}>导出</Link>
+        <Button key="export" icon={<DownloadOutlined />} disabled={!canWrite}>
+          {canWrite ? <Link to={`/bids/${bidId}/wizard?step=7`}>导出</Link> : '导出'}
         </Button>,
       ]}
     >
@@ -1538,25 +1597,25 @@ export function BidEditorPage() {
               block
               icon={<SyncOutlined />}
               loading={isRegenerating}
-              disabled={!currentChapter || isRegenerating}
+              disabled={!canWrite || !currentChapter || isRegenerating}
               onClick={() => regenerateMutation.mutate()}
             >
               查找素材并重新生成
             </Button>
             <Space wrap size={[6, 6]}>
-              <Button size="small" icon={<EditOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('optimize')}>
+              <Button size="small" icon={<EditOutlined />} disabled={!canWrite || !currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('optimize')}>
                 优化
               </Button>
-              <Button size="small" icon={<ExpandAltOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('expand')}>
+              <Button size="small" icon={<ExpandAltOutlined />} disabled={!canWrite || !currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('expand')}>
                 扩写
               </Button>
-              <Button size="small" icon={<CompressOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('shorten')}>
+              <Button size="small" icon={<CompressOutlined />} disabled={!canWrite || !currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('shorten')}>
                 缩写
               </Button>
-              <Button size="small" icon={<PlusCircleOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('add_detail')}>
+              <Button size="small" icon={<PlusCircleOutlined />} disabled={!canWrite || !currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('add_detail')}>
                 加细节
               </Button>
-              <Button size="small" icon={<SafetyCertificateOutlined />} disabled={!currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('self_check')}>
+              <Button size="small" icon={<SafetyCertificateOutlined />} disabled={!canWrite || !currentChapter || isRegenerating} onClick={() => aiActionMutation.mutate('self_check')}>
                 自检
               </Button>
             </Space>

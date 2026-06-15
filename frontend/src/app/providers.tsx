@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { isAxiosError } from 'axios'
 import { ConfigProvider, App as AntApp, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import type { PropsWithChildren } from 'react'
@@ -7,14 +8,18 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      // 4xx responses are deterministic; retry only transient network/5xx failures.
+      retry: (failureCount, error) => {
+        const status = isAxiosError(error) ? error.response?.status : undefined
+        if (status && status >= 400 && status < 500) return false
+        return failureCount < 1
+      },
       staleTime: 30_000,
     },
   },
 })
 
-// 设计令牌与 index.css 中的 CSS 变量保持一致（晨纸·黛蓝 v2）：
-// 纸 #F6F6F3 / 墨 #20242B / 黛蓝 #2C5FA8 / 鎏金 #B08530（仅品牌签名）/ 智能紫 #7C3AED
+// Keep Ant Design tokens aligned with the CSS variables in index.css.
 const bodyFont =
   '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif'
 

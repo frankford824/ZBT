@@ -1,5 +1,5 @@
-import { ExclamationCircleOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons'
-import { Alert, Spin, Typography } from 'antd'
+import { ExclamationCircleOutlined, LoadingOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
+import { Alert, Button, Spin, Typography } from 'antd'
 
 const emptyIllustration = '/illustrations/zbt-empty-office.png'
 
@@ -36,17 +36,26 @@ export function EmptyBlock({ description = '暂无数据' }: { description?: str
 }
 
 export function ErrorBlock({
-  description = '请刷新页面重试；若多次失败，请联系管理员处理',
+  description = '数据没能加载出来，可能是网络波动或登录状态已过期。',
+  onRetry,
 }: {
   description?: string
+  onRetry?: () => void
 }) {
   return (
-    <Alert
-      type="error"
-      showIcon
-      icon={<ExclamationCircleOutlined />}
-      message="数据加载失败"
-      description={description}
-    />
+    <div className="state-tile state-tile-error">
+      <ExclamationCircleOutlined className="state-error-icon" />
+      <div className="state-error-body">
+        <Typography.Text className="state-error-title">数据加载失败</Typography.Text>
+        <Typography.Text type="secondary" className="state-copy">
+          {description}
+        </Typography.Text>
+      </div>
+      {onRetry ? (
+        <Button size="small" icon={<ReloadOutlined />} onClick={onRetry}>
+          重新加载
+        </Button>
+      ) : null}
+    </div>
   )
 }

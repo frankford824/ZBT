@@ -76,8 +76,14 @@ services:
     build:
       context: ./ai-service
     environment:
-      USE_MOCK_PROVIDERS: "true"
+      USE_MOCK_PROVIDERS: ${USE_MOCK_PROVIDERS:-true}
       MODEL_ROUTING_FILE: ./app/config/model_routing.yaml
+      AI_LLM_PROVIDER: ${AI_LLM_PROVIDER:-openai_compatible_primary}
+      AI_LLM_MODEL: ${AI_LLM_MODEL:-}
+      AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-openai_compatible_primary}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-}
+      AI_RERANK_PROVIDER: ${AI_RERANK_PROVIDER:-openai_compatible_primary}
+      AI_RERANK_MODEL: ${AI_RERANK_MODEL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}

@@ -4,14 +4,17 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from urllib import request
 
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, Request
 from minio import Minio
+from starlette.responses import JSONResponse
 
 from app.gateway.model_router import ModelRouter
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
@@ -40,6 +43,33 @@ CONFIG_PATH = routing_config_path()
 
 app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0")
 router = ModelRouter.from_yaml(CONFIG_PATH)
+PUBLIC_PATHS = {"/healthz", "/models/health"}
+DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
+
+
+@app.middleware("http")
+async def require_backend_signature(request: Request, call_next):
+    if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+    secret = ai_service_hmac_secret()
+    if not secret:
+        return await call_next(request)
+    body = await request.body()
+    if not verify_request_signature(
+        request.headers.get("X-ZBT-Timestamp", ""),
+        request.headers.get("X-ZBT-Signature", ""),
+        body,
+        secret,
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"code": "invalid_signature", "error": "AI service request signature invalid"},
+        )
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return await call_next(Request(request.scope, receive))
 
 
 def minio_client() -> Minio:
@@ -199,7 +229,7 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
 def post_callback(callback_url: str, payload: dict[str, object]) -> None:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     timestamp = str(int(time.time()))
-    secret = os.getenv("AI_SERVICE_HMAC_SECRET", "")
+    secret = ai_service_hmac_secret()
     signature = hmac.new(secret.encode("utf-8"), timestamp.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
     req = request.Request(
         callback_url,
@@ -213,6 +243,36 @@ def post_callback(callback_url: str, payload: dict[str, object]) -> None:
     )
     with request.urlopen(req, timeout=10) as response:
         response.read()
+
+
+def verify_request_signature(
+    timestamp_header: str,
+    signature_header: str,
+    body: bytes,
+    secret: str,
+    *,
+    now: int | None = None,
+) -> bool:
+    secret = secret.strip()
+    if not secret or not timestamp_header or not signature_header:
+        return False
+    try:
+        timestamp = int(timestamp_header)
+    except ValueError:
+        return False
+    current = int(time.time()) if now is None else now
+    if abs(current - timestamp) > 300:
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        timestamp_header.encode("utf-8") + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
+
+
+def ai_service_hmac_secret() -> str:
+    return os.getenv("AI_SERVICE_HMAC_SECRET", "").strip() or DEFAULT_AI_HMAC_SECRET
 
 
 def estimate_tokens(text: str) -> int:
@@ -367,81 +427,97 @@ def enqueue_document_export(
 
 
 def process_document_export(task_id: str, payload: DocumentExportRequest, export_type: str) -> None:
-    output_path = Path("/tmp") / payload.filename
-    try:
-        content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        if export_type == "zip":
-            export_bid_zip(
-                payload.bid_title,
-                payload.parts,
-                output_path,
-                layout=payload.layout,
-                attachments=payload.attachments,
-                boq_files=payload.boq_files,
-            )
-            content_type = "application/zip"
-        elif export_type == "pdf":
-            export_bid_pdf(
-                payload.bid_title,
-                payload.part_title,
-                payload.chapters,
-                output_path,
-                layout=payload.layout,
-            )
-            content_type = "application/pdf"
-        else:
-            export_bid_docx(
-                payload.bid_title,
-                payload.part_title,
-                payload.chapters,
-                output_path,
-                layout=payload.layout,
-            )
-        client = minio_client()
-        client.fput_object(
-            os.getenv("MINIO_BUCKET", "zbt-files"),
-            payload.object_key,
-            str(output_path),
-            content_type=content_type,
-        )
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "done",
-            "result": {
-                "export_id": payload.export_id,
-                "bid_id": payload.bid_id,
-                "export_type": export_type,
-                "filename": payload.filename,
-                "object_key": payload.object_key,
-                "part_code": payload.part_code,
-                "part_count": len(payload.parts) if export_type == "zip" else 1,
-                "chapter_count": sum(len(part.chapters) for part in payload.parts)
-                if export_type == "zip"
-                else len(payload.chapters),
-                "size_bytes": output_path.stat().st_size,
-                "content_type": content_type,
-                "layout": payload.layout.model_dump(),
-                "manifest_filename": "manifest.json"
-                if export_type == "zip" and payload.layout.include_manifest
-                else None,
-                "pdf_validation": "enabled"
-                if export_type == "pdf" and payload.layout.validate_pdf
-                else "disabled",
-            },
-        }
-    except Exception as exc:  # pragma: no cover - defensive task boundary
-        callback_payload = {
-            "tenant_id": payload.tenant_id,
-            "task_id": task_id,
-            "status": "failed",
-            "error_message": str(exc),
-            "result": {"error": str(exc), "export_id": payload.export_id},
-        }
-    finally:
+    with TemporaryDirectory(prefix="zbt-ai-export-") as tmpdir:
+        output_path = Path(tmpdir) / safe_output_filename(payload.filename, export_type)
         try:
-            output_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if export_type == "zip":
+                export_bid_zip(
+                    payload.bid_title,
+                    payload.parts,
+                    output_path,
+                    layout=payload.layout,
+                    attachments=payload.attachments,
+                    boq_files=payload.boq_files,
+                )
+                content_type = "application/zip"
+            elif export_type == "pdf":
+                export_bid_pdf(
+                    payload.bid_title,
+                    payload.part_title,
+                    payload.chapters,
+                    output_path,
+                    layout=payload.layout,
+                )
+                content_type = "application/pdf"
+            else:
+                export_bid_docx(
+                    payload.bid_title,
+                    payload.part_title,
+                    payload.chapters,
+                    output_path,
+                    layout=payload.layout,
+                )
+            client = minio_client()
+            client.fput_object(
+                os.getenv("MINIO_BUCKET", "zbt-files"),
+                payload.object_key,
+                str(output_path),
+                content_type=content_type,
+            )
+            callback_payload = {
+                "tenant_id": payload.tenant_id,
+                "task_id": task_id,
+                "status": "done",
+                "result": {
+                    "export_id": payload.export_id,
+                    "bid_id": payload.bid_id,
+                    "export_type": export_type,
+                    "filename": payload.filename,
+                    "object_key": payload.object_key,
+                    "part_code": payload.part_code,
+                    "part_count": len(payload.parts) if export_type == "zip" else 1,
+                    "chapter_count": sum(len(part.chapters) for part in payload.parts)
+                    if export_type == "zip"
+                    else len(payload.chapters),
+                    "size_bytes": output_path.stat().st_size,
+                    "content_type": content_type,
+                    "layout": payload.layout.model_dump(),
+                    "manifest_filename": "manifest.json"
+                    if export_type == "zip" and payload.layout.include_manifest
+                    else None,
+                    "pdf_validation": "enabled"
+                    if export_type == "pdf" and payload.layout.validate_pdf
+                    else "disabled",
+                },
+            }
+        except Exception as exc:  # pragma: no cover - defensive task boundary
+            callback_payload = {
+                "tenant_id": payload.tenant_id,
+                "task_id": task_id,
+                "status": "failed",
+                "error_message": str(exc),
+                "result": {"error": str(exc), "export_id": payload.export_id},
+            }
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+def safe_output_filename(filename: str, export_type: str) -> str:
+    suffix = {
+        "docx": ".docx",
+        "pdf": ".pdf",
+        "zip": ".zip",
+    }.get(export_type, ".docx")
+    basename = Path(filename.replace("\\", "/")).name.strip()
+    basename = re.sub(r"[^0-9A-Za-z._\-\u4e00-\u9fff]+", "-", basename).strip(".-")
+    if not basename:
+        basename = "export"
+    path = Path(basename)
+    stem = path.stem.strip(".-") or "export"
+    basename = stem + path.suffix
+    if Path(basename).suffix.lower() != suffix:
+        basename = Path(basename).with_suffix(suffix).name
+    if len(basename) > 120:
+        basename = Path(basename).stem[: 120 - len(suffix)] + suffix
+    return basename

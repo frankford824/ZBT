@@ -1,4 +1,4 @@
-import type { LoginSessionPayload } from '../../app/store/session'
+import { expireSessionAndRedirect, getStoredSession } from '../auth/session'
 
 export type SseHandler<T> = {
   onMessage: (data: T, event: string) => void
@@ -18,8 +18,12 @@ async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSig
       headers: sseHeaders(),
       signal,
     })
+    if (response.status === 401) {
+      expireSessionAndRedirect()
+      throw new Error('登录状态已过期，请重新登录')
+    }
     if (!response.ok || !response.body) {
-      throw new Error(`SSE request failed: ${response.status}`)
+      throw new Error('实时更新暂时不可用，请稍后重试')
     }
     handler.onOpen?.()
     const reader = response.body.getReader()
@@ -64,14 +68,10 @@ function sseUrl(path: string) {
 
 function sseHeaders() {
   const headers = new Headers({ Accept: 'text/event-stream' })
-  const raw = localStorage.getItem('zbt.session')
-  if (!raw) return headers
-  try {
-    const session = JSON.parse(raw) as LoginSessionPayload
+  const session = getStoredSession()
+  if (session) {
     headers.set('Authorization', `Bearer ${session.access_token}`)
     headers.set('X-Tenant-ID', session.session.tenant.id)
-  } catch {
-    localStorage.removeItem('zbt.session')
   }
   return headers
 }

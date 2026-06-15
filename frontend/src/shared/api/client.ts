@@ -1,5 +1,6 @@
 import axios from 'axios'
 import type { LoginSessionPayload, ModulePermission } from '../../app/store/session'
+import { expireSessionAndRedirect, getStoredSession } from '../auth/session'
 
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
@@ -7,18 +8,26 @@ export const apiClient = axios.create({
 })
 
 apiClient.interceptors.request.use((config) => {
-  const raw = localStorage.getItem('zbt.session')
-  if (raw) {
-    try {
-      const session = JSON.parse(raw) as LoginSessionPayload
-      config.headers.set('Authorization', `Bearer ${session.access_token}`)
-      config.headers.set('X-Tenant-ID', session.session.tenant.id)
-    } catch {
-      localStorage.removeItem('zbt.session')
-    }
+  const session = getStoredSession()
+  if (session) {
+    config.headers.set('Authorization', `Bearer ${session.access_token}`)
+    config.headers.set('X-Tenant-ID', session.session.tenant.id)
   }
   return config
 })
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status
+    const url: string = error?.config?.url ?? ''
+    const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/register')
+    if (status === 401 && !isAuthRequest) {
+      expireSessionAndRedirect()
+    }
+    return Promise.reject(error)
+  },
+)
 
 export type RoleDTO = {
   id: string

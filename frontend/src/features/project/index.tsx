@@ -33,6 +33,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 const statuses: ProjectDTO['status'][] = ['opportunity', 'bidding', 'compliance_review', 'submitted', 'closed']
 const statusLabels: Record<ProjectDTO['status'], string> = {
@@ -78,6 +79,7 @@ export function ProjectsPage() {
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
   const view = searchParams.get('view') || 'board'
+  const canWrite = useCanAccess('project', 'full')
   const projects = useQuery({
     queryKey: ['projects'],
     queryFn: () => fetchProjects(),
@@ -162,9 +164,9 @@ export function ProjectsPage() {
           ]}
           onChange={(value) => setSearchParams({ view: String(value) })}
         />,
-        <Button key="create" type="primary" onClick={() => setOpen(true)}>
+        canWrite ? <Button key="create" type="primary" onClick={() => setOpen(true)}>
           新建项目
-        </Button>,
+        </Button> : null,
       ]}
     >
       {view === 'list' ? table() : board()}
@@ -187,6 +189,7 @@ export function ProjectDetailPage() {
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('project', 'full')
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
   const project = useQuery({
@@ -259,27 +262,27 @@ export function ProjectDetailPage() {
       subtitle={statusLabels[project.data.status]}
       tags={['/projects/:projectId']}
       actions={[
-        next && (
+        canWrite && next && (
           <Button key="next" loading={transitionMutation.isPending} onClick={() => transitionMutation.mutate({ status: next })}>
             推进到{statusLabels[next]}
           </Button>
         ),
-        <Button
+        canWrite ? <Button
           key="won"
           loading={transitionMutation.isPending}
           onClick={() => transitionMutation.mutate({ status: 'closed', result: 'won' })}
         >
           标记中标
-        </Button>,
-        <Button key="milestone" onClick={() => setOpen(true)}>
+        </Button> : null,
+        canWrite ? <Button key="milestone" onClick={() => setOpen(true)}>
           新增里程碑
-        </Button>,
-        <Button key="archive-case" disabled={!canCreateCost} loading={archiveCaseMutation.isPending} onClick={() => archiveCaseMutation.mutate()}>
+        </Button> : null,
+        canWrite ? <Button key="archive-case" disabled={!canCreateCost} loading={archiveCaseMutation.isPending} onClick={() => archiveCaseMutation.mutate()}>
           回流知识库
-        </Button>,
-        <Button key="cost" type="primary" disabled={!canCreateCost} loading={costMutation.isPending} onClick={() => costMutation.mutate()}>
+        </Button> : null,
+        canWrite ? <Button key="cost" type="primary" disabled={!canCreateCost} loading={costMutation.isPending} onClick={() => costMutation.mutate()}>
           创建成本项目
-        </Button>,
+        </Button> : null,
       ].filter(Boolean)}
     >
       <Descriptions bordered column={2}>

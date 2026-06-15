@@ -10,6 +10,8 @@ import pytest
 from docx import Document
 
 from app.pipelines.export.docx_exporter import (
+    _attachment_content,
+    _safe_zip_path,
     _validate_pdf_output,
     export_bid_docx,
     export_bid_pdf,
@@ -250,6 +252,17 @@ def test_validate_pdf_output_rejects_blank_pdf(tmp_path) -> None:
 
     with pytest.raises(RuntimeError, match="no extractable text"):
         _validate_pdf_output(blank_pdf)
+
+
+def test_attachment_local_path_is_rejected() -> None:
+    attachment = ExportAttachment(filename="secret.txt", local_path="/etc/passwd")
+
+    with pytest.raises(RuntimeError, match="local_path is not allowed"):
+        _attachment_content(attachment)
+
+
+def test_zip_path_removes_parent_segments() -> None:
+    assert _safe_zip_path("../../evil/../资质.txt") == "evil/资质.txt"
 
 
 def _b64(value: str) -> str:

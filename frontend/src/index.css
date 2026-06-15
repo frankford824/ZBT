@@ -552,6 +552,48 @@ a {
   text-align: center;
 }
 
+/* Error states use a solid accent rail and optional retry action. */
+.state-tile-error {
+  justify-content: flex-start;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  border-style: solid;
+  border-color: var(--line);
+  box-shadow: inset 3px 0 0 var(--error);
+  background: #fdf6f5;
+}
+
+.state-error-icon {
+  font-size: 22px;
+  color: var(--error);
+  flex: 0 0 auto;
+}
+
+.state-error-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.state-error-title {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+@media (max-width: 575px) {
+  .state-tile-error {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .state-tile-error .ant-btn {
+    margin-left: 36px;
+  }
+}
+
 .state-illustration {
   width: 88px;
   height: 88px;

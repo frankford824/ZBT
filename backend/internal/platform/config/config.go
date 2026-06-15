@@ -2,6 +2,8 @@ package config
 
 import "os"
 
+const DefaultAIServiceHMACSecret = "dev-only-zbt-ai-callback-secret"
+
 type Config struct {
 	HTTPAddr             string
 	DatabaseURL          string
@@ -28,7 +30,7 @@ func Load() Config {
 		MigrationDatabaseURL: env("MIGRATION_DATABASE_URL", env("DATABASE_URL", "")),
 		RedisURL:             env("REDIS_URL", "redis://redis:6379/0"),
 		AIServiceURL:         env("AI_SERVICE_URL", "http://ai-service:8000"),
-		AIServiceHMACSecret:  env("AI_SERVICE_HMAC_SECRET", ""),
+		AIServiceHMACSecret:  env("AI_SERVICE_HMAC_SECRET", DefaultAIServiceHMACSecret),
 		AICallbackURL:        env("AI_CALLBACK_URL", "http://backend:8080/api/v1/ai/callbacks/tasks"),
 		MinIOEndpoint:        env("MINIO_ENDPOINT", "minio:9000"),
 		MinIOPublicEndpoint:  env("MINIO_PUBLIC_ENDPOINT", env("MINIO_ENDPOINT", "minio:9000")),

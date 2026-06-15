@@ -23,7 +23,7 @@ func Require(module string, level Level) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "permission denied", "module": module})
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "permission_denied", "error": "当前账号没有此操作权限", "module": module})
 	}
 }
 

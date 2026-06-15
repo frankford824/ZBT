@@ -4,9 +4,9 @@
 
 上传文件后，Go 保存 file_asset 和 MinIO object，创建任务。Python 按文件类型处理：PDF 使用 PyMuPDF，Word 使用 python-docx，Excel 使用 openpyxl，PPT 使用 python-pptx，旧格式通过 LibreOffice 转换，图片和扫描 PDF 走 OCRProvider。
 
-当前一期实现路径：前端通过 Go 获取 MinIO 预签名 URL，上传后调用 confirm；Go 将 ready 的 file_asset 转成 knowledge_document。用户点击处理后，Go 创建 ai_tasks，调用 Python AI 服务 `/tasks/knowledge-process`，Python 通过 ModelRouter 选择处理路线并返回外部 task_id。Python 后台任务读取 MinIO 对象，已支持 text/plain、PDF 和 Word 的最小文本抽取与切片；随后通过 `knowledge_embedding` 路由使用 MockProvider 生成 1024 维 embedding，并随 HMAC 签名回调 Go。Go 验签后更新 ai_tasks、knowledge_documents.parse_status，并将切片和 embedding 写入 knowledge_chunks / pgvector。
+当前一期实现路径：前端通过 Go 获取 MinIO 预签名 URL，上传后调用 confirm；Go 将 ready 的 file_asset 转成 knowledge_document。用户点击处理后，Go 创建 ai_tasks，签名调用 Python AI 服务 `/tasks/knowledge-process`，Python 通过 ModelRouter 选择处理路线并返回外部 task_id。Python 后台任务读取 MinIO 对象，已支持 text/plain、PDF 文本层/版面块/表格候选、docx 段落和表格、xlsx/xlsm、pptx/pptm；空文本 PDF 可通过 `OCR_HTTP_ENDPOINT` 接外部 OCR，未配置 OCR 时标记 `ocr_required` 而不伪装为成功。随后通过 `knowledge_embedding` 路由生成 embedding，并随 HMAC 签名回调 Go。Go 验签后更新 ai_tasks、knowledge_documents.parse_status，并将切片和 embedding 写入 knowledge_chunks / pgvector。
 
-输出统一中间文档模型，随后清洗、结构感知切片、embedding、写入 knowledge_chunks 和 pgvector。当前 embedding Provider 仍为 MockProvider，真实 BGE/OpenAI-compatible embedding Provider 留在后续 Provider 适配中替换。
+输出统一中间文档模型，随后清洗、结构感知切片、embedding、写入 knowledge_chunks 和 pgvector。默认开发模式 embedding Provider 为 MockProvider；设置 `USE_MOCK_PROVIDERS=false` 并配置真实 provider/model 后可切换 OpenAI-compatible/BGE 类 embedding。
 
 ## 逐章生成
 
@@ -14,7 +14,7 @@
 
 输出 Tiptap JSON、source_refs、self_check、needs_human_input、model metadata、token usage 和 trace_id。
 
-当前一期实现路径：Go 在 `POST /chapters/:chapterId/regenerate` 中预生成外部 task_id，检索当前租户 `knowledge_chunks`，将真实 chunk/document 引用写入 `retrieved_knowledge_refs` 后创建 `ai_tasks(resource_type='bid_chapter')`，并将章节状态置为 `generating`。Python `/tasks/chapter-generate` 返回 202 + task_id，在后台执行 ModelRouter；MockProvider 会优先使用 `retrieved_knowledge_refs` 返回 source_refs。完成后通过 HMAC 回调 Go，Go 根据 `external_task_id` 定位任务，更新任务状态、章节内容、`bid_chapter_versions` 和 `knowledge_references`。前端通过 `/bids/:id/generation/stream` 订阅 SSE 进度，并保留 `GET /ai-tasks/:taskId` 轮询兜底。
+当前一期实现路径：Go 在 `POST /chapters/:chapterId/regenerate` 中预生成外部 task_id，检索当前租户 `knowledge_chunks`，将真实 chunk/document 引用写入 `retrieved_knowledge_refs` 后创建 `ai_tasks(resource_type='bid_chapter')`，并将章节状态置为 `generating`。Go 签名调用 Python `/tasks/chapter-generate`；Python 返回 202 + task_id 后在后台执行 ModelRouter。默认开发模式 MockProvider 会优先使用 `retrieved_knowledge_refs` 返回 source_refs；真实模型模式通过 `USE_MOCK_PROVIDERS=false` 和 `AI_LLM_PROVIDER` / `AI_LLM_MODEL` 切换。完成后通过 HMAC 回调 Go，Go 根据 `external_task_id` 定位任务，更新任务状态、章节内容、`bid_chapter_versions` 和 `knowledge_references`。前端通过 `/bids/:id/generation/stream` 订阅 SSE 进度，并保留 `GET /ai-tasks/:taskId` 轮询兜底。
 
 事实性内容没有引用时必须标记 needs_human_input。
 

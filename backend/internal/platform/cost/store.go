@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -532,8 +533,16 @@ func (s *Store) ApplyAdviceCallback(ctx context.Context, payload CallbackPayload
 	}
 	var task Task
 	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
+		current, err := lockAdviceTaskByExternalID(ctx, tx, payload.TenantID, payload.TaskID)
+		if err != nil {
+			return err
+		}
+		task = current
+		if isTerminalTaskStatus(current.Status) {
+			return nil
+		}
 		resultJSON, _ := json.Marshal(payload.Result)
-		found, err := scanTask(tx.QueryRow(ctx, `
+		updated, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
 			set status = $3,
 				result = $4,
@@ -541,15 +550,15 @@ func (s *Store) ApplyAdviceCallback(ctx context.Context, payload CallbackPayload
 				started_at = coalesce(started_at, now()),
 				completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
 				updated_at = now()
-			where tenant_id = $1 and external_task_id = $2 and resource_type = 'cost_project'
+			where tenant_id = $1 and id = $2 and resource_type = 'cost_project'
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, payload.TenantID, payload.TaskID, status, resultJSON, payload.ErrorMessage))
+		`, payload.TenantID, current.ID, status, resultJSON, payload.ErrorMessage))
 		if err != nil {
 			return err
 		}
-		task = found
+		task = updated
 		if status == "done" {
 			metadataJSON, _ := json.Marshal(map[string]any{
 				"last_ai_advice_task_id": task.ID,
@@ -616,6 +625,7 @@ func (s *Store) submitCostAdvice(ctx context.Context, payload map[string]any) (a
 		return aiTaskAccepted{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	aihttp.Sign(req, body, s.cfg.AIServiceHMACSecret)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return aiTaskAccepted{}, err
@@ -697,6 +707,26 @@ func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx)
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+func lockAdviceTaskByExternalID(ctx context.Context, tx pgx.Tx, tenantID, externalTaskID string) (Task, error) {
+	return scanTask(tx.QueryRow(ctx, `
+		select id::text, task_type, status, external_task_id::text,
+			resource_type, resource_id::text, payload, route, result, error_message,
+			started_at, completed_at, created_at, updated_at
+		from ai_tasks
+		where tenant_id = $1 and external_task_id = $2 and resource_type = 'cost_project'
+		for update
+	`, tenantID, externalTaskID))
+}
+
+func isTerminalTaskStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func projectSelectSQL() string {

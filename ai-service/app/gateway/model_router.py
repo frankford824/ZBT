@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +27,8 @@ class RouteTarget(BaseModel):
 
 class ModelRouter:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
-        self.providers = self._build_providers(config.get("providers", {}))
+        self.config = self._apply_provider_mode(config)
+        self.providers = self._build_providers(self.config.get("providers", {}))
 
     @classmethod
     def from_yaml(cls, path: Path) -> "ModelRouter":
@@ -117,3 +119,58 @@ class ModelRouter:
         if "mock" not in providers:
             providers["mock"] = MockProvider()
         return providers
+
+    LLM_ROUTES = {
+        "tender_parse",
+        "outline_generate",
+        "chapter_generate",
+        "chapter_self_check",
+        "compliance_check",
+        "rewrite_assistant",
+        "cost_advice",
+    }
+    EMBEDDING_ROUTES = {"knowledge_embedding"}
+    RERANK_ROUTES = {"knowledge_rerank"}
+
+    def _apply_provider_mode(self, config: dict[str, Any]) -> dict[str, Any]:
+        effective = deepcopy(config)
+        if os.getenv("USE_MOCK_PROVIDERS", "true").strip().lower() not in {"0", "false", "no"}:
+            return effective
+
+        for task_type, route in effective.get("routes", {}).items():
+            primary = route.get("primary", {})
+            if primary.get("provider") != "mock":
+                continue
+            route_kind = self._route_kind(task_type)
+            if route_kind == "":
+                continue
+            provider = self._route_env(task_type, "PROVIDER") or os.getenv(f"AI_{route_kind}_PROVIDER", "")
+            model = self._route_env(task_type, "MODEL") or os.getenv(f"AI_{route_kind}_MODEL", "")
+            provider = provider.strip()
+            model = model.strip()
+            if not provider or not model:
+                raise ValueError(
+                    "USE_MOCK_PROVIDERS=false requires "
+                    f"{task_type.upper()}_PROVIDER/{task_type.upper()}_MODEL or "
+                    f"AI_{route_kind}_PROVIDER/AI_{route_kind}_MODEL"
+                )
+            mock_primary = deepcopy(primary)
+            primary["provider"] = provider
+            primary["model"] = model
+            fallback = route.setdefault("fallback", [])
+            if not any(item.get("provider") == "mock" for item in fallback):
+                fallback.append(mock_primary)
+        return effective
+
+    def _route_kind(self, task_type: str) -> str:
+        if task_type in self.LLM_ROUTES:
+            return "LLM"
+        if task_type in self.EMBEDDING_ROUTES:
+            return "EMBEDDING"
+        if task_type in self.RERANK_ROUTES:
+            return "RERANK"
+        return ""
+
+    def _route_env(self, task_type: str, suffix: str) -> str:
+        key = task_type.upper().replace("-", "_") + "_" + suffix
+        return os.getenv(key, "")

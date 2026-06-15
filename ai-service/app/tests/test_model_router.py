@@ -6,6 +6,11 @@ from app.gateway.model_router import ModelRouter
 from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef
 
 
+@pytest.fixture(autouse=True)
+def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")
+
+
 def _dot(left: list[float], right: list[float]) -> float:
     return sum(left_value * right_value for left_value, right_value in zip(left, right, strict=True))
 
@@ -164,3 +169,52 @@ def test_router_does_not_silently_fallback_to_mock(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(RuntimeError, match="no configured provider"):
         router.get_llm("chapter_generate", tenant_id="tenant-demo")
+
+
+def test_use_mock_providers_false_rewrites_mock_primary_to_real_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("AI_LLM_PROVIDER", "openai_compatible_primary")
+    monkeypatch.setenv("AI_LLM_MODEL", "real-model")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "mock", "model": "mock-model"},
+                }
+            },
+        }
+    )
+
+    target = router.resolve("chapter_generate", tenant_id="tenant-demo")
+
+    assert target.provider == "openai_compatible_primary"
+    assert target.model == "real-model"
+    assert router.config["routes"]["chapter_generate"]["fallback"][0]["provider"] == "mock"
+
+
+def test_use_mock_providers_false_requires_real_route_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.delenv("AI_LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_LLM_MODEL", raising=False)
+
+    with pytest.raises(ValueError, match="USE_MOCK_PROVIDERS=false requires"):
+        ModelRouter(
+            {
+                "providers": {"mock": {"type": "mock"}},
+                "routes": {"chapter_generate": {"primary": {"provider": "mock", "model": "mock"}}},
+            }
+        )

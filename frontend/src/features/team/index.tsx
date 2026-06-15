@@ -41,6 +41,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 const teamTabs = ['members', 'approvals', 'logs', 'notifications'] as const
 type TeamTab = (typeof teamTabs)[number]
@@ -75,19 +76,29 @@ function statusTag(status: string) {
 }
 
 const taskTypeLabels: Record<string, string> = {
+  tender_parse: '招标文件解读',
   knowledge_process: '知识库处理',
   knowledge_embedding: '知识库整理',
+  knowledge_rerank: '知识库匹配',
+  outline_generate: '目录大纲生成',
   chapter_generate: '章节生成',
+  chapter_ai_action: '章节处理',
   document_export: '文档导出',
+  compliance_check: '合规检查',
+  cost_advice: '成本建议',
 }
 
 const resourceLabels: Record<string, string> = {
   bid: '标书',
+  bid_export: '导出文件',
+  bid_chapter: '标书章节',
   chapter: '章节',
   knowledge: '知识库',
+  knowledge_document: '知识文档',
   document: '文档',
   tender: '标讯',
   cost: '成本',
+  cost_project: '成本测算',
 }
 
 function formatTime(value?: string | null) {
@@ -116,6 +127,7 @@ export function TeamPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = normalizeTeamTab(searchParams.get('tab'))
+  const canWrite = useCanAccess('team', 'full')
   const [inviteOpen, setInviteOpen] = useState(false)
   const [chainOpen, setChainOpen] = useState(false)
   const [memberOpen, setMemberOpen] = useState(false)
@@ -268,12 +280,12 @@ export function TeamPage() {
       subtitle="成员、审批流程、待办审批、使用记录和通知"
       tags={['page-team', '/team?tab=members|approvals|logs|notifications']}
       actions={[
-        <Button key="chain" icon={<PlusOutlined />} onClick={() => setChainOpen(true)}>
+        canWrite ? <Button key="chain" icon={<PlusOutlined />} onClick={() => setChainOpen(true)}>
           审批流程
-        </Button>,
-        <Button key="invite" type="primary" icon={<TeamOutlined />} onClick={() => setInviteOpen(true)}>
+        </Button> : null,
+        canWrite ? <Button key="invite" type="primary" icon={<TeamOutlined />} onClick={() => setInviteOpen(true)}>
           邀请成员
-        </Button>,
+        </Button> : null,
       ]}
     >
       <Tabs
@@ -299,21 +311,21 @@ export function TeamPage() {
                     render: (_, record) => record.roles.map((role) => <Tag key={role.id}>{role.name}</Tag>),
                   },
                   { title: '状态', dataIndex: 'status', render: statusTag },
-                  {
-                    title: '操作',
-                    render: (_, record) => (
-                      <Space>
-                        <Button size="small" icon={<EditOutlined />} onClick={() => openMemberEditor(record)}>
+	                  {
+	                    title: '操作',
+	                    render: (_, record) => canWrite ? (
+	                      <Space>
+	                        <Button size="small" icon={<EditOutlined />} onClick={() => openMemberEditor(record)}>
                           编辑
                         </Button>
                         <Popconfirm title="禁用该成员" onConfirm={() => deleteMemberMutation.mutate(record.id)}>
                           <Button size="small" danger icon={<DeleteOutlined />} loading={deleteMemberMutation.isPending}>
                             禁用
                           </Button>
-                        </Popconfirm>
-                      </Space>
-                    ),
-                  },
+	                        </Popconfirm>
+	                      </Space>
+	                    ) : '-',
+	                  },
                 ]}
               />
             ) : (
@@ -344,8 +356,8 @@ export function TeamPage() {
                           {
                             title: '操作',
                             render: (_, row) =>
-                              row.status === 'pending' ? (
-                                <Space>
+	                              row.status === 'pending' && canWrite ? (
+	                                <Space>
                                   <Button
                                     size="small"
                                     icon={<CheckOutlined />}
@@ -396,18 +408,18 @@ export function TeamPage() {
                           {
                             title: '启用',
                             dataIndex: 'enabled',
-                            render: (enabled, row) => (
-                              <Switch size="small" checked={enabled} onChange={(checked) => updateChainMutation.mutate({ ...row, enabled: checked })} />
-                            ),
-                          },
-                          {
-                            title: '操作',
-                            render: (_, row) => (
-                              <Popconfirm title="删除审批流程" onConfirm={() => deleteChainMutation.mutate(row.id)}>
-                                <Button size="small" danger icon={<DeleteOutlined />} />
-                              </Popconfirm>
-                            ),
-                          },
+	                            render: (enabled, row) => (
+	                              <Switch size="small" checked={enabled} disabled={!canWrite} onChange={(checked) => updateChainMutation.mutate({ ...row, enabled: checked })} />
+	                            ),
+	                          },
+	                          {
+	                            title: '操作',
+	                            render: (_, row) => canWrite ? (
+	                              <Popconfirm title="删除审批流程" onConfirm={() => deleteChainMutation.mutate(row.id)}>
+	                                <Button size="small" danger icon={<DeleteOutlined />} />
+	                              </Popconfirm>
+	                            ) : '-',
+	                          },
                         ]}
                       />
                     )}

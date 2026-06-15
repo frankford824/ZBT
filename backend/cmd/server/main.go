@@ -3,7 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/api"
 	"github.com/frankford824/ZBT/backend/internal/db/migrations"
@@ -25,7 +31,8 @@ import (
 
 func main() {
 	cfg := config.Load()
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	sqlDB, err := sql.Open("pgx", cfg.MigrationDatabaseURL)
 	if err != nil {
@@ -49,9 +56,32 @@ func main() {
 
 	aiCallStore := aicall.NewStore(pool)
 	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool, aiCallStore), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(cfg, pool), compliance.NewStore(pool), approval.NewStore(pool), dashboard.NewStore(pool), aiCallStore)
+	server := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
 	log.Printf("zbt backend listening on %s", cfg.HTTPAddr)
-	if err := router.Run(cfg.HTTPAddr); err != nil {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Print("zbt backend shutting down")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
 }

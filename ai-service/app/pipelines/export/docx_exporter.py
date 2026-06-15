@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -262,9 +263,12 @@ def _write_attachments(
 
 def _attachment_content(attachment: ExportAttachment) -> bytes:
     if attachment.content_base64:
-        return base64.b64decode(attachment.content_base64)
+        try:
+            return base64.b64decode(attachment.content_base64, validate=True)
+        except binascii.Error as exc:
+            raise RuntimeError(f"attachment content_base64 is invalid: {attachment.filename}") from exc
     if attachment.local_path:
-        return Path(attachment.local_path).read_bytes()
+        raise RuntimeError("attachment local_path is not allowed")
     raise RuntimeError(f"attachment content missing: {attachment.filename}")
 
 
@@ -282,7 +286,7 @@ def _zip_attachment_path(
 ) -> str:
     filename = _safe_filename(attachment.filename)
     if attachment.zip_path:
-        return attachment.zip_path.strip("/").replace("\\", "/")
+        return _safe_zip_path(attachment.zip_path)
     if layout.e_bidding_structure == "flat":
         folder = "boq" if category == "boq" else "attachments"
         return f"{folder}/{filename}"
@@ -294,7 +298,7 @@ def _zip_attachment_path(
 
 
 def _dedupe_zip_path(path: str, used_paths: set[str]) -> str:
-    cleaned = path.strip("/").replace("\\", "/")
+    cleaned = _safe_zip_path(path)
     candidate = cleaned
     suffix = 2
     while candidate in used_paths:
@@ -305,6 +309,16 @@ def _dedupe_zip_path(path: str, used_paths: set[str]) -> str:
         suffix += 1
     used_paths.add(candidate)
     return candidate
+
+
+def _safe_zip_path(value: str) -> str:
+    cleaned = value.strip().replace("\\", "/").strip("/")
+    parts = []
+    for part in cleaned.split("/"):
+        safe = _safe_filename(part).strip(".")
+        if safe:
+            parts.append(safe)
+    return "/".join(parts) or "attachment"
 
 
 def _validate_pdf_output(path: Path) -> dict[str, object]:

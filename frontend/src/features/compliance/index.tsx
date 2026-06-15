@@ -51,6 +51,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 const levelOptions = ['L1', 'L2', 'L3', 'L4'].map((value) => ({ label: value, value }))
 
@@ -149,6 +150,7 @@ export function CompliancePage() {
   const navigate = useNavigate()
   const [checkOpen, setCheckOpen] = useState(false)
   const [ruleOpen, setRuleOpen] = useState(false)
+  const canWrite = useCanAccess('compliance', 'full')
   const [checkForm] = Form.useForm<{ name: string; bid_document_id?: string; levels: string[] }>()
   const [ruleForm] = Form.useForm<{
     code: string
@@ -225,12 +227,12 @@ export function CompliancePage() {
         <Button key="refresh" icon={<ReloadOutlined />} onClick={() => checks.refetch()}>
           刷新
         </Button>,
-        <Button key="rule" icon={<PlusOutlined />} onClick={() => setRuleOpen(true)}>
+        canWrite ? <Button key="rule" icon={<PlusOutlined />} onClick={() => setRuleOpen(true)}>
           新增规则
-        </Button>,
-        <Button key="start" type="primary" icon={<CheckCircleOutlined />} onClick={() => setCheckOpen(true)}>
+        </Button> : null,
+        canWrite ? <Button key="start" type="primary" icon={<CheckCircleOutlined />} onClick={() => setCheckOpen(true)}>
           开始检查
-        </Button>,
+        </Button> : null,
       ]}
     >
       <Row gutter={[16, 16]}>
@@ -304,23 +306,24 @@ export function CompliancePage() {
                             title: '启用',
                             dataIndex: 'enabled',
                             render: (enabled, row) => (
-                              <Switch
-                                checked={enabled}
-                                size="small"
-                                onChange={(checked) => updateRuleMutation.mutate({ ...row, enabled: checked })}
-                              />
+	                              <Switch
+	                                checked={enabled}
+	                                size="small"
+	                                disabled={!canWrite}
+	                                onChange={(checked) => updateRuleMutation.mutate({ ...row, enabled: checked })}
+	                              />
                             ),
                           },
                           {
                             title: '操作',
-                            render: (_, row) => (
-                              <Popconfirm title="删除规则" description="确认删除该合规规则？" onConfirm={() => deleteRuleMutation.mutate(row.id)}>
-                                <Button size="small" danger icon={<DeleteOutlined />}>
-                                  删除
-                                </Button>
-                              </Popconfirm>
-                            ),
-                          },
+	                            render: (_, row) => canWrite ? (
+	                              <Popconfirm title="删除规则" description="确认删除该合规规则？" onConfirm={() => deleteRuleMutation.mutate(row.id)}>
+	                                <Button size="small" danger icon={<DeleteOutlined />}>
+	                                  删除
+	                                </Button>
+	                              </Popconfirm>
+	                            ) : '-',
+	                          },
                         ]}
                       />
                     )}
@@ -400,6 +403,7 @@ export function ComplianceDetailPage() {
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('compliance', 'full')
   const check = useQuery({
     queryKey: ['compliance-check', checkId],
     queryFn: () => fetchComplianceCheck(checkId),
@@ -499,28 +503,28 @@ export function ComplianceDetailPage() {
                   定位
                 </Button>
                 <Button
-                  size="small"
-                  icon={<ToolOutlined />}
-                  disabled={closed}
-                  loading={actionMutation.isPending}
+	                  size="small"
+	                  icon={<ToolOutlined />}
+	                  disabled={!canWrite || closed}
+	                  loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'autofix', issueId: row.id })}
                 >
                   一键修复
                 </Button>
-                <Button
-                  size="small"
-                  disabled={closed}
-                  loading={actionMutation.isPending}
+	                <Button
+	                  size="small"
+	                  disabled={!canWrite || closed}
+	                  loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'ignore', issueId: row.id })}
                 >
                   忽略
                 </Button>
                 {row.severity === 'fail_candidate' && (
                   <Button
-                    size="small"
-                    danger
-                    disabled={closed}
-                    loading={actionMutation.isPending}
+	                    size="small"
+	                    danger
+	                    disabled={!canWrite || closed}
+	                    loading={actionMutation.isPending}
                     onClick={() => actionMutation.mutate({ action: 'confirm', issueId: row.id })}
                   >
                     判定废标
@@ -542,9 +546,9 @@ export function ComplianceDetailPage() {
       subtitle={check.data.bid_title || '未关联标书'}
       tags={['/compliance/:checkId']}
       actions={[
-        <Button key="report" icon={<CheckCircleOutlined />} loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
+        canWrite ? <Button key="report" icon={<CheckCircleOutlined />} loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
           导出报告
-        </Button>,
+        </Button> : null,
       ]}
     >
       <div className="report-head">

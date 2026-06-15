@@ -4,7 +4,7 @@
 
 ## 基础
 
-GET /healthz，GET /api/v1/meta/routes，GET /api/v1/dashboard/summary。
+GET /healthz，GET /api/v1/meta/routes，GET /api/v1/dashboard/summary。`/meta/routes` 返回业务路由、模块、所需权限等级和异步标记，不返回内部 AI 服务地址。
 
 工作台一期已落地 `GET /dashboard/summary`，从当前租户实时聚合项目、标书、合规、成本、知识库、审批和通知数据，返回核心统计、6 个月趋势、推荐标讯、最近项目、待审批和通知快照。前端 `/dashboard` 已从静态数字切换到真实 summary API。
 
@@ -68,7 +68,7 @@ GET /cost-projects、POST /cost-projects、GET /cost-projects/:id、PATCH /cost-
 
 ## Approval / Notification / File
 
-覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底；合规检查当前返回 202 + 检查快照，后续异步化时复用同一 SSE 事件结构。
+覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底；合规检查当前返回 202 + 检查快照，后续异步化时复用同一 SSE 事件结构。Go 调用 Python AI 服务时携带 `X-ZBT-Timestamp` 和 `X-ZBT-Signature`，Python AI 服务在 `AI_SERVICE_HMAC_SECRET` 非空时强制验签；`/healthz` 和 `/models/health` 保持公开。
 
 审批一期已落地 `approval_chains`、`approval_instances`、`approval_actions` 和 `comments` RLS 表。`GET /approval-chains` / `POST /approval-chains` / `PATCH /approval-chains/:id` / `DELETE /approval-chains/:id` 管理标书审批链，steps 保存角色、级次、是否必选和条件说明。`POST /bids/:id/submit-for-approval` 创建审批实例、保存审批链快照、将标书置为 `in_review` 并通知当前审批角色；`GET /approvals` / `GET /approvals/:id` 返回审批列表和动作流水；`POST /approvals/:id/approve` 会推进下一级或完成审批并将标书置为 `approved`；`POST /approvals/:id/reject` 会完成驳回并将标书退回 `editing`。`POST /notifications/read` 支持批量或全部标记已读，`GET /notifications/stream` 返回 notifications SSE 快照。前端 `/team` 已接入真实成员、审批链、审批实例、审批动作、通知和通知已读。
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
+	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -766,8 +767,16 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 	}
 	var task Task
 	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
+		current, err := lockTaskByExternalID(ctx, tx, payload.TenantID, payload.TaskID)
+		if err != nil {
+			return err
+		}
+		task = current
+		if isTerminalTaskStatus(current.Status) {
+			return nil
+		}
 		resultJSON, _ := json.Marshal(payload.Result)
-		found, err := scanTask(tx.QueryRow(ctx, `
+		updated, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
 			set status = $3,
 				result = $4,
@@ -775,15 +784,15 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				started_at = coalesce(started_at, now()),
 				completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
 				updated_at = now()
-			where tenant_id = $1 and external_task_id = $2
+			where tenant_id = $1 and id = $2
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, payload.TenantID, payload.TaskID, status, resultJSON, payload.ErrorMessage))
+		`, payload.TenantID, current.ID, status, resultJSON, payload.ErrorMessage))
 		if err != nil {
 			return err
 		}
-		task = found
+		task = updated
 		parseStatus := "processing"
 		if status == "done" {
 			parseStatus = "processed"
@@ -1088,6 +1097,7 @@ func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]a
 		return aiTaskAccepted{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	aihttp.Sign(req, body, s.cfg.AIServiceHMACSecret)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return aiTaskAccepted{}, err
@@ -1130,6 +1140,7 @@ func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string
 		return embeddingResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	aihttp.Sign(req, body, s.cfg.AIServiceHMACSecret)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return embeddingResponse{}, err
@@ -1198,6 +1209,7 @@ func (s *Store) rerankKnowledgeResults(ctx context.Context, tenantID, userID, qu
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	aihttp.Sign(req, body, s.cfg.AIServiceHMACSecret)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -1411,6 +1423,26 @@ func documentSelectSQL(suffix string) string {
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+func lockTaskByExternalID(ctx context.Context, tx pgx.Tx, tenantID, externalTaskID string) (Task, error) {
+	return scanTask(tx.QueryRow(ctx, `
+		select id::text, task_type, status, external_task_id::text,
+			resource_type, resource_id::text, payload, route, result, error_message,
+			started_at, completed_at, created_at, updated_at
+		from ai_tasks
+		where tenant_id = $1 and external_task_id = $2
+		for update
+	`, tenantID, externalTaskID))
+}
+
+func isTerminalTaskStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func scanCategory(row scanner) (Category, error) {

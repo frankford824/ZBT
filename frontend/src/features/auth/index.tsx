@@ -1,18 +1,22 @@
 import { LoginOutlined, UserAddOutlined } from '@ant-design/icons'
 import { Alert, Button, Form, Input, Space, Typography } from 'antd'
 import { useMutation } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
 import { login, registerTenant } from '../../shared/api/client'
+import { safeReturnPath } from '../../shared/auth/session'
 
 export function LoginPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const setSession = useSessionStore((state) => state.setSession)
+  const sessionExpired = searchParams.get('session') === 'expired'
+  const tenantId = searchParams.get('tenant') ?? undefined
   const mutation = useMutation({
     mutationFn: login,
     onSuccess: (payload) => {
       setSession(payload)
-      navigate('/dashboard')
+      navigate(safeReturnPath(searchParams.get('from')), { replace: true })
     },
   })
 
@@ -27,22 +31,18 @@ export function LoginPage() {
       {mutation.isError ? (
         <Alert type="error" showIcon message="登录失败" description="账号或密码不正确，请重新输入" />
       ) : null}
-      <Form
-        layout="vertical"
-        onFinish={(values) => mutation.mutate(values)}
-      >
+      {sessionExpired && !mutation.isError ? (
+        <Alert type="warning" showIcon message="登录状态已过期" description="请重新登录后继续处理刚才的事项" />
+      ) : null}
+      <Form layout="vertical" onFinish={(values) => mutation.mutate(values)}>
         <Form.Item label="账号" name="email" initialValue="admin@zbt.local">
           <Input />
         </Form.Item>
         <Form.Item label="密码" name="password" initialValue="demo-password">
           <Input.Password />
         </Form.Item>
-        <Form.Item
-          label="企业编号"
-          name="tenant_id"
-          initialValue="00000000-0000-4000-8000-000000000001"
-        >
-          <Input className="data-mono" />
+        <Form.Item hidden name="tenant_id" initialValue={tenantId}>
+          <Input type="hidden" />
         </Form.Item>
         <Button
           type="primary"

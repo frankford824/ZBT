@@ -80,7 +80,7 @@ MODEL_ROUTING_FILE=./app/config/model_routing.yaml
 USE_MOCK_PROVIDERS=true
 ```
 
-没有真实 API Key 时，MockProvider 可以跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。切换真实 Provider 时，把对应 route 的 `provider` 改为已配置的 OpenAI-compatible provider；如果未配置 key/base_url 且未显式设置 fallback，AI 服务会报错而不会静默回退 mock。
+没有真实 API Key 时，MockProvider 可以跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。切换真实 Provider 时，可直接编辑 `model_routing.yaml`；也可以设置 `USE_MOCK_PROVIDERS=false`，并配置 `AI_LLM_PROVIDER` / `AI_LLM_MODEL`、`AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL`、`AI_RERANK_PROVIDER` / `AI_RERANK_MODEL`。此模式下未配置真实 provider/model 会启动失败；真实 provider 不可用时只会走显式 fallback，不会静默回退 mock。
 
 AI 调用成本通过后端环境变量 `AI_MODEL_PRICING_JSON` 配置，例如：
 

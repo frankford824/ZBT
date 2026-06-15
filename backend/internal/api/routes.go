@@ -38,6 +38,14 @@ type routeSpec struct {
 	Async  bool   `json:"async"`
 }
 
+type routeInfo struct {
+	Method   string     `json:"method"`
+	Path     string     `json:"path"`
+	Module   string     `json:"module"`
+	Required rbac.Level `json:"required"`
+	Async    bool       `json:"async"`
+}
+
 type server struct {
 	cfg             config.Config
 	store           *saas.Store
@@ -195,6 +203,13 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-tasks/:taskId", "dashboard", false},
 }
 
+var routeLevelOverrides = map[string]rbac.Level{
+	"POST /tenders/:id/favorite":   rbac.LevelRead,
+	"DELETE /tenders/:id/favorite": rbac.LevelRead,
+	"POST /knowledge/search":       rbac.LevelRead,
+	"POST /notifications/read":     rbac.LevelRead,
+}
+
 func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -219,7 +234,7 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 	api.POST("/auth/logout", s.logout)
 	api.GET("/me", s.currentUser)
 	api.GET("/meta/routes", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"routes": routeSpecs, "ai_service_url": cfg.AIServiceURL})
+		c.JSON(http.StatusOK, gin.H{"routes": routeInfos()})
 	})
 	api.GET("/dashboard/summary", rbac.Require("dashboard", rbac.LevelRead), s.dashboardSummary)
 	s.registerSaaSRoutes(api)
@@ -234,7 +249,7 @@ func (s *server) login(c *gin.Context) {
 		TenantID string `json:"tenant_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	tenantID := req.TenantID
@@ -243,11 +258,11 @@ func (s *server) login(c *gin.Context) {
 	}
 	session, err := s.store.Login(c.Request.Context(), tenantID, req.Email, req.Password)
 	if errors.Is(err, saas.ErrNotFound) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		c.JSON(http.StatusUnauthorized, apiError("invalid_credentials", "账号或密码不正确"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternal(c)
 		return
 	}
 	respondSession(c, s.cfg, session)
@@ -256,16 +271,16 @@ func (s *server) login(c *gin.Context) {
 func (s *server) register(c *gin.Context) {
 	var req saas.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	session, err := s.store.Register(c.Request.Context(), req)
 	if errors.Is(err, saas.ErrInvalidRequest) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternal(c)
 		return
 	}
 	respondSession(c, s.cfg, session)
@@ -274,16 +289,16 @@ func (s *server) register(c *gin.Context) {
 func (s *server) refresh(c *gin.Context) {
 	claims, err := auth.ParseJWT(s.cfg.JWTSecret, bearerToken(c.GetHeader("Authorization")))
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		respondUnauthorized(c)
 		return
 	}
 	session, err := s.store.SessionByUserRole(c.Request.Context(), claims.TenantID, claims.UserID, claims.RoleID)
 	if errors.Is(err, saas.ErrNotFound) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "session not found"})
+		respondUnauthorized(c)
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternal(c)
 		return
 	}
 	respondSession(c, s.cfg, session)
@@ -303,7 +318,7 @@ func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
 		ExpiresAt: time.Now().Add(8 * time.Hour).Unix(),
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternal(c)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -318,21 +333,21 @@ func (s *server) authenticate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := bearerToken(c.GetHeader("Authorization"))
 		if token == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, apiError("unauthorized", "登录状态已过期，请重新登录"))
 			return
 		}
 		claims, err := auth.ParseJWT(s.cfg.JWTSecret, token)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, apiError("unauthorized", "登录状态已过期，请重新登录"))
 			return
 		}
 		session, err := s.store.SessionByUserRole(c.Request.Context(), claims.TenantID, claims.UserID, claims.RoleID)
 		if errors.Is(err, saas.ErrNotFound) {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "session not found"})
+			c.AbortWithStatusJSON(http.StatusUnauthorized, apiError("unauthorized", "登录状态已过期，请重新登录"))
 			return
 		}
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.AbortWithStatusJSON(http.StatusInternalServerError, apiError("internal_error", "服务暂时不可用，请稍后重试"))
 			return
 		}
 
@@ -419,7 +434,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/roles", rbac.Require("team", rbac.LevelFull), s.createRole)
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
 	group.DELETE("/roles/:id", rbac.Require("team", rbac.LevelFull), s.deleteRole)
-	group.GET("/notifications", s.listNotifications)
+	group.GET("/notifications", rbac.Require("team", rbac.LevelRead), s.listNotifications)
 	group.GET("/knowledge", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeHome)
 	group.GET("/knowledge/categories", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeCategories)
 	group.POST("/knowledge/categories", rbac.Require("knowledge", rbac.LevelFull), s.createKnowledgeCategory)
@@ -490,8 +505,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/approvals/:id", rbac.Require("team", rbac.LevelRead), s.getApproval)
 	group.POST("/approvals/:id/approve", rbac.Require("team", rbac.LevelFull), s.approveApproval)
 	group.POST("/approvals/:id/reject", rbac.Require("team", rbac.LevelFull), s.rejectApproval)
-	group.POST("/notifications/read", s.markNotificationsRead)
-	group.GET("/notifications/stream", s.streamNotifications)
+	group.POST("/notifications/read", rbac.Require("team", rbac.LevelRead), s.markNotificationsRead)
+	group.GET("/notifications/stream", rbac.Require("team", rbac.LevelRead), s.streamNotifications)
 	group.GET("/ai-call-logs", rbac.Require("team", rbac.LevelRead), s.listAICallLogs)
 }
 
@@ -683,7 +698,7 @@ func (s *server) listTenders(c *gin.Context) {
 func (s *server) createTender(c *gin.Context) {
 	var req platformtender.CreateTenderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -700,7 +715,7 @@ func (s *server) getTender(c *gin.Context) {
 func (s *server) updateTender(c *gin.Context) {
 	var req platformtender.UpdateTenderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -748,7 +763,7 @@ func (s *server) listTenderSources(c *gin.Context) {
 func (s *server) createTenderSource(c *gin.Context) {
 	var req platformtender.CreateSourceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.tenderStore.CreateSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -758,7 +773,7 @@ func (s *server) createTenderSource(c *gin.Context) {
 func (s *server) updateTenderSource(c *gin.Context) {
 	var req platformtender.UpdateSourceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.tenderStore.UpdateSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -787,7 +802,7 @@ func (s *server) listProjects(c *gin.Context) {
 func (s *server) createProject(c *gin.Context) {
 	var req platformproject.CreateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -803,7 +818,7 @@ func (s *server) getProject(c *gin.Context) {
 func (s *server) updateProject(c *gin.Context) {
 	var req platformproject.UpdateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -823,7 +838,7 @@ func (s *server) deleteProject(c *gin.Context) {
 func (s *server) transitionProject(c *gin.Context) {
 	var req platformproject.TransitionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -839,7 +854,7 @@ func (s *server) listProjectMilestones(c *gin.Context) {
 func (s *server) createProjectMilestone(c *gin.Context) {
 	var req platformproject.CreateMilestoneRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -850,7 +865,7 @@ func (s *server) createProjectMilestone(c *gin.Context) {
 func (s *server) updateProjectMilestone(c *gin.Context) {
 	var req platformproject.UpdateMilestoneRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -871,7 +886,7 @@ func (s *server) deleteProjectMilestone(c *gin.Context) {
 func (s *server) addProjectMember(c *gin.Context) {
 	var req platformproject.AddMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -931,7 +946,7 @@ func (s *server) listCostProjects(c *gin.Context) {
 func (s *server) createCostProject(c *gin.Context) {
 	var req platformcost.CreateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.costStore.CreateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -946,7 +961,7 @@ func (s *server) getCostProject(c *gin.Context) {
 func (s *server) updateCostProject(c *gin.Context) {
 	var req platformcost.UpdateProjectRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.costStore.UpdateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -961,7 +976,7 @@ func (s *server) listCostItems(c *gin.Context) {
 func (s *server) createCostItem(c *gin.Context) {
 	var req platformcost.CreateItemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.costStore.CreateItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -971,7 +986,7 @@ func (s *server) createCostItem(c *gin.Context) {
 func (s *server) updateCostItem(c *gin.Context) {
 	var req platformcost.UpdateItemRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.costStore.UpdateItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1006,7 +1021,7 @@ func (s *server) createCostReport(c *gin.Context) {
 func (s *server) createComplianceCheck(c *gin.Context) {
 	var req platformcompliance.CreateCheckRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.complianceStore.CreateCheck(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1075,7 +1090,7 @@ func (s *server) listComplianceRules(c *gin.Context) {
 func (s *server) createComplianceRule(c *gin.Context) {
 	var req platformcompliance.CreateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.complianceStore.CreateRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1085,7 +1100,7 @@ func (s *server) createComplianceRule(c *gin.Context) {
 func (s *server) updateComplianceRule(c *gin.Context) {
 	var req platformcompliance.UpdateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.complianceStore.UpdateRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1111,7 +1126,7 @@ func (s *server) updateTenant(c *gin.Context) {
 		Name string `json:"name" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.store.UpdateTenant(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name)
@@ -1130,7 +1145,7 @@ func (s *server) inviteMember(c *gin.Context) {
 		RoleCode string `json:"role_code"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.store.InviteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Email, req.Name, req.RoleCode)
@@ -1140,7 +1155,7 @@ func (s *server) inviteMember(c *gin.Context) {
 func (s *server) updateMember(c *gin.Context) {
 	var req saas.UpdateMemberRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.store.UpdateMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1168,7 +1183,7 @@ func (s *server) createRole(c *gin.Context) {
 		Permissions map[string]rbac.Level `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.store.CreateRole(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Code, req.Name, req.Permissions)
@@ -1181,7 +1196,7 @@ func (s *server) updateRole(c *gin.Context) {
 		Permissions map[string]rbac.Level `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.store.UpdateRole(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Permissions)
@@ -1209,7 +1224,7 @@ func (s *server) markNotificationsRead(c *gin.Context) {
 	}
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1291,7 +1306,7 @@ func (s *server) createKnowledgeCategory(c *gin.Context) {
 		Description string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.CreateCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name, req.Description)
@@ -1304,7 +1319,7 @@ func (s *server) updateKnowledgeCategory(c *gin.Context) {
 		Description string `json:"description"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.UpdateCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Description)
@@ -1331,7 +1346,7 @@ func (s *server) createKnowledgeTag(c *gin.Context) {
 		Color string `json:"color"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.CreateTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name, req.Color)
@@ -1344,7 +1359,7 @@ func (s *server) updateKnowledgeTag(c *gin.Context) {
 		Color string `json:"color"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.UpdateTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Color)
@@ -1370,7 +1385,7 @@ func (s *server) createKnowledgeDocument(c *gin.Context) {
 		FileID string `json:"file_id" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.EnsureDocumentForFile(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.FileID)
@@ -1385,7 +1400,7 @@ func (s *server) getKnowledgeDocument(c *gin.Context) {
 func (s *server) updateKnowledgeDocument(c *gin.Context) {
 	var req knowledge.UpdateDocumentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.UpdateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1425,7 +1440,7 @@ func (s *server) knowledgeDocumentReferences(c *gin.Context) {
 func (s *server) searchKnowledge(c *gin.Context) {
 	var req knowledge.SearchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1455,7 +1470,7 @@ func (s *server) listKnowledgeTemplates(c *gin.Context) {
 func (s *server) createKnowledgeTemplate(c *gin.Context) {
 	var req knowledge.CreateDocumentTemplateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.knowledgeStore.CreateDocumentTemplate(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1476,7 +1491,7 @@ func (s *server) useBidTemplate(c *gin.Context) {
 	var req bid.UseTemplateRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1492,7 +1507,7 @@ func (s *server) listBids(c *gin.Context) {
 func (s *server) createBid(c *gin.Context) {
 	var req bid.CreateDocumentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.bidStore.CreateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1507,7 +1522,7 @@ func (s *server) getBid(c *gin.Context) {
 func (s *server) updateBid(c *gin.Context) {
 	var req bid.UpdateDocumentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.bidStore.UpdateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1526,7 +1541,7 @@ func (s *server) deleteBid(c *gin.Context) {
 func (s *server) uploadBidTenderFile(c *gin.Context) {
 	var req bid.UploadTenderFileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1549,7 +1564,7 @@ func (s *server) confirmBidParseResult(c *gin.Context) {
 	var req bid.ConfirmParseResultRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1577,7 +1592,7 @@ func (s *server) getBidPartOutline(c *gin.Context) {
 func (s *server) updateBidPartOutline(c *gin.Context) {
 	var req bid.UpdatePartOutlineRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1594,7 +1609,7 @@ func (s *server) updateBidMaterialSelection(c *gin.Context) {
 	var req bid.UpdateMaterialSelectionRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1607,7 +1622,7 @@ func (s *server) generateBid(c *gin.Context) {
 	var req bid.GenerateBidRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1683,7 +1698,7 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 		case <-ticker.C:
 			next, err := s.bidStore.GenerationSnapshot(c.Request.Context(), tenantID, bidID)
 			if err != nil {
-				_ = writeSSE(c, flusher, "error", gin.H{"error": err.Error()})
+				_ = writeSSE(c, flusher, "error", apiError("stream_unavailable", "实时更新暂时不可用，请稍后重试"))
 				return
 			}
 			fingerprint := generationSnapshotFingerprint(next)
@@ -1706,7 +1721,7 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 func (s *server) updateChapterContent(c *gin.Context) {
 	var req bid.UpdateChapterContentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1729,7 +1744,7 @@ func (s *server) regenerateChapter(c *gin.Context) {
 func (s *server) chapterAIAction(c *gin.Context) {
 	var req bid.ChapterAIActionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1750,7 +1765,7 @@ func (s *server) chapterDiff(c *gin.Context) {
 func (s *server) createBidExport(c *gin.Context) {
 	var req bid.CreateExportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1795,7 +1810,7 @@ func (s *server) listApprovalChains(c *gin.Context) {
 func (s *server) createApprovalChain(c *gin.Context) {
 	var req platformapproval.CreateChainRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.approvalStore.CreateChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1805,7 +1820,7 @@ func (s *server) createApprovalChain(c *gin.Context) {
 func (s *server) updateApprovalChain(c *gin.Context) {
 	var req platformapproval.UpdateChainRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	result, err := s.approvalStore.UpdateChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1835,7 +1850,7 @@ func (s *server) approveApproval(c *gin.Context) {
 	var req platformapproval.DecisionRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1848,7 +1863,7 @@ func (s *server) rejectApproval(c *gin.Context) {
 	var req platformapproval.DecisionRequest
 	if c.Request.ContentLength != 0 {
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			respondBadRequest(c)
 			return
 		}
 	}
@@ -1860,7 +1875,7 @@ func (s *server) rejectApproval(c *gin.Context) {
 func (s *server) presignFileUpload(c *gin.Context) {
 	var req platformfile.PresignUploadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1900,16 +1915,16 @@ func (s *server) getAITask(c *gin.Context) {
 func (s *server) aiTaskCallback(c *gin.Context) {
 	body, err := c.GetRawData()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	if !s.verifyCallbackSignature(c.GetHeader("X-ZBT-Timestamp"), c.GetHeader("X-ZBT-Signature"), body) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid callback signature"})
+		c.JSON(http.StatusUnauthorized, apiError("invalid_signature", "回调签名校验失败"))
 		return
 	}
 	var payload knowledge.CallbackPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	task, err := s.knowledgeStore.GetTaskByExternalID(c.Request.Context(), payload.TenantID, payload.TaskID)
@@ -1921,7 +1936,7 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 	case "knowledge_document":
 		result, err := s.knowledgeStore.ApplyCallback(c.Request.Context(), payload)
 		if err == nil {
-			_, err = s.aiCallStore.RecordTaskCallback(c.Request.Context(), payload.TenantID, payload.TaskID, payload.Result, payload.Status, payload.ErrorMessage)
+			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
 		respond(c, result, err)
 	case "bid_export", "bid_chapter":
@@ -1933,7 +1948,7 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 			ErrorMessage: payload.ErrorMessage,
 		})
 		if err == nil {
-			_, err = s.aiCallStore.RecordTaskCallback(c.Request.Context(), payload.TenantID, payload.TaskID, payload.Result, payload.Status, payload.ErrorMessage)
+			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
 		respond(c, result, err)
 	case "cost_project":
@@ -1945,12 +1960,21 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 			ErrorMessage: payload.ErrorMessage,
 		})
 		if err == nil {
-			_, err = s.aiCallStore.RecordTaskCallback(c.Request.Context(), payload.TenantID, payload.TaskID, payload.Result, payload.Status, payload.ErrorMessage)
+			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
 		respond(c, result, err)
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported callback resource type"})
+		c.JSON(http.StatusBadRequest, apiError("unsupported_callback_resource", "回调资源类型不支持"))
 	}
+}
+
+func (s *server) recordTaskCallback(c *gin.Context, tenantID, taskID string, result map[string]any, status string, errorMessage *string) error {
+	message := ""
+	if errorMessage != nil {
+		message = *errorMessage
+	}
+	_, err := s.aiCallStore.RecordTaskCallback(c.Request.Context(), tenantID, taskID, result, status, message)
+	return err
 }
 
 func (s *server) verifyCallbackSignature(timestampHeader, signatureHeader string, body []byte) bool {
@@ -1973,10 +1997,31 @@ func (s *server) verifyCallbackSignature(timestampHeader, signatureHeader string
 }
 
 func requiredLevel(spec routeSpec) rbac.Level {
+	if level, ok := routeLevelOverrides[routeKey(spec)]; ok {
+		return level
+	}
 	if spec.Method == http.MethodGet {
 		return rbac.LevelRead
 	}
 	return rbac.LevelFull
+}
+
+func routeInfos() []routeInfo {
+	routes := make([]routeInfo, 0, len(routeSpecs))
+	for _, spec := range routeSpecs {
+		routes = append(routes, routeInfo{
+			Method:   spec.Method,
+			Path:     spec.Path,
+			Module:   spec.Module,
+			Required: requiredLevel(spec),
+			Async:    spec.Async,
+		})
+	}
+	return routes
+}
+
+func routeKey(spec routeSpec) string {
+	return spec.Method + " " + spec.Path
 }
 
 func writeSSE(c *gin.Context, flusher http.Flusher, event string, payload any) error {
@@ -2012,21 +2057,37 @@ func respond(c *gin.Context, payload any, err error) {
 	respondStatus(c, http.StatusOK, payload, err)
 }
 
+func apiError(code, message string) gin.H {
+	return gin.H{"code": code, "error": message}
+}
+
+func respondBadRequest(c *gin.Context) {
+	c.JSON(http.StatusBadRequest, apiError("bad_request", "请求内容不完整或格式不正确"))
+}
+
+func respondUnauthorized(c *gin.Context) {
+	c.JSON(http.StatusUnauthorized, apiError("unauthorized", "登录状态已过期，请重新登录"))
+}
+
+func respondInternal(c *gin.Context) {
+	c.JSON(http.StatusInternalServerError, apiError("internal_error", "服务暂时不可用，请稍后重试"))
+}
+
 func respondStatus(c *gin.Context, status int, payload any, err error) {
 	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return
 	}
 	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c)
 		return
 	}
 	if errors.Is(err, platformfile.ErrObjectNotUploaded) || errors.Is(err, platformfile.ErrInvalidObjectState) {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, apiError("file_not_ready", "文件尚未上传完成或状态不可用"))
 		return
 	}
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondInternal(c)
 		return
 	}
 	c.JSON(status, payload)

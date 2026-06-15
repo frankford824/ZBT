@@ -6,6 +6,7 @@ import { fetchPlatformSummary } from '../../shared/api/client'
 import { IconfontGlyph, type IconfontGlyphName } from '../../shared/components/IconfontGlyph'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 const statusLabels: Record<string, string> = {
   opportunity: '商机评估',
@@ -21,7 +22,8 @@ function formatDate(value?: string | null) {
 }
 
 export function DashboardPage() {
-  const { data, isLoading, isError } = useQuery({
+  const canCreateBid = useCanAccess('bid', 'full')
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['dashboard-summary'],
     queryFn: fetchPlatformSummary,
   })
@@ -46,18 +48,18 @@ export function DashboardPage() {
       subtitle="标讯、项目、审批和知识资产集中视图"
       tags={['page-dashboard', '/dashboard']}
       actions={[
-        <Button key="bid" type="primary">
+        canCreateBid ? <Button key="bid" type="primary">
           <Link to="/bids/new">新建标书</Link>
-        </Button>,
+        </Button> : null,
         <Button key="project">
-          <Link to="/projects">新建项目</Link>
+          <Link to="/projects">项目管理</Link>
         </Button>,
       ]}
     >
       {isLoading ? (
         <Skeleton active />
       ) : isError || !data || !stats ? (
-        <ErrorBlock />
+        <ErrorBlock onRetry={() => void refetch()} />
       ) : (
         <Row gutter={[16, 16]}>
           {statItems.map((item) => (

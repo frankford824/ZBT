@@ -44,6 +44,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 export function KnowledgeHomePage() {
   const { message } = AntApp.useApp()
@@ -146,6 +147,7 @@ export function KnowledgeHomePage() {
 export function KnowledgeDocsPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('knowledge', 'full')
   const [referenceDocument, setReferenceDocument] = useState<KnowledgeDocumentDTO | null>(null)
   const [categoryModalOpen, setCategoryModalOpen] = useState(false)
   const [editingCategory, setEditingCategory] = useState<KnowledgeCategoryDTO | null>(null)
@@ -325,38 +327,38 @@ export function KnowledgeDocsPage() {
       subtitle="分类、上传、预览、下载和引用记录"
       tags={['page-knowledge-docs', '/knowledge/docs']}
       actions={[
-        <Upload key="upload" {...uploadProps}>
+        canWrite ? <Upload key="upload" {...uploadProps}>
           <Button type="primary" icon={<CloudUploadOutlined />}>
             上传文档
           </Button>
-        </Upload>,
+        </Upload> : null,
       ]}
     >
       <Row gutter={16}>
         <Col xs={24} xl={6}>
-          <Card
-            title={`文档分类 ${categories.data?.length ?? 0}`}
-            extra={<Button size="small" icon={<PlusOutlined />} onClick={openCreateCategory}>新建</Button>}
-          >
+	          <Card
+	            title={`文档分类 ${categories.data?.length ?? 0}`}
+	            extra={canWrite ? <Button size="small" icon={<PlusOutlined />} onClick={openCreateCategory}>新建</Button> : null}
+	          >
             <List
               loading={categories.isLoading}
               dataSource={categories.data ?? []}
               locale={{ emptyText: '暂无分类' }}
               renderItem={(item) => (
                 <List.Item
-                  actions={[
-                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEditCategory(item)} />,
-                    <Popconfirm
-                      key="delete"
+	                  actions={canWrite ? [
+	                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={() => openEditCategory(item)} />,
+	                    <Popconfirm
+	                      key="delete"
                       title="删除分类"
                       description="关联文档会变为未分类。"
                       okText="删除"
                       cancelText="取消"
                       onConfirm={() => deleteCategory.mutate(item.id)}
-                    >
-                      <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-                    </Popconfirm>,
-                  ]}
+	                    >
+	                      <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+	                    </Popconfirm>,
+	                  ] : []}
                 >
                   <List.Item.Meta title={item.name} description={item.description || '无说明'} />
                 </List.Item>
@@ -366,10 +368,12 @@ export function KnowledgeDocsPage() {
         </Col>
         <Col xs={24} xl={18}>
           <Space direction="vertical" className="full-width">
-            <Upload.Dragger {...uploadProps}>
-              <CloudUploadOutlined />
-              <p>拖拽上传 PDF、Word、Excel、PPT、图片或压缩包</p>
-            </Upload.Dragger>
+	            {canWrite ? (
+	              <Upload.Dragger {...uploadProps}>
+	                <CloudUploadOutlined />
+	                <p>拖拽上传 PDF、Word、Excel、PPT、图片或压缩包</p>
+	              </Upload.Dragger>
+	            ) : null}
             {documents.isLoading ? <LoadingBlock /> : null}
             {documents.isError ? <ErrorBlock /> : null}
             {!documents.isLoading && !documents.isError && documents.data?.length === 0 ? (
@@ -417,13 +421,13 @@ export function KnowledgeDocsPage() {
                   render: (_, row) => (
                     <Space wrap size={[8, 6]}>
                       <a href={`/files/${row.file.id}/preview`}>预览</a>
-                      <Button
-                        size="small"
-                        icon={<EditOutlined />}
-                        onClick={() => openEditDocument(row)}
-                      >
-                        编辑
-                      </Button>
+	                      {canWrite ? <Button
+	                        size="small"
+	                        icon={<EditOutlined />}
+	                        onClick={() => openEditDocument(row)}
+	                      >
+	                        编辑
+	                      </Button> : null}
                       <Button
                         size="small"
                         icon={<LinkOutlined />}
@@ -431,14 +435,14 @@ export function KnowledgeDocsPage() {
                       >
                         引用
                       </Button>
-                      <Button
-                        size="small"
-                        icon={<PlayCircleOutlined />}
-                        disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
-                        onClick={() => void startProcess(row.id)}
-                      >
-                        整理
-                      </Button>
+	                      {canWrite ? <Button
+	                        size="small"
+	                        icon={<PlayCircleOutlined />}
+	                        disabled={row.parse_status === 'queued' || row.parse_status === 'processing'}
+	                        onClick={() => void startProcess(row.id)}
+	                      >
+	                        整理
+	                      </Button> : null}
                       <Button
                         size="small"
                         icon={<DownloadOutlined />}
@@ -589,6 +593,7 @@ function DocumentReferenceDrawer({
 export function KnowledgeTemplatesPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('knowledge', 'full')
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm<{
     name: string
@@ -636,9 +641,9 @@ export function KnowledgeTemplatesPage() {
       subtitle="企业内部方案、报告、合同、制度模板"
       tags={['page-knowledge-templates', '/knowledge/templates']}
       actions={[
-        <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+        canWrite ? <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
           新建模板
-        </Button>,
+        </Button> : null,
       ]}
     >
       {templates.isError ? <ErrorBlock /> : null}
@@ -705,6 +710,7 @@ export function KnowledgeTemplatesPage() {
 export function KnowledgeTagsPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('knowledge', 'full')
   const [open, setOpen] = useState(false)
   const [editingTag, setEditingTag] = useState<KnowledgeTagDTO | null>(null)
   const [selectedTagId, setSelectedTagId] = useState<string | null>(null)
@@ -784,9 +790,9 @@ export function KnowledgeTagsPage() {
       subtitle="标签颜色、关联文档和删除确认"
       tags={['page-knowledge-tags', '/knowledge/tags']}
       actions={[
-        <Button key="new" type="primary" icon={<TagsOutlined />} onClick={openCreate}>
+        canWrite ? <Button key="new" type="primary" icon={<TagsOutlined />} onClick={openCreate}>
           新建标签
-        </Button>,
+        </Button> : null,
       ]}
     >
       <Row gutter={16}>
@@ -805,19 +811,19 @@ export function KnowledgeTagsPage() {
                     paddingInline: 8,
                   }}
                   onClick={() => setSelectedTagId(selectedTagId === item.id ? null : item.id)}
-                  actions={[
-                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(item) }} />,
-                    <Popconfirm
-                      key="delete"
+	                  actions={canWrite ? [
+	                    <Button key="edit" type="text" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(item) }} />,
+	                    <Popconfirm
+	                      key="delete"
                       title="删除标签"
                       description="关联文档会移除此标签。"
                       okText="删除"
                       cancelText="取消"
                       onConfirm={() => deleteTag.mutate(item.id)}
-                    >
-                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} />
-                    </Popconfirm>,
-                  ]}
+	                    >
+	                      <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()} />
+	                    </Popconfirm>,
+	                  ] : []}
                 >
                   <Tag color={item.color}>{item.name}</Tag>
                   <span>{documentsByTag(item).length} 个文档</span>
