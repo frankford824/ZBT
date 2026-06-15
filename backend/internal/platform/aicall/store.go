@@ -271,7 +271,7 @@ func recordFromTask(
 		LatencyMS:     latencyMS,
 		Status:        normalizeStatus(status),
 		ErrorMessage:  errorMessage,
-		FallbackFrom:  stringFromMap(route, "fallback_from"),
+		FallbackFrom:  firstNonEmpty(stringFromMap(modelMetadata, "fallback_from"), stringFromMap(route, "fallback_from")),
 		BizRef: map[string]any{
 			"local_task_id":     localTaskID,
 			"external_task_id":  externalTaskID,

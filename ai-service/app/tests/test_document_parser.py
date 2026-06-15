@@ -43,6 +43,24 @@ def test_empty_pdf_marks_ocr_required_without_claiming_success(monkeypatch) -> N
     assert result.chunks[0].metadata["needs_human_input"] is True
 
 
+def test_empty_pdf_clears_ocr_required_after_successful_ocr(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser._try_http_ocr",
+        lambda _payload, _content: {"status": "done", "provider": "fake_ocr", "text": "扫描件识别文本"},
+    )
+    pdf = fitz.open()
+    pdf.new_page()
+    content = pdf.tobytes()
+    pdf.close()
+
+    result = parse_document(_request("scan.pdf"), content)
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert result.metadata["ocr_required"] is False
+    assert result.metadata["ocr"]["status"] == "done"
+    assert "扫描件识别文本" in text
+
+
 def test_image_parser_uses_ocr_boundary_without_falling_back_to_plain_text(monkeypatch) -> None:
     monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
 
@@ -52,6 +70,21 @@ def test_image_parser_uses_ocr_boundary_without_falling_back_to_plain_text(monke
     assert result.metadata["ocr_required"] is True
     assert result.metadata["ocr"]["status"] == "provider_not_configured"
     assert result.chunks[0].metadata["needs_human_input"] is True
+
+
+def test_image_parser_clears_ocr_required_after_successful_ocr(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser._try_http_ocr",
+        lambda _payload, _content: {"status": "done", "provider": "fake_ocr", "text": "图片识别文本"},
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert result.metadata["parser"] == "image-ocr"
+    assert result.metadata["ocr_required"] is False
+    assert result.metadata["ocr"]["status"] == "done"
+    assert "图片识别文本" in text
 
 
 def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> None:

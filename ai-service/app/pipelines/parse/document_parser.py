@@ -43,6 +43,7 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
                 text = str(ocr_result.get("text") or "")
                 ocr_result = {key: value for key, value in ocr_result.items() if key != "text"}
             metadata["ocr"] = ocr_result
+            metadata["ocr_required"] = not bool(text.strip())
         parser = "pymupdf"
     elif suffix in LEGACY_OFFICE_TARGETS:
         text, page_count, legacy_metadata = _parse_legacy_office(payload, content, suffix)
@@ -61,7 +62,7 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
         ocr_result = _try_http_ocr(payload, content)
         text = str(ocr_result.get("text") or "") if ocr_result["status"] == "done" else ""
         metadata["ocr"] = {key: value for key, value in ocr_result.items() if key != "text"}
-        metadata["ocr_required"] = True
+        metadata["ocr_required"] = not bool(text.strip())
         page_count = None
         parser = "image-ocr"
     else:
