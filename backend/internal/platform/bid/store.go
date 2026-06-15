@@ -28,6 +28,11 @@ const (
 	docxContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 	pdfContentType  = "application/pdf"
 	zipContentType  = "application/zip"
+
+	tenderParseSubmitFailureMessage     = "招标文件解读启动失败，请稍后重试"
+	chapterGenerateSubmitFailureMessage = "章节生成启动失败，请稍后重试"
+	chapterActionSubmitFailureMessage   = "章节处理启动失败，请稍后重试"
+	documentExportSubmitFailureMessage  = "导出任务启动失败，请稍后重试"
 )
 
 type Store struct {
@@ -864,7 +869,7 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 	}
 	accepted, err := s.submitTenderParse(ctx, requestPayload)
 	if err != nil {
-		_ = s.markTenderParseFailed(ctx, tenantID, result.Task.ID, result.ParseResult.ID, err.Error())
+		_ = s.markTenderParseFailed(ctx, tenantID, result.Task.ID, result.ParseResult.ID, tenderParseSubmitFailureMessage)
 		return ParseTenderResponse{}, err
 	}
 	updatedTask, err := s.bindAcceptedTask(ctx, tenantID, result.ParseResult.ID, result.Task.ID, accepted, requestPayload, func(ctx context.Context, tx pgx.Tx) error {
@@ -1781,7 +1786,7 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 
 	accepted, err := s.submitChapterGenerate(ctx, requestPayload)
 	if err != nil {
-		_ = s.markChapterGenerateFailed(ctx, tenantID, chapterID, task.ID, err.Error())
+		_ = s.markChapterGenerateFailed(ctx, tenantID, chapterID, task.ID, chapterGenerateSubmitFailureMessage)
 		return ChapterRegenerateResponse{}, err
 	}
 	updated, err := s.bindAcceptedTask(ctx, tenantID, chapterID, task.ID, accepted, requestPayload, nil)
@@ -1869,7 +1874,7 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 
 	accepted, err := s.submitChapterAction(ctx, requestPayload)
 	if err != nil {
-		_ = s.markChapterGenerateFailed(ctx, tenantID, chapterID, task.ID, err.Error())
+		_ = s.markChapterGenerateFailed(ctx, tenantID, chapterID, task.ID, chapterActionSubmitFailureMessage)
 		return ChapterRegenerateResponse{}, err
 	}
 	updated, err := s.bindAcceptedTask(ctx, tenantID, chapterID, task.ID, accepted, requestPayload, nil)
@@ -2135,7 +2140,7 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 
 	accepted, err := s.submitDocumentExport(ctx, exportType, payload)
 	if err != nil {
-		_ = s.markExportFailed(ctx, tenantID, export.ID, task.ID, err.Error())
+		_ = s.markExportFailed(ctx, tenantID, export.ID, task.ID, documentExportSubmitFailureMessage)
 		return CreateExportResponse{}, err
 	}
 	updated, updateErr := s.bindAcceptedTask(ctx, tenantID, export.ID, task.ID, accepted, payload, func(ctx context.Context, tx pgx.Tx) error {
@@ -2594,7 +2599,7 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 	}
 	accepted, err := s.submitChapterGenerate(ctx, dispatch.Payload)
 	if err != nil {
-		_ = s.markGenerationStepFailed(ctx, tenantID, dispatch.JobID, dispatch.StepID, dispatch.TaskID, dispatch.ChapterID, err.Error())
+		_ = s.markGenerationStepFailed(ctx, tenantID, dispatch.JobID, dispatch.StepID, dispatch.TaskID, dispatch.ChapterID, chapterGenerateSubmitFailureMessage)
 		return err
 	}
 	_, err = s.bindAcceptedTask(ctx, tenantID, dispatch.ChapterID, dispatch.TaskID, accepted, dispatch.Payload, func(ctx context.Context, tx pgx.Tx) error {

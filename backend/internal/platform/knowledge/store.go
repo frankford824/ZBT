@@ -27,6 +27,8 @@ var (
 	ErrInvalidRequest = errors.New("invalid knowledge request")
 )
 
+const knowledgeProcessSubmitFailureMessage = "知识库文档整理启动失败，请稍后重试"
+
 type Store struct {
 	pool     *pgxpool.Pool
 	cfg      config.Config
@@ -747,7 +749,7 @@ func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string
 	}
 	accepted, err := s.submitKnowledgeProcess(ctx, payload)
 	if err != nil {
-		_ = s.markKnowledgeProcessFailed(ctx, tenantID, task.ID, task.ResourceID, err.Error())
+		_ = s.markKnowledgeProcessFailed(ctx, tenantID, task.ID, task.ResourceID, knowledgeProcessSubmitFailureMessage)
 		return Task{}, err
 	}
 	if err := s.applyAcceptedKnowledgeTask(ctx, tenantID, task.ID, accepted); err != nil {

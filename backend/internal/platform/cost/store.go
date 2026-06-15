@@ -24,6 +24,8 @@ var (
 	ErrInvalidRequest = errors.New("invalid cost request")
 )
 
+const costAdviceSubmitFailureMessage = "成本建议生成启动失败，请稍后重试"
+
 type Store struct {
 	pool   *pgxpool.Pool
 	cfg    config.Config
@@ -499,7 +501,7 @@ func (s *Store) Advice(ctx context.Context, tenantID, userID, projectID string) 
 	}
 	accepted, err := s.submitCostAdvice(ctx, payload)
 	if err != nil {
-		_ = s.markTaskFailed(ctx, tenantID, task.ID, err.Error())
+		_ = s.markTaskFailed(ctx, tenantID, task.ID, costAdviceSubmitFailureMessage)
 		return Task{}, err
 	}
 	if err := s.applyAcceptedTask(ctx, tenantID, task.ID, accepted); err != nil {
