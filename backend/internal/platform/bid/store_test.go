@@ -46,3 +46,43 @@ func TestDefaultTenderStructuredResultCarriesSourceObjectKey(t *testing.T) {
 		t.Fatalf("expected object key in source_file, got %v", source["object_key"])
 	}
 }
+
+func TestValidateExportAttachmentsAllowsTenantObjectKeysAndInlineContent(t *testing.T) {
+	err := validateExportAttachments(
+		"tenant-demo",
+		[]map[string]any{
+			{"filename": "资质.txt", "object_key": "tenant-demo/assets/qualification.txt"},
+			{"filename": "说明.txt", "content_base64": "Y29udGVudA=="},
+		},
+		[]map[string]any{
+			{"filename": "清单.xlsx", "object_key": "tenant-demo/boq/file.xlsx"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("expected valid export attachments, got %v", err)
+	}
+}
+
+func TestValidateExportAttachmentsRejectsUnsafeInputs(t *testing.T) {
+	for name, attachments := range map[string][]map[string]any{
+		"cross tenant object": {
+			{"filename": "secret.txt", "object_key": "other-tenant/assets/secret.txt"},
+		},
+		"local path": {
+			{"filename": "secret.txt", "local_path": "/etc/passwd", "content_base64": "YQ=="},
+		},
+		"missing content": {
+			{"filename": "empty.txt"},
+		},
+		"non string object key": {
+			{"filename": "bad.txt", "object_key": 42},
+		},
+		"non string inline content": {
+			{"filename": "bad.txt", "content_base64": 42},
+		},
+	} {
+		if err := validateExportAttachments("tenant-demo", attachments); err == nil {
+			t.Fatalf("expected %s to be rejected", name)
+		}
+	}
+}

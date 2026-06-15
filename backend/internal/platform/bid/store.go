@@ -1980,6 +1980,9 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 	if exportType == "" {
 		return CreateExportResponse{}, ErrInvalidRequest
 	}
+	if err := validateExportAttachments(tenantID, req.Attachments, req.BOQFiles); err != nil {
+		return CreateExportResponse{}, err
+	}
 	partCode := normalizePartCode(req.PartCode)
 	if exportType == "zip" {
 		partCode = "all"
@@ -4095,6 +4098,51 @@ func normalizeExportType(value string) string {
 	default:
 		return ""
 	}
+}
+
+func validateExportAttachments(tenantID string, groups ...[]map[string]any) error {
+	tenantPrefix := strings.TrimSpace(tenantID)
+	if tenantPrefix == "" {
+		return ErrInvalidRequest
+	}
+	tenantPrefix = strings.TrimRight(tenantPrefix, "/") + "/"
+	for _, attachments := range groups {
+		for _, attachment := range attachments {
+			if attachment == nil {
+				return ErrInvalidRequest
+			}
+			if localPath, present, ok := exportStringField(attachment, "local_path"); !ok || (present && localPath != "") {
+				return ErrInvalidRequest
+			}
+			objectKey, objectPresent, objectOK := exportStringField(attachment, "object_key")
+			if !objectOK {
+				return ErrInvalidRequest
+			}
+			contentBase64, contentPresent, contentOK := exportStringField(attachment, "content_base64")
+			if !contentOK {
+				return ErrInvalidRequest
+			}
+			if objectPresent && objectKey != "" && !strings.HasPrefix(objectKey, tenantPrefix) {
+				return ErrInvalidRequest
+			}
+			if strings.TrimSpace(objectKey) == "" && (!contentPresent || strings.TrimSpace(contentBase64) == "") {
+				return ErrInvalidRequest
+			}
+		}
+	}
+	return nil
+}
+
+func exportStringField(values map[string]any, key string) (string, bool, bool) {
+	value, present := values[key]
+	if !present || value == nil {
+		return "", false, true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", true, false
+	}
+	return strings.TrimSpace(text), true, true
 }
 
 func normalizePartCode(value string) string {
