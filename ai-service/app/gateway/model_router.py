@@ -12,6 +12,17 @@ from app.gateway.mock_provider import MockProvider
 from app.gateway.openai_compatible_provider import OpenAICompatibleProvider
 
 
+class LocalPipelineProvider:
+    name = "local"
+
+    def health_check(self) -> bool:
+        return True
+
+    def bind(self, target: Any) -> "LocalPipelineProvider":
+        _ = target
+        return self
+
+
 class RouteTarget(BaseModel):
     provider: str
     model: str
@@ -118,7 +129,7 @@ class ModelRouter:
     def provider_for_target(self, target: RouteTarget) -> object:
         return self._provider_for_target(target)
 
-    SUPPORTED_PROVIDER_TYPES = ("mock", "openai_compatible")
+    SUPPORTED_PROVIDER_TYPES = ("mock", "openai_compatible", "local")
 
     def _build_providers(self, provider_config: dict[str, Any]) -> dict[str, object]:
         providers: dict[str, object] = {}
@@ -126,6 +137,8 @@ class ModelRouter:
             provider_type = str(config.get("type", "")).strip()
             if provider_type == "mock":
                 providers[name] = MockProvider()
+            elif provider_type == "local":
+                providers[name] = LocalPipelineProvider()
             elif provider_type == "openai_compatible":
                 providers[name] = OpenAICompatibleProvider(
                     name,

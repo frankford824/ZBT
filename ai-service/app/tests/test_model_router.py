@@ -100,8 +100,16 @@ def test_openai_compatible_provider_is_registered_but_unhealthy_without_key(monk
 
     health = router.health_check()
 
+    assert health["local"] is True
     assert "openai_compatible_primary" in health
     assert health["openai_compatible_primary"] is False
+
+
+def test_local_pipeline_routes_do_not_use_mock_provider() -> None:
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+
+    assert router.resolve("knowledge_process", tenant_id="tenant-demo").provider == "local"
+    assert router.resolve("document_export", tenant_id="tenant-demo").provider == "local"
 
 
 def test_router_uses_explicit_fallback_when_primary_provider_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
