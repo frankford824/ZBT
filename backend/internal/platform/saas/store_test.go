@@ -107,6 +107,18 @@ func TestMergeModulePermissionsKeepsStrongestLevel(t *testing.T) {
 	}
 }
 
+func TestEnsureTenantManagementAvailableRequiresActiveTeamAdmin(t *testing.T) {
+	if err := ensureTenantManagementAvailable(0); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected zero active team admins to be rejected, got %v", err)
+	}
+	if err := ensureTenantManagementAvailable(-1); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected negative active team admin count to be rejected, got %v", err)
+	}
+	if err := ensureTenantManagementAvailable(1); err != nil {
+		t.Fatalf("expected one active team admin to be accepted: %v", err)
+	}
+}
+
 func TestInviteMemberRejectsBlankIdentity(t *testing.T) {
 	store := NewStore(nil)
 	for _, req := range []struct {

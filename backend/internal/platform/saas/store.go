@@ -455,6 +455,9 @@ func (s *Store) UpdateMember(ctx context.Context, tenantID, memberID string, req
 		if err != nil {
 			return err
 		}
+		if err := ensureTenantHasActiveTeamAdmin(ctx, tx, tenantID); err != nil {
+			return err
+		}
 		member = loaded
 		return nil
 	})
@@ -477,7 +480,7 @@ func (s *Store) DeleteMember(ctx context.Context, tenantID, memberID string) err
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return nil
+		return ensureTenantHasActiveTeamAdmin(ctx, tx, tenantID)
 	})
 }
 
@@ -561,6 +564,9 @@ func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, p
 			if err := replaceModulePermissions(ctx, tx, tenantID, role.ID, permissions); err != nil {
 				return err
 			}
+			if err := ensureTenantHasActiveTeamAdmin(ctx, tx, tenantID); err != nil {
+				return err
+			}
 		}
 		loaded, err := loadRolePermissions(ctx, tx, role.ID)
 		if err != nil {
@@ -593,7 +599,7 @@ func (s *Store) DeleteRole(ctx context.Context, tenantID, roleID string) error {
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return nil
+		return ensureTenantHasActiveTeamAdmin(ctx, tx, tenantID)
 	})
 }
 
@@ -758,6 +764,30 @@ func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID s
 		`, tenantID, roleID, module, level); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func ensureTenantHasActiveTeamAdmin(ctx context.Context, tx pgx.Tx, tenantID string) error {
+	var count int
+	if err := tx.QueryRow(ctx, `
+		select count(distinct tm.id)::int
+		from tenant_members tm
+		join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
+		join module_permissions mp on mp.role_id = tmr.role_id and mp.tenant_id = tmr.tenant_id
+		where tm.tenant_id = $1
+			and tm.status = 'active'
+			and mp.module = 'team'
+			and mp.level = 'full'
+	`, tenantID).Scan(&count); err != nil {
+		return err
+	}
+	return ensureTenantManagementAvailable(count)
+}
+
+func ensureTenantManagementAvailable(activeTeamAdmins int) error {
+	if activeTeamAdmins <= 0 {
+		return ErrInvalidRequest
 	}
 	return nil
 }
