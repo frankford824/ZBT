@@ -230,13 +230,27 @@ def _env_positive_int(name: str, default: int) -> int:
 
 def _json_from_text(text: str) -> dict[str, object]:
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
-        cleaned = re.sub(r"```$", "", cleaned).strip()
-    parsed = json.loads(cleaned)
-    if not isinstance(parsed, dict):
-        raise RuntimeError("model returned non-object JSON")
-    return parsed
+    decoder = json.JSONDecoder()
+    candidates = [cleaned]
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    candidates.extend(cleaned[match.start() :] for match in re.finditer(r"\{", cleaned))
+
+    first_error: Exception | None = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(candidate)
+        except json.JSONDecodeError as exc:
+            if first_error is None:
+                first_error = exc
+            continue
+        if not isinstance(parsed, dict):
+            raise RuntimeError("model returned non-object JSON")
+        return parsed
+    raise RuntimeError("model returned invalid JSON") from first_error
 
 
 def _parse_rank_index(value: object, document_count: int) -> int | None:

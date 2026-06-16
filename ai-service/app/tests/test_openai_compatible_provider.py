@@ -5,7 +5,7 @@ import urllib.error
 
 import pytest
 
-from app.gateway.openai_compatible_provider import OpenAICompatibleProvider
+from app.gateway.openai_compatible_provider import OpenAICompatibleProvider, _json_from_text
 
 
 def test_openai_rerank_accepts_numeric_string_indexes(monkeypatch) -> None:
@@ -84,3 +84,17 @@ def test_openai_http_error_does_not_expose_response_body(monkeypatch) -> None:
     message = str(exc_info.value)
     assert message == "fake /chat/completions returned HTTP 429"
     assert "tenant secret" not in message
+
+
+def test_json_from_text_accepts_fenced_or_explained_json() -> None:
+    assert _json_from_text('{"indexes":[1,0]}') == {"indexes": [1, 0]}
+    assert _json_from_text('```json\n{"indexes":[2,0]}\n```') == {"indexes": [2, 0]}
+    assert _json_from_text('结果如下：\n{"summary":"ok","recommendations":["a"]}\n请确认。') == {
+        "summary": "ok",
+        "recommendations": ["a"],
+    }
+
+
+def test_json_from_text_rejects_non_object_json() -> None:
+    with pytest.raises(RuntimeError, match="non-object JSON"):
+        _json_from_text('[{"summary":"ok"}]')

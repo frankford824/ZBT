@@ -20,7 +20,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from minio import Minio
 from starlette.responses import JSONResponse
 
-from app.gateway.model_router import ModelRouter
+from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
 from app.pipelines.parse.tender_parser import (
@@ -148,15 +148,19 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
             content_type=payload.content_type,
         )
         parsed = parse_document(parse_payload, content)
-        route = router.resolve("tender_parse", tenant_id=payload.tenant_id)
-        provider = router.get_llm("tender_parse", tenant_id=payload.tenant_id)
         base_structured = build_tender_structured_result(payload, parsed)
         prompt = build_tender_parse_prompt(payload, parsed, base_structured)
-        model_result = provider.generate_json(prompt, route.schema_name or "TenderParseResult")
-        structured = merge_tender_structured_result(base_structured, model_result)
-        output_text = json.dumps(structured, ensure_ascii=False)
-        input_tokens = provider.count_tokens(prompt) if hasattr(provider, "count_tokens") else estimate_tokens(prompt)
-        output_tokens = provider.count_tokens(output_text) if hasattr(provider, "count_tokens") else estimate_tokens(output_text)
+
+        def generate(route: RouteTarget, provider: object) -> tuple[dict[str, object], int, int]:
+            model_result = provider.generate_json(prompt, route.schema_name or "TenderParseResult")
+            structured = merge_tender_structured_result(base_structured, model_result)
+            output_text = json.dumps(structured, ensure_ascii=False)
+            input_tokens = provider.count_tokens(prompt) if hasattr(provider, "count_tokens") else estimate_tokens(prompt)
+            output_tokens = provider.count_tokens(output_text) if hasattr(provider, "count_tokens") else estimate_tokens(output_text)
+            return structured, input_tokens, output_tokens
+
+        route, provider, generated = run_llm_task("tender_parse", payload.tenant_id, generate)
+        structured, input_tokens, output_tokens = generated
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -170,7 +174,7 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                 "metadata": parsed.metadata,
                 "chunk_count": len(parsed.chunks),
                 "model_metadata": {
-                    "provider": provider.name,
+                    "provider": provider_name(provider, route),
                     "model": route.model,
                     "fallback_from": route.fallback_from,
                     "parser": parsed.metadata.get("parser"),
@@ -474,6 +478,42 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(value) // 4)
 
 
+def llm_attempts(task_type: str, tenant_id: str) -> list[tuple[RouteTarget, object]]:
+    if hasattr(router, "resolve_candidates") and hasattr(router, "provider_for_target"):
+        return [
+            (target, router.provider_for_target(target))
+            for target in router.resolve_candidates(task_type, tenant_id=tenant_id)
+        ]
+    target = router.resolve(task_type, tenant_id=tenant_id)
+    return [(target, router.get_llm(task_type, tenant_id=tenant_id))]
+
+
+def provider_name(provider: object, route: RouteTarget) -> str:
+    name = getattr(provider, "name", "")
+    return str(name).strip() or route.provider
+
+
+def run_llm_task(
+    task_type: str,
+    tenant_id: str,
+    operation,
+) -> tuple[RouteTarget, object, object]:
+    last_error: Exception | None = None
+    for route, provider in llm_attempts(task_type, tenant_id):
+        try:
+            return route, provider, operation(route, provider)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "AI provider call failed; task_type=%s provider=%s model=%s error_type=%s",
+                task_type,
+                provider_name(provider, route),
+                route.model,
+                type(exc).__name__,
+            )
+    raise RuntimeError(f"all configured providers failed for {task_type}") from last_error
+
+
 @app.post("/tasks/chapter-generate", response_model=TaskAccepted, status_code=202)
 async def chapter_generate(
     payload: ChapterGenerateRequest,
@@ -488,10 +528,11 @@ async def chapter_generate(
 
 def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> None:
     try:
-        route = router.resolve("chapter_generate", tenant_id=payload.tenant_id)
-        provider = router.get_llm("chapter_generate", tenant_id=payload.tenant_id)
-        payload.model_hint = route.model
-        generation = provider.generate_chapter(payload)
+        def generate(route: RouteTarget, provider: object) -> object:
+            payload.model_hint = route.model
+            return provider.generate_chapter(payload)
+
+        _, _, generation = run_llm_task("chapter_generate", payload.tenant_id, generate)
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -525,9 +566,13 @@ async def chapter_action(
 
 def process_chapter_action(task_id: str, payload: ChapterActionRequest, route_name: str, model_hint: str) -> None:
     try:
-        provider = router.get_llm(route_name, tenant_id=payload.tenant_id)
-        payload.model_hint = model_hint
-        generation = provider.chapter_action(payload)
+        _ = model_hint
+
+        def generate(route: RouteTarget, provider: object) -> object:
+            payload.model_hint = route.model
+            return provider.chapter_action(payload)
+
+        _, _, generation = run_llm_task(route_name, payload.tenant_id, generate)
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -559,9 +604,13 @@ async def cost_advice(
 
 def process_cost_advice(task_id: str, payload: CostAdviceRequest, model_hint: str) -> None:
     try:
-        provider = router.get_llm("cost_advice", tenant_id=payload.tenant_id)
-        payload.model_hint = model_hint
-        result = provider.cost_advice(payload)
+        _ = model_hint
+
+        def generate(route: RouteTarget, provider: object) -> object:
+            payload.model_hint = route.model
+            return provider.cost_advice(payload)
+
+        _, _, result = run_llm_task("cost_advice", payload.tenant_id, generate)
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,

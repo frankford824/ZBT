@@ -131,6 +131,35 @@ def test_router_uses_explicit_fallback_when_primary_provider_unavailable(monkeyp
     assert target.fallback_from == "openai_compatible_primary"
 
 
+def test_router_exposes_healthy_provider_candidates_for_runtime_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                    "fallback": [{"provider": "mock", "model": "mock-model"}],
+                }
+            },
+        }
+    )
+
+    targets = router.resolve_candidates("chapter_generate", tenant_id="tenant-demo")
+
+    assert [target.provider for target in targets] == ["openai_compatible_primary", "mock"]
+    assert targets[0].fallback_from is None
+    assert targets[1].fallback_from == "openai_compatible_primary"
+
+
 def test_shipped_routing_config_declares_only_buildable_providers() -> None:
     router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
     declared = set(router.config.get("providers", {}).keys())

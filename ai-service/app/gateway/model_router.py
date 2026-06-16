@@ -36,16 +36,22 @@ class ModelRouter:
             return cls(yaml.safe_load(handle))
 
     def resolve(self, task_type: str, tenant_id: str) -> RouteTarget:
+        return self.resolve_candidates(task_type, tenant_id)[0]
+
+    def resolve_candidates(self, task_type: str, tenant_id: str) -> list[RouteTarget]:
         _ = tenant_id
         candidates = [self.config["routes"][task_type]["primary"], *self.config["routes"][task_type].get("fallback", [])]
         primary_provider = str(candidates[0]["provider"])
+        targets: list[RouteTarget] = []
         for route in candidates:
             target = self._route_target(route)
             provider = self.providers.get(target.provider)
             if provider is not None and provider.health_check():
                 if target.provider != primary_provider:
                     target.fallback_from = primary_provider
-                return target
+                targets.append(target)
+        if targets:
+            return targets
         provider_names = ", ".join(str(route["provider"]) for route in candidates)
         raise RuntimeError(f"no configured provider is available for {task_type}: {provider_names}")
 
@@ -108,6 +114,9 @@ class ModelRouter:
         if hasattr(provider, "bind"):
             return provider.bind(target)
         return provider
+
+    def provider_for_target(self, target: RouteTarget) -> object:
+        return self._provider_for_target(target)
 
     SUPPORTED_PROVIDER_TYPES = ("mock", "openai_compatible")
 

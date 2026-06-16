@@ -573,6 +573,86 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert result["token_usage"]["input_tokens"] > 0
 
 
+def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return "项目名称：桥梁检查服务\n资格要求：具备桥梁检测资质\n".encode()
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class FailingProvider:
+        name = "primary-llm"
+
+        def generate_json(self, _prompt: str, _schema_name: str) -> dict[str, object]:
+            raise RuntimeError("primary unavailable")
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
+    class FallbackProvider:
+        name = "fallback-llm"
+
+        def generate_json(self, _prompt: str, schema_name: str) -> dict[str, object]:
+            assert schema_name == "TenderParseResult"
+            return {"project_name": "fallback 解析项目"}
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
+    class FakeRouter:
+        def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
+            assert tenant_id == "tenant-demo"
+            return [
+                RouteTarget(provider="primary-llm", model="primary-model", schema_name="TenderParseResult"),
+                RouteTarget(
+                    provider="fallback-llm",
+                    model="fallback-model",
+                    schema_name="TenderParseResult",
+                    fallback_from="primary-llm",
+                ),
+            ]
+
+        def provider_for_target(self, target: RouteTarget) -> object:
+            if target.provider == "primary-llm":
+                return FailingProvider()
+            return FallbackProvider()
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="tenant-demo/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks[0]["status"] == "done", callbacks[0]
+    result = callbacks[0]["result"]
+    assert isinstance(result, dict)
+    assert result["structured_result"]["project_name"] == "fallback 解析项目"
+    assert result["model_metadata"]["provider"] == "fallback-llm"
+    assert result["model_metadata"]["model"] == "fallback-model"
+    assert result["model_metadata"]["fallback_from"] == "primary-llm"
+
+
 def test_process_tender_parse_rejects_cross_tenant_object_key(monkeypatch) -> None:
     callbacks: list[dict[str, object]] = []
 
