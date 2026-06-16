@@ -133,7 +133,13 @@ type CreateSourceRequest struct {
 	Config     map[string]any `json:"config"`
 }
 
-type UpdateSourceRequest = CreateSourceRequest
+type UpdateSourceRequest struct {
+	Name       *string         `json:"name"`
+	SourceType *string         `json:"source_type"`
+	URL        *string         `json:"url"`
+	Status     *string         `json:"status"`
+	Config     *map[string]any `json:"config"`
+}
 
 type normalizedTenderWriteRequest struct {
 	SourceID     any
@@ -151,6 +157,14 @@ type normalizedTenderWriteRequest struct {
 	RiskFlags    []string
 	SourceURL    string
 	Metadata     []byte
+}
+
+type normalizedSourceWriteRequest struct {
+	Name       string
+	SourceType string
+	URL        string
+	Status     string
+	Config     []byte
 }
 
 func NewStore(pool *pgxpool.Pool) *Store {
@@ -402,16 +416,10 @@ func (s *Store) ListSources(ctx context.Context, tenantID string) ([]Source, err
 }
 
 func (s *Store) CreateSource(ctx context.Context, tenantID string, req CreateSourceRequest) (Source, error) {
-	name := strings.TrimSpace(req.Name)
-	url := strings.TrimSpace(req.URL)
-	if name == "" || !validHTTPURL(url) {
-		return Source{}, ErrInvalidRequest
-	}
-	status, err := normalizeSourceStatus(req.Status)
+	normalized, err := normalizeSourceWriteRequest(req)
 	if err != nil {
 		return Source{}, err
 	}
-	config, _ := json.Marshal(req.Config)
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
@@ -424,7 +432,7 @@ func (s *Store) CreateSource(ctx context.Context, tenantID string, req CreateSou
 				config = excluded.config,
 				updated_at = now()
 			returning id::text
-		`, tenantID, name, defaultString(req.SourceType, "其他"), url, status, config).Scan(&id)
+		`, tenantID, normalized.Name, normalized.SourceType, normalized.URL, normalized.Status, normalized.Config).Scan(&id)
 	})
 	if err != nil {
 		return Source{}, normalizeSourceWriteError(err)
@@ -459,22 +467,25 @@ func (s *Store) UpdateSource(ctx context.Context, tenantID, id string, req Updat
 	if _, err := uuid.Parse(strings.TrimSpace(id)); err != nil {
 		return Source{}, ErrInvalidRequest
 	}
-	name := strings.TrimSpace(req.Name)
-	url := strings.TrimSpace(req.URL)
-	if name == "" || !validHTTPURL(url) {
-		return Source{}, ErrInvalidRequest
-	}
-	status, err := normalizeSourceStatus(req.Status)
-	if err != nil {
-		return Source{}, err
-	}
-	config, _ := json.Marshal(req.Config)
-	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		current, err := scanSource(tx.QueryRow(ctx, `
+			select id::text, name, source_type, url, status, last_verified_at, last_verify_status, last_verify_message, config, created_at, updated_at
+			from tender_sources
+			where tenant_id = $1 and id = $2
+			for update
+		`, tenantID, id))
+		if err != nil {
+			return err
+		}
+		normalized, err := normalizeSourceWriteRequest(mergeSourceUpdateRequest(current, req))
+		if err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			update tender_sources
 			set name = $3, source_type = $4, url = $5, status = $6, config = $7, updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, id, name, defaultString(req.SourceType, "其他"), url, status, config)
+		`, tenantID, id, normalized.Name, normalized.SourceType, normalized.URL, normalized.Status, normalized.Config)
 		if err != nil {
 			return err
 		}
@@ -742,6 +753,56 @@ func normalizeTenderWriteRequest(req CreateTenderRequest) (normalizedTenderWrite
 		RiskFlags:    req.RiskFlags,
 		SourceURL:    strings.TrimSpace(req.SourceURL),
 		Metadata:     metadata,
+	}, nil
+}
+
+func mergeSourceUpdateRequest(current Source, req UpdateSourceRequest) CreateSourceRequest {
+	config := current.Config
+	if config == nil {
+		config = map[string]any{}
+	}
+	merged := CreateSourceRequest{
+		Name:       current.Name,
+		SourceType: current.SourceType,
+		URL:        current.URL,
+		Status:     current.Status,
+		Config:     config,
+	}
+	if req.Name != nil {
+		merged.Name = *req.Name
+	}
+	if req.SourceType != nil {
+		merged.SourceType = *req.SourceType
+	}
+	if req.URL != nil {
+		merged.URL = *req.URL
+	}
+	if req.Status != nil {
+		merged.Status = *req.Status
+	}
+	if req.Config != nil {
+		merged.Config = *req.Config
+	}
+	return merged
+}
+
+func normalizeSourceWriteRequest(req CreateSourceRequest) (normalizedSourceWriteRequest, error) {
+	name := strings.TrimSpace(req.Name)
+	url := strings.TrimSpace(req.URL)
+	if name == "" || !validHTTPURL(url) {
+		return normalizedSourceWriteRequest{}, ErrInvalidRequest
+	}
+	status, err := normalizeSourceStatus(req.Status)
+	if err != nil {
+		return normalizedSourceWriteRequest{}, err
+	}
+	config, _ := json.Marshal(req.Config)
+	return normalizedSourceWriteRequest{
+		Name:       name,
+		SourceType: defaultString(req.SourceType, "其他"),
+		URL:        url,
+		Status:     status,
+		Config:     config,
 	}, nil
 }
 

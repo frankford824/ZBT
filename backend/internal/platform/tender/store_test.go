@@ -157,6 +157,44 @@ func TestNormalizeSourceStatusDefaultsOnlyBlankStatus(t *testing.T) {
 	}
 }
 
+func TestMergeSourceUpdateRequestPreservesOmittedFields(t *testing.T) {
+	name := "新来源"
+	status := " INACTIVE "
+	merged := mergeSourceUpdateRequest(Source{
+		Name:       "原来源",
+		SourceType: "招标平台",
+		URL:        "https://example.com/source",
+		Status:     "active",
+		Config:     map[string]any{"region": "浙江"},
+	}, UpdateSourceRequest{
+		Name:   &name,
+		Status: &status,
+	})
+	normalized, err := normalizeSourceWriteRequest(merged)
+	if err != nil {
+		t.Fatalf("expected merged source update to normalize: %v", err)
+	}
+	if normalized.Name != "新来源" || normalized.Status != "inactive" {
+		t.Fatalf("expected provided source fields to be applied, got %+v", normalized)
+	}
+	if normalized.SourceType != "招标平台" || normalized.URL != "https://example.com/source" {
+		t.Fatalf("expected omitted source fields to be preserved, got %+v", normalized)
+	}
+}
+
+func TestMergeSourceUpdateRequestRejectsInvalidProvidedURL(t *testing.T) {
+	url := "http://127.0.0.1/admin"
+	merged := mergeSourceUpdateRequest(Source{
+		Name:       "原来源",
+		SourceType: "招标平台",
+		URL:        "https://example.com/source",
+		Status:     "active",
+	}, UpdateSourceRequest{URL: &url})
+	if _, err := normalizeSourceWriteRequest(merged); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid provided url to be rejected, got %v", err)
+	}
+}
+
 func TestSourceVerifyOutcomeUsesUserFacingMessages(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

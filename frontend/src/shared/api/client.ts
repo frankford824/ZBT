@@ -320,6 +320,16 @@ export type TenderSourceDTO = {
   updated_at: string
 }
 
+export type TenderSourcePayload = {
+  name: string
+  source_type?: string
+  url: string
+  status?: TenderSourceDTO['status']
+  config?: Record<string, unknown>
+}
+
+export type TenderSourceUpdatePayload = Partial<TenderSourcePayload>
+
 export type TenderProjectDTO = {
   id: string
   name: string
@@ -1020,12 +1030,13 @@ export async function fetchTenderSources(): Promise<TenderSourceDTO[]> {
   return data.items
 }
 
-export async function createTenderSource(payload: {
-  name: string
-  source_type: string
-  url: string
-}): Promise<TenderSourceDTO> {
+export async function createTenderSource(payload: TenderSourcePayload): Promise<TenderSourceDTO> {
   const { data } = await apiClient.post<TenderSourceDTO>('/tender-sources', payload)
+  return data
+}
+
+export async function updateTenderSource(sourceId: string, payload: TenderSourceUpdatePayload): Promise<TenderSourceDTO> {
+  const { data } = await apiClient.patch<TenderSourceDTO>(`/tender-sources/${sourceId}`, payload)
   return data
 }
 
