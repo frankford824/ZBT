@@ -965,7 +965,7 @@ export function FilePreviewPage() {
       module="知识库"
       title={preview.data?.file.filename ?? '文件预览'}
       subtitle="文档预览"
-      tags={['/files/:fileId/preview']}
+      tags={['在线预览']}
       actions={[
         <Button key="download" icon={<DownloadOutlined />} disabled={!fileId} onClick={() => void openDownload()}>
           下载

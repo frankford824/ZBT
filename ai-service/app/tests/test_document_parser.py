@@ -245,6 +245,26 @@ def test_xlsx_parser_extracts_sheet_rows() -> None:
     assert "设备 | 1200" in text
 
 
+def test_xlsx_parser_stops_at_configured_row_limit(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_XLSX_ROWS_PER_SHEET", "2")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "报价"
+    sheet.append(["科目", "金额"])
+    sheet.append(["设备", 1200])
+    sheet.append(["人工", 800])
+    content = BytesIO()
+    workbook.save(content)
+
+    result = parse_document(_request("quote.xlsx"), content.getvalue())
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert "设备 | 1200" in text
+    assert "人工 | 800" not in text
+    assert result.metadata["xlsx_row_limit_per_sheet"] == 2
+    assert result.metadata["truncated_after_parse_limit"] is True
+
+
 def test_pptx_parser_extracts_slide_text() -> None:
     presentation = Presentation()
     slide = presentation.slides.add_slide(presentation.slide_layouts[5])
@@ -260,6 +280,46 @@ def test_pptx_parser_extracts_slide_text() -> None:
     assert result.metadata["parser"] == "python-pptx"
     assert "实施路线" in text
     assert "里程碑计划" in text
+
+
+def test_pptx_parser_stops_at_configured_slide_limit(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_PPTX_SLIDES", "1")
+    presentation = Presentation()
+    first = presentation.slides.add_slide(presentation.slide_layouts[5])
+    first.shapes.title.text = "第一页方案"
+    second = presentation.slides.add_slide(presentation.slide_layouts[5])
+    second.shapes.title.text = "第二页方案"
+    content = BytesIO()
+    presentation.save(content)
+
+    result = parse_document(_request("deck.pptx"), content.getvalue())
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert "第一页方案" in text
+    assert "第二页方案" not in text
+    assert result.metadata["pptx_slide_limit"] == 1
+    assert result.metadata["pptx_parsed_slide_count"] == 1
+    assert result.metadata["truncated_after_parse_limit"] is True
+
+
+def test_pdf_parser_stops_at_configured_page_limit(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_PDF_PAGES", "1")
+    pdf = fitz.open()
+    first = pdf.new_page()
+    first.insert_text((72, 72), "first page content")
+    second = pdf.new_page()
+    second.insert_text((72, 72), "second page content")
+    content = pdf.tobytes()
+    pdf.close()
+
+    result = parse_document(_request("multi.pdf"), content)
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert "first page content" in text
+    assert "second page content" not in text
+    assert result.metadata["page_count"] == 2
+    assert result.metadata["parsed_page_count"] == 1
+    assert result.metadata["truncated_after_page_limit"] is True
 
 
 def test_parse_document_marks_chunk_limit_truncation(monkeypatch) -> None:

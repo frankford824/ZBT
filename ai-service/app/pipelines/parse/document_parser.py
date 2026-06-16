@@ -64,10 +64,14 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
         text, page_count = _parse_docx(content), None
         parser = "python-docx"
     elif "spreadsheet" in content_type or suffix in {".xlsx", ".xlsm"}:
-        text, page_count = _parse_xlsx(content), None
+        text, parse_metadata = _parse_xlsx(content)
+        page_count = None
+        metadata.update(parse_metadata)
         parser = "openpyxl"
     elif "presentation" in content_type or suffix in {".pptx", ".pptm"}:
-        text, page_count = _parse_pptx(content), None
+        text, parse_metadata = _parse_pptx(content)
+        page_count = None
+        metadata.update(parse_metadata)
         parser = "python-pptx"
     elif content_type.startswith("image/") or suffix in IMAGE_SUFFIXES:
         ocr_result = _try_http_ocr(payload, content)
@@ -114,11 +118,14 @@ def _parse_text(content: bytes) -> str:
 def _parse_pdf(payload: KnowledgeProcessRequest, content: bytes) -> tuple[str, int, dict[str, object]]:
     doc = fitz.open(stream=content, filetype="pdf")
     try:
+        page_limit = _env_int("KNOWLEDGE_PARSE_MAX_PDF_PAGES", 300)
+        parsed_page_count = min(doc.page_count, page_limit)
         page_texts: list[str] = []
         layout_blocks: list[dict[str, object]] = []
         tables: list[dict[str, object]] = []
         table_errors: list[dict[str, object]] = []
-        for page_index, page in enumerate(doc, start=1):
+        for page_index in range(1, parsed_page_count + 1):
+            page = doc[page_index - 1]
             page_text = page.get_text("text").strip()
             page_texts.append(page_text)
             layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
@@ -152,6 +159,9 @@ def _parse_pdf(payload: KnowledgeProcessRequest, content: bytes) -> tuple[str, i
             "ocr_pages": page_ocr_results[:50],
             "ocr_page_count": len(page_ocr_results),
             "ocr_required": _pdf_ocr_required(text, page_ocr_results),
+            "parsed_page_count": parsed_page_count,
+            "page_limit": page_limit,
+            "truncated_after_page_limit": doc.page_count > parsed_page_count,
         }
         return text, doc.page_count, metadata
     finally:
@@ -219,16 +229,21 @@ def _extract_pdf_tables(
     errors: list[dict[str, object]] = []
     if hasattr(page, "find_tables"):
         try:
+            max_rows = _env_int("KNOWLEDGE_PARSE_MAX_TABLE_ROWS", 200)
             found = page.find_tables()
             for table_index, table in enumerate(found.tables, start=1):
                 rows = table.extract()
-                cleaned_rows = [
-                    [str(cell or "").strip() for cell in row]
-                    for row in rows
-                    if any(str(cell or "").strip() for cell in row)
-                ]
+                cleaned_rows: list[list[str]] = []
+                for row in rows[:max_rows]:
+                    values = [str(cell or "").strip() for cell in row]
+                    if any(values):
+                        cleaned_rows.append(values)
                 if cleaned_rows:
-                    tables.append({"page": page_index, "index": table_index, "rows": cleaned_rows})
+                    table_payload: dict[str, object] = {"page": page_index, "index": table_index, "rows": cleaned_rows}
+                    if len(rows) > max_rows:
+                        table_payload["truncated_after_row_limit"] = True
+                        table_payload["row_limit"] = max_rows
+                    tables.append(table_payload)
         except Exception as exc:
             errors.append(
                 {
@@ -242,12 +257,19 @@ def _extract_pdf_tables(
         return tables, errors
 
     heuristic_rows: list[list[str]] = []
+    max_rows = _env_int("KNOWLEDGE_PARSE_MAX_TABLE_ROWS", 200)
     for line in page_text.splitlines():
         cells = [cell.strip() for cell in re.split(r"\t+|\s{2,}|\s*\|\s*", line.strip()) if cell.strip()]
         if len(cells) >= 2:
             heuristic_rows.append(cells)
+            if len(heuristic_rows) >= max_rows:
+                break
     if len(heuristic_rows) >= 2:
-        tables.append({"page": page_index, "index": 1, "rows": heuristic_rows, "extraction": "heuristic"})
+        table_payload = {"page": page_index, "index": 1, "rows": heuristic_rows, "extraction": "heuristic"}
+        if len(heuristic_rows) >= max_rows:
+            table_payload["truncated_after_row_limit"] = True
+            table_payload["row_limit"] = max_rows
+        tables.append(table_payload)
     return tables, errors
 
 
@@ -310,36 +332,79 @@ def _ocr_provider_name() -> str:
 
 def _parse_docx(content: bytes) -> str:
     document = DocxDocument(BytesIO(content))
-    paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+    paragraph_limit = _env_int("KNOWLEDGE_PARSE_MAX_DOCX_PARAGRAPHS", 3000)
+    table_row_limit = _env_int("KNOWLEDGE_PARSE_MAX_DOCX_TABLE_ROWS", 3000)
+    paragraphs: list[str] = []
+    for paragraph in document.paragraphs[:paragraph_limit]:
+        text = paragraph.text.strip()
+        if text:
+            paragraphs.append(text)
     table_rows: list[str] = []
+    parsed_table_rows = 0
     for table_index, table in enumerate(document.tables, start=1):
         for row_index, row in enumerate(table.rows, start=1):
+            if parsed_table_rows >= table_row_limit:
+                break
             values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
             if values:
                 table_rows.append(f"[Table {table_index} Row {row_index}] " + " | ".join(values))
+                parsed_table_rows += 1
+        if parsed_table_rows >= table_row_limit:
+            break
     return "\n\n".join([*paragraphs, *table_rows])
 
 
-def _parse_xlsx(content: bytes) -> str:
+def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
     workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
     lines: list[str] = []
+    sheet_count = len(workbook.worksheets)
+    max_sheets = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_SHEETS", 20)
+    max_rows = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_ROWS_PER_SHEET", 5000)
+    max_columns = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_COLUMNS", 80)
+    truncated = False
+    parsed_sheets = 0
+    parsed_rows = 0
     try:
-        for sheet in workbook.worksheets:
+        sheets = workbook.worksheets
+        for sheet in sheets[:max_sheets]:
+            parsed_sheets += 1
             lines.append(f"[Sheet] {sheet.title}")
-            for row in sheet.iter_rows(values_only=True):
+            for row in sheet.iter_rows(max_row=max_rows, max_col=max_columns, values_only=True):
                 values = [_cell_text(value) for value in row]
                 values = [value for value in values if value]
                 if values:
                     lines.append(" | ".join(values))
+                    parsed_rows += 1
+            if (sheet.max_row or 0) > max_rows or (sheet.max_column or 0) > max_columns:
+                truncated = True
+        if sheet_count > max_sheets:
+            truncated = True
     finally:
         workbook.close()
-    return "\n".join(lines)
+    return "\n".join(lines), {
+        "xlsx_sheet_count": sheet_count,
+        "xlsx_parsed_sheet_count": parsed_sheets,
+        "xlsx_parsed_row_count": parsed_rows,
+        "xlsx_sheet_limit": max_sheets,
+        "xlsx_row_limit_per_sheet": max_rows,
+        "xlsx_column_limit": max_columns,
+        "truncated_after_parse_limit": truncated,
+    }
 
 
-def _parse_pptx(content: bytes) -> str:
+def _parse_pptx(content: bytes) -> tuple[str, dict[str, object]]:
     presentation = Presentation(BytesIO(content))
     lines: list[str] = []
+    max_slides = _env_int("KNOWLEDGE_PARSE_MAX_PPTX_SLIDES", 200)
+    max_table_rows = _env_int("KNOWLEDGE_PARSE_MAX_PPTX_TABLE_ROWS", 1000)
+    slide_count = len(presentation.slides)
+    parsed_slides = 0
+    parsed_table_rows = 0
+    truncated = slide_count > max_slides
     for slide_index, slide in enumerate(presentation.slides, start=1):
+        if parsed_slides >= max_slides:
+            break
+        parsed_slides += 1
         lines.append(f"[Slide {slide_index}]")
         for shape in slide.shapes:
             if getattr(shape, "has_text_frame", False) and shape.text_frame:
@@ -348,10 +413,21 @@ def _parse_pptx(content: bytes) -> str:
                     lines.append(text)
             if getattr(shape, "has_table", False):
                 for row in shape.table.rows:
+                    if parsed_table_rows >= max_table_rows:
+                        truncated = True
+                        break
                     values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
                     if values:
                         lines.append(" | ".join(values))
-    return "\n".join(lines)
+                        parsed_table_rows += 1
+    return "\n".join(lines), {
+        "pptx_slide_count": slide_count,
+        "pptx_parsed_slide_count": parsed_slides,
+        "pptx_slide_limit": max_slides,
+        "pptx_parsed_table_row_count": parsed_table_rows,
+        "pptx_table_row_limit": max_table_rows,
+        "truncated_after_parse_limit": truncated,
+    }
 
 
 def _parse_legacy_office(
@@ -378,10 +454,14 @@ def _parse_legacy_office(
         return _parse_docx(converted), None, metadata
     if target_suffix == ".xlsx":
         metadata["parser"] = "libreoffice-openpyxl"
-        return _parse_xlsx(converted), None, metadata
+        text, parse_metadata = _parse_xlsx(converted)
+        metadata.update(parse_metadata)
+        return text, None, metadata
     if target_suffix == ".pptx":
         metadata["parser"] = "libreoffice-python-pptx"
-        return _parse_pptx(converted), None, metadata
+        text, parse_metadata = _parse_pptx(converted)
+        metadata.update(parse_metadata)
+        return text, None, metadata
     metadata["parser"] = "legacy-office-unconverted"
     metadata["needs_human_input"] = True
     return "", None, metadata
