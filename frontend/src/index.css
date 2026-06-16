@@ -676,7 +676,7 @@ a {
 
 .auth-thesis {
   font-family: var(--font-display);
-  font-size: clamp(25px, 2.5vw, 32px);
+  font-size: 30px;
   font-weight: 700;
   line-height: 1.55;
   letter-spacing: 0;
@@ -1256,6 +1256,10 @@ a {
 /* ---------- 响应式 ---------- */
 
 @media (max-width: 960px) {
+  .auth-thesis {
+    font-size: 25px;
+  }
+
   .auth-layout {
     grid-template-columns: 1fr;
   }
