@@ -46,7 +46,7 @@ export function DashboardPage() {
       module="概览"
       title="工作台"
       subtitle="标讯、项目、审批和知识资产集中视图"
-      tags={['page-dashboard', '/dashboard']}
+      tags={['经营概览']}
       bare
       actions={[
         canCreateBid ? <Button key="bid" type="primary">

@@ -78,7 +78,7 @@ export function KnowledgeHomePage() {
       module="企业管理"
       title="知识库"
       subtitle="资料检索、引用统计和中标案例回流"
-      tags={['page-knowledge', '/knowledge']}
+      tags={['资料检索']}
       bare
     >
       <Space orientation="vertical" size={16} className="full-width">
@@ -351,7 +351,7 @@ export function KnowledgeDocsPage() {
       module="知识库"
       title="文档库"
       subtitle="分类、上传、预览、下载和引用记录"
-      tags={['page-knowledge-docs', '/knowledge/docs']}
+      tags={['文档管理']}
       bare
       actions={[
         canWrite ? <Upload key="upload" {...uploadProps}>
@@ -676,7 +676,7 @@ export function KnowledgeTemplatesPage() {
       module="知识库"
       title="文档模板"
       subtitle="企业内部方案、报告、合同、制度模板"
-      tags={['page-knowledge-templates', '/knowledge/templates']}
+      tags={['模板管理']}
       actions={[
         canWrite ? <Button key="new" type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
           新建模板
@@ -825,7 +825,7 @@ export function KnowledgeTagsPage() {
       module="知识库"
       title="标签管理"
       subtitle="标签颜色、关联文档和删除确认"
-      tags={['page-knowledge-tags', '/knowledge/tags']}
+      tags={['标签管理']}
       bare
       actions={[
         canWrite ? <Button key="new" type="primary" icon={<TagsOutlined />} onClick={openCreate}>

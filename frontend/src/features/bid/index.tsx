@@ -153,7 +153,7 @@ export function BidNewPage() {
       module="标书生成"
       title="新建标书"
       subtitle="创建综合标书、分离标书或自定义组合"
-      tags={['page-generate-new', '/bids/new']}
+      tags={['新建标书']}
       permission={canWrite}
       bare
     >
@@ -295,7 +295,7 @@ export function BidListPage() {
       module="标书生成"
       title="我的标书"
       subtitle="状态筛选、审批和编辑入口"
-      tags={['page-generate-list', '/bids']}
+      tags={['标书列表']}
       actions={[
         canWrite ? <Button key="new" type="primary" icon={<PlusOutlined />}>
           <Link to="/bids/new">新建标书</Link>
@@ -411,7 +411,7 @@ export function BidTemplatesPage() {
       module="标书生成"
       title="标书模板"
       subtitle="行业分类、预览和使用"
-      tags={['page-generate-templates', '/bids/templates']}
+      tags={['模板管理']}
       bare
     >
       {templates.isLoading && <LoadingBlock />}
@@ -765,7 +765,7 @@ export function BidWizardPage() {
       module="标书生成"
       title="标书编制流程"
       subtitle={bid.data?.title ?? '分离标书支持技术标和商务标独立生成'}
-      tags={['page-generate', '/bids/:bidId/wizard?step=1..7']}
+      tags={['编制流程', '分册生成']}
       permission={canWrite}
       bare
     >
@@ -1503,7 +1503,7 @@ export function BidEditorPage() {
       module="标书生成"
       title="标书编辑器"
       subtitle={bid.data?.title ?? bidId}
-      tags={['/bids/:bidId/editor', 'Tiptap']}
+      tags={['在线编辑', '章节协同']}
       bare
       actions={[
         <Button key="save" type="primary" icon={<SaveOutlined />} loading={saveMutation.isPending} disabled={!canWrite || !currentChapter} onClick={() => saveMutation.mutate()}>

@@ -288,7 +288,7 @@ export function TeamPage() {
       module="企业管理"
       title="团队协作"
       subtitle="成员、审批流程、待办审批、使用记录和通知"
-      tags={['page-team', '/team?tab=members|approvals|logs|notifications']}
+      tags={['团队协作', '审批通知']}
       actions={[
         canWrite ? <Button key="chain" icon={<PlusOutlined />} onClick={() => setChainOpen(true)}>
           审批流程

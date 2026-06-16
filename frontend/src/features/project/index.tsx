@@ -160,7 +160,7 @@ export function ProjectsPage() {
       module="投标管控"
       title="项目管理"
       subtitle="看板、列表、里程碑、成员和推进记录"
-      tags={['page-project', '/projects?view=board|list']}
+      tags={['项目看板', '进度跟踪']}
       bare
       actions={[
         <Segmented
@@ -268,7 +268,7 @@ export function ProjectDetailPage() {
       module="项目管理"
       title={project.data.name}
       subtitle={projectStatusLabel(project.data.status)}
-      tags={['/projects/:projectId']}
+      tags={['项目详情']}
       bare
       actions={[
         canWrite && next && (

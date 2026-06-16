@@ -68,7 +68,7 @@ export function CostsPage() {
       module="企业管理"
       title="成本管理"
       subtitle="项目成本列表、预算实际对比和利润率"
-      tags={['page-cost', '/costs']}
+      tags={['成本台账', '项目测算']}
     >
       {projects.isLoading && <LoadingBlock />}
       {projects.isError && <ErrorBlock />}
@@ -220,7 +220,7 @@ export function CostDetailPage() {
       module="成本管理"
       title={project.data.name}
       subtitle={project.data.project_name || '未关联项目'}
-      tags={['/costs/:costProjectId']}
+      tags={['成本测算']}
       bare
       actions={[
         canWrite ? <Button key="add" onClick={() => setOpen(true)}>

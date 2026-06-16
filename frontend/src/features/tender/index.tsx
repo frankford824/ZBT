@@ -215,7 +215,7 @@ export function TendersPage() {
       module="投标准备"
       title="标讯大厅"
       subtitle="标讯搜索、智能推荐、收藏和来源管理"
-      tags={['page-tender', '/tenders']}
+      tags={['标讯列表']}
     >
       <Tabs
         activeKey={activeTab}
@@ -265,7 +265,7 @@ export function TenderDetailPage() {
       module="标讯大厅"
       title={tender.data.title}
       subtitle={tender.data.source_name || tender.data.region}
-      tags={['/tenders/:tenderId']}
+      tags={['招标详情']}
       actions={[
         <Button key="project" loading={projectMutation.isPending} onClick={() => projectMutation.mutate()}>
           创建项目

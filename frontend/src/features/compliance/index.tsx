@@ -223,7 +223,7 @@ export function CompliancePage() {
       module="投标管控"
       title="合规检查"
       subtitle="四层规则检查、人工确认和修复闭环"
-      tags={['page-compliance', '/compliance']}
+      tags={['合规概览']}
       bare
       actions={[
         <Button key="refresh" icon={<ReloadOutlined />} onClick={() => checks.refetch()}>
@@ -551,7 +551,7 @@ export function ComplianceDetailPage() {
       module="合规检查"
       title={check.data.name}
       subtitle={check.data.bid_title || '未关联标书'}
-      tags={['/compliance/:checkId']}
+      tags={['检查详情']}
       actions={[
         canWrite ? <Button key="report" icon={<CheckCircleOutlined />} loading={reportMutation.isPending} onClick={() => reportMutation.mutate()}>
           导出报告
