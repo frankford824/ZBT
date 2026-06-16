@@ -380,12 +380,13 @@ func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
 		ttl = config.DefaultJWTAccessTTL
 	}
 	expiresAt := time.Now().Add(ttl)
+	roles := sessionRoleCodes(session)
 	token, err := auth.SignJWT(cfg.JWTSecret, auth.Claims{
 		UserID:    session.User.ID,
 		TenantID:  session.Tenant.ID,
 		RoleID:    session.Role.ID,
 		RoleCode:  session.Role.Code,
-		Roles:     []string{session.Role.Code},
+		Roles:     roles,
 		ExpiresAt: expiresAt.Unix(),
 	})
 	if err != nil {
@@ -398,6 +399,24 @@ func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
 		"expires_in":   int(ttl.Seconds()),
 		"session":      session,
 	})
+}
+
+func sessionRoleCodes(session saas.Session) []string {
+	seen := map[string]bool{}
+	roles := []string{}
+	for _, role := range session.Roles {
+		code := strings.TrimSpace(role.Code)
+		if code == "" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		roles = append(roles, code)
+	}
+	fallback := strings.TrimSpace(session.Role.Code)
+	if len(roles) == 0 && fallback != "" {
+		roles = append(roles, fallback)
+	}
+	return roles
 }
 
 func (s *server) authenticate() gin.HandlerFunc {

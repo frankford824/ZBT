@@ -59,6 +59,7 @@ type Session struct {
 	User        User                  `json:"user"`
 	Tenant      Tenant                `json:"tenant"`
 	Role        Role                  `json:"role"`
+	Roles       []Role                `json:"roles"`
 	Permissions map[string]rbac.Level `json:"permissions"`
 }
 
@@ -145,6 +146,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, err
 			User:        user,
 			Tenant:      Tenant{ID: tenantID, Name: tenantName},
 			Role:        role,
+			Roles:       []Role{role},
 			Permissions: role.Permissions,
 		}
 		return nil
@@ -164,26 +166,24 @@ func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Se
 	}
 	var session Session
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var memberID string
 		err := tx.QueryRow(ctx, `
 			select
 				u.id::text, u.email, u.name,
 				t.id::text, t.name,
-				r.id::text, r.code, r.name
+				tm.id::text
 			from users u
 			join tenant_members tm on tm.user_id = u.id
 			join tenants t on t.id = tm.tenant_id
-			join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
-			join roles r on r.id = tmr.role_id and r.tenant_id = tm.tenant_id
 			where tm.tenant_id = $1
 				and tm.status = 'active'
 				and lower(u.email) = lower($2)
 				and u.password_hash = crypt($3, u.password_hash)
-			order by r.code
 			limit 1
 		`, tenantID, email, password).Scan(
 			&session.User.ID, &session.User.Email, &session.User.Name,
 			&session.Tenant.ID, &session.Tenant.Name,
-			&session.Role.ID, &session.Role.Code, &session.Role.Name,
+			&memberID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
@@ -191,12 +191,18 @@ func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Se
 		if err != nil {
 			return err
 		}
-		permissions, err := loadRolePermissions(ctx, tx, session.Role.ID)
+		roles, permissions, err := loadSessionRoles(ctx, tx, tenantID, memberID)
 		if err != nil {
 			return err
 		}
+		if len(roles) == 0 {
+			return ErrNotFound
+		}
+		primaryRole := roles[0]
+		primaryRole.Permissions = permissions
+		session.Role = primaryRole
+		session.Roles = roles
 		session.Permissions = permissions
-		session.Role.Permissions = permissions
 		return nil
 	})
 	return session, err
@@ -205,10 +211,12 @@ func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Se
 func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID string) (Session, error) {
 	var session Session
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var memberID string
 		err := tx.QueryRow(ctx, `
 			select
 				u.id::text, u.email, u.name,
 				t.id::text, t.name,
+				tm.id::text,
 				r.id::text, r.code, r.name
 			from users u
 			join tenant_members tm on tm.user_id = u.id
@@ -223,6 +231,7 @@ func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID 
 		`, tenantID, userID, roleID).Scan(
 			&session.User.ID, &session.User.Email, &session.User.Name,
 			&session.Tenant.ID, &session.Tenant.Name,
+			&memberID,
 			&session.Role.ID, &session.Role.Code, &session.Role.Name,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -231,11 +240,15 @@ func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID 
 		if err != nil {
 			return err
 		}
-		permissions, err := loadRolePermissions(ctx, tx, session.Role.ID)
+		roles, permissions, err := loadSessionRoles(ctx, tx, tenantID, memberID)
 		if err != nil {
 			return err
 		}
+		if len(roles) == 0 {
+			return ErrNotFound
+		}
 		session.Permissions = permissions
+		session.Roles = roles
 		session.Role.Permissions = permissions
 		return nil
 	})
@@ -672,6 +685,63 @@ func loadRolePermissions(ctx context.Context, tx pgx.Tx, roleID string) (map[str
 		permissions[module] = level
 	}
 	return permissions, rows.Err()
+}
+
+func loadSessionRoles(ctx context.Context, tx pgx.Tx, tenantID, memberID string) ([]Role, map[string]rbac.Level, error) {
+	rows, err := tx.Query(ctx, `
+		select
+			r.id::text, r.code, r.name,
+			coalesce(jsonb_object_agg(mp.module, mp.level) filter (where mp.module is not null), '{}'::jsonb)
+		from tenant_member_roles tmr
+		join roles r on r.id = tmr.role_id and r.tenant_id = tmr.tenant_id
+		left join module_permissions mp on mp.role_id = r.id and mp.tenant_id = r.tenant_id
+		where tmr.tenant_id = $1 and tmr.tenant_member_id = $2
+		group by r.id, r.code, r.name
+		order by r.code
+	`, tenantID, memberID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	roles := []Role{}
+	permissions := map[string]rbac.Level{}
+	for rows.Next() {
+		role := Role{Permissions: map[string]rbac.Level{}}
+		var raw []byte
+		if err := rows.Scan(&role.ID, &role.Code, &role.Name, &raw); err != nil {
+			return nil, nil, err
+		}
+		if err := json.Unmarshal(raw, &role.Permissions); err != nil {
+			return nil, nil, err
+		}
+		mergeModulePermissions(permissions, role.Permissions)
+		roles = append(roles, role)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return roles, permissions, nil
+}
+
+func mergeModulePermissions(target, source map[string]rbac.Level) {
+	for module, level := range source {
+		current, exists := target[module]
+		if !exists || levelRank(level) > levelRank(current) {
+			target[module] = level
+		}
+	}
+}
+
+func levelRank(level rbac.Level) int {
+	switch level {
+	case rbac.LevelFull:
+		return 2
+	case rbac.LevelRead:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func replaceModulePermissions(ctx context.Context, tx pgx.Tx, tenantID, roleID string, permissions map[string]rbac.Level) error {

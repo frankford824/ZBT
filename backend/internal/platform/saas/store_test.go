@@ -75,6 +75,38 @@ func TestUpdateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
 	}
 }
 
+func TestMergeModulePermissionsKeepsStrongestLevel(t *testing.T) {
+	permissions := map[string]rbac.Level{
+		"dashboard": rbac.LevelRead,
+		"cost":      rbac.LevelNone,
+	}
+
+	mergeModulePermissions(permissions, map[string]rbac.Level{
+		"dashboard":  rbac.LevelFull,
+		"cost":       rbac.LevelRead,
+		"knowledge":  rbac.LevelRead,
+		"compliance": rbac.LevelNone,
+	})
+	mergeModulePermissions(permissions, map[string]rbac.Level{
+		"dashboard": rbac.LevelRead,
+		"cost":      rbac.LevelNone,
+		"knowledge": rbac.LevelFull,
+	})
+
+	if permissions["dashboard"] != rbac.LevelFull {
+		t.Fatalf("expected dashboard to keep full permission, got %q", permissions["dashboard"])
+	}
+	if permissions["cost"] != rbac.LevelRead {
+		t.Fatalf("expected cost to keep read permission, got %q", permissions["cost"])
+	}
+	if permissions["knowledge"] != rbac.LevelFull {
+		t.Fatalf("expected knowledge to upgrade to full permission, got %q", permissions["knowledge"])
+	}
+	if permissions["compliance"] != rbac.LevelNone {
+		t.Fatalf("expected compliance to keep none permission, got %q", permissions["compliance"])
+	}
+}
+
 func TestInviteMemberRejectsBlankIdentity(t *testing.T) {
 	store := NewStore(nil)
 	for _, req := range []struct {

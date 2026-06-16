@@ -45,6 +45,12 @@ export type LoginSessionPayload = {
       code: string
       name: string
     }
+    roles?: {
+      id: string
+      code: string
+      name: string
+      permissions?: Record<string, ModulePermission>
+    }[]
     permissions: Record<string, ModulePermission>
   }
 }

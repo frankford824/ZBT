@@ -65,6 +65,10 @@ func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
 			User:   saas.User{ID: "user-1", Email: "admin@example.com", Name: "管理员"},
 			Tenant: saas.Tenant{ID: "tenant-1", Name: "企业"},
 			Role:   saas.Role{ID: "role-1", Code: "admin", Name: "管理员"},
+			Roles: []saas.Role{
+				{ID: "role-1", Code: "admin", Name: "管理员"},
+				{ID: "role-2", Code: "auditor", Name: "审核员"},
+			},
 			Permissions: map[string]rbac.Level{
 				"dashboard": rbac.LevelRead,
 			},
@@ -91,6 +95,9 @@ func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
 	remaining := time.Until(time.Unix(claims.ExpiresAt, 0))
 	if remaining < 14*time.Minute || remaining > 16*time.Minute {
 		t.Fatalf("expected token exp to use configured TTL, remaining %s", remaining)
+	}
+	if len(claims.Roles) != 2 || claims.Roles[0] != "admin" || claims.Roles[1] != "auditor" {
+		t.Fatalf("expected JWT to include all session roles, got %v", claims.Roles)
 	}
 }
 
