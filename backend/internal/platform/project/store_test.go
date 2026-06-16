@@ -50,6 +50,28 @@ func TestNormalizeStatusRejectsUnsupportedFilterValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeUpdateStatusEnforcesProjectStateMachine(t *testing.T) {
+	if status, err := normalizeUpdateStatus("bidding", nil); err != nil || status != "bidding" {
+		t.Fatalf("expected omitted status to preserve current value, got status=%q err=%v", status, err)
+	}
+
+	next := " COMPLIANCE_REVIEW "
+	status, err := normalizeUpdateStatus("bidding", &next)
+	if err != nil {
+		t.Fatalf("expected legal transition to normalize: %v", err)
+	}
+	if status != "compliance_review" {
+		t.Fatalf("expected legal transition target to normalize, got %q", status)
+	}
+
+	for _, target := range []string{"submitted", "opportunity", " "} {
+		target := target
+		if _, err := normalizeUpdateStatus("bidding", &target); err != ErrInvalidRequest {
+			t.Fatalf("expected update status %q from bidding to be rejected, got %v", target, err)
+		}
+	}
+}
+
 func TestNormalizeResultValueDefaultsOnlyBlankResult(t *testing.T) {
 	result, err := normalizeResultValue(" ", "closed")
 	if err != nil {

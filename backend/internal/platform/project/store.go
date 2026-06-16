@@ -250,16 +250,9 @@ func (s *Store) Update(ctx context.Context, tenantID, userID, id string, req Upd
 				return ErrInvalidRequest
 			}
 		}
-		status := current.Status
-		if req.Status != nil {
-			normalized, err := normalizeStatus(*req.Status)
-			if err != nil {
-				return err
-			}
-			status = normalized
-			if status == "" {
-				return ErrInvalidRequest
-			}
+		status, err := normalizeUpdateStatus(current.Status, req.Status)
+		if err != nil {
+			return err
 		}
 		result, err := normalizeResultPointer(req.Result, status)
 		if err != nil {
@@ -1209,6 +1202,20 @@ func normalizeStatus(value string) (string, error) {
 	default:
 		return "", ErrInvalidRequest
 	}
+}
+
+func normalizeUpdateStatus(current string, requested *string) (string, error) {
+	if requested == nil {
+		return current, nil
+	}
+	target, err := normalizeStatus(*requested)
+	if err != nil {
+		return "", err
+	}
+	if target == "" || !allowedTransition(current, target) {
+		return "", ErrInvalidRequest
+	}
+	return target, nil
 }
 
 func normalizeCreateStatus(value string) (string, error) {
