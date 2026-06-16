@@ -165,6 +165,24 @@ func TestExportAttachmentObjectKeysDedupesObjectBackedAttachments(t *testing.T) 
 	}
 }
 
+func TestTokenUsageSumSQLGuardsMalformedCallbackValues(t *testing.T) {
+	expr := tokenUsageSumSQL("input_tokens")
+	for _, want := range []string{
+		"input_tokens",
+		"^[0-9]{1,12}$",
+		"::bigint",
+		"least(",
+		"2147483647",
+	} {
+		if !strings.Contains(expr, want) {
+			t.Fatalf("expected token usage SQL to contain %q, got %s", want, expr)
+		}
+	}
+	if got := tokenUsageSumSQL("bad_field"); got != "0::int" {
+		t.Fatalf("expected unsupported token field to be neutralized, got %s", got)
+	}
+}
+
 func TestNormalizeBidTypeDefaultsOnlyBlankType(t *testing.T) {
 	bidType, err := normalizeBidType(" ")
 	if err != nil {

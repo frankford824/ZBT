@@ -3118,7 +3118,7 @@ func refreshGenerationJob(ctx context.Context, tx pgx.Tx, tenantID, jobID string
 func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (bool, error) {
 	var currentStatus string
 	var total, done, failed, cancelled, running, queued, promptTokens, completionTokens int
-	if err := tx.QueryRow(ctx, `
+	summarySQL := fmt.Sprintf(`
 		select
 			j.status,
 			count(s.id)::int,
@@ -3127,14 +3127,15 @@ func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenan
 			count(*) filter (where s.status = 'cancelled')::int,
 			count(*) filter (where s.status = 'running')::int,
 			count(*) filter (where s.status = 'queued')::int,
-			coalesce(sum((t.result->'token_usage'->>'input_tokens')::int), 0)::int,
-			coalesce(sum((t.result->'token_usage'->>'output_tokens')::int), 0)::int
+			%s,
+			%s
 		from bid_generation_jobs j
 		left join bid_generation_steps s on s.tenant_id = j.tenant_id and s.job_id = j.id
 		left join ai_tasks t on t.tenant_id = s.tenant_id and t.id = s.ai_task_id
 		where j.tenant_id = $1 and j.id = $2
 		group by j.id, j.status
-	`, tenantID, jobID).Scan(&currentStatus, &total, &done, &failed, &cancelled, &running, &queued, &promptTokens, &completionTokens); err != nil {
+	`, tokenUsageSumSQL("input_tokens"), tokenUsageSumSQL("output_tokens"))
+	if err := tx.QueryRow(ctx, summarySQL, tenantID, jobID).Scan(&currentStatus, &total, &done, &failed, &cancelled, &running, &queued, &promptTokens, &completionTokens); err != nil {
 		return false, err
 	}
 	progress := 0
@@ -3175,6 +3176,19 @@ func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenan
 	}
 	shouldDispatch := currentStatus != "paused" && currentStatus != "cancelled" && failed == 0 && running == 0 && queued > 0
 	return shouldDispatch, nil
+}
+
+func tokenUsageSumSQL(field string) string {
+	switch field {
+	case "input_tokens", "output_tokens":
+	default:
+		return "0::int"
+	}
+	value := fmt.Sprintf("trim(coalesce(t.result->'token_usage'->>'%s', ''))", field)
+	return fmt.Sprintf(
+		"least(coalesce(sum(case when %[1]s ~ '^[0-9]{1,12}$' then %[1]s::bigint else 0 end), 0), 2147483647)::int",
+		value,
+	)
 }
 
 type outlinePartSpec struct {
