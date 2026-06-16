@@ -2340,6 +2340,10 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				return err
 			}
 		case "bid_chapter":
+			applyChapterSideEffects, err := shouldApplyChapterTaskSideEffects(ctx, tx, payload.TenantID, task.ID)
+			if err != nil {
+				return err
+			}
 			if status == "done" {
 				generation, err := chapterGenerationFromResult(payload.Result)
 				if err != nil {
@@ -2349,11 +2353,13 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				if task.TaskType == "chapter_ai_action" {
 					changeReason = "ai_action"
 				}
-				if err := applyChapterGeneration(ctx, tx, payload.TenantID, task.ResourceID, generation, changeReason); err != nil {
-					return err
+				if applyChapterSideEffects {
+					if err := applyChapterGeneration(ctx, tx, payload.TenantID, task.ResourceID, generation, changeReason); err != nil {
+						return err
+					}
 				}
 			}
-			if status == "failed" || status == "cancelled" {
+			if applyChapterSideEffects && (status == "failed" || status == "cancelled") {
 				if _, err := tx.Exec(ctx, `
 					update bid_chapters
 					set status = 'needs_fix',
@@ -2401,6 +2407,31 @@ func chapterGenerationFromResult(result map[string]any) (chapterGenerateResponse
 		return chapterGenerateResponse{}, ErrInvalidRequest
 	}
 	return generation, nil
+}
+
+func shouldApplyChapterTaskSideEffects(ctx context.Context, tx pgx.Tx, tenantID, taskID string) (bool, error) {
+	var jobStatus, stepStatus string
+	err := tx.QueryRow(ctx, `
+		select j.status, s.status
+		from bid_generation_steps s
+		join bid_generation_jobs j on j.tenant_id = s.tenant_id and j.id = s.job_id
+		where s.tenant_id = $1 and s.ai_task_id = $2
+	`, tenantID, taskID).Scan(&jobStatus, &stepStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return chapterTaskSideEffectsAllowed("", "", false), nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return chapterTaskSideEffectsAllowed(jobStatus, stepStatus, true), nil
+}
+
+func chapterTaskSideEffectsAllowed(jobStatus, stepStatus string, linkedGenerationStep bool) bool {
+	if !linkedGenerationStep {
+		return true
+	}
+	return strings.TrimSpace(strings.ToLower(jobStatus)) != "cancelled" &&
+		strings.TrimSpace(strings.ToLower(stepStatus)) != "cancelled"
 }
 
 func tenderStructuredResultFromCallback(result map[string]any) (map[string]any, bool) {

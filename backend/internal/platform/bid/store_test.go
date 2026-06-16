@@ -110,6 +110,54 @@ func TestConfirmableParseResultStatusOnlyAllowsReadyResults(t *testing.T) {
 	}
 }
 
+func TestChapterTaskSideEffectsAllowedBlocksCancelledGenerationWork(t *testing.T) {
+	for name, tc := range map[string]struct {
+		jobStatus  string
+		stepStatus string
+		linked     bool
+		want       bool
+	}{
+		"standalone chapter task": {
+			linked: false,
+			want:   true,
+		},
+		"running generation step": {
+			jobStatus:  "running",
+			stepStatus: "running",
+			linked:     true,
+			want:       true,
+		},
+		"paused generation job keeps current step result": {
+			jobStatus:  "paused",
+			stepStatus: "running",
+			linked:     true,
+			want:       true,
+		},
+		"cancelled generation job blocks late callback": {
+			jobStatus:  "cancelled",
+			stepStatus: "running",
+			linked:     true,
+			want:       false,
+		},
+		"cancelled generation step blocks late callback": {
+			jobStatus:  "running",
+			stepStatus: "cancelled",
+			linked:     true,
+			want:       false,
+		},
+		"status comparison is normalized": {
+			jobStatus:  " CANCELLED ",
+			stepStatus: "running",
+			linked:     true,
+			want:       false,
+		},
+	} {
+		if got := chapterTaskSideEffectsAllowed(tc.jobStatus, tc.stepStatus, tc.linked); got != tc.want {
+			t.Fatalf("%s: expected %v, got %v", name, tc.want, got)
+		}
+	}
+}
+
 func TestValidateExportAttachmentsAllowsTenantObjectKeysAndInlineContent(t *testing.T) {
 	err := validateExportAttachments(
 		"tenant-demo",
