@@ -65,6 +65,31 @@ def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
     assert "右键更新域以刷新目录" not in package_xml
 
 
+def test_export_bid_docx_handles_empty_markdown_table_header_cell(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
+    output = tmp_path / "empty-header-table.docx"
+
+    export_bid_docx(
+        "智慧交通平台",
+        "技术标",
+        [
+            ExportChapter(
+                title="项目实施方案",
+                plain_text="| 项目 |  |\n| --- | --- |\n| 工期 | 90天 |",
+            )
+        ],
+        output,
+        layout=ExportLayoutOptions(include_cover=False, include_toc=False),
+    )
+
+    document = Document(output)
+
+    assert len(document.tables) == 1
+    assert document.tables[0].cell(0, 0).text == "项目"
+    assert document.tables[0].cell(0, 1).text == ""
+    assert document.tables[0].cell(1, 1).text == "90天"
+
+
 def test_export_bid_zip_uses_master_layout_for_each_part(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
     output = tmp_path / "bid.zip"

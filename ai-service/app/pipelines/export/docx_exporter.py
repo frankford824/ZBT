@@ -668,7 +668,7 @@ def _add_table(document: DocxDocument, rows: list[list[str]]) -> None:
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             for paragraph in cell.paragraphs:
                 paragraph.paragraph_format.first_line_indent = None
-                if row_index == 0:
+                if row_index == 0 and paragraph.runs:
                     paragraph.runs[0].bold = True
     document.add_paragraph()
 
