@@ -457,8 +457,9 @@ export function ComplianceDetailPage() {
   if (!check.data) return <EmptyBlock />
 
   const issueRows = issues.data || []
-  const openIssues = issueRows.filter((issue) => issue.status === 'open' || issue.status === 'confirmed_fail').length
-  const severityCounts = issueRows.reduce(
+  const activeIssues = issueRows.filter((issue) => issue.status === 'open' || issue.status === 'confirmed_fail')
+  const openIssues = activeIssues.length
+  const severityCounts = activeIssues.reduce(
     (acc, issue) => {
       acc[issue.severity] = (acc[issue.severity] ?? 0) + 1
       return acc
@@ -510,28 +511,28 @@ export function ComplianceDetailPage() {
                   定位
                 </Button>
                 <Button
-                    size="small"
-                    icon={<ToolOutlined />}
-                    disabled={!canWrite || closed}
-                    loading={actionMutation.isPending}
+                  size="small"
+                  icon={<ToolOutlined />}
+                  disabled={!canWrite || closed}
+                  loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'autofix', issueId: row.id })}
                 >
                   一键修复
                 </Button>
-                  <Button
-                    size="small"
-                    disabled={!canWrite || closed}
-                    loading={actionMutation.isPending}
+                <Button
+                  size="small"
+                  disabled={!canWrite || closed}
+                  loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'ignore', issueId: row.id })}
                 >
                   忽略
                 </Button>
                 {row.severity === 'fail_candidate' && (
                   <Button
-                      size="small"
-                      danger
-                      disabled={!canWrite || closed}
-                      loading={actionMutation.isPending}
+                    size="small"
+                    danger
+                    disabled={!canWrite || closed}
+                    loading={actionMutation.isPending}
                     onClick={() => actionMutation.mutate({ action: 'confirm', issueId: row.id })}
                   >
                     判定废标
