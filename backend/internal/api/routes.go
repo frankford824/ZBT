@@ -561,8 +561,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/ai-call-logs", rbac.Require("team", rbac.LevelRead), s.listAICallLogs)
 }
 
-func registerStubs(group *gin.RouterGroup) {
-	custom := map[string]bool{
+func customRouteSet() map[string]bool {
+	return map[string]bool{
 		"GET /me":                                      true,
 		"GET /meta/routes":                             true,
 		"GET /dashboard/summary":                       true,
@@ -703,6 +703,10 @@ func registerStubs(group *gin.RouterGroup) {
 		"GET /notifications/stream":                    true,
 		"GET /ai-call-logs":                            true,
 	}
+}
+
+func registerStubs(group *gin.RouterGroup) {
+	custom := customRouteSet()
 	for _, spec := range routeSpecs {
 		if custom[spec.Method+" "+spec.Path] {
 			continue

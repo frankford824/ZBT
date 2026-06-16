@@ -48,6 +48,29 @@ func TestRespondStatusMapsAICallInvalidRequestToBadRequest(t *testing.T) {
 	}
 }
 
+func TestRouteSpecsAreAllHandledByRealRoutes(t *testing.T) {
+	custom := customRouteSet()
+	routeKeys := map[string]bool{}
+	missing := []string{}
+	for _, spec := range routeSpecs {
+		key := spec.Method + " " + spec.Path
+		routeKeys[key] = true
+		if !custom[key] {
+			missing = append(missing, key)
+		}
+	}
+	extra := []string{}
+	for key := range custom {
+		if !routeKeys[key] {
+			extra = append(extra, key)
+		}
+	}
+
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Fatalf("routeSpecs and real handler set diverged; missing handlers=%v extra handlers=%v", missing, extra)
+	}
+}
+
 func TestLimitRequestBodyRejectsKnownOversizedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
