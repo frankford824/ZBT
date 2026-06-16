@@ -110,6 +110,23 @@ def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> N
     assert "secret OCR" not in str(result.metadata["ocr"])
 
 
+def test_ocr_skips_oversized_content_without_external_request(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setenv("OCR_MAX_BYTES", "4")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("oversized OCR content must not be sent")
+
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fail_if_called)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr_required"] is True
+    assert result.metadata["ocr"]["status"] == "skipped_too_large"
+    assert result.metadata["ocr"]["size_bytes"] == len(b"image-bytes")
+    assert result.metadata["ocr"]["max_bytes"] == 4
+
+
 def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> None:
     monkeypatch.delenv("LIBREOFFICE_BIN", raising=False)
     monkeypatch.setattr("app.pipelines.parse.document_parser.shutil.which", lambda _name: None)

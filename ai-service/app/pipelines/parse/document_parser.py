@@ -189,6 +189,14 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
     provider = os.getenv("OCR_PROVIDER", "http_ocr").strip() or "http_ocr"
     if not endpoint:
         return {"status": "provider_not_configured", "provider": provider}
+    max_bytes = _env_int("OCR_MAX_BYTES", 20 * 1024 * 1024)
+    if len(content) > max_bytes:
+        return {
+            "status": "skipped_too_large",
+            "provider": provider,
+            "size_bytes": len(content),
+            "max_bytes": max_bytes,
+        }
     body = json.dumps(
         {
             "filename": payload.filename,
