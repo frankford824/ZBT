@@ -130,7 +130,16 @@ type CreateItemRequest struct {
 	Note         string  `json:"note"`
 }
 
-type UpdateItemRequest = CreateItemRequest
+type UpdateItemRequest struct {
+	Category     *string  `json:"category"`
+	Name         *string  `json:"name"`
+	CostType     *string  `json:"cost_type"`
+	BudgetAmount *float64 `json:"budget_amount"`
+	ActualAmount *float64 `json:"actual_amount"`
+	Status       *string  `json:"status"`
+	Vendor       *string  `json:"vendor"`
+	Note         *string  `json:"note"`
+}
 
 type CallbackPayload struct {
 	TenantID     string         `json:"tenant_id"`
@@ -350,11 +359,21 @@ func (s *Store) UpdateItem(ctx context.Context, tenantID, itemID string, req Upd
 	if err := validateUUID(itemID); err != nil {
 		return Item{}, err
 	}
-	normalized, err := normalizeItemRequest(req)
-	if err != nil {
-		return Item{}, err
-	}
-	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		current, err := scanItem(tx.QueryRow(ctx, `
+			select id::text, cost_project_id::text, category, name, cost_type, budget_amount::float8, actual_amount::float8,
+				status, vendor, note, created_at, updated_at
+			from cost_items
+			where tenant_id = $1 and id = $2
+			for update
+		`, tenantID, itemID))
+		if err != nil {
+			return err
+		}
+		normalized, err := mergeItemUpdateRequest(current, req)
+		if err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			update cost_items
 			set category = $3, name = $4, cost_type = $5, budget_amount = $6, actual_amount = $7,
@@ -884,6 +903,44 @@ func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 		return req, ErrInvalidRequest
 	}
 	return req, nil
+}
+
+func mergeItemUpdateRequest(current Item, req UpdateItemRequest) (CreateItemRequest, error) {
+	merged := CreateItemRequest{
+		Category:     current.Category,
+		Name:         current.Name,
+		CostType:     current.CostType,
+		BudgetAmount: current.BudgetAmount,
+		ActualAmount: current.ActualAmount,
+		Status:       current.Status,
+		Vendor:       current.Vendor,
+		Note:         current.Note,
+	}
+	if req.Category != nil {
+		merged.Category = *req.Category
+	}
+	if req.Name != nil {
+		merged.Name = *req.Name
+	}
+	if req.CostType != nil {
+		merged.CostType = *req.CostType
+	}
+	if req.BudgetAmount != nil {
+		merged.BudgetAmount = *req.BudgetAmount
+	}
+	if req.ActualAmount != nil {
+		merged.ActualAmount = *req.ActualAmount
+	}
+	if req.Status != nil {
+		merged.Status = *req.Status
+	}
+	if req.Vendor != nil {
+		merged.Vendor = *req.Vendor
+	}
+	if req.Note != nil {
+		merged.Note = *req.Note
+	}
+	return normalizeItemRequest(merged)
 }
 
 func normalizeCostType(value string) (string, error) {

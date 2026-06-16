@@ -67,3 +67,47 @@ func TestNormalizeItemStatusDefaultsOnlyBlankStatus(t *testing.T) {
 		t.Fatalf("expected unsupported item status to be rejected, got %v", err)
 	}
 }
+
+func TestMergeItemUpdateRequestPreservesOmittedFields(t *testing.T) {
+	actualAmount := 88.5
+	status := " ACTUAL "
+	vendor := ""
+	merged, err := mergeItemUpdateRequest(Item{
+		Category:     "人力",
+		Name:         "实施顾问",
+		CostType:     "labor",
+		BudgetAmount: 120,
+		ActualAmount: 40,
+		Status:       "planned",
+		Vendor:       "原供应商",
+		Note:         "原备注",
+	}, UpdateItemRequest{
+		ActualAmount: &actualAmount,
+		Status:       &status,
+		Vendor:       &vendor,
+	})
+	if err != nil {
+		t.Fatalf("expected partial item update to normalize: %v", err)
+	}
+	if merged.Category != "人力" || merged.Name != "实施顾问" || merged.CostType != "labor" || merged.BudgetAmount != 120 {
+		t.Fatalf("expected omitted fields to be preserved, got %+v", merged)
+	}
+	if merged.ActualAmount != 88.5 || merged.Status != "actual" || merged.Vendor != "" || merged.Note != "原备注" {
+		t.Fatalf("expected provided fields to be applied, got %+v", merged)
+	}
+}
+
+func TestMergeItemUpdateRequestRejectsInvalidProvidedFields(t *testing.T) {
+	name := " "
+	_, err := mergeItemUpdateRequest(Item{
+		Category:     "人力",
+		Name:         "实施顾问",
+		CostType:     "labor",
+		BudgetAmount: 120,
+		ActualAmount: 40,
+		Status:       "planned",
+	}, UpdateItemRequest{Name: &name})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected blank provided name to be rejected, got %v", err)
+	}
+}

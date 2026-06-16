@@ -420,6 +420,8 @@ export type CostItemPayload = {
   note?: string
 }
 
+export type CostItemUpdatePayload = Partial<CostItemPayload>
+
 export type CostAnalysisDTO = {
   project: CostProjectDTO
   category_totals: Array<{
@@ -1144,7 +1146,7 @@ export async function createCostItem(
 
 export async function updateCostItem(
   costItemId: string,
-  payload: CostItemPayload,
+  payload: CostItemUpdatePayload,
 ): Promise<CostItemDTO> {
   const { data } = await apiClient.patch<CostItemDTO>(`/cost-items/${costItemId}`, payload)
   return data
