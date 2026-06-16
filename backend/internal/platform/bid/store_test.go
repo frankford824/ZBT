@@ -109,6 +109,18 @@ func TestNormalizeBidTypeDefaultsOnlyBlankType(t *testing.T) {
 	}
 }
 
+func TestNormalizeDocumentStatusAcceptsOnlyWorkflowStates(t *testing.T) {
+	if got := normalizeDocumentStatus(" IN_REVIEW "); got != "in_review" {
+		t.Fatalf("expected known document status to normalize, got %q", got)
+	}
+	if got := normalizeDocumentStatus("submitted"); got != "submitted" {
+		t.Fatalf("expected submitted status to be accepted, got %q", got)
+	}
+	if got := normalizeDocumentStatus("superseded"); got != "" {
+		t.Fatalf("expected unsupported document status to be rejected, got %q", got)
+	}
+}
+
 func TestNormalizeRequestedPartCodeDefaultsOnlyBlankPartCode(t *testing.T) {
 	partCode, err := normalizeRequestedPartCode(" ")
 	if err != nil {

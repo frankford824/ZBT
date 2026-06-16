@@ -610,7 +610,7 @@ export type BidPartDTO = {
   code: 'combined_body' | 'tech' | 'business' | 'boq' | 'attachment'
   title: string
   sort_order: number
-  status: string
+  status: 'draft' | 'generated'
   metadata: Record<string, unknown>
   created_at: string
   updated_at: string
@@ -640,7 +640,7 @@ export type BidChapterVersionDTO = {
   title: string
   content: Record<string, unknown>
   plain_text: string
-  status: string
+  status: 'pending' | 'generating' | 'generated' | 'accepted' | 'edited' | 'needs_fix'
   source_refs: unknown[]
   needs_human_input: string[]
   change_reason: string

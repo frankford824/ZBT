@@ -381,7 +381,7 @@ func normalizeStatus(value string) string {
 		if strings.TrimSpace(value) == "" {
 			return "done"
 		}
-		return strings.TrimSpace(value)
+		return ""
 	}
 }
 

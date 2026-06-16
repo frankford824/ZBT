@@ -121,3 +121,27 @@ func TestRecordFromTaskParsesStringTokenAndCostFields(t *testing.T) {
 		t.Fatalf("expected explicit string estimated cost, got %.6f", input.EstimatedCost)
 	}
 }
+
+func TestNormalizeStatusCanonicalizesKnownValues(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: " ", want: "done"},
+		{input: " SUCCESS ", want: "done"},
+		{input: "succeeded", want: "done"},
+		{input: "ERROR", want: "failed"},
+		{input: "canceled", want: "cancelled"},
+		{input: " RUNNING ", want: "running"},
+	} {
+		if got := normalizeStatus(tc.input); got != tc.want {
+			t.Fatalf("expected %q to normalize to %q, got %q", tc.input, tc.want, got)
+		}
+	}
+}
+
+func TestNormalizeStatusRejectsUnsupportedValues(t *testing.T) {
+	if got := normalizeStatus("partial_success"); got != "" {
+		t.Fatalf("expected unsupported status to be rejected, got %q", got)
+	}
+}
