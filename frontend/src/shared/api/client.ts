@@ -904,7 +904,7 @@ export async function registerTenant(payload: {
 
 export async function refreshSession(): Promise<LoginSessionPayload> {
   const { data } = await apiClient.post<LoginSessionPayload>('/auth/refresh')
-  return data
+  return storeSession(data)
 }
 
 export async function logoutSession(): Promise<{ status: string }> {

@@ -53,12 +53,12 @@ export function safeReturnPath(raw: string | null | undefined) {
 }
 
 export function shouldRefreshSession(payload: LoginSessionPayload, now = Date.now()) {
-  const expiresAt = sessionExpiresAtMs(payload)
+  const expiresAt = sessionExpiresAtMs(payload, now)
   return Boolean(expiresAt && expiresAt > now && expiresAt - now <= sessionRefreshLeewayMs)
 }
 
 export function isSessionExpired(payload: LoginSessionPayload, now = Date.now()) {
-  const expiresAt = sessionExpiresAtMs(payload)
+  const expiresAt = sessionExpiresAtMs(payload, now)
   return Boolean(expiresAt && expiresAt <= now)
 }
 
