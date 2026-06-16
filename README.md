@@ -90,6 +90,8 @@ AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1
 
 价格可按 `provider/model`、`model`、`provider/*` 或 `*` 匹配；未配置价格时 `estimated_cost` 保持 0。
 
+API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整，最大允许配置到 256 MB。
+
 ## 文件和对象存储
 
 文件上传通过 Go 后端获取 MinIO 预签名 URL。开发环境中：

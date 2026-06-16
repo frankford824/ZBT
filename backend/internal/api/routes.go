@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -214,7 +215,7 @@ var routeLevelOverrides = map[string]rbac.Level{
 func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(gin.Recovery(), audit.Middleware())
+	router.Use(gin.Recovery(), audit.Middleware(), limitRequestBody(maxRequestBodyBytes()))
 	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
@@ -241,6 +242,45 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 	s.registerSaaSRoutes(api)
 	registerStubs(api)
 	return router
+}
+
+const (
+	defaultMaxRequestBodyBytes = int64(96 * 1024 * 1024)
+	minMaxRequestBodyBytes     = int64(1024 * 1024)
+	maxMaxRequestBodyBytes     = int64(256 * 1024 * 1024)
+)
+
+func maxRequestBodyBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv("API_MAX_BODY_BYTES"))
+	if raw == "" {
+		return defaultMaxRequestBodyBytes
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < minMaxRequestBodyBytes {
+		return defaultMaxRequestBodyBytes
+	}
+	if value > maxMaxRequestBodyBytes {
+		return maxMaxRequestBodyBytes
+	}
+	return value
+}
+
+func limitRequestBody(maxBytes int64) gin.HandlerFunc {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxRequestBodyBytes
+	}
+	return func(c *gin.Context) {
+		if c.Request.Body == nil {
+			c.Next()
+			return
+		}
+		if c.Request.ContentLength > maxBytes {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, apiError("payload_too_large", "请求内容过大"))
+			return
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
+	}
 }
 
 func (s *server) login(c *gin.Context) {

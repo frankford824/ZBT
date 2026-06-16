@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
@@ -44,6 +45,62 @@ func TestRespondStatusMapsAICallInvalidRequestToBadRequest(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid AI call request, got %d", recorder.Code)
+	}
+}
+
+func TestLimitRequestBodyRejectsKnownOversizedBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	called := false
+	router.Use(limitRequestBody(4))
+	router.POST("/payload", func(c *gin.Context) {
+		called = true
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader("12345"))
+	router.ServeHTTP(recorder, request)
+
+	if called {
+		t.Fatal("expected oversized request to abort before handler")
+	}
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for oversized body, got %d", recorder.Code)
+	}
+}
+
+func TestLimitRequestBodyAllowsSmallBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(limitRequestBody(8))
+	router.POST("/payload", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader("1234"))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected small request to pass, got %d", recorder.Code)
+	}
+}
+
+func TestMaxRequestBodyBytesUsesSafeEnvBounds(t *testing.T) {
+	t.Setenv("API_MAX_BODY_BYTES", "2097152")
+	if got := maxRequestBodyBytes(); got != 2*1024*1024 {
+		t.Fatalf("expected env body limit, got %d", got)
+	}
+
+	t.Setenv("API_MAX_BODY_BYTES", "1")
+	if got := maxRequestBodyBytes(); got != defaultMaxRequestBodyBytes {
+		t.Fatalf("expected tiny env body limit to fall back, got %d", got)
+	}
+
+	t.Setenv("API_MAX_BODY_BYTES", "999999999")
+	if got := maxRequestBodyBytes(); got != maxMaxRequestBodyBytes {
+		t.Fatalf("expected huge env body limit to clamp, got %d", got)
 	}
 }
 
