@@ -41,16 +41,42 @@ func TestValidHTTPURLRejectsLocalAndPrivateHosts(t *testing.T) {
 	}
 }
 
+func TestValidHTTPURLRejectsSpecialUseIPHosts(t *testing.T) {
+	for _, value := range []string{
+		"http://100.64.0.1/admin",
+		"http://192.0.2.1/admin",
+		"http://198.18.0.1/admin",
+		"http://198.51.100.1/admin",
+		"http://203.0.113.1/admin",
+		"http://240.0.0.1/admin",
+		"http://[2001:db8::1]/admin",
+		"http://[2002::1]/admin",
+	} {
+		if validHTTPURL(value) {
+			t.Fatalf("expected special-use host %q to be rejected", value)
+		}
+	}
+}
+
 func TestPublicNetIPRejectsNonPublicRanges(t *testing.T) {
 	for _, value := range []string{
 		"0.0.0.0",
+		"0.0.0.1",
 		"127.0.0.1",
 		"10.0.0.1",
 		"172.16.0.1",
 		"192.168.0.1",
 		"169.254.169.254",
+		"100.64.0.1",
+		"192.0.2.1",
+		"198.18.0.1",
+		"198.51.100.1",
+		"203.0.113.1",
+		"240.0.0.1",
 		"::1",
 		"fd00::1",
+		"2001:db8::1",
+		"2002::1",
 	} {
 		if publicNetIP(netip.MustParseAddr(value)) {
 			t.Fatalf("expected %s to be rejected", value)
