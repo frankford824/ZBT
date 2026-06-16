@@ -112,10 +112,13 @@ function formatBizRef(value: Record<string, unknown>) {
   return resourceLabels[resourceType] || '相关内容'
 }
 
-function formatUsage(input: number, output: number) {
+function formatProcessingVolume(input: number, output: number) {
   const total = Number(input || 0) + Number(output || 0)
   if (!total) return '-'
-  return `${total.toLocaleString()} 字`
+  if (total < 2000) return '少量内容'
+  if (total < 10000) return '中等内容'
+  if (total < 30000) return '较多内容'
+  return '大量内容'
 }
 
 function formatEstimatedCost(value: number) {
@@ -469,9 +472,9 @@ export function TeamPage() {
                   { title: '处理方式', width: 130, render: () => '平台智能处理' },
                   { title: '调用人', dataIndex: 'user_name', width: 120, render: (value) => value || '系统' },
                   {
-                    title: '用量',
+                    title: '处理量',
                     width: 110,
-                    render: (_, row) => formatUsage(row.input_tokens, row.output_tokens),
+                    render: (_, row) => formatProcessingVolume(row.input_tokens, row.output_tokens),
                   },
                   {
                     title: '预估费用',
