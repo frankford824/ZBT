@@ -117,18 +117,23 @@ def _parse_pdf(content: bytes) -> tuple[str, int, dict[str, object]]:
         pages: list[str] = []
         layout_blocks: list[dict[str, object]] = []
         tables: list[dict[str, object]] = []
+        table_errors: list[dict[str, object]] = []
         for page_index, page in enumerate(doc, start=1):
             page_text = page.get_text("text").strip()
             if page_text:
                 pages.append(f"[Page {page_index}]\n{page_text}")
             layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
-            tables.extend(_extract_pdf_tables(page, page_index, page_text))
+            page_tables, page_table_errors = _extract_pdf_tables(page, page_index, page_text)
+            tables.extend(page_tables)
+            table_errors.extend(page_table_errors)
         text = "\n\n".join(pages)
         metadata = {
             "layout_blocks": layout_blocks[:200],
             "layout_block_count": len(layout_blocks),
             "tables": tables[:50],
             "table_count": len(tables),
+            "table_extraction_errors": table_errors[:20],
+            "table_extraction_error_count": len(table_errors),
             "ocr_required": not bool(text.strip()),
         }
         return text, doc.page_count, metadata
@@ -160,8 +165,13 @@ def _extract_pdf_layout_blocks(page: fitz.Page, page_index: int) -> list[dict[st
     return blocks
 
 
-def _extract_pdf_tables(page: fitz.Page, page_index: int, page_text: str) -> list[dict[str, object]]:
+def _extract_pdf_tables(
+    page: fitz.Page,
+    page_index: int,
+    page_text: str,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     tables: list[dict[str, object]] = []
+    errors: list[dict[str, object]] = []
     if hasattr(page, "find_tables"):
         try:
             found = page.find_tables()
@@ -174,10 +184,17 @@ def _extract_pdf_tables(page: fitz.Page, page_index: int, page_text: str) -> lis
                 ]
                 if cleaned_rows:
                     tables.append({"page": page_index, "index": table_index, "rows": cleaned_rows})
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(
+                {
+                    "page": page_index,
+                    "extractor": "pymupdf",
+                    "error_type": type(exc).__name__,
+                    "message": "PDF 表格结构识别失败，已改用文本行识别",
+                }
+            )
     if tables:
-        return tables
+        return tables, errors
 
     heuristic_rows: list[list[str]] = []
     for line in page_text.splitlines():
@@ -186,7 +203,7 @@ def _extract_pdf_tables(page: fitz.Page, page_index: int, page_text: str) -> lis
             heuristic_rows.append(cells)
     if len(heuristic_rows) >= 2:
         tables.append({"page": page_index, "index": 1, "rows": heuristic_rows, "extraction": "heuristic"})
-    return tables
+    return tables, errors
 
 
 def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str, object]:

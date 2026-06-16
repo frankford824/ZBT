@@ -6,7 +6,7 @@ from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
 
-from app.pipelines.parse.document_parser import _env_int, parse_document
+from app.pipelines.parse.document_parser import _env_int, _extract_pdf_tables, parse_document
 from app.schemas.knowledge import KnowledgeProcessRequest
 
 
@@ -27,6 +27,36 @@ def test_pdf_parser_extracts_layout_blocks_and_table_candidates() -> None:
     assert result.metadata["table_count"] >= 1
     assert result.metadata["ocr_required"] is False
     assert "Equipment" in text
+
+
+def test_pdf_table_extraction_error_keeps_heuristic_tables_without_sensitive_details() -> None:
+    class BrokenTablePage:
+        def find_tables(self) -> object:
+            raise RuntimeError("secret table payload fragment")
+
+    tables, errors = _extract_pdf_tables(
+        BrokenTablePage(),
+        2,
+        "Item    Amount\nEquipment    1200",
+    )
+
+    assert tables == [
+        {
+            "page": 2,
+            "index": 1,
+            "rows": [["Item", "Amount"], ["Equipment", "1200"]],
+            "extraction": "heuristic",
+        }
+    ]
+    assert errors == [
+        {
+            "page": 2,
+            "extractor": "pymupdf",
+            "error_type": "RuntimeError",
+            "message": "PDF 表格结构识别失败，已改用文本行识别",
+        }
+    ]
+    assert "secret table" not in str(errors)
 
 
 def test_empty_pdf_marks_ocr_required_without_claiming_success(monkeypatch) -> None:
