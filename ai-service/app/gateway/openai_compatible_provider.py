@@ -203,8 +203,7 @@ class OpenAICompatibleProvider:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", "replace")
-            raise RuntimeError(f"{self.name} {path} returned {exc.code}: {error_body}") from exc
+            raise RuntimeError(f"{self.name} {path} returned HTTP {exc.code}") from exc
 
 
 def _choice_text(data: dict[str, Any]) -> str:
