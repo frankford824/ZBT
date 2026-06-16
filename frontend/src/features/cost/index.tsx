@@ -15,9 +15,10 @@ import {
   Statistic,
   Table,
   Tag,
+  Typography,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
   createCostAdvice,
@@ -126,6 +127,7 @@ export function CostDetailPage() {
   const canWrite = useCanAccess('cost', 'full')
   const [open, setOpen] = useState(false)
   const [adviceTaskId, setAdviceTaskId] = useState('')
+  const adviceTaskNoticeRef = useRef('')
   const [form] = Form.useForm()
   const project = useQuery({
     queryKey: ['cost-project', costProjectId],
@@ -180,14 +182,27 @@ export function CostDetailPage() {
   const adviceTaskStatus = adviceTask.data?.status
   useEffect(() => {
     if (!adviceTaskId || !adviceTaskStatus) return
+    if (!['done', 'failed', 'cancelled'].includes(adviceTaskStatus)) return
+    const noticeKey = `${adviceTaskId}:${adviceTaskStatus}`
+    if (adviceTaskNoticeRef.current === noticeKey) return
+    adviceTaskNoticeRef.current = noticeKey
     if (adviceTaskStatus === 'done') {
       message.success(adviceSummary(adviceTask.data?.result) || '建议已生成')
       void queryClient.invalidateQueries({ queryKey: ['cost-project', costProjectId] })
     }
     if (adviceTaskStatus === 'failed' || adviceTaskStatus === 'cancelled') {
-      message.error('生成建议失败')
+      message.error(adviceFailureMessage(adviceTask.data?.status, adviceTask.data?.error_message))
     }
-  }, [adviceTaskId, adviceTaskStatus, adviceTask.data?.result, message, queryClient, costProjectId])
+  }, [
+    adviceTaskId,
+    adviceTaskStatus,
+    adviceTask.data?.status,
+    adviceTask.data?.result,
+    adviceTask.data?.error_message,
+    message,
+    queryClient,
+    costProjectId,
+  ])
   const adviceBusy = adviceMutation.isPending || adviceTaskStatus === 'queued' || adviceTaskStatus === 'running'
 
   if (project.isLoading) return <LoadingBlock />
@@ -276,6 +291,11 @@ export function CostDetailPage() {
                         {item}
                       </Tag>
                     ))}
+                    {adviceTask.data.status === 'failed' || adviceTask.data.status === 'cancelled' ? (
+                      <Typography.Text type="danger">
+                        {adviceFailureMessage(adviceTask.data.status, adviceTask.data.error_message)}
+                      </Typography.Text>
+                    ) : null}
                   </Space>
                 </Descriptions.Item>
               ) : null}
@@ -373,6 +393,11 @@ function adviceRiskFlags(result: Record<string, unknown> | undefined) {
 function adviceSummary(result: Record<string, unknown> | undefined) {
   if (!result || typeof result.summary !== 'string') return ''
   return result.summary
+}
+
+function adviceFailureMessage(status: string | undefined, errorMessage: string | null | undefined) {
+  if (errorMessage?.trim()) return errorMessage.trim()
+  return status === 'cancelled' ? '建议生成已取消' : '生成建议失败'
 }
 
 function adviceStatusTag(status: string) {

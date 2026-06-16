@@ -84,6 +84,7 @@ import {
   uploadBidTenderFile,
   uploadToPresignedUrl,
   useBidTemplate,
+  type AITaskDTO,
   type BidChapterDTO,
   type BidDocumentDTO,
   type BidExportDTO,
@@ -727,6 +728,10 @@ export function BidWizardPage() {
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
+  const parseFailureMessage =
+    parseResult.data?.status === 'failed'
+      ? parseResult.data.error_message?.trim() || '文件解读失败，请重新上传或重新解读'
+      : ''
   const setOutlineDraft = (partId: string, rowIndex: number, patch: Partial<OutlineDraftChapter>) => {
     setOutlineDrafts((current) => ({
       ...current,
@@ -833,6 +838,7 @@ export function BidWizardPage() {
                   {parseStatusLabel(parseResult.data?.status ?? 'queued')}
                 </Tag>
               </Space>
+              {parseFailureMessage ? <Alert type="error" showIcon message={parseFailureMessage} /> : null}
               <Table
                 size="small"
                 pagination={false}
@@ -1021,7 +1027,11 @@ export function BidWizardPage() {
                 dataSource={generationJobs.data ?? []}
                 columns={[
                   { title: '范围', dataIndex: 'scope', render: generationScopeLabel },
-                  { title: '状态', dataIndex: 'status', render: generationJobStatusTag },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    render: (_, row: BidGenerationJobDTO) => generationJobStatusCell(row),
+                  },
                   { title: '进度', dataIndex: 'progress', render: (value: number) => <Progress percent={value} size="small" /> },
                   {
                     title: '章节',
@@ -1111,7 +1121,11 @@ export function BidWizardPage() {
                     dataIndex: 'part_code',
                     render: (value: string, row: BidExportDTO) => exportTypeLabel(row, value),
                   },
-                  { title: '状态', dataIndex: 'status', render: exportStatusTag },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    render: (_, row: BidExportDTO) => exportStatusCell(row),
+                  },
                   {
                     title: '操作',
                     render: (_, row: BidExportDTO) => (
@@ -1183,6 +1197,17 @@ function exportStatusTag(value: BidExportDTO['status']) {
   return <Tag color={color}>{labels[value] ?? '状态未知'}</Tag>
 }
 
+function exportStatusCell(row: BidExportDTO) {
+  return (
+    <Space orientation="vertical" size={2}>
+      {exportStatusTag(row.status)}
+      {row.status === 'failed' || row.status === 'cancelled' ? (
+        <Typography.Text type="danger">{taskFailureMessage(row, '导出文件生成失败')}</Typography.Text>
+      ) : null}
+    </Space>
+  )
+}
+
 function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
   const color = value === 'done' ? 'green' : value === 'failed' || value === 'cancelled' ? 'red' : value === 'paused' ? 'orange' : 'blue'
   const labels: Record<BidGenerationJobDTO['status'], string> = {
@@ -1194,6 +1219,17 @@ function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
     cancelled: '已取消',
   }
   return <Tag color={color}>{labels[value] ?? '状态未知'}</Tag>
+}
+
+function generationJobStatusCell(row: BidGenerationJobDTO) {
+  return (
+    <Space orientation="vertical" size={2}>
+      {generationJobStatusTag(row.status)}
+      {row.status === 'failed' || row.status === 'cancelled' ? (
+        <Typography.Text type="danger">{taskFailureMessage(row, '正文生成失败')}</Typography.Text>
+      ) : null}
+    </Space>
+  )
 }
 
 function generationScopeLabel(value: BidGenerationJobDTO['scope']) {
@@ -1220,6 +1256,24 @@ function parseStatusColor(value: 'queued' | 'processing' | 'ready' | 'confirmed'
     failed: 'red',
   }
   return colors[value]
+}
+
+function isTerminalTaskStatus(status: AITaskDTO['status']) {
+  return status === 'done' || status === 'failed' || status === 'cancelled'
+}
+
+function taskFailureMessage(
+  task:
+    | Pick<AITaskDTO, 'status' | 'error_message'>
+    | Pick<BidGenerationSnapshotDTO['tasks'][number], 'status' | 'error_message'>
+    | Pick<BidExportDTO, 'status' | 'error_message'>
+    | Pick<BidGenerationJobDTO, 'status' | 'error_message'>
+    | undefined,
+  fallback: string,
+) {
+  if (!task || (task.status !== 'failed' && task.status !== 'cancelled')) return ''
+  if (task.error_message?.trim()) return task.error_message.trim()
+  return task.status === 'cancelled' ? '任务已取消' : fallback
 }
 
 function structuredResultRows(result: Record<string, unknown> | undefined) {
@@ -1274,6 +1328,7 @@ export function BidEditorPage() {
   const queryClient = useQueryClient()
   const canWrite = useCanAccess('bid', 'full')
   const [regenerateTaskId, setRegenerateTaskId] = useState('')
+  const regenerateTaskNoticeRef = useRef('')
   const [generationSnapshot, setGenerationSnapshot] = useState<BidGenerationSnapshotDTO | null>(null)
   const [generationStreamStatus, setGenerationStreamStatus] = useState<'connecting' | 'open' | 'error'>('connecting')
   const [diffOpen, setDiffOpen] = useState(false)
@@ -1346,16 +1401,20 @@ export function BidEditorPage() {
   }, [editor, currentChapter, editorSourceKey])
   useEffect(() => {
     if (!regenerateTaskId || !regenerateTaskStatus) return
+    if (!isTerminalTaskStatus(regenerateTaskStatus)) return
+    const noticeKey = `${regenerateTaskId}:${regenerateTaskStatus}`
+    if (regenerateTaskNoticeRef.current === noticeKey) return
+    regenerateTaskNoticeRef.current = noticeKey
     if (regenerateTaskStatus === 'done') {
       message.success('本章已重新生成')
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
       void queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter?.id] })
     }
     if (regenerateTaskStatus === 'failed' || regenerateTaskStatus === 'cancelled') {
-      message.error('重新生成失败')
+      message.error(taskFailureMessage(regenerateTask.data, '重新生成失败'))
       void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
     }
-  }, [regenerateTaskId, regenerateTaskStatus, message, queryClient, bidId, currentChapter?.id])
+  }, [regenerateTaskId, regenerateTaskStatus, regenerateTask.data, message, queryClient, bidId, currentChapter?.id])
   useEffect(() => {
     if (!bidId) return
     return openSse<BidGenerationSnapshotDTO>(`/bids/${bidId}/generation/stream`, {
@@ -1433,6 +1492,7 @@ export function BidEditorPage() {
     ? Math.round((acceptedCount / visibleChapters.length) * 100)
     : 0
   const humanInputItems = currentChapter?.needs_human_input ?? []
+  const latestChapterTaskFailure = taskFailureMessage(latestChapterTask, '本章处理失败')
 
   const switchPart = (code: string) => {
     setSearchParams(code === 'all' ? {} : { part: code })
@@ -1611,6 +1671,7 @@ export function BidEditorPage() {
                 message="正在处理本章，完成后自动刷新"
               />
             ) : null}
+            {latestChapterTaskFailure ? <Alert type="error" showIcon message={latestChapterTaskFailure} /> : null}
             <Button
               block
               icon={<SyncOutlined />}
