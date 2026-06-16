@@ -46,7 +46,7 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
         "object_key": payload.object_key,
     }
     if "pdf" in content_type or suffix == ".pdf":
-        text, page_count, pdf_metadata = _parse_pdf(content)
+        text, page_count, pdf_metadata = _parse_pdf(payload, content)
         metadata.update(pdf_metadata)
         if not text.strip():
             ocr_result = _try_http_ocr(payload, content)
@@ -111,21 +111,36 @@ def _parse_text(content: bytes) -> str:
     return content.decode("utf-8", errors="replace")
 
 
-def _parse_pdf(content: bytes) -> tuple[str, int, dict[str, object]]:
+def _parse_pdf(payload: KnowledgeProcessRequest, content: bytes) -> tuple[str, int, dict[str, object]]:
     doc = fitz.open(stream=content, filetype="pdf")
     try:
-        pages: list[str] = []
+        page_texts: list[str] = []
         layout_blocks: list[dict[str, object]] = []
         tables: list[dict[str, object]] = []
         table_errors: list[dict[str, object]] = []
         for page_index, page in enumerate(doc, start=1):
             page_text = page.get_text("text").strip()
-            if page_text:
-                pages.append(f"[Page {page_index}]\n{page_text}")
+            page_texts.append(page_text)
             layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
             page_tables, page_table_errors = _extract_pdf_tables(page, page_index, page_text)
             tables.extend(page_tables)
             table_errors.extend(page_table_errors)
+        pages: list[str] = []
+        page_ocr_results: list[dict[str, object]] = []
+        has_text_layer = any(text.strip() for text in page_texts)
+        for page_index, page_text in enumerate(page_texts, start=1):
+            if page_text:
+                pages.append(f"[Page {page_index}]\n{page_text}")
+                continue
+            if not has_text_layer:
+                continue
+            ocr_result = _try_pdf_page_ocr(payload, doc[page_index - 1], page_index)
+            ocr_text = str(ocr_result.get("text") or "")
+            ocr_metadata = {key: value for key, value in ocr_result.items() if key != "text"}
+            ocr_metadata["page"] = page_index
+            page_ocr_results.append(ocr_metadata)
+            if ocr_result.get("status") == "done" and ocr_text.strip():
+                pages.append(f"[Page {page_index} OCR]\n{ocr_text.strip()}")
         text = "\n\n".join(pages)
         metadata = {
             "layout_blocks": layout_blocks[:200],
@@ -134,11 +149,41 @@ def _parse_pdf(content: bytes) -> tuple[str, int, dict[str, object]]:
             "table_count": len(tables),
             "table_extraction_errors": table_errors[:20],
             "table_extraction_error_count": len(table_errors),
-            "ocr_required": not bool(text.strip()),
+            "ocr_pages": page_ocr_results[:50],
+            "ocr_page_count": len(page_ocr_results),
+            "ocr_required": _pdf_ocr_required(text, page_ocr_results),
         }
         return text, doc.page_count, metadata
     finally:
         doc.close()
+
+
+def _pdf_ocr_required(text: str, page_ocr_results: list[dict[str, object]]) -> bool:
+    if not text.strip():
+        return True
+    return any(result.get("status") != "done" for result in page_ocr_results)
+
+
+def _try_pdf_page_ocr(payload: KnowledgeProcessRequest, page: fitz.Page, page_index: int) -> dict[str, object]:
+    if not os.getenv("OCR_HTTP_ENDPOINT", "").strip():
+        return {"status": "provider_not_configured", "provider": _ocr_provider_name()}
+    try:
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        page_image = pixmap.tobytes("png")
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "provider": _ocr_provider_name(),
+            "error": "pdf page render failed",
+            "error_type": type(exc).__name__,
+        }
+    page_payload = payload.model_copy(
+        update={
+            "filename": f"{Path(payload.filename).stem or 'page'}-page-{page_index}.png",
+            "content_type": "image/png",
+        }
+    )
+    return _try_http_ocr(page_payload, page_image)
 
 
 def _extract_pdf_layout_blocks(page: fitz.Page, page_index: int) -> list[dict[str, object]]:
@@ -208,7 +253,7 @@ def _extract_pdf_tables(
 
 def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str, object]:
     endpoint = os.getenv("OCR_HTTP_ENDPOINT", "").strip()
-    provider = os.getenv("OCR_PROVIDER", "http_ocr").strip() or "http_ocr"
+    provider = _ocr_provider_name()
     if not endpoint:
         return {"status": "provider_not_configured", "provider": provider}
     max_bytes = _env_int("OCR_MAX_BYTES", 20 * 1024 * 1024)
@@ -257,6 +302,10 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         }
     except Exception:
         return {"status": "failed", "provider": provider, "error": "ocr request failed"}
+
+
+def _ocr_provider_name() -> str:
+    return os.getenv("OCR_PROVIDER", "http_ocr").strip() or "http_ocr"
 
 
 def _parse_docx(content: bytes) -> str:

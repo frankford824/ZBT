@@ -92,6 +92,39 @@ def test_empty_pdf_clears_ocr_required_after_successful_ocr(monkeypatch) -> None
     assert "扫描件识别文本" in text
 
 
+def test_mixed_pdf_runs_page_ocr_for_pages_without_text_layer(monkeypatch) -> None:
+    def fake_page_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str, object]:
+        assert payload.filename == "mixed-page-2.png"
+        assert payload.content_type == "image/png"
+        assert content.startswith(b"\x89PNG")
+        return {
+            "status": "done",
+            "provider": "fake_ocr",
+            "text": "第二页扫描文本",
+            "metadata": {"confidence": 0.96},
+        }
+
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setattr("app.pipelines.parse.document_parser._try_http_ocr", fake_page_ocr)
+    pdf = fitz.open()
+    first = pdf.new_page()
+    first.insert_text((72, 72), "page one selectable text")
+    pdf.new_page()
+    content = pdf.tobytes()
+    pdf.close()
+
+    result = parse_document(_request("mixed.pdf"), content)
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert result.metadata["ocr_required"] is False
+    assert result.metadata["ocr_page_count"] == 1
+    assert result.metadata["ocr_pages"] == [
+        {"status": "done", "provider": "fake_ocr", "metadata": {"confidence": 0.96}, "page": 2}
+    ]
+    assert "page one selectable text" in text
+    assert "第二页扫描文本" in text
+
+
 def test_image_parser_uses_ocr_boundary_without_falling_back_to_plain_text(monkeypatch) -> None:
     monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
 
