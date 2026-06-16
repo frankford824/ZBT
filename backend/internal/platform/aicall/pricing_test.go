@@ -122,6 +122,73 @@ func TestRecordFromTaskParsesStringTokenAndCostFields(t *testing.T) {
 	}
 }
 
+func TestRecordFromTaskReadsTopLevelEstimatedCost(t *testing.T) {
+	input := recordFromTask(
+		"tenant-1",
+		"external-task-1",
+		"local-task-1",
+		sql.NullString{},
+		"chapter_generate",
+		"done",
+		"bid_chapter",
+		"resource-1",
+		map[string]any{"provider": "deepseek", "model": "deepseek-chat"},
+		map[string]any{
+			"estimated_cost": "0.0315",
+			"model_metadata": map[string]any{
+				"provider": "deepseek",
+				"model":    "deepseek-chat",
+			},
+			"token_usage": map[string]any{
+				"input_tokens":  2000,
+				"output_tokens": 1000,
+			},
+		},
+		"",
+		time.Unix(100, 0),
+		sql.NullTime{Time: time.Unix(103, 0), Valid: true},
+	)
+	input = normalizeRecord(input)
+
+	if input.EstimatedCost != 0.0315 {
+		t.Fatalf("expected top-level estimated cost, got %.6f", input.EstimatedCost)
+	}
+}
+
+func TestRecordFromTaskPrefersModelMetadataEstimatedCost(t *testing.T) {
+	input := recordFromTask(
+		"tenant-1",
+		"external-task-1",
+		"local-task-1",
+		sql.NullString{},
+		"chapter_generate",
+		"done",
+		"bid_chapter",
+		"resource-1",
+		map[string]any{"provider": "deepseek", "model": "deepseek-chat"},
+		map[string]any{
+			"estimated_cost": 0.0315,
+			"model_metadata": map[string]any{
+				"provider":       "deepseek",
+				"model":          "deepseek-chat",
+				"estimated_cost": 0.0125,
+			},
+			"token_usage": map[string]any{
+				"input_tokens":  2000,
+				"output_tokens": 1000,
+			},
+		},
+		"",
+		time.Unix(100, 0),
+		sql.NullTime{Time: time.Unix(103, 0), Valid: true},
+	)
+	input = normalizeRecord(input)
+
+	if input.EstimatedCost != 0.0125 {
+		t.Fatalf("expected model metadata estimated cost, got %.6f", input.EstimatedCost)
+	}
+}
+
 func TestNormalizeStatusCanonicalizesKnownValues(t *testing.T) {
 	for _, tc := range []struct {
 		input string

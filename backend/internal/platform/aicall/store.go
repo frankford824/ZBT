@@ -296,7 +296,7 @@ func recordFromTask(
 		Model:         model,
 		InputTokens:   intFromMap(tokenUsage, "input_tokens"),
 		OutputTokens:  intFromMap(tokenUsage, "output_tokens"),
-		EstimatedCost: floatFromMap(modelMetadata, "estimated_cost"),
+		EstimatedCost: estimatedCostFromResult(result, modelMetadata),
 		LatencyMS:     latencyMS,
 		Status:        normalizeStatus(status),
 		ErrorMessage:  errorMessage,
@@ -310,6 +310,13 @@ func recordFromTask(
 			"callback_recorded": true,
 		},
 	}
+}
+
+func estimatedCostFromResult(result, modelMetadata map[string]any) float64 {
+	if cost := floatFromMap(modelMetadata, "estimated_cost"); cost != 0 {
+		return cost
+	}
+	return floatFromMap(result, "estimated_cost")
 }
 
 func normalizeRecord(input RecordInput) RecordInput {
