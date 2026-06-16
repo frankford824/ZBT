@@ -242,8 +242,13 @@ def _template_context(
             for chapter in chapters
         ],
     }
-    context.update(layout.context)
+    context.update(_public_template_context(layout.context))
     return context
+
+
+def _public_template_context(context: dict[str, object]) -> dict[str, object]:
+    reserved = {alias for aliases in ANCHOR_ALIASES.values() for alias in aliases}
+    return {key: value for key, value in context.items() if key not in reserved}
 
 
 def _generated_at(layout: ExportLayoutOptions) -> str:

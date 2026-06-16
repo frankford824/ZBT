@@ -220,6 +220,35 @@ def test_export_bid_docx_renders_template_placeholders_and_body_anchor(tmp_path,
     assert "模板正文内容。" in paragraph_text
 
 
+def test_export_bid_docx_keeps_reserved_anchor_context_internal(tmp_path, monkeypatch) -> None:
+    template_path = tmp_path / "reserved-anchor-template.docx"
+    template = Document()
+    template.add_paragraph("{{ZBT_BODY}}")
+    template.save(template_path)
+    monkeypatch.setenv("BID_EXPORT_TEMPLATE_PATH", str(template_path))
+    output = tmp_path / "reserved-anchor.docx"
+
+    export_bid_docx(
+        "智慧交通平台",
+        "技术标",
+        [ExportChapter(title="实施计划", plain_text="模板正文内容。")],
+        output,
+        layout=ExportLayoutOptions(
+            include_cover=False,
+            include_toc=False,
+            context={"ZBT_BODY": "外部正文覆盖", "body": "外部别名覆盖"},
+        ),
+    )
+
+    document = Document(output)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "外部正文覆盖" not in paragraph_text
+    assert "外部别名覆盖" not in paragraph_text
+    assert "实施计划" in paragraph_text
+    assert "模板正文内容。" in paragraph_text
+
+
 def test_export_bid_docx_removes_disabled_template_anchors(tmp_path, monkeypatch) -> None:
     template_path = tmp_path / "disabled-anchors-template.docx"
     template = Document()
