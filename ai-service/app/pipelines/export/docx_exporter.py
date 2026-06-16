@@ -62,10 +62,16 @@ def export_bid_docx(
     anchors = _replace_template_fields(document, context)
     if layout.include_cover:
         _render_cover(document, title, part_title, layout, anchor=anchors.get("cover"))
+    else:
+        _remove_anchor(anchors.get("cover"))
     if layout.include_toc:
         _render_toc(document, layout, anchor=anchors.get("toc"))
+    else:
+        _remove_anchor(anchors.get("toc"))
     if layout.render_body:
         _render_bid_body(document, part_title, chapters, anchor=anchors.get("body"))
+    else:
+        _remove_anchor(anchors.get("body"))
     _enable_field_updates(document)
     document.save(output_path)
     return output_path
@@ -404,6 +410,14 @@ def _insert_document_after(anchor: Paragraph, source: DocxDocument) -> None:
     ]
     for element in reversed(body_elements):
         anchor._p.addnext(element)
+    parent = anchor._element.getparent()
+    if parent is not None:
+        parent.remove(anchor._element)
+
+
+def _remove_anchor(anchor: Paragraph | None) -> None:
+    if anchor is None:
+        return
     parent = anchor._element.getparent()
     if parent is not None:
         parent.remove(anchor._element)

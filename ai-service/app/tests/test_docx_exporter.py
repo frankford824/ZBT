@@ -195,6 +195,37 @@ def test_export_bid_docx_renders_template_placeholders_and_body_anchor(tmp_path,
     assert "模板正文内容。" in paragraph_text
 
 
+def test_export_bid_docx_removes_disabled_template_anchors(tmp_path, monkeypatch) -> None:
+    template_path = tmp_path / "disabled-anchors-template.docx"
+    template = Document()
+    template.add_paragraph("项目：{{ bid_title }}")
+    template.add_paragraph("{{ZBT_COVER}}")
+    template.add_paragraph("{{ZBT_TOC}}")
+    template.add_paragraph("{{ZBT_BODY}}")
+    template.save(template_path)
+    monkeypatch.setenv("BID_EXPORT_TEMPLATE_PATH", str(template_path))
+    output = tmp_path / "disabled-anchors.docx"
+
+    export_bid_docx(
+        "智慧交通平台",
+        "技术标",
+        [ExportChapter(title="实施计划", plain_text="模板正文内容。")],
+        output,
+        layout=ExportLayoutOptions(include_cover=False, include_toc=False, render_body=False),
+    )
+
+    document = Document(output)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    package_xml = _package_xml(output)
+
+    assert "项目：智慧交通平台" in paragraph_text
+    assert "ZBT_COVER" not in package_xml
+    assert "ZBT_TOC" not in package_xml
+    assert "ZBT_BODY" not in package_xml
+    assert "实施计划" not in paragraph_text
+    assert "模板正文内容。" not in paragraph_text
+
+
 def test_template_field_replacement_stringifies_non_string_context() -> None:
     document = Document()
     document.add_paragraph("轮次：{{ review_round }}")
