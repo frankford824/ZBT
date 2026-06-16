@@ -17,7 +17,9 @@ from app.main import (
     embed_knowledge_inputs,
     ensure_callback_url_allowed,
     export_docx,
+    knowledge_embeddings,
     knowledge_process,
+    knowledge_rerank,
     process_document_export,
     process_knowledge_document,
     process_tender_parse,
@@ -31,7 +33,14 @@ from app.main import (
 from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.parse.tender_parser import build_tender_structured_result, merge_tender_structured_result
 from app.schemas.export import DocumentExportRequest, ExportAttachment, ExportChapter, ExportPart
-from app.schemas.knowledge import KnowledgeChunk, KnowledgeProcessRequest, KnowledgeProcessResult
+from app.schemas.knowledge import (
+    KnowledgeChunk,
+    KnowledgeEmbeddingRequest,
+    KnowledgeProcessRequest,
+    KnowledgeProcessResult,
+    KnowledgeRerankDocument,
+    KnowledgeRerankRequest,
+)
 from app.schemas.tender import TenderParseRequest
 
 
@@ -229,6 +238,196 @@ def test_process_knowledge_document_batches_embeddings(monkeypatch) -> None:
     callback_chunks = callbacks[0]["chunks"]
     assert isinstance(callback_chunks, list)
     assert all(chunk["embedding"] for chunk in callback_chunks)
+
+
+def test_knowledge_embeddings_falls_back_when_primary_provider_call_fails(monkeypatch) -> None:
+    class FailingEmbeddingProvider:
+        name = "primary-embedding"
+
+        def embed_batch(self, _texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("primary embedding unavailable")
+
+        def get_dimensions(self) -> int:
+            return 3
+
+    class FallbackEmbeddingProvider:
+        name = "fallback-embedding"
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+        def get_dimensions(self) -> int:
+            return 3
+
+    class FakeRouter:
+        def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
+            assert tenant_id == "tenant-demo"
+            return [
+                RouteTarget(provider="primary-embedding", model="primary-embedding-model", dimensions=3),
+                RouteTarget(
+                    provider="fallback-embedding",
+                    model="fallback-embedding-model",
+                    dimensions=3,
+                    fallback_from="primary-embedding",
+                ),
+            ]
+
+        def provider_for_target(self, target: RouteTarget) -> object:
+            if target.provider == "primary-embedding":
+                return FailingEmbeddingProvider()
+            return FallbackEmbeddingProvider()
+
+    monkeypatch.setattr("app.main.router", FakeRouter())
+
+    response = asyncio.run(
+        knowledge_embeddings(KnowledgeEmbeddingRequest(tenant_id="tenant-demo", texts=["智慧交通"]))
+    )
+
+    assert response.provider == "fallback-embedding"
+    assert response.model == "fallback-embedding-model"
+    assert response.dimensions == 3
+    assert response.embeddings == [[1.0, 0.0, 0.0]]
+    assert response.route["fallback_from"] == "primary-embedding"
+
+
+def test_knowledge_rerank_falls_back_when_primary_provider_call_fails(monkeypatch) -> None:
+    class FailingRerankProvider:
+        name = "primary-rerank"
+
+        def rerank(self, _query: str, _documents: list[str]) -> list[int]:
+            raise RuntimeError("primary rerank unavailable")
+
+    class FallbackRerankProvider:
+        name = "fallback-rerank"
+
+        def rerank(self, _query: str, _documents: list[str]) -> list[int]:
+            return [1, 0]
+
+    class FakeRouter:
+        def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
+            assert tenant_id == "tenant-demo"
+            return [
+                RouteTarget(provider="primary-rerank", model="primary-rerank-model"),
+                RouteTarget(
+                    provider="fallback-rerank",
+                    model="fallback-rerank-model",
+                    fallback_from="primary-rerank",
+                ),
+            ]
+
+        def provider_for_target(self, target: RouteTarget) -> object:
+            if target.provider == "primary-rerank":
+                return FailingRerankProvider()
+            return FallbackRerankProvider()
+
+    monkeypatch.setattr("app.main.router", FakeRouter())
+
+    response = asyncio.run(
+        knowledge_rerank(
+            KnowledgeRerankRequest(
+                tenant_id="tenant-demo",
+                query="智慧交通",
+                documents=[
+                    KnowledgeRerankDocument(id="doc-1", title="财务报表", content="成本核算"),
+                    KnowledgeRerankDocument(id="doc-2", title="交通方案", content="智慧交通实施"),
+                ],
+                top_k=2,
+            )
+        )
+    )
+
+    assert response.provider == "fallback-rerank"
+    assert response.model == "fallback-rerank-model"
+    assert [item.id for item in response.results] == ["doc-2", "doc-1"]
+    assert response.route["fallback_from"] == "primary-rerank"
+
+
+def test_process_knowledge_document_falls_back_when_embedding_provider_call_fails(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return b"document"
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class FailingEmbeddingProvider:
+        name = "primary-embedding"
+
+        def embed_batch(self, _texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("primary embedding unavailable")
+
+        def get_dimensions(self) -> int:
+            return 3
+
+    class FallbackEmbeddingProvider:
+        name = "fallback-embedding"
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0, 1.0, 0.0] for _ in texts]
+
+        def get_dimensions(self) -> int:
+            return 3
+
+    class FakeRouter:
+        def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
+            assert tenant_id == "tenant-demo"
+            return [
+                RouteTarget(provider="primary-embedding", model="primary-embedding-model", dimensions=3),
+                RouteTarget(
+                    provider="fallback-embedding",
+                    model="fallback-embedding-model",
+                    dimensions=3,
+                    fallback_from="primary-embedding",
+                ),
+            ]
+
+        def provider_for_target(self, target: RouteTarget) -> object:
+            if target.provider == "primary-embedding":
+                return FailingEmbeddingProvider()
+            return FallbackEmbeddingProvider()
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr(
+        "app.main.parse_document",
+        lambda _payload, _content: KnowledgeProcessResult(
+            processed_title="doc",
+            summary="summary",
+            metadata={"parser": "test"},
+            chunks=[KnowledgeChunk(title="chunk", content="content", section_path="section")],
+        ),
+    )
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_knowledge_document(
+        "task-knowledge-demo",
+        KnowledgeProcessRequest(
+            tenant_id="tenant-demo",
+            document_id="doc-demo",
+            file_id="file-demo",
+            object_key="tenant-demo/knowledge/file-demo",
+            filename="doc.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks[0]["status"] == "done", callbacks[0]
+    result = callbacks[0]["result"]
+    assert isinstance(result, dict)
+    assert result["embedding_provider"] == "fallback-embedding"
+    assert result["embedding_model"] == "fallback-embedding-model"
+    assert result["model_metadata"]["fallback_from"] == "primary-embedding"
+    assert callbacks[0]["chunks"][0]["embedding"] == [0.0, 1.0, 0.0]
 
 
 def test_process_knowledge_document_rejects_cross_tenant_object_key(monkeypatch) -> None:

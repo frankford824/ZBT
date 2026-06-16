@@ -210,13 +210,16 @@ async def knowledge_process(
 
 @app.post("/embeddings/knowledge", response_model=KnowledgeEmbeddingResponse)
 async def knowledge_embeddings(payload: KnowledgeEmbeddingRequest) -> KnowledgeEmbeddingResponse:
-    route = router.resolve("knowledge_embedding", tenant_id=payload.tenant_id)
-    provider = router.get_embedding("knowledge_embedding", tenant_id=payload.tenant_id)
-    embeddings = provider.embed_batch(payload.texts)
+    route, provider, embeddings = run_provider_task(
+        "knowledge_embedding",
+        payload.tenant_id,
+        lambda _route, candidate: candidate.embed_batch(payload.texts),
+        provider_kind="embedding",
+    )
     return KnowledgeEmbeddingResponse(
-        provider=provider.name,
+        provider=provider_name(provider, route),
         model=route.model,
-        dimensions=provider.get_dimensions(),
+        dimensions=provider_dimensions(provider, route, embeddings),
         embeddings=embeddings,
         route=route.model_dump(),
     )
@@ -224,12 +227,15 @@ async def knowledge_embeddings(payload: KnowledgeEmbeddingRequest) -> KnowledgeE
 
 @app.post("/rerank/knowledge", response_model=KnowledgeRerankResponse)
 async def knowledge_rerank(payload: KnowledgeRerankRequest) -> KnowledgeRerankResponse:
-    route = router.resolve("knowledge_rerank", tenant_id=payload.tenant_id)
-    provider = router.get_rerank("knowledge_rerank", tenant_id=payload.tenant_id)
     document_texts = [
         f"{document.title}\n{document.section_path}\n{document.content}" for document in payload.documents
     ]
-    ordered_indexes = provider.rerank(payload.query, document_texts)
+    route, provider, ordered_indexes = run_provider_task(
+        "knowledge_rerank",
+        payload.tenant_id,
+        lambda _route, candidate: candidate.rerank(payload.query, document_texts),
+        provider_kind="rerank",
+    )
     seen: set[int] = set()
     results: list[KnowledgeRerankResult] = []
     for index in ordered_indexes:
@@ -259,7 +265,7 @@ async def knowledge_rerank(payload: KnowledgeRerankRequest) -> KnowledgeRerankRe
             )
         )
     return KnowledgeRerankResponse(
-        provider=provider.name,
+        provider=provider_name(provider, route),
         model=route.model,
         results=results,
         route=route.model_dump(),
@@ -277,20 +283,25 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
             response.close()
             response.release_conn()
         parsed = parse_document(payload, content)
-        embedding_provider = router.get_embedding("knowledge_embedding", tenant_id=payload.tenant_id)
-        embedding_route = router.resolve("knowledge_embedding", tenant_id=payload.tenant_id)
         embedding_inputs = [
             f"{chunk.title}\n{chunk.section_path}\n{chunk.content}" for chunk in parsed.chunks
         ]
-        embeddings = embed_knowledge_inputs(embedding_provider, embedding_inputs)
+        embedding_route, embedding_provider, embeddings = run_provider_task(
+            "knowledge_embedding",
+            payload.tenant_id,
+            lambda _route, candidate: embed_knowledge_inputs(candidate, embedding_inputs),
+            provider_kind="embedding",
+        )
         input_tokens = sum(estimate_tokens(text) for text in embedding_inputs)
         if len(embeddings) != len(parsed.chunks):
             raise RuntimeError(f"embedding count mismatch: got {len(embeddings)} want {len(parsed.chunks)}")
+        embedding_provider_name = provider_name(embedding_provider, embedding_route)
+        embedding_dimensions = provider_dimensions(embedding_provider, embedding_route, embeddings)
         for chunk, embedding in zip(parsed.chunks, embeddings, strict=True):
             chunk.embedding = embedding
             chunk.metadata["embedding_model"] = embedding_route.model
-            chunk.metadata["embedding_provider"] = embedding_provider.name
-            chunk.metadata["embedding_dimensions"] = embedding_provider.get_dimensions()
+            chunk.metadata["embedding_provider"] = embedding_provider_name
+            chunk.metadata["embedding_dimensions"] = embedding_dimensions
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -303,12 +314,13 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
                 "metadata": parsed.metadata,
                 "chunk_count": len(parsed.chunks),
                 "embedding_model": embedding_route.model,
-                "embedding_provider": embedding_provider.name,
-                "embedding_dimensions": embedding_provider.get_dimensions(),
+                "embedding_provider": embedding_provider_name,
+                "embedding_dimensions": embedding_dimensions,
                 "model_metadata": {
-                    "provider": embedding_provider.name,
+                    "provider": embedding_provider_name,
                     "model": embedding_route.model,
-                    "embedding_dimensions": embedding_provider.get_dimensions(),
+                    "embedding_dimensions": embedding_dimensions,
+                    "fallback_from": embedding_route.fallback_from,
                 },
                 "token_usage": {
                     "input_tokens": input_tokens,
@@ -478,14 +490,20 @@ def estimate_tokens(text: str) -> int:
     return max(1, len(value) // 4)
 
 
-def llm_attempts(task_type: str, tenant_id: str) -> list[tuple[RouteTarget, object]]:
+def provider_attempts(task_type: str, tenant_id: str, provider_kind: str) -> list[tuple[RouteTarget, object]]:
     if hasattr(router, "resolve_candidates") and hasattr(router, "provider_for_target"):
         return [
             (target, router.provider_for_target(target))
             for target in router.resolve_candidates(task_type, tenant_id=tenant_id)
         ]
     target = router.resolve(task_type, tenant_id=tenant_id)
-    return [(target, router.get_llm(task_type, tenant_id=tenant_id))]
+    if provider_kind == "embedding":
+        provider = router.get_embedding(task_type, tenant_id=tenant_id)
+    elif provider_kind == "rerank":
+        provider = router.get_rerank(task_type, tenant_id=tenant_id)
+    else:
+        provider = router.get_llm(task_type, tenant_id=tenant_id)
+    return [(target, provider)]
 
 
 def provider_name(provider: object, route: RouteTarget) -> str:
@@ -493,13 +511,25 @@ def provider_name(provider: object, route: RouteTarget) -> str:
     return str(name).strip() or route.provider
 
 
-def run_llm_task(
+def provider_dimensions(provider: object, route: RouteTarget, embeddings: list[list[float]] | None = None) -> int:
+    if hasattr(provider, "get_dimensions"):
+        return int(provider.get_dimensions())
+    if route.dimensions:
+        return route.dimensions
+    if embeddings:
+        return len(embeddings[0])
+    return 0
+
+
+def run_provider_task(
     task_type: str,
     tenant_id: str,
     operation,
+    *,
+    provider_kind: str = "llm",
 ) -> tuple[RouteTarget, object, object]:
     last_error: Exception | None = None
-    for route, provider in llm_attempts(task_type, tenant_id):
+    for route, provider in provider_attempts(task_type, tenant_id, provider_kind):
         try:
             return route, provider, operation(route, provider)
         except Exception as exc:
@@ -512,6 +542,14 @@ def run_llm_task(
                 type(exc).__name__,
             )
     raise RuntimeError(f"all configured providers failed for {task_type}") from last_error
+
+
+def run_llm_task(
+    task_type: str,
+    tenant_id: str,
+    operation,
+) -> tuple[RouteTarget, object, object]:
+    return run_provider_task(task_type, tenant_id, operation)
 
 
 @app.post("/tasks/chapter-generate", response_model=TaskAccepted, status_code=202)
