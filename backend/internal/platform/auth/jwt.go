@@ -39,6 +39,21 @@ func ParseJWT(secret, token string) (Claims, error) {
 		return Claims{}, ErrInvalidToken
 	}
 
+	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return Claims{}, ErrInvalidToken
+	}
+	var headerClaims struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+	}
+	if err := json.Unmarshal(header, &headerClaims); err != nil {
+		return Claims{}, ErrInvalidToken
+	}
+	if headerClaims.Alg != "HS256" || headerClaims.Typ != "JWT" {
+		return Claims{}, ErrInvalidToken
+	}
+
 	signingInput := parts[0] + "." + parts[1]
 	if !hmac.Equal([]byte(sign(secret, signingInput)), []byte(parts[2])) {
 		return Claims{}, ErrInvalidToken
@@ -52,7 +67,10 @@ func ParseJWT(secret, token string) (Claims, error) {
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return Claims{}, ErrInvalidToken
 	}
-	if claims.ExpiresAt > 0 && time.Now().Unix() > claims.ExpiresAt {
+	if claims.ExpiresAt <= 0 {
+		return Claims{}, ErrInvalidToken
+	}
+	if time.Now().Unix() >= claims.ExpiresAt {
 		return Claims{}, ErrExpiredToken
 	}
 	return claims, nil
