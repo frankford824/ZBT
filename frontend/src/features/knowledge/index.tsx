@@ -445,14 +445,23 @@ export function KnowledgeDocsPage() {
                   width: 320,
                   render: (_, row) => (
                     <Space wrap size={[8, 6]}>
-                      <a href={`/files/${row.file.id}/preview`}>预览</a>
-                        {canWrite ? <Button
+                      <Button
+                        size="small"
+                        icon={<FileSearchOutlined />}
+                        disabled={row.file.status !== 'ready'}
+                        onClick={() => void openFile(row.file.id, 'preview')}
+                      >
+                        预览
+                      </Button>
+                      {canWrite ? (
+                        <Button
                           size="small"
                           icon={<EditOutlined />}
                           onClick={() => openEditDocument(row)}
                         >
                           编辑
-                        </Button> : null}
+                        </Button>
+                      ) : null}
                       <Button
                         size="small"
                         icon={<LinkOutlined />}
@@ -460,7 +469,8 @@ export function KnowledgeDocsPage() {
                       >
                         引用
                       </Button>
-                        {canWrite ? <Button
+                      {canWrite ? (
+                        <Button
                           size="small"
                           icon={<PlayCircleOutlined />}
                           loading={startingProcessId === row.id}
@@ -468,7 +478,8 @@ export function KnowledgeDocsPage() {
                           onClick={() => void startProcess(row.id)}
                         >
                           整理
-                        </Button> : null}
+                        </Button>
+                      ) : null}
                       <Button
                         size="small"
                         icon={<DownloadOutlined />}
