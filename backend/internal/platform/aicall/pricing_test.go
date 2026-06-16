@@ -2,6 +2,7 @@ package aicall
 
 import (
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 )
@@ -33,6 +34,42 @@ func TestEstimateCostReturnsZeroWhenPricingMissing(t *testing.T) {
 
 	if cost := estimateCost("mock", "mock-model", 1000, 1000); cost != 0 {
 		t.Fatalf("expected missing pricing to keep zero cost, got %.6f", cost)
+	}
+}
+
+func TestEstimateCostSanitizesInvalidPricingRates(t *testing.T) {
+	t.Setenv("AI_MODEL_PRICING_JSON", `{
+		"bad/model": {"input_per_1k": -5, "output_per_1k": -9},
+		"partial/model": {"input_per_1k": -5, "output_per_1k": 0.002}
+	}`)
+
+	if cost := estimateCost("bad", "model", 1000, 1000); cost != 0 {
+		t.Fatalf("expected negative pricing rates to be ignored, got %.6f", cost)
+	}
+	if cost := estimateCost("partial", "model", 1000, 1000); cost != 0.002 {
+		t.Fatalf("expected positive output rate to be retained, got %.6f", cost)
+	}
+}
+
+func TestNormalizeRecordSanitizesInvalidExplicitCostAndFallsBackToPricing(t *testing.T) {
+	t.Setenv("AI_MODEL_PRICING_JSON", `{
+		"deepseek/deepseek-chat": {"input_per_1k": 0.001, "output_per_1k": 0.002}
+	}`)
+
+	for _, value := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		input := normalizeRecord(RecordInput{
+			TraceID:       "trace-1",
+			TaskType:      "chapter_generate",
+			Provider:      "deepseek",
+			Model:         "deepseek-chat",
+			InputTokens:   1000,
+			OutputTokens:  500,
+			EstimatedCost: value,
+			Status:        "done",
+		})
+		if input.EstimatedCost != 0.002 {
+			t.Fatalf("expected invalid explicit cost %v to fall back to pricing, got %.6f", value, input.EstimatedCost)
+		}
 	}
 }
 

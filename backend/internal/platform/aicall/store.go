@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -340,16 +341,21 @@ func normalizeRecord(input RecordInput) RecordInput {
 	if input.OutputTokens < 0 {
 		input.OutputTokens = 0
 	}
-	if input.EstimatedCost < 0 {
-		input.EstimatedCost = 0
-	}
+	input.EstimatedCost = sanitizeCost(input.EstimatedCost)
 	if input.EstimatedCost == 0 {
-		input.EstimatedCost = estimateCost(input.Provider, input.Model, input.InputTokens, input.OutputTokens)
+		input.EstimatedCost = sanitizeCost(estimateCost(input.Provider, input.Model, input.InputTokens, input.OutputTokens))
 	}
 	if input.LatencyMS < 0 {
 		input.LatencyMS = 0
 	}
 	return input
+}
+
+func sanitizeCost(value float64) float64 {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return value
 }
 
 func shouldUpdateExistingLog(currentStatus, nextStatus string) bool {
@@ -371,15 +377,15 @@ func estimateCost(provider, model string, inputTokens, outputTokens int) float64
 	if !ok {
 		return 0
 	}
-	inputPer1K := rate.InputPer1K
-	outputPer1K := rate.OutputPer1K
-	if inputPer1K == 0 && rate.InputPer1M > 0 {
-		inputPer1K = rate.InputPer1M / 1000
+	inputPer1K := sanitizeCost(rate.InputPer1K)
+	outputPer1K := sanitizeCost(rate.OutputPer1K)
+	if inputPer1K == 0 && sanitizeCost(rate.InputPer1M) > 0 {
+		inputPer1K = sanitizeCost(rate.InputPer1M) / 1000
 	}
-	if outputPer1K == 0 && rate.OutputPer1M > 0 {
-		outputPer1K = rate.OutputPer1M / 1000
+	if outputPer1K == 0 && sanitizeCost(rate.OutputPer1M) > 0 {
+		outputPer1K = sanitizeCost(rate.OutputPer1M) / 1000
 	}
-	return (float64(inputTokens)*inputPer1K + float64(outputTokens)*outputPer1K) / 1000
+	return sanitizeCost((float64(inputTokens)*inputPer1K + float64(outputTokens)*outputPer1K) / 1000)
 }
 
 func pricingFor(provider, model string) (pricingRate, bool) {
