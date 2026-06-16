@@ -112,6 +112,32 @@ func TestNormalizeContentTypeRejectsControlCharacters(t *testing.T) {
 	}
 }
 
+func TestConfirmedContentTypeUsesObservedSafeValue(t *testing.T) {
+	contentType, err := confirmedContentType("application/pdf", " text/plain ")
+	if err != nil {
+		t.Fatalf("expected observed content type to normalize: %v", err)
+	}
+	if contentType != "text/plain" {
+		t.Fatalf("unexpected confirmed content type: %q", contentType)
+	}
+}
+
+func TestConfirmedContentTypeFallsBackToClaimedValue(t *testing.T) {
+	contentType, err := confirmedContentType("application/pdf", " ")
+	if err != nil {
+		t.Fatalf("expected blank observed content type to use claimed value: %v", err)
+	}
+	if contentType != "application/pdf" {
+		t.Fatalf("unexpected fallback content type: %q", contentType)
+	}
+}
+
+func TestConfirmedContentTypeRejectsUnsafeObservedValue(t *testing.T) {
+	if _, err := confirmedContentType("application/pdf", "text/plain\r\nX-Injected: yes"); err != ErrInvalidRequest {
+		t.Fatalf("expected unsafe observed content type to be rejected, got %v", err)
+	}
+}
+
 func TestValidateUploadSizeRejectsEmptyNegativeAndOversizedFiles(t *testing.T) {
 	for _, size := range []int64{-1, 0, maxUploadSizeBytes + 1} {
 		if err := validateUploadSize(size); err != ErrInvalidRequest {

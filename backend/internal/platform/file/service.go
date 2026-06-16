@@ -269,9 +269,11 @@ func (s *Service) ConfirmUpload(ctx context.Context, tenantID, fileID string) (A
 		}
 		return Asset{}, err
 	}
-	if info.ContentType != "" {
-		asset.ContentType = info.ContentType
+	contentType, err := confirmedContentType(asset.ContentType, info.ContentType)
+	if err != nil {
+		return Asset{}, err
 	}
+	asset.ContentType = contentType
 	asset.SizeBytes = info.Size
 	if err := validateUploadSize(asset.SizeBytes); err != nil {
 		return Asset{}, err
@@ -480,6 +482,14 @@ func normalizeContentType(value string) (string, error) {
 		return "", ErrInvalidRequest
 	}
 	return contentType, nil
+}
+
+func confirmedContentType(claimed, observed string) (string, error) {
+	value := strings.TrimSpace(observed)
+	if value == "" {
+		value = claimed
+	}
+	return normalizeContentType(value)
 }
 
 func validateUploadSize(sizeBytes int64) error {
