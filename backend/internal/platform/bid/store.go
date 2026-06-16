@@ -834,6 +834,15 @@ func attachableTenderFileAsset(bizType string, bizID sql.NullString, bidID strin
 	return strings.EqualFold(strings.TrimSpace(bizID.String), strings.TrimSpace(bidID))
 }
 
+func confirmableParseResultStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ready", "confirmed":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string) (ParseTenderResponse, error) {
 	bidID = strings.TrimSpace(bidID)
 	if _, err := uuid.Parse(bidID); err != nil {
@@ -955,16 +964,18 @@ func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID 
 	}
 	var result ParseResult
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		document, err := bidForExport(ctx, tx, tenantID, bidID)
-		if err != nil {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
 			return err
 		}
 		current, err := parseResultForBid(ctx, tx, tenantID, bidID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			current, err = upsertParseResult(ctx, tx, tenantID, bidID, "", "queued", defaultTenderStructuredResult(document, TenderFile{}), "")
+			return ErrInvalidRequest
 		}
 		if err != nil {
 			return err
+		}
+		if !confirmableParseResultStatus(current.Status) {
+			return ErrInvalidRequest
 		}
 		structured := req.StructuredResult
 		if structured == nil {

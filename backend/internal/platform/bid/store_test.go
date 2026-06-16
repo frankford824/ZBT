@@ -94,6 +94,22 @@ func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	}
 }
 
+func TestConfirmableParseResultStatusOnlyAllowsReadyResults(t *testing.T) {
+	for status, want := range map[string]bool{
+		"ready":      true,
+		" READY ":    true,
+		"confirmed":  true,
+		"queued":     false,
+		"processing": false,
+		"failed":     false,
+		"":           false,
+	} {
+		if got := confirmableParseResultStatus(status); got != want {
+			t.Fatalf("expected status %q confirmable=%v, got %v", status, want, got)
+		}
+	}
+}
+
 func TestValidateExportAttachmentsAllowsTenantObjectKeysAndInlineContent(t *testing.T) {
 	err := validateExportAttachments(
 		"tenant-demo",
