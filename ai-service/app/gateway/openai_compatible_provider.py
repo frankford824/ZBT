@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -101,7 +102,7 @@ class OpenAICompatibleProvider:
         if self.target and self.target.dimensions:
             payload["dimensions"] = self.target.dimensions
         data = self._post_json("/embeddings", payload)
-        embeddings = [item["embedding"] for item in sorted(data.get("data", []), key=lambda item: item.get("index", 0))]
+        embeddings = _embedding_vectors_from_response(data, len(texts), self.name)
         if len(embeddings) != len(texts):
             raise RuntimeError(f"{self.name} embedding count mismatch: got {len(embeddings)} want {len(texts)}")
         return embeddings
@@ -201,7 +202,10 @@ class OpenAICompatibleProvider:
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
-                return json.loads(response.read().decode("utf-8"))
+                parsed = json.loads(response.read().decode("utf-8"))
+                if not isinstance(parsed, dict):
+                    raise RuntimeError(f"{self.name} {path} returned non-object JSON")
+                return parsed
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"{self.name} {path} returned HTTP {exc.code}") from exc
 
@@ -215,6 +219,54 @@ def _choice_text(data: dict[str, Any]) -> str:
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError("chat completion returned empty content")
     return content
+
+
+def _embedding_vectors_from_response(
+    data: dict[str, Any],
+    expected_count: int,
+    provider_name: str,
+) -> list[list[float]]:
+    items = data.get("data")
+    if not isinstance(items, list):
+        raise RuntimeError(f"{provider_name} embedding response data must be a list")
+    if len(items) != expected_count:
+        raise RuntimeError(f"{provider_name} embedding count mismatch: got {len(items)} want {expected_count}")
+    has_indexes = any(isinstance(item, dict) and "index" in item for item in items)
+    embeddings: list[list[float] | None] = [None] * expected_count
+    seen_indexes: set[int] = set()
+    for response_index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{provider_name} embedding response item must be an object")
+        embedding = _embedding_vector(item.get("embedding"), provider_name)
+        if not has_indexes:
+            embeddings[response_index] = embedding
+            continue
+        raw_index = item.get("index")
+        if isinstance(raw_index, bool) or not isinstance(raw_index, int):
+            raise RuntimeError(f"{provider_name} embedding response index is invalid")
+        if raw_index < 0 or raw_index >= expected_count:
+            raise RuntimeError(f"{provider_name} embedding response index is out of range")
+        if raw_index in seen_indexes:
+            raise RuntimeError(f"{provider_name} embedding response index is duplicated")
+        seen_indexes.add(raw_index)
+        embeddings[raw_index] = embedding
+    if any(embedding is None for embedding in embeddings):
+        raise RuntimeError(f"{provider_name} embedding response index is incomplete")
+    return [embedding for embedding in embeddings if embedding is not None]
+
+
+def _embedding_vector(value: object, provider_name: str) -> list[float]:
+    if not isinstance(value, list) or not value:
+        raise RuntimeError(f"{provider_name} embedding vector must be a non-empty list")
+    vector: list[float] = []
+    for coordinate in value:
+        if isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)):
+            raise RuntimeError(f"{provider_name} embedding vector contains a non-numeric value")
+        number = float(coordinate)
+        if not math.isfinite(number):
+            raise RuntimeError(f"{provider_name} embedding vector contains a non-finite value")
+        vector.append(number)
+    return vector
 
 
 def _env_positive_int(name: str, default: int) -> int:
