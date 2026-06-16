@@ -364,6 +364,16 @@ export type ProjectMilestoneDTO = {
   updated_at: string
 }
 
+export type ProjectMilestonePayload = {
+  title: string
+  status?: ProjectMilestoneDTO['status']
+  due_date?: string
+  sort_order?: number
+  note?: string
+}
+
+export type ProjectMilestoneUpdatePayload = Partial<ProjectMilestonePayload>
+
 export type ProjectActivityDTO = {
   id: string
   project_id: string
@@ -1087,7 +1097,7 @@ export async function fetchProjectMilestones(projectId: string): Promise<Project
 
 export async function createProjectMilestone(
   projectId: string,
-  payload: { title: string; status?: ProjectMilestoneDTO['status']; due_date?: string; sort_order?: number; note?: string },
+  payload: ProjectMilestonePayload,
 ): Promise<ProjectMilestoneDTO> {
   const { data } = await apiClient.post<ProjectMilestoneDTO>(`/projects/${projectId}/milestones`, payload)
   return data
@@ -1096,7 +1106,7 @@ export async function createProjectMilestone(
 export async function updateProjectMilestone(
   projectId: string,
   milestoneId: string,
-  payload: { title: string; status?: ProjectMilestoneDTO['status']; due_date?: string; sort_order?: number; note?: string },
+  payload: ProjectMilestoneUpdatePayload,
 ): Promise<ProjectMilestoneDTO> {
   const { data } = await apiClient.patch<ProjectMilestoneDTO>(`/projects/${projectId}/milestones/${milestoneId}`, payload)
   return data

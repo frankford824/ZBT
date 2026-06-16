@@ -1,6 +1,10 @@
 package project
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestNormalizeCreateStatusDefaultsOnlyBlankStatus(t *testing.T) {
 	status, err := normalizeCreateStatus(" ")
@@ -95,5 +99,42 @@ func TestNormalizeMilestoneStatusDefaultsOnlyBlankStatus(t *testing.T) {
 
 	if _, err := normalizeMilestoneStatus("unknown"); err != ErrInvalidRequest {
 		t.Fatalf("expected unsupported milestone status to be rejected, got %v", err)
+	}
+}
+
+func TestMergeMilestoneUpdateRequestPreservesOmittedFields(t *testing.T) {
+	dueDate := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	status := " DONE "
+	note := ""
+	merged := mergeMilestoneUpdateRequest(Milestone{
+		Title:     "初验",
+		Status:    "pending",
+		DueDate:   &dueDate,
+		SortOrder: 30,
+		Note:      "原备注",
+	}, UpdateMilestoneRequest{
+		Status: &status,
+		Note:   &note,
+	})
+	if merged.Title != "初验" || merged.DueDate != "2026-09-01" || merged.SortOrder != 30 {
+		t.Fatalf("expected omitted milestone fields to be preserved, got %+v", merged)
+	}
+	normalizedStatus, err := normalizeMilestoneStatus(merged.Status)
+	if err != nil {
+		t.Fatalf("expected merged milestone status to normalize: %v", err)
+	}
+	if normalizedStatus != "done" || merged.Note != "" {
+		t.Fatalf("expected provided milestone fields to be applied, got %+v", merged)
+	}
+}
+
+func TestMergeMilestoneUpdateRequestRejectsBlankProvidedTitle(t *testing.T) {
+	title := " "
+	merged := mergeMilestoneUpdateRequest(Milestone{
+		Title:  "初验",
+		Status: "pending",
+	}, UpdateMilestoneRequest{Title: &title})
+	if strings.TrimSpace(merged.Title) != "" {
+		t.Fatalf("expected provided blank title to win before validation, got %+v", merged)
 	}
 }

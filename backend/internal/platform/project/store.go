@@ -129,7 +129,13 @@ type CreateMilestoneRequest struct {
 	Note      string `json:"note"`
 }
 
-type UpdateMilestoneRequest = CreateMilestoneRequest
+type UpdateMilestoneRequest struct {
+	Title     *string `json:"title"`
+	Status    *string `json:"status"`
+	DueDate   *string `json:"due_date"`
+	SortOrder *int    `json:"sort_order"`
+	Note      *string `json:"note"`
+}
 
 type AddMemberRequest struct {
 	UserID string `json:"user_id"`
@@ -432,26 +438,36 @@ func (s *Store) UpdateMilestone(ctx context.Context, tenantID, userID, projectID
 	if err := validateUUID(milestoneID); err != nil {
 		return Milestone{}, err
 	}
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		return Milestone{}, ErrInvalidRequest
-	}
-	status, err := normalizeMilestoneStatus(req.Status)
-	if err != nil {
-		return Milestone{}, err
-	}
-	dueDate, err := parseOptionalDate(req.DueDate)
-	if err != nil {
-		return Milestone{}, ErrInvalidRequest
-	}
-	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		current, err := scanMilestone(tx.QueryRow(ctx, `
+			select id::text, project_id::text, title, status, due_date, completed_at, sort_order, note, created_at, updated_at
+			from project_milestones
+			where tenant_id = $1 and project_id = $2 and id = $3
+			for update
+		`, tenantID, projectID, milestoneID))
+		if err != nil {
+			return err
+		}
+		merged := mergeMilestoneUpdateRequest(current, req)
+		title := strings.TrimSpace(merged.Title)
+		if title == "" {
+			return ErrInvalidRequest
+		}
+		status, err := normalizeMilestoneStatus(merged.Status)
+		if err != nil {
+			return err
+		}
+		dueDate, err := parseOptionalDate(merged.DueDate)
+		if err != nil {
+			return ErrInvalidRequest
+		}
 		tag, err := tx.Exec(ctx, `
 			update project_milestones
 			set title = $4, status = $5, due_date = $6,
 				completed_at = case when $5 = 'done' and completed_at is null then now() when $5 = 'pending' then null else completed_at end,
 				sort_order = $7, note = $8, updated_at = now()
 			where tenant_id = $1 and project_id = $2 and id = $3
-		`, tenantID, projectID, milestoneID, title, status, dueDate, req.SortOrder, strings.TrimSpace(req.Note))
+		`, tenantID, projectID, milestoneID, title, status, dueDate, merged.SortOrder, strings.TrimSpace(merged.Note))
 		if err != nil {
 			return err
 		}
@@ -1269,6 +1285,32 @@ func normalizeMilestoneStatus(value string) (string, error) {
 	}
 }
 
+func mergeMilestoneUpdateRequest(current Milestone, req UpdateMilestoneRequest) CreateMilestoneRequest {
+	merged := CreateMilestoneRequest{
+		Title:     current.Title,
+		Status:    current.Status,
+		DueDate:   formatOptionalDate(current.DueDate),
+		SortOrder: current.SortOrder,
+		Note:      current.Note,
+	}
+	if req.Title != nil {
+		merged.Title = *req.Title
+	}
+	if req.Status != nil {
+		merged.Status = *req.Status
+	}
+	if req.DueDate != nil {
+		merged.DueDate = *req.DueDate
+	}
+	if req.SortOrder != nil {
+		merged.SortOrder = *req.SortOrder
+	}
+	if req.Note != nil {
+		merged.Note = *req.Note
+	}
+	return merged
+}
+
 func parseOptionalDate(value string) (any, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1279,4 +1321,11 @@ func parseOptionalDate(value string) (any, error) {
 		return nil, err
 	}
 	return parsed, nil
+}
+
+func formatOptionalDate(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.Format("2006-01-02")
 }
