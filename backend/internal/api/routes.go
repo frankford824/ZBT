@@ -241,7 +241,7 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 	})
 	api.GET("/dashboard/summary", rbac.Require("dashboard", rbac.LevelRead), s.dashboardSummary)
 	s.registerSaaSRoutes(api)
-	registerStubs(api)
+	assertRouteSpecsHandled()
 	return router
 }
 
@@ -720,35 +720,17 @@ func customRouteSet() map[string]bool {
 	}
 }
 
-func registerStubs(group *gin.RouterGroup) {
+func assertRouteSpecsHandled() {
 	custom := customRouteSet()
+	missing := make([]string, 0)
 	for _, spec := range routeSpecs {
-		if custom[spec.Method+" "+spec.Path] {
-			continue
+		key := spec.Method + " " + spec.Path
+		if !custom[key] {
+			missing = append(missing, key)
 		}
-		spec := spec
-		handlers := []gin.HandlerFunc{rbac.Require(spec.Module, requiredLevel(spec)), stub(spec)}
-		group.Handle(spec.Method, spec.Path, handlers...)
 	}
-}
-
-func stub(spec routeSpec) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		payload := gin.H{
-			"module":    spec.Module,
-			"method":    spec.Method,
-			"path":      spec.Path,
-			"tenant_id": tenant.FromContext(c.Request.Context()),
-			"params":    c.Params,
-		}
-		if spec.Async {
-			payload["task_id"] = "task-demo"
-			payload["status"] = "queued"
-			c.JSON(http.StatusAccepted, payload)
-			return
-		}
-		payload["status"] = "ok"
-		c.JSON(http.StatusOK, payload)
+	if len(missing) > 0 {
+		panic("routeSpecs missing real handlers: " + strings.Join(missing, ", "))
 	}
 }
 
