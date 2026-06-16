@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -70,5 +71,73 @@ func TestApplyKnowledgeRerankUsesProviderOrderAndFillsRemainder(t *testing.T) {
 func TestTruncateForRerankPreservesRuneBoundaries(t *testing.T) {
 	if got := truncateForRerank("智慧交通ABC", 4); got != "智慧交通" {
 		t.Fatalf("unexpected truncation: %q", got)
+	}
+}
+
+func TestValidateKnowledgeChunksRejectsUnsafeCallbackChunks(t *testing.T) {
+	for name, chunks := range map[string][]ChunkInput{
+		"empty list": {},
+		"empty content": {
+			{Title: "空片段", Content: "   "},
+		},
+		"too many chunks": func() []ChunkInput {
+			items := make([]ChunkInput, maxKnowledgeCallbackChunks+1)
+			for index := range items {
+				items[index] = ChunkInput{Title: "片段", Content: "内容"}
+			}
+			return items
+		}(),
+		"oversized content": {
+			{Title: "片段", Content: strings.Repeat("内", maxKnowledgeChunkContentChars+1)},
+		},
+		"oversized title": {
+			{Title: strings.Repeat("题", maxKnowledgeChunkTitleChars+1), Content: "内容"},
+		},
+		"oversized section": {
+			{Title: "片段", SectionPath: strings.Repeat("章", maxKnowledgeChunkSectionChars+1), Content: "内容"},
+		},
+	} {
+		if err := validateKnowledgeChunks(chunks); err != ErrInvalidRequest {
+			t.Fatalf("expected %s to be rejected, got %v", name, err)
+		}
+	}
+}
+
+func TestValidateKnowledgeChunksAllowsBoundedCallbackChunks(t *testing.T) {
+	chunks := []ChunkInput{
+		{Title: "片段", SectionPath: "章节", Content: strings.Repeat("内", maxKnowledgeChunkContentChars)},
+	}
+
+	if err := validateKnowledgeChunks(chunks); err != nil {
+		t.Fatalf("expected bounded chunk to be accepted, got %v", err)
+	}
+}
+
+func TestKnowledgeChunkMetadataJSONAddsIndexWithoutMutatingInput(t *testing.T) {
+	metadata := map[string]any{"source": "parser"}
+	encoded, err := knowledgeChunkMetadataJSON(metadata, 3)
+	if err != nil {
+		t.Fatalf("expected metadata json: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("expected valid metadata json: %v", err)
+	}
+	if decoded["chunk_index"] != float64(3) || decoded["source"] != "parser" {
+		t.Fatalf("unexpected metadata json: %v", decoded)
+	}
+	if _, ok := metadata["chunk_index"]; ok {
+		t.Fatal("expected input metadata map not to be mutated")
+	}
+}
+
+func TestKnowledgeChunkMetadataJSONRejectsOversizedMetadata(t *testing.T) {
+	_, err := knowledgeChunkMetadataJSON(
+		map[string]any{"memo": strings.Repeat("x", maxKnowledgeChunkMetadataBytes+1)},
+		1,
+	)
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized metadata to be rejected, got %v", err)
 	}
 }

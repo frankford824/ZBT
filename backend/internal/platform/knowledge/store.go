@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
 	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
@@ -28,6 +29,14 @@ var (
 )
 
 const knowledgeProcessSubmitFailureMessage = "知识库文档整理启动失败，请稍后重试"
+
+const (
+	maxKnowledgeCallbackChunks     = 300
+	maxKnowledgeChunkContentChars  = 6000
+	maxKnowledgeChunkTitleChars    = 300
+	maxKnowledgeChunkSectionChars  = 500
+	maxKnowledgeChunkMetadataBytes = 32 * 1024
+)
 
 type Store struct {
 	pool     *pgxpool.Pool
@@ -1425,6 +1434,9 @@ func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx)
 }
 
 func replaceChunks(ctx context.Context, tx pgx.Tx, tenantID, documentID string, chunks []ChunkInput) error {
+	if err := validateKnowledgeChunks(chunks); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `delete from knowledge_chunks where tenant_id = $1 and document_id = $2`, tenantID, documentID); err != nil {
 		return err
 	}
@@ -1441,12 +1453,10 @@ func replaceChunks(ctx context.Context, tx pgx.Tx, tenantID, documentID string, 
 		if sectionPath == "" {
 			sectionPath = title
 		}
-		metadata := chunk.Metadata
-		if metadata == nil {
-			metadata = map[string]any{}
+		metadataJSON, err := knowledgeChunkMetadataJSON(chunk.Metadata, index)
+		if err != nil {
+			return err
 		}
-		metadata["chunk_index"] = index
-		metadataJSON, _ := json.Marshal(metadata)
 		embedding, err := vectorLiteralFromEmbedding(chunk.Embedding)
 		if err != nil {
 			return err
@@ -1462,6 +1472,49 @@ func replaceChunks(ctx context.Context, tx pgx.Tx, tenantID, documentID string, 
 		}
 	}
 	return nil
+}
+
+func validateKnowledgeChunks(chunks []ChunkInput) error {
+	if len(chunks) == 0 || len(chunks) > maxKnowledgeCallbackChunks {
+		return ErrInvalidRequest
+	}
+	usableChunks := 0
+	for _, chunk := range chunks {
+		content := strings.TrimSpace(chunk.Content)
+		if content == "" {
+			continue
+		}
+		usableChunks++
+		if utf8.RuneCountInString(content) > maxKnowledgeChunkContentChars {
+			return ErrInvalidRequest
+		}
+		if utf8.RuneCountInString(strings.TrimSpace(chunk.Title)) > maxKnowledgeChunkTitleChars {
+			return ErrInvalidRequest
+		}
+		if utf8.RuneCountInString(strings.TrimSpace(chunk.SectionPath)) > maxKnowledgeChunkSectionChars {
+			return ErrInvalidRequest
+		}
+	}
+	if usableChunks == 0 {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func knowledgeChunkMetadataJSON(metadata map[string]any, index int) ([]byte, error) {
+	normalized := map[string]any{}
+	for key, value := range metadata {
+		normalized[key] = value
+	}
+	normalized["chunk_index"] = index
+	metadataJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	if len(metadataJSON) > maxKnowledgeChunkMetadataBytes {
+		return nil, ErrInvalidRequest
+	}
+	return metadataJSON, nil
 }
 
 func vectorLiteralFromEmbedding(values []float64) (string, error) {
