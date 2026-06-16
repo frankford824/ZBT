@@ -226,6 +226,41 @@ def test_docx_parser_includes_paragraphs_and_tables() -> None:
     assert result.metadata["parser"] == "python-docx"
     assert "项目总体方案" in text
     assert "工期 | 90天" in text
+    assert result.metadata["docx_paragraph_count"] == 1
+    assert result.metadata["docx_table_count"] == 1
+    assert result.metadata["truncated_after_parse_limit"] is False
+
+
+def test_docx_parser_marks_configured_parse_limits(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_DOCX_PARAGRAPHS", "2")
+    monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_DOCX_TABLE_ROWS", "1")
+    document = Document()
+    document.add_paragraph("第一段方案")
+    document.add_paragraph("第二段方案")
+    document.add_paragraph("第三段方案")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "首行"
+    table.cell(0, 1).text = "保留"
+    table.cell(1, 0).text = "次行"
+    table.cell(1, 1).text = "截断"
+    content = BytesIO()
+    document.save(content)
+
+    result = parse_document(_request("plan.docx"), content.getvalue())
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert "第一段方案" in text
+    assert "第二段方案" in text
+    assert "第三段方案" not in text
+    assert "首行 | 保留" in text
+    assert "次行 | 截断" not in text
+    assert result.metadata["docx_paragraph_limit"] == 2
+    assert result.metadata["docx_paragraph_count"] == 3
+    assert result.metadata["docx_parsed_paragraph_count"] == 2
+    assert result.metadata["docx_table_row_limit"] == 1
+    assert result.metadata["docx_table_row_count"] == 2
+    assert result.metadata["docx_parsed_table_row_count"] == 1
+    assert result.metadata["truncated_after_parse_limit"] is True
 
 
 def test_xlsx_parser_extracts_sheet_rows() -> None:

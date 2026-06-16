@@ -61,7 +61,9 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
         metadata.update(legacy_metadata)
         parser = str(legacy_metadata.get("parser") or "libreoffice-conversion")
     elif "word" in content_type or suffix == ".docx":
-        text, page_count = _parse_docx(content), None
+        text, parse_metadata = _parse_docx(content)
+        page_count = None
+        metadata.update(parse_metadata)
         parser = "python-docx"
     elif "spreadsheet" in content_type or suffix in {".xlsx", ".xlsm"}:
         text, parse_metadata = _parse_xlsx(content)
@@ -330,28 +332,40 @@ def _ocr_provider_name() -> str:
     return os.getenv("OCR_PROVIDER", "http_ocr").strip() or "http_ocr"
 
 
-def _parse_docx(content: bytes) -> str:
+def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:
     document = DocxDocument(BytesIO(content))
     paragraph_limit = _env_int("KNOWLEDGE_PARSE_MAX_DOCX_PARAGRAPHS", 3000)
     table_row_limit = _env_int("KNOWLEDGE_PARSE_MAX_DOCX_TABLE_ROWS", 3000)
     paragraphs: list[str] = []
+    paragraph_count = len(document.paragraphs)
     for paragraph in document.paragraphs[:paragraph_limit]:
         text = paragraph.text.strip()
         if text:
             paragraphs.append(text)
     table_rows: list[str] = []
+    table_count = len(document.tables)
     parsed_table_rows = 0
+    total_table_rows = sum(len(table.rows) for table in document.tables)
     for table_index, table in enumerate(document.tables, start=1):
         for row_index, row in enumerate(table.rows, start=1):
             if parsed_table_rows >= table_row_limit:
                 break
+            parsed_table_rows += 1
             values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
             if values:
                 table_rows.append(f"[Table {table_index} Row {row_index}] " + " | ".join(values))
-                parsed_table_rows += 1
         if parsed_table_rows >= table_row_limit:
             break
-    return "\n\n".join([*paragraphs, *table_rows])
+    return "\n\n".join([*paragraphs, *table_rows]), {
+        "docx_paragraph_count": paragraph_count,
+        "docx_parsed_paragraph_count": min(paragraph_count, paragraph_limit),
+        "docx_paragraph_limit": paragraph_limit,
+        "docx_table_count": table_count,
+        "docx_table_row_count": total_table_rows,
+        "docx_parsed_table_row_count": parsed_table_rows,
+        "docx_table_row_limit": table_row_limit,
+        "truncated_after_parse_limit": paragraph_count > paragraph_limit or total_table_rows > table_row_limit,
+    }
 
 
 def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
@@ -416,10 +430,10 @@ def _parse_pptx(content: bytes) -> tuple[str, dict[str, object]]:
                     if parsed_table_rows >= max_table_rows:
                         truncated = True
                         break
+                    parsed_table_rows += 1
                     values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
                     if values:
                         lines.append(" | ".join(values))
-                        parsed_table_rows += 1
     return "\n".join(lines), {
         "pptx_slide_count": slide_count,
         "pptx_parsed_slide_count": parsed_slides,
@@ -451,7 +465,9 @@ def _parse_legacy_office(
     metadata["legacy_conversion"] = conversion
     if target_suffix == ".docx":
         metadata["parser"] = "libreoffice-python-docx"
-        return _parse_docx(converted), None, metadata
+        text, parse_metadata = _parse_docx(converted)
+        metadata.update(parse_metadata)
+        return text, None, metadata
     if target_suffix == ".xlsx":
         metadata["parser"] = "libreoffice-openpyxl"
         text, parse_metadata = _parse_xlsx(converted)
