@@ -14,6 +14,7 @@ import (
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
+	"github.com/frankford824/ZBT/backend/internal/platform/taskstatus"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -566,7 +567,7 @@ func (s *Store) ApplyAdviceCallback(ctx context.Context, payload CallbackPayload
 			return err
 		}
 		task = current
-		if isTerminalTaskStatus(current.Status) {
+		if !taskstatus.ShouldApplyCallback(current.Status, status) {
 			return nil
 		}
 		resultJSON, _ := json.Marshal(payload.Result)
@@ -746,15 +747,6 @@ func lockAdviceTaskByExternalID(ctx context.Context, tx pgx.Tx, tenantID, extern
 		where tenant_id = $1 and external_task_id = $2 and resource_type = 'cost_project'
 		for update
 	`, tenantID, externalTaskID))
-}
-
-func isTerminalTaskStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "failed", "cancelled":
-		return true
-	default:
-		return false
-	}
 }
 
 func projectSelectSQL() string {
