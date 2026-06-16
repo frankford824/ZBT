@@ -71,6 +71,52 @@ func TestRouteSpecsAreAllHandledByRealRoutes(t *testing.T) {
 	}
 }
 
+func TestBindOptionalJSONAllowsUnknownLengthEmptyBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/optional", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if !bindOptionalJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/optional", strings.NewReader(""))
+	request.ContentLength = -1
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected optional empty body to be accepted, got %d", recorder.Code)
+	}
+}
+
+func TestBindOptionalJSONRejectsMalformedUnknownLengthBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/optional", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if !bindOptionalJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/optional", strings.NewReader("{"))
+	request.ContentLength = -1
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected malformed optional body to be rejected, got %d", recorder.Code)
+	}
+}
+
 func TestLimitRequestBodyRejectsKnownOversizedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

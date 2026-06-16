@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -285,6 +286,20 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 
 func bindJSON(c *gin.Context, target any) bool {
 	if err := c.ShouldBindJSON(target); err != nil {
+		respondBodyReadError(c, err)
+		return false
+	}
+	return true
+}
+
+func bindOptionalJSON(c *gin.Context, target any) bool {
+	if c.Request.ContentLength == 0 {
+		return true
+	}
+	if err := c.ShouldBindJSON(target); err != nil {
+		if errors.Is(err, io.EOF) {
+			return true
+		}
 		respondBodyReadError(c, err)
 		return false
 	}
@@ -1256,10 +1271,8 @@ func (s *server) markNotificationsRead(c *gin.Context) {
 	var req struct {
 		IDs []string `json:"ids"`
 	}
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	userID, _ := c.Get("user_id")
 	updated, err := s.store.MarkNotificationsRead(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), req.IDs)
@@ -1514,10 +1527,8 @@ func (s *server) listBidTemplates(c *gin.Context) {
 
 func (s *server) useBidTemplate(c *gin.Context) {
 	var req bid.UseTemplateRequest
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	result, err := s.bidStore.UseTemplate(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("templateId"), req)
 	respondStatus(c, http.StatusCreated, result, err)
@@ -1583,10 +1594,8 @@ func (s *server) getBidParseResult(c *gin.Context) {
 
 func (s *server) confirmBidParseResult(c *gin.Context) {
 	var req bid.ConfirmParseResultRequest
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	userID, _ := c.Get("user_id")
 	result, err := s.bidStore.ConfirmParseResult(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
@@ -1626,10 +1635,8 @@ func (s *server) getBidMaterialSelection(c *gin.Context) {
 
 func (s *server) updateBidMaterialSelection(c *gin.Context) {
 	var req bid.UpdateMaterialSelectionRequest
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	userID, _ := c.Get("user_id")
 	result, err := s.bidStore.UpdateMaterialSelection(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
@@ -1638,10 +1645,8 @@ func (s *server) updateBidMaterialSelection(c *gin.Context) {
 
 func (s *server) generateBid(c *gin.Context) {
 	var req bid.GenerateBidRequest
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	userID, _ := c.Get("user_id")
 	result, err := s.bidStore.GenerateBid(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
@@ -1860,10 +1865,8 @@ func (s *server) getApproval(c *gin.Context) {
 
 func (s *server) approveApproval(c *gin.Context) {
 	var req platformapproval.DecisionRequest
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	userID, _ := c.Get("user_id")
 	result, err := s.approvalStore.Approve(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
@@ -1872,10 +1875,8 @@ func (s *server) approveApproval(c *gin.Context) {
 
 func (s *server) rejectApproval(c *gin.Context) {
 	var req platformapproval.DecisionRequest
-	if c.Request.ContentLength != 0 {
-		if !bindJSON(c, &req) {
-			return
-		}
+	if !bindOptionalJSON(c, &req) {
+		return
 	}
 	userID, _ := c.Get("user_id")
 	result, err := s.approvalStore.Reject(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
