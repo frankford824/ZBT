@@ -46,17 +46,6 @@ export type LoginSessionPayload = {
   }
 }
 
-const fullPermissions = {
-  dashboard: 'full',
-  tender: 'full',
-  bid: 'full',
-  compliance: 'full',
-  project: 'full',
-  cost: 'full',
-  knowledge: 'full',
-  team: 'full',
-} satisfies Record<string, ModulePermission>
-
 function readStoredSession(): Partial<SessionState> {
   const parsed = getStoredSession()
   return parsed ? toSessionState(parsed) : {}
@@ -93,7 +82,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     id: '',
     name: '',
   },
-  permissions: fullPermissions,
+  permissions: {},
   ...storedSession,
   toggleCollapsed: () =>
     set((state) => {
