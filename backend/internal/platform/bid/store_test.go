@@ -1,6 +1,7 @@
 package bid
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -48,6 +49,47 @@ func TestDefaultTenderStructuredResultCarriesSourceObjectKey(t *testing.T) {
 	}
 	if source["object_key"] != "tenant/bid_tender/file-demo" {
 		t.Fatalf("expected object key in source_file, got %v", source["object_key"])
+	}
+}
+
+func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
+	bidID := "00000000-0000-4000-8000-000000000001"
+	otherBidID := "00000000-0000-4000-8000-000000000002"
+
+	for name, tc := range map[string]struct {
+		bizType string
+		bizID   sql.NullString
+		want    bool
+	}{
+		"unbound bid tender file": {
+			bizType: "bid_tender",
+			bizID:   sql.NullString{},
+			want:    true,
+		},
+		"current bid tender file": {
+			bizType: "bid_tender",
+			bizID:   sql.NullString{String: bidID, Valid: true},
+			want:    true,
+		},
+		"current bid tender file uppercase uuid": {
+			bizType: "bid_tender",
+			bizID:   sql.NullString{String: strings.ToUpper(bidID), Valid: true},
+			want:    true,
+		},
+		"knowledge file": {
+			bizType: "knowledge",
+			bizID:   sql.NullString{},
+			want:    false,
+		},
+		"other bid tender file": {
+			bizType: "bid_tender",
+			bizID:   sql.NullString{String: otherBidID, Valid: true},
+			want:    false,
+		},
+	} {
+		if got := attachableTenderFileAsset(tc.bizType, tc.bizID, bidID); got != tc.want {
+			t.Fatalf("%s: expected %v, got %v", name, tc.want, got)
+		}
 	}
 }
 

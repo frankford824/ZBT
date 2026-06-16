@@ -755,16 +755,20 @@ func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID st
 		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
 			return err
 		}
-		var fileStatus string
+		var fileStatus, fileBizType string
+		var fileBizID sql.NullString
 		if err := tx.QueryRow(ctx, `
-			select status
+			select status, biz_type, biz_id::text
 			from file_assets
 			where tenant_id = $1 and id = $2
-		`, tenantID, fileID).Scan(&fileStatus); err != nil {
+		`, tenantID, fileID).Scan(&fileStatus, &fileBizType, &fileBizID); err != nil {
 			return err
 		}
 		if fileStatus != "ready" {
 			return platformfile.ErrInvalidObjectState
+		}
+		if !attachableTenderFileAsset(fileBizType, fileBizID, bidID) {
+			return ErrInvalidRequest
 		}
 		if _, err := tx.Exec(ctx, `
 			update bid_tender_files
@@ -773,14 +777,20 @@ func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID st
 		`, tenantID, bidID, fileID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
 			update file_assets
 			set biz_type = 'bid_tender',
 				biz_id = $3,
 				updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, fileID, bidID); err != nil {
+				and biz_type = 'bid_tender'
+				and (biz_id is null or biz_id = $3::uuid)
+		`, tenantID, fileID, bidID)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrInvalidRequest
 		}
 		attached, err := scanTenderFile(tx.QueryRow(ctx, `
 			with upserted as (
@@ -810,6 +820,16 @@ func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID st
 		return UploadTenderFileResponse{}, ErrNotFound
 	}
 	return result, err
+}
+
+func attachableTenderFileAsset(bizType string, bizID sql.NullString, bidID string) bool {
+	if strings.TrimSpace(bizType) != "bid_tender" {
+		return false
+	}
+	if !bizID.Valid || strings.TrimSpace(bizID.String) == "" {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(bizID.String), strings.TrimSpace(bidID))
 }
 
 func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string) (ParseTenderResponse, error) {
