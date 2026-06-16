@@ -87,6 +87,52 @@ func TestLimitRequestBodyAllowsSmallBody(t *testing.T) {
 	}
 }
 
+func TestBindJSONMapsUnknownLengthOversizedBodyToPayloadTooLarge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(limitRequestBody(8))
+	router.POST("/payload", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if !bindJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader(`{"name":"oversized"}`))
+	request.ContentLength = -1
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for unknown-length oversized body, got %d", recorder.Code)
+	}
+}
+
+func TestRawBodyReadMapsUnknownLengthOversizedBodyToPayloadTooLarge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(limitRequestBody(8))
+	router.POST("/payload", func(c *gin.Context) {
+		if _, err := c.GetRawData(); err != nil {
+			respondBodyReadError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader("123456789"))
+	request.ContentLength = -1
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for unknown-length oversized raw body, got %d", recorder.Code)
+	}
+}
+
 func TestMaxRequestBodyBytesUsesSafeEnvBounds(t *testing.T) {
 	t.Setenv("API_MAX_BODY_BYTES", "2097152")
 	if got := maxRequestBodyBytes(); got != 2*1024*1024 {

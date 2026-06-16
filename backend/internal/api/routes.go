@@ -283,14 +283,21 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 	}
 }
 
+func bindJSON(c *gin.Context, target any) bool {
+	if err := c.ShouldBindJSON(target); err != nil {
+		respondBodyReadError(c, err)
+		return false
+	}
+	return true
+}
+
 func (s *server) login(c *gin.Context) {
 	var req struct {
 		Email    string `json:"email" binding:"required"`
 		Password string `json:"password" binding:"required"`
 		TenantID string `json:"tenant_id"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	tenantID := req.TenantID
@@ -315,8 +322,7 @@ func (s *server) login(c *gin.Context) {
 
 func (s *server) register(c *gin.Context) {
 	var req saas.RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	session, err := s.store.Register(c.Request.Context(), req)
@@ -742,8 +748,7 @@ func (s *server) listTenders(c *gin.Context) {
 
 func (s *server) createTender(c *gin.Context) {
 	var req platformtender.CreateTenderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -759,8 +764,7 @@ func (s *server) getTender(c *gin.Context) {
 
 func (s *server) updateTender(c *gin.Context) {
 	var req platformtender.UpdateTenderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -807,8 +811,7 @@ func (s *server) listTenderSources(c *gin.Context) {
 
 func (s *server) createTenderSource(c *gin.Context) {
 	var req platformtender.CreateSourceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.tenderStore.CreateSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -817,8 +820,7 @@ func (s *server) createTenderSource(c *gin.Context) {
 
 func (s *server) updateTenderSource(c *gin.Context) {
 	var req platformtender.UpdateSourceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.tenderStore.UpdateSource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -846,8 +848,7 @@ func (s *server) listProjects(c *gin.Context) {
 
 func (s *server) createProject(c *gin.Context) {
 	var req platformproject.CreateProjectRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -862,8 +863,7 @@ func (s *server) getProject(c *gin.Context) {
 
 func (s *server) updateProject(c *gin.Context) {
 	var req platformproject.UpdateProjectRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -882,8 +882,7 @@ func (s *server) deleteProject(c *gin.Context) {
 
 func (s *server) transitionProject(c *gin.Context) {
 	var req platformproject.TransitionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -898,8 +897,7 @@ func (s *server) listProjectMilestones(c *gin.Context) {
 
 func (s *server) createProjectMilestone(c *gin.Context) {
 	var req platformproject.CreateMilestoneRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -909,8 +907,7 @@ func (s *server) createProjectMilestone(c *gin.Context) {
 
 func (s *server) updateProjectMilestone(c *gin.Context) {
 	var req platformproject.UpdateMilestoneRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -930,8 +927,7 @@ func (s *server) deleteProjectMilestone(c *gin.Context) {
 
 func (s *server) addProjectMember(c *gin.Context) {
 	var req platformproject.AddMemberRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -990,8 +986,7 @@ func (s *server) listCostProjects(c *gin.Context) {
 
 func (s *server) createCostProject(c *gin.Context) {
 	var req platformcost.CreateProjectRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.costStore.CreateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1005,8 +1000,7 @@ func (s *server) getCostProject(c *gin.Context) {
 
 func (s *server) updateCostProject(c *gin.Context) {
 	var req platformcost.UpdateProjectRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.costStore.UpdateProject(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1020,8 +1014,7 @@ func (s *server) listCostItems(c *gin.Context) {
 
 func (s *server) createCostItem(c *gin.Context) {
 	var req platformcost.CreateItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.costStore.CreateItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1030,8 +1023,7 @@ func (s *server) createCostItem(c *gin.Context) {
 
 func (s *server) updateCostItem(c *gin.Context) {
 	var req platformcost.UpdateItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.costStore.UpdateItem(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1065,8 +1057,7 @@ func (s *server) createCostReport(c *gin.Context) {
 
 func (s *server) createComplianceCheck(c *gin.Context) {
 	var req platformcompliance.CreateCheckRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.complianceStore.CreateCheck(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1134,8 +1125,7 @@ func (s *server) listComplianceRules(c *gin.Context) {
 
 func (s *server) createComplianceRule(c *gin.Context) {
 	var req platformcompliance.CreateRuleRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.complianceStore.CreateRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1144,8 +1134,7 @@ func (s *server) createComplianceRule(c *gin.Context) {
 
 func (s *server) updateComplianceRule(c *gin.Context) {
 	var req platformcompliance.UpdateRuleRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.complianceStore.UpdateRule(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1170,8 +1159,7 @@ func (s *server) updateTenant(c *gin.Context) {
 	var req struct {
 		Name string `json:"name" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.store.UpdateTenant(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name)
@@ -1190,8 +1178,7 @@ func (s *server) inviteMember(c *gin.Context) {
 		RoleCode        string `json:"role_code"`
 		InitialPassword string `json:"initial_password" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.store.InviteMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Email, req.Name, req.RoleCode, req.InitialPassword)
@@ -1200,8 +1187,7 @@ func (s *server) inviteMember(c *gin.Context) {
 
 func (s *server) updateMember(c *gin.Context) {
 	var req saas.UpdateMemberRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.store.UpdateMember(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1228,8 +1214,7 @@ func (s *server) createRole(c *gin.Context) {
 		Name        string                `json:"name" binding:"required"`
 		Permissions map[string]rbac.Level `json:"permissions"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.store.CreateRole(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Code, req.Name, req.Permissions)
@@ -1241,8 +1226,7 @@ func (s *server) updateRole(c *gin.Context) {
 		Name        string                `json:"name"`
 		Permissions map[string]rbac.Level `json:"permissions"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.store.UpdateRole(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Permissions)
@@ -1269,8 +1253,7 @@ func (s *server) markNotificationsRead(c *gin.Context) {
 		IDs []string `json:"ids"`
 	}
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1351,8 +1334,7 @@ func (s *server) createKnowledgeCategory(c *gin.Context) {
 		Name        string `json:"name" binding:"required"`
 		Description string `json:"description"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.CreateCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name, req.Description)
@@ -1364,8 +1346,7 @@ func (s *server) updateKnowledgeCategory(c *gin.Context) {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.UpdateCategory(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Description)
@@ -1391,8 +1372,7 @@ func (s *server) createKnowledgeTag(c *gin.Context) {
 		Name  string `json:"name" binding:"required"`
 		Color string `json:"color"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.CreateTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.Name, req.Color)
@@ -1404,8 +1384,7 @@ func (s *server) updateKnowledgeTag(c *gin.Context) {
 		Name  string `json:"name"`
 		Color string `json:"color"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.UpdateTag(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req.Name, req.Color)
@@ -1430,8 +1409,7 @@ func (s *server) createKnowledgeDocument(c *gin.Context) {
 	var req struct {
 		FileID string `json:"file_id" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.EnsureDocumentForFile(c.Request.Context(), tenant.FromContext(c.Request.Context()), req.FileID)
@@ -1445,8 +1423,7 @@ func (s *server) getKnowledgeDocument(c *gin.Context) {
 
 func (s *server) updateKnowledgeDocument(c *gin.Context) {
 	var req knowledge.UpdateDocumentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.UpdateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1485,8 +1462,7 @@ func (s *server) knowledgeDocumentReferences(c *gin.Context) {
 
 func (s *server) searchKnowledge(c *gin.Context) {
 	var req knowledge.SearchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1515,8 +1491,7 @@ func (s *server) listKnowledgeTemplates(c *gin.Context) {
 
 func (s *server) createKnowledgeTemplate(c *gin.Context) {
 	var req knowledge.CreateDocumentTemplateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.knowledgeStore.CreateDocumentTemplate(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1536,8 +1511,7 @@ func (s *server) listBidTemplates(c *gin.Context) {
 func (s *server) useBidTemplate(c *gin.Context) {
 	var req bid.UseTemplateRequest
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1552,8 +1526,7 @@ func (s *server) listBids(c *gin.Context) {
 
 func (s *server) createBid(c *gin.Context) {
 	var req bid.CreateDocumentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.bidStore.CreateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1567,8 +1540,7 @@ func (s *server) getBid(c *gin.Context) {
 
 func (s *server) updateBid(c *gin.Context) {
 	var req bid.UpdateDocumentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.bidStore.UpdateDocument(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1586,8 +1558,7 @@ func (s *server) deleteBid(c *gin.Context) {
 
 func (s *server) uploadBidTenderFile(c *gin.Context) {
 	var req bid.UploadTenderFileRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1609,8 +1580,7 @@ func (s *server) getBidParseResult(c *gin.Context) {
 func (s *server) confirmBidParseResult(c *gin.Context) {
 	var req bid.ConfirmParseResultRequest
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1637,8 +1607,7 @@ func (s *server) getBidPartOutline(c *gin.Context) {
 
 func (s *server) updateBidPartOutline(c *gin.Context) {
 	var req bid.UpdatePartOutlineRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1654,8 +1623,7 @@ func (s *server) getBidMaterialSelection(c *gin.Context) {
 func (s *server) updateBidMaterialSelection(c *gin.Context) {
 	var req bid.UpdateMaterialSelectionRequest
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1667,8 +1635,7 @@ func (s *server) updateBidMaterialSelection(c *gin.Context) {
 func (s *server) generateBid(c *gin.Context) {
 	var req bid.GenerateBidRequest
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1766,8 +1733,7 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 
 func (s *server) updateChapterContent(c *gin.Context) {
 	var req bid.UpdateChapterContentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1789,8 +1755,7 @@ func (s *server) regenerateChapter(c *gin.Context) {
 
 func (s *server) chapterAIAction(c *gin.Context) {
 	var req bid.ChapterAIActionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1810,8 +1775,7 @@ func (s *server) chapterDiff(c *gin.Context) {
 
 func (s *server) createBidExport(c *gin.Context) {
 	var req bid.CreateExportRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	userID, _ := c.Get("user_id")
@@ -1855,8 +1819,7 @@ func (s *server) listApprovalChains(c *gin.Context) {
 
 func (s *server) createApprovalChain(c *gin.Context) {
 	var req platformapproval.CreateChainRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.approvalStore.CreateChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), req)
@@ -1865,8 +1828,7 @@ func (s *server) createApprovalChain(c *gin.Context) {
 
 func (s *server) updateApprovalChain(c *gin.Context) {
 	var req platformapproval.UpdateChainRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	result, err := s.approvalStore.UpdateChain(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), req)
@@ -1895,8 +1857,7 @@ func (s *server) getApproval(c *gin.Context) {
 func (s *server) approveApproval(c *gin.Context) {
 	var req platformapproval.DecisionRequest
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1908,8 +1869,7 @@ func (s *server) approveApproval(c *gin.Context) {
 func (s *server) rejectApproval(c *gin.Context) {
 	var req platformapproval.DecisionRequest
 	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
-			respondBadRequest(c)
+		if !bindJSON(c, &req) {
 			return
 		}
 	}
@@ -1920,8 +1880,7 @@ func (s *server) rejectApproval(c *gin.Context) {
 
 func (s *server) presignFileUpload(c *gin.Context) {
 	var req platformfile.PresignUploadRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c)
+	if !bindJSON(c, &req) {
 		return
 	}
 	if !requireFileAccess(c, req.BizType, rbac.LevelFull) {
@@ -2043,7 +2002,7 @@ func aiTaskAccessModule(resourceType, taskType string) string {
 func (s *server) aiTaskCallback(c *gin.Context) {
 	body, err := c.GetRawData()
 	if err != nil {
-		respondBadRequest(c)
+		respondBodyReadError(c, err)
 		return
 	}
 	if !s.verifyCallbackSignature(c.GetHeader("X-ZBT-Timestamp"), c.GetHeader("X-ZBT-Signature"), body) {
@@ -2196,6 +2155,15 @@ func apiError(code, message string) gin.H {
 
 func respondBadRequest(c *gin.Context) {
 	c.JSON(http.StatusBadRequest, apiError("bad_request", "请求内容不完整或格式不正确"))
+}
+
+func respondBodyReadError(c *gin.Context, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		c.JSON(http.StatusRequestEntityTooLarge, apiError("payload_too_large", "请求内容过大"))
+		return
+	}
+	respondBadRequest(c)
 }
 
 func respondUnauthorized(c *gin.Context) {
