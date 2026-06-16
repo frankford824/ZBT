@@ -7,6 +7,8 @@ export type SseHandler<T> = {
   onError?: (error: Error) => void
 }
 
+const sseApiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+
 export function openSse<T>(path: string, handler: SseHandler<T>) {
   const controller = new AbortController()
   void readSse(path, handler, controller.signal)
@@ -69,9 +71,14 @@ function parseSse(raw: string) {
 }
 
 function sseUrl(path: string) {
-  if (/^https?:\/\//.test(path)) return path
-  const baseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
-  return `${baseURL}${path}`
+  const trimmed = path.trim()
+  if (/^https?:\/\//i.test(trimmed)) {
+    return allowedAbsoluteSseURL(trimmed)
+  }
+  if (!isSafeRelativeSsePath(trimmed)) {
+    throw new Error('实时更新暂时不可用，请稍后重试')
+  }
+  return joinBaseAndPath(sseApiBaseURL, trimmed)
 }
 
 async function sseHeaders() {
@@ -90,4 +97,52 @@ async function sseHeaders() {
     headers.set('X-Tenant-ID', session.session.tenant.id)
   }
   return headers
+}
+
+function allowedAbsoluteSseURL(raw: string) {
+  try {
+    const url = new URL(raw)
+    const allowedOrigins = new Set([browserOrigin(), apiOrigin()].filter(Boolean))
+    if (!allowedOrigins.has(url.origin)) {
+      throw new Error('disallowed origin')
+    }
+    return url.toString()
+  } catch {
+    throw new Error('实时更新暂时不可用，请稍后重试')
+  }
+}
+
+function isSafeRelativeSsePath(path: string) {
+  if (!path || !path.startsWith('/') || path.startsWith('//')) return false
+  if (containsUnsafePathCharacter(path)) return false
+  try {
+    const decoded = decodeURIComponent(path)
+    return !decoded.includes('\\') && !decoded.startsWith('//')
+  } catch {
+    return false
+  }
+}
+
+function joinBaseAndPath(baseURL: string, path: string) {
+  return `${baseURL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`
+}
+
+function apiOrigin() {
+  try {
+    return new URL(sseApiBaseURL, browserOrigin() || undefined).origin
+  } catch {
+    return ''
+  }
+}
+
+function browserOrigin() {
+  return typeof window === 'undefined' ? '' : window.location.origin
+}
+
+function containsUnsafePathCharacter(path: string) {
+  for (let index = 0; index < path.length; index += 1) {
+    const code = path.charCodeAt(index)
+    if (code <= 31 || code === 127 || path[index] === '\\') return true
+  }
+  return false
 }

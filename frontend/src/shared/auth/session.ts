@@ -46,10 +46,11 @@ export function expireSessionAndRedirect() {
 }
 
 export function safeReturnPath(raw: string | null | undefined) {
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.startsWith('/login')) {
+  const path = typeof raw === 'string' ? raw.trim() : ''
+  if (!isSafeAppPath(path) || isLoginPath(path)) {
     return '/dashboard'
   }
-  return raw
+  return path
 }
 
 export function shouldRefreshSession(payload: LoginSessionPayload, now = Date.now()) {
@@ -99,6 +100,35 @@ function base64UrlToBase64(value: string) {
   const base64 = value.replace(/-/g, '+').replace(/_/g, '/')
   const padding = base64.length % 4
   return padding ? base64 + '='.repeat(4 - padding) : base64
+}
+
+function isSafeAppPath(path: string) {
+  if (!path || !path.startsWith('/') || path.startsWith('//')) return false
+  if (containsUnsafePathCharacter(path)) return false
+  try {
+    const decoded = decodeURIComponent(path)
+    if (decoded.includes('\\') || decoded.startsWith('//')) return false
+  } catch {
+    return false
+  }
+  return true
+}
+
+function isLoginPath(path: string) {
+  try {
+    const url = new URL(path, 'https://zbt.local')
+    return url.pathname === '/login' || url.pathname.startsWith('/login/')
+  } catch {
+    return path === '/login' || path.startsWith('/login/')
+  }
+}
+
+function containsUnsafePathCharacter(path: string) {
+  for (let index = 0; index < path.length; index += 1) {
+    const code = path.charCodeAt(index)
+    if (code <= 31 || code === 127 || path[index] === '\\') return true
+  }
+  return false
 }
 
 function isUsableSessionPayload(value: Partial<LoginSessionPayload>): value is LoginSessionPayload {
