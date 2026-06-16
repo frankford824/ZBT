@@ -67,6 +67,7 @@ PUBLIC_PATHS = {"/healthz", "/models/health"}
 DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
 DEFAULT_MINIO_ACCESS_KEY = "zbt_minio"
 DEFAULT_MINIO_SECRET_KEY = "zbt_minio_secret"
+MIN_PRODUCTION_SECRET_LENGTH = 16
 DEFAULT_CALLBACK_ALLOWED_HOSTS = {"backend", "localhost", "127.0.0.1", "host.docker.internal"}
 DEFAULT_CALLBACK_MAX_ATTEMPTS = 3
 DEFAULT_CALLBACK_RETRY_DELAY_SECONDS = 0.25
@@ -875,7 +876,7 @@ def safe_output_filename(filename: str, export_type: str) -> str:
 def validate_production_config() -> None:
     if not production_mode():
         return
-    if ai_service_hmac_secret() == DEFAULT_AI_HMAC_SECRET:
+    if insecure_config_value(ai_service_hmac_secret(), DEFAULT_AI_HMAC_SECRET):
         raise RuntimeError("AI_SERVICE_HMAC_SECRET must be set to a non-development value in production")
     if insecure_config_value(os.getenv("MINIO_ACCESS_KEY", DEFAULT_MINIO_ACCESS_KEY), DEFAULT_MINIO_ACCESS_KEY):
         raise RuntimeError("MINIO_ACCESS_KEY must be set to a non-development value in production")
@@ -906,4 +907,4 @@ def allow_mock_providers_in_production() -> bool:
 
 def insecure_config_value(value: str, development_default: str) -> bool:
     value = value.strip()
-    return value == "" or value == development_default
+    return value == "" or value == development_default or len(value) < MIN_PRODUCTION_SECRET_LENGTH

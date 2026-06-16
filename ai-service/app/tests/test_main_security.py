@@ -894,6 +894,14 @@ def test_validate_production_config_rejects_development_secret(monkeypatch) -> N
         validate_production_config()
 
 
+def test_validate_production_config_rejects_short_secret(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "short")
+
+    with pytest.raises(RuntimeError, match="AI_SERVICE_HMAC_SECRET"):
+        validate_production_config()
+
+
 def test_validate_production_config_rejects_development_minio_credentials(monkeypatch) -> None:
     _set_production_security_env(monkeypatch)
     monkeypatch.setenv("MINIO_ACCESS_KEY", DEFAULT_MINIO_ACCESS_KEY)
@@ -950,7 +958,7 @@ def test_validate_production_config_allows_explicit_production_config(monkeypatc
 
 def _set_production_security_env(monkeypatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret")
-    monkeypatch.setenv("MINIO_ACCESS_KEY", "prod-minio-access")
-    monkeypatch.setenv("MINIO_SECRET_KEY", "prod-minio-secret")
+    monkeypatch.setenv("AI_SERVICE_HMAC_SECRET", "prod-ai-secret-value")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "prod-minio-access-value")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "prod-minio-secret-value")
     monkeypatch.setenv("OPENAI_API_KEY", "prod-openai-key")

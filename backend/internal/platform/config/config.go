@@ -11,6 +11,7 @@ const (
 	DefaultJWTSecret           = "dev-only-zbt-jwt-secret"
 	DefaultMinIOAccessKey      = "zbt_minio"
 	DefaultMinIOSecretKey      = "zbt_minio_secret"
+	minProductionSecretLength  = 16
 )
 
 type Config struct {
@@ -88,7 +89,7 @@ func ProductionMode() bool {
 
 func insecureSecret(value, developmentDefault string) bool {
 	value = strings.TrimSpace(value)
-	return value == "" || value == developmentDefault
+	return value == "" || value == developmentDefault || len(value) < minProductionSecretLength
 }
 
 func env(key, fallback string) string {
