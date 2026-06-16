@@ -92,6 +92,42 @@ func TestContentDispositionUsesHeaderSafeFallbackName(t *testing.T) {
 	}
 }
 
+func TestContentDispositionTypeAllowsOnlySafeInlinePreviewTypes(t *testing.T) {
+	for _, contentType := range []string{
+		"application/pdf",
+		"image/png",
+		"image/jpeg",
+		"image/gif",
+		"image/webp",
+		"text/plain; charset=utf-8",
+	} {
+		if got := contentDispositionType(contentType, true); got != "inline" {
+			t.Fatalf("expected safe preview type %q to be inline, got %q", contentType, got)
+		}
+	}
+}
+
+func TestContentDispositionTypeFallsBackToAttachmentForUnsafePreviewTypes(t *testing.T) {
+	for _, contentType := range []string{
+		"text/html",
+		"image/svg+xml",
+		"application/xml",
+		"application/octet-stream",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"",
+	} {
+		if got := contentDispositionType(contentType, true); got != "attachment" {
+			t.Fatalf("expected unsafe preview type %q to be attachment, got %q", contentType, got)
+		}
+	}
+}
+
+func TestContentDispositionTypeUsesAttachmentForDownloads(t *testing.T) {
+	if got := contentDispositionType("application/pdf", false); got != "attachment" {
+		t.Fatalf("expected download disposition to be attachment, got %q", got)
+	}
+}
+
 func TestNormalizeContentTypeDefaultsAndRejectsOversizedValues(t *testing.T) {
 	contentType, err := normalizeContentType(" ")
 	if err != nil {

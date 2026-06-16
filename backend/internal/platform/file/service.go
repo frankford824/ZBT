@@ -346,10 +346,7 @@ func (s *Service) DownloadURL(ctx context.Context, tenantID, fileID string, prev
 	}
 
 	reqParams := make(url.Values)
-	dispositionType := "attachment"
-	if preview {
-		dispositionType = "inline"
-	}
+	dispositionType := contentDispositionType(asset.ContentType, preview)
 	reqParams.Set("response-content-type", asset.ContentType)
 	reqParams.Set("response-content-disposition", contentDisposition(dispositionType, asset.Filename))
 	downloadURL, err := s.public.PresignedGetObject(ctx, s.bucket, asset.objectKey, presignTTL, reqParams)
@@ -520,6 +517,28 @@ func contentDisposition(dispositionType, filename string) string {
 	asciiName := headerFallbackFilename(cleaned)
 	encoded := url.PathEscape(cleaned)
 	return fmt.Sprintf(`%s; filename="%s"; filename*=UTF-8''%s`, dispositionType, asciiName, encoded)
+}
+
+func contentDispositionType(contentType string, preview bool) string {
+	if preview && safeInlineContentType(contentType) {
+		return "inline"
+	}
+	return "attachment"
+}
+
+func safeInlineContentType(contentType string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch mediaType {
+	case "application/pdf",
+		"image/png",
+		"image/jpeg",
+		"image/gif",
+		"image/webp",
+		"text/plain":
+		return true
+	default:
+		return false
+	}
 }
 
 func stripControlChars(value string) string {
