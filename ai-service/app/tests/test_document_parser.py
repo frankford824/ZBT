@@ -190,6 +190,19 @@ def test_pptx_parser_extracts_slide_text() -> None:
     assert "里程碑计划" in text
 
 
+def test_parse_document_marks_chunk_limit_truncation(monkeypatch) -> None:
+    monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_CHUNKS", "2")
+    content = ("\n".join(f"段落 {index} " + "内容" * 40 for index in range(80))).encode()
+
+    result = parse_document(_request("large.txt"), content)
+
+    assert len(result.chunks) == 2
+    assert result.metadata["chunk_count"] == 2
+    assert result.metadata["chunk_limit"] == 2
+    assert result.metadata["truncated_after_chunk_limit"] is True
+    assert result.chunks[-1].metadata["truncated_after_chunk_limit"] is True
+
+
 def test_timeout_env_parsing_falls_back_for_invalid_values(monkeypatch) -> None:
     monkeypatch.setenv("OCR_HTTP_TIMEOUT_S", "bad")
     assert _env_int("OCR_HTTP_TIMEOUT_S", 120) == 120

@@ -80,13 +80,18 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
         text, page_count = _parse_text(content), None
         parser = "plain-text"
 
-    chunks = _chunk_text(text, payload.filename, page_count)
+    chunk_limit = _env_int("KNOWLEDGE_PARSE_MAX_CHUNKS", 300)
+    chunks = _chunk_text(text, payload.filename, page_count, chunk_limit)
     summary = _summary(text, payload.filename)
     metadata.update(
         {
             "parser": parser,
             "page_count": page_count,
             "chunk_count": len(chunks),
+            "chunk_limit": chunk_limit,
+            "truncated_after_chunk_limit": any(
+                bool(chunk.metadata.get("truncated_after_chunk_limit")) for chunk in chunks
+            ),
         }
     )
     return KnowledgeProcessResult(
@@ -368,7 +373,12 @@ def _cell_text(value: object) -> str:
     return str(value).strip()
 
 
-def _chunk_text(text: str, filename: str, page_count: int | None) -> list[KnowledgeChunk]:
+def _chunk_text(
+    text: str,
+    filename: str,
+    page_count: int | None,
+    max_chunks: int,
+) -> list[KnowledgeChunk]:
     normalized = "\n".join(line.strip() for line in text.splitlines() if line.strip())
     if not normalized:
         return [
@@ -383,7 +393,7 @@ def _chunk_text(text: str, filename: str, page_count: int | None) -> list[Knowle
     chunks: list[KnowledgeChunk] = []
     max_chars = 1200
     cursor = 0
-    while cursor < len(normalized):
+    while cursor < len(normalized) and len(chunks) < max_chunks:
         end = min(len(normalized), cursor + max_chars)
         if end < len(normalized):
             boundary = normalized.rfind("\n", cursor, end)
@@ -405,6 +415,9 @@ def _chunk_text(text: str, filename: str, page_count: int | None) -> list[Knowle
                 )
             )
         cursor = max(end, cursor + 1)
+    if cursor < len(normalized) and chunks:
+        chunks[-1].metadata["truncated_after_chunk_limit"] = True
+        chunks[-1].metadata["remaining_chars_estimate"] = len(normalized) - cursor
     return chunks
 
 
