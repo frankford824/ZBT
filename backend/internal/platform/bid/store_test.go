@@ -3,6 +3,7 @@ package bid
 import (
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -203,6 +204,55 @@ func TestExportAttachmentObjectKeysDedupesObjectBackedAttachments(t *testing.T) 
 	for index := range want {
 		if got[index] != want[index] {
 			t.Fatalf("unexpected object keys: got %v want %v", got, want)
+		}
+	}
+}
+
+func TestExportCallbackFileResultValidatesSizeAndContentType(t *testing.T) {
+	sizeBytes, contentType, err := exportCallbackFileResult("pdf", map[string]any{
+		"size_bytes":   float64(128),
+		"content_type": "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("expected valid pdf callback result: %v", err)
+	}
+	if sizeBytes != 128 || contentType != pdfContentType {
+		t.Fatalf("unexpected normalized callback result: size=%d contentType=%q", sizeBytes, contentType)
+	}
+
+	sizeBytes, contentType, err = exportCallbackFileResult("zip", map[string]any{
+		"size_bytes": json.Number("256"),
+	})
+	if err != nil {
+		t.Fatalf("expected missing content type to default for zip: %v", err)
+	}
+	if sizeBytes != 256 || contentType != zipContentType {
+		t.Fatalf("unexpected zip callback result: size=%d contentType=%q", sizeBytes, contentType)
+	}
+}
+
+func TestExportCallbackFileResultRejectsUnsafeValues(t *testing.T) {
+	for name, result := range map[string]map[string]any{
+		"negative size": {
+			"size_bytes": float64(-1),
+		},
+		"fractional size": {
+			"size_bytes": float64(1.5),
+		},
+		"oversized json integer": {
+			"size_bytes": float64(maxExactJSONInteger) + 1,
+		},
+		"wrong content type": {
+			"size_bytes":   float64(128),
+			"content_type": "text/html",
+		},
+		"non string content type": {
+			"size_bytes":   float64(128),
+			"content_type": 42,
+		},
+	} {
+		if _, _, err := exportCallbackFileResult("docx", result); err != ErrInvalidRequest {
+			t.Fatalf("expected %s to be rejected, got %v", name, err)
 		}
 	}
 }

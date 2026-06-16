@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -39,6 +40,7 @@ const (
 	maxExportAttachmentCount            = 50
 	maxExportInlineAttachmentBytes      = 20 * 1024 * 1024
 	maxExportInlineAttachmentTotalBytes = 50 * 1024 * 1024
+	maxExactJSONInteger                 = int64(1<<53 - 1)
 )
 
 type Store struct {
@@ -2278,16 +2280,17 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			}
 		case "bid_export":
 			if status == "done" {
-				sizeBytes := int64(0)
-				if value, ok := payload.Result["size_bytes"].(float64); ok {
-					sizeBytes = int64(value)
+				var exportType string
+				if err := tx.QueryRow(ctx, `
+					select export_type
+					from bid_exports
+					where tenant_id = $1 and id = $2
+				`, payload.TenantID, task.ResourceID).Scan(&exportType); err != nil {
+					return err
 				}
-				contentType := ""
-				if value, ok := payload.Result["content_type"].(string); ok {
-					contentType = strings.TrimSpace(value)
-				}
-				if contentType == "" {
-					contentType = docxContentType
+				sizeBytes, contentType, err := exportCallbackFileResult(exportType, payload.Result)
+				if err != nil {
+					return err
 				}
 				if _, err := tx.Exec(ctx, `
 					update file_assets
@@ -4413,6 +4416,64 @@ func contentTypeForExport(exportType string) string {
 		return pdfContentType
 	}
 	return docxContentType
+}
+
+func exportCallbackFileResult(exportType string, result map[string]any) (int64, string, error) {
+	sizeBytes, ok := exportCallbackSizeBytes(result["size_bytes"])
+	if !ok {
+		return 0, "", ErrInvalidRequest
+	}
+	expectedContentType := contentTypeForExport(exportType)
+	contentType := expectedContentType
+	if rawContentType, exists := result["content_type"]; exists && rawContentType != nil {
+		value, ok := rawContentType.(string)
+		if !ok {
+			return 0, "", ErrInvalidRequest
+		}
+		contentType = strings.TrimSpace(value)
+		if contentType == "" {
+			contentType = expectedContentType
+		}
+	}
+	if !strings.EqualFold(contentType, expectedContentType) {
+		return 0, "", ErrInvalidRequest
+	}
+	return sizeBytes, expectedContentType, nil
+}
+
+func exportCallbackSizeBytes(value any) (int64, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return 0, true
+	case int:
+		if typed < 0 {
+			return 0, false
+		}
+		return int64(typed), true
+	case int32:
+		if typed < 0 {
+			return 0, false
+		}
+		return int64(typed), true
+	case int64:
+		if typed < 0 {
+			return 0, false
+		}
+		return typed, true
+	case float64:
+		if typed < 0 || typed > float64(maxExactJSONInteger) || math.IsNaN(typed) || math.IsInf(typed, 0) || math.Trunc(typed) != typed {
+			return 0, false
+		}
+		return int64(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil || parsed < 0 {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }
 
 func normalizeTaskStatus(status string) string {
