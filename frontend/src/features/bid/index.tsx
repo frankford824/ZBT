@@ -1186,7 +1186,7 @@ function exportTypeLabel(row: BidExportDTO, partCode: string) {
 }
 
 function exportStatusTag(value: BidExportDTO['status']) {
-  const color = value === 'done' ? 'green' : value === 'failed' ? 'red' : 'blue'
+  const color = value === 'done' ? 'green' : value === 'failed' || value === 'cancelled' ? 'red' : 'blue'
   const labels: Record<BidExportDTO['status'], string> = {
     queued: '等待生成',
     running: '生成中',
