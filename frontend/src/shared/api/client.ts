@@ -1,17 +1,36 @@
-import axios, { isAxiosError } from 'axios'
+import axios, { AxiosHeaders, isAxiosError } from 'axios'
 import type { LoginSessionPayload, ModulePermission, Tenant } from '../../app/store/session'
-import { expireSessionAndRedirect, getStoredSession } from '../auth/session'
+import { expireSessionAndRedirect, getStoredSession, shouldRefreshSession, storeSession } from '../auth/session'
+
+const apiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
+  baseURL: apiBaseURL,
   timeout: 15_000,
 })
 
-apiClient.interceptors.request.use((config) => {
-  const session = getStoredSession()
+const authRefreshClient = axios.create({
+  baseURL: apiBaseURL,
+  timeout: 15_000,
+})
+
+let refreshInFlight: Promise<LoginSessionPayload> | null = null
+
+apiClient.interceptors.request.use(async (config) => {
+  let session = getStoredSession()
+  if (session && shouldRefreshSession(session) && !isAuthSessionRequest(config.url)) {
+    try {
+      session = await refreshStoredSession(session)
+    } catch {
+      expireSessionAndRedirect()
+      throw new Error('登录状态已过期，请重新登录')
+    }
+  }
   if (session) {
-    config.headers.set('Authorization', `Bearer ${session.access_token}`)
-    config.headers.set('X-Tenant-ID', session.session.tenant.id)
+    const headers = AxiosHeaders.from(config.headers)
+    headers.set('Authorization', `Bearer ${session.access_token}`)
+    headers.set('X-Tenant-ID', session.session.tenant.id)
+    config.headers = headers
   }
   return config
 })
@@ -28,6 +47,31 @@ apiClient.interceptors.response.use(
     return Promise.reject(error)
   },
 )
+
+function refreshStoredSession(session: LoginSessionPayload) {
+  if (!refreshInFlight) {
+    refreshInFlight = authRefreshClient
+      .post<LoginSessionPayload>(
+        '/auth/refresh',
+        undefined,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            'X-Tenant-ID': session.session.tenant.id,
+          },
+        },
+      )
+      .then((response) => storeSession(response.data))
+      .finally(() => {
+        refreshInFlight = null
+      })
+  }
+  return refreshInFlight
+}
+
+function isAuthSessionRequest(url: string | undefined) {
+  return Boolean(url && /^\/?auth\/(login|register|refresh|logout)\b/.test(url))
+}
 
 type ApiErrorBody = {
   error?: unknown

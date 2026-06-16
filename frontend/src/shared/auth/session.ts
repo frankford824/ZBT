@@ -1,6 +1,7 @@
 import type { LoginSessionPayload } from '../../app/store/session'
 
 export const sessionStorageKey = 'zbt.session'
+export const sessionRefreshLeewayMs = 2 * 60 * 1000
 
 let loginRedirectInFlight = false
 
@@ -9,15 +10,25 @@ export function getStoredSession() {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as Partial<LoginSessionPayload>
-    if (!isUsableSessionPayload(parsed)) {
+    if (!isUsableSessionPayload(parsed) || isSessionExpired(parsed)) {
       localStorage.removeItem(sessionStorageKey)
       return null
     }
-    return parsed
+    const normalized = normalizeSession(parsed)
+    if (normalized.expires_at !== parsed.expires_at) {
+      localStorage.setItem(sessionStorageKey, JSON.stringify(normalized))
+    }
+    return normalized
   } catch {
     localStorage.removeItem(sessionStorageKey)
     return null
   }
+}
+
+export function storeSession(payload: LoginSessionPayload) {
+  const normalized = normalizeSession(payload)
+  localStorage.setItem(sessionStorageKey, JSON.stringify(normalized))
+  return normalized
 }
 
 export function clearStoredSession() {
@@ -39,6 +50,55 @@ export function safeReturnPath(raw: string | null | undefined) {
     return '/dashboard'
   }
   return raw
+}
+
+export function shouldRefreshSession(payload: LoginSessionPayload, now = Date.now()) {
+  const expiresAt = sessionExpiresAtMs(payload)
+  return Boolean(expiresAt && expiresAt > now && expiresAt - now <= sessionRefreshLeewayMs)
+}
+
+export function isSessionExpired(payload: LoginSessionPayload, now = Date.now()) {
+  const expiresAt = sessionExpiresAtMs(payload)
+  return Boolean(expiresAt && expiresAt <= now)
+}
+
+function normalizeSession(payload: LoginSessionPayload, now = Date.now()): LoginSessionPayload {
+  const expiresAt = sessionExpiresAtMs(payload, now)
+  if (!expiresAt) return payload
+  return { ...payload, expires_at: new Date(expiresAt).toISOString() }
+}
+
+function sessionExpiresAtMs(payload: Partial<LoginSessionPayload>, now = Date.now()) {
+  const explicit = parseDateMs(payload.expires_at)
+  if (explicit) return explicit
+  if (typeof payload.expires_in === 'number' && Number.isFinite(payload.expires_in) && payload.expires_in > 0) {
+    return now + payload.expires_in * 1000
+  }
+  return jwtExpiresAtMs(payload.access_token)
+}
+
+function parseDateMs(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return 0
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function jwtExpiresAtMs(token: unknown) {
+  if (typeof token !== 'string') return 0
+  const payload = token.split('.')[1]
+  if (!payload) return 0
+  try {
+    const decoded = JSON.parse(globalThis.atob(base64UrlToBase64(payload))) as { exp?: unknown }
+    return typeof decoded.exp === 'number' && Number.isFinite(decoded.exp) ? decoded.exp * 1000 : 0
+  } catch {
+    return 0
+  }
+}
+
+function base64UrlToBase64(value: string) {
+  const base64 = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padding = base64.length % 4
+  return padding ? base64 + '='.repeat(4 - padding) : base64
 }
 
 function isUsableSessionPayload(value: Partial<LoginSessionPayload>): value is LoginSessionPayload {

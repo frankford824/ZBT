@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { clearStoredSession, getStoredSession, sessionStorageKey } from '../../shared/auth/session'
+import { clearStoredSession, getStoredSession, storeSession } from '../../shared/auth/session'
 
 export type ModulePermission = 'none' | 'read' | 'full'
 
@@ -30,6 +30,9 @@ type SessionState = {
 
 export type LoginSessionPayload = {
   access_token: string
+  token_type?: string
+  expires_in?: number
+  expires_at?: string
   session: {
     user: {
       id: string
@@ -91,19 +94,13 @@ export const useSessionStore = create<SessionState>((set) => ({
       return { collapsed: next }
     }),
   setSession: (payload) => {
-    localStorage.setItem(sessionStorageKey, JSON.stringify(payload))
-    set(toSessionState(payload))
+    const stored = storeSession(payload)
+    set(toSessionState(stored))
   },
   setTenant: (tenant) => {
-    const raw = localStorage.getItem(sessionStorageKey)
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as LoginSessionPayload
-        parsed.session.tenant = tenant
-        localStorage.setItem(sessionStorageKey, JSON.stringify(parsed))
-      } catch {
-        clearStoredSession()
-      }
+    const stored = getStoredSession()
+    if (stored) {
+      storeSession({ ...stored, session: { ...stored.session, tenant } })
     }
     set({ tenant })
   },

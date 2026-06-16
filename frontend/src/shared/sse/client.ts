@@ -1,4 +1,5 @@
-import { expireSessionAndRedirect, getStoredSession } from '../auth/session'
+import { refreshSession } from '../api/client'
+import { expireSessionAndRedirect, getStoredSession, shouldRefreshSession } from '../auth/session'
 
 export type SseHandler<T> = {
   onMessage: (data: T, event: string) => void
@@ -15,7 +16,7 @@ export function openSse<T>(path: string, handler: SseHandler<T>) {
 async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSignal) {
   try {
     const response = await fetch(sseUrl(path), {
-      headers: sseHeaders(),
+      headers: await sseHeaders(),
       signal,
     })
     if (response.status === 401) {
@@ -73,9 +74,17 @@ function sseUrl(path: string) {
   return `${baseURL}${path}`
 }
 
-function sseHeaders() {
+async function sseHeaders() {
   const headers = new Headers({ Accept: 'text/event-stream' })
-  const session = getStoredSession()
+  let session = getStoredSession()
+  if (session && shouldRefreshSession(session)) {
+    try {
+      session = await refreshSession()
+    } catch {
+      expireSessionAndRedirect()
+      throw new Error('登录状态已过期，请重新登录')
+    }
+  }
   if (session) {
     headers.set('Authorization', `Bearer ${session.access_token}`)
     headers.set('X-Tenant-ID', session.session.tenant.id)
