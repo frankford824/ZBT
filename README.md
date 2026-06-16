@@ -73,14 +73,15 @@ docker compose exec -T ai-service python -m pytest app/tests
 
 后端启动会自动执行嵌入式 goose 迁移。迁移连接使用 `MIGRATION_DATABASE_URL`，业务连接使用非超级账号 `DATABASE_URL=postgres://zbt_app:zbt_app@postgres:5432/zbt?sslmode=disable`，用于确保 RLS 在应用查询中真实生效。
 
-AI 模型名称和 Provider 路由通过 `MODEL_ROUTING_FILE` 指向的 YAML 配置，不写死在代码中。Router 当前支持 `mock` 和 OpenAI-compatible Provider；DeepSeek、DashScope、OpenAI 兼容网关可通过 YAML provider 配置和对应 `*_API_KEY` / `*_BASE_URL` 环境变量启用。Docker 默认路径为：
+AI 模型名称和 Provider 路由通过 `MODEL_ROUTING_FILE` 指向的 YAML 配置，不写死在代码中。Router 当前支持 `mock`、本地管线和 OpenAI-compatible Provider；DeepSeek、DashScope、OpenAI 兼容网关可通过 YAML provider 配置和对应 `*_API_KEY` / `*_BASE_URL` 环境变量启用。随仓路由默认以 OpenAI-compatible Provider 为主路径，MockProvider 只作为无 Key 本地验收的显式降级。Docker 默认路径为：
 
 ```bash
 MODEL_ROUTING_FILE=./app/config/model_routing.yaml
-USE_MOCK_PROVIDERS=true
+USE_MOCK_PROVIDERS=false
+ALLOW_MOCK_FALLBACK=true
 ```
 
-没有真实 API Key 时，MockProvider 可以跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。切换真实 Provider 时，可直接编辑 `model_routing.yaml`；也可以设置 `USE_MOCK_PROVIDERS=false`，并配置 `AI_LLM_PROVIDER` / `AI_LLM_MODEL`、`AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL`、`AI_RERANK_PROVIDER` / `AI_RERANK_MODEL`。此模式下未配置真实 provider/model 会启动失败；真实 provider 不可用时只会走显式 fallback，不会静默回退 mock。
+没有真实 API Key 时，MockProvider 可以作为显式 fallback 跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路；配置 Key 后会优先走真实 Provider。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。切换真实 Provider 时，可直接编辑 `model_routing.yaml`；也可以配置 `AI_LLM_PROVIDER` / `AI_LLM_MODEL`、`AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL`、`AI_RERANK_PROVIDER` / `AI_RERANK_MODEL` 覆盖每类任务的 provider/model。生产环境必须设置 `USE_MOCK_PROVIDERS=false` 和 `ALLOW_MOCK_FALLBACK=false`；真实 Provider 不可用时只会走显式 fallback，不会静默回退 mock。
 
 AI 调用成本通过后端环境变量 `AI_MODEL_PRICING_JSON` 配置，例如：
 

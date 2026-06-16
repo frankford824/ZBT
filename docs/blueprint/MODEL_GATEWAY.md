@@ -14,9 +14,9 @@ OCRProvider：parse_pdf、parse_image、extract_layout、extract_tables、health
 
 ModelRouter：resolve、fallback、log_call、enforce_quota。
 
-当前已落地 `/embeddings/knowledge`，Go 后端在知识库搜索时调用该端点获取 query embedding。该端点通过 `knowledge_embedding` 路由解析 Provider；默认开发模式使用 Mock embedding，设置 `USE_MOCK_PROVIDERS=false` 并配置 `AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL` 后可切到 OpenAI-compatible、DashScope 或 Local BGE。
+当前已落地 `/embeddings/knowledge`，Go 后端在知识库搜索时调用该端点获取 query embedding。该端点通过 `knowledge_embedding` 路由解析 Provider；随仓配置以 OpenAI-compatible embedding 为主路径，未配置真实 Key 时才走显式 Mock fallback。`AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL` 可覆盖到 OpenAI-compatible、DashScope 或 Local BGE。
 
-当前已落地 `/rerank/knowledge`，Go 后端在知识库搜索完成 RRF 融合后调用该端点精排候选。该端点通过 `knowledge_rerank` 路由解析 RerankProvider；默认开发模式使用 Mock rerank，设置 `USE_MOCK_PROVIDERS=false` 并配置 `AI_RERANK_PROVIDER` / `AI_RERANK_MODEL` 后可切到真实 rerank provider。
+当前已落地 `/rerank/knowledge`，Go 后端在知识库搜索完成 RRF 融合后调用该端点精排候选。该端点通过 `knowledge_rerank` 路由解析 RerankProvider；随仓配置以 OpenAI-compatible Provider 为主路径，未配置真实 Key 时才走显式 Mock fallback。`AI_RERANK_PROVIDER` / `AI_RERANK_MODEL` 可覆盖到真实 rerank provider。
 
 ## Provider 类型
 

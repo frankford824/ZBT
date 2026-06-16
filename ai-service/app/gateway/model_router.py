@@ -52,10 +52,10 @@ class ModelRouter:
     def resolve_candidates(self, task_type: str, tenant_id: str) -> list[RouteTarget]:
         _ = tenant_id
         candidates = [self.config["routes"][task_type]["primary"], *self.config["routes"][task_type].get("fallback", [])]
-        primary_provider = str(candidates[0]["provider"])
+        candidate_targets = [self._route_target(task_type, route) for route in candidates]
+        primary_provider = candidate_targets[0].provider
         targets: list[RouteTarget] = []
-        for route in candidates:
-            target = self._route_target(route)
+        for target in candidate_targets:
             provider = self.providers.get(target.provider)
             if provider is not None and provider.health_check():
                 if target.provider != primary_provider:
@@ -67,7 +67,7 @@ class ModelRouter:
         raise RuntimeError(f"no configured provider is available for {task_type}: {provider_names}")
 
     def fallback(self, task_type: str) -> list[RouteTarget]:
-        return [RouteTarget(**item) for item in self.config["routes"][task_type].get("fallback", [])]
+        return [self._route_target(task_type, item) for item in self.config["routes"][task_type].get("fallback", [])]
 
     def get_llm(self, task_type: str, tenant_id: str) -> object:
         target = self.resolve(task_type, tenant_id)
@@ -105,10 +105,24 @@ class ModelRouter:
                     mock_routes.append(f"{task_type}.fallback[{index}]")
         return mock_routes
 
-    def _route_target(self, route: dict[str, Any]) -> RouteTarget:
+    def _route_target(self, task_type: str, route: dict[str, Any]) -> RouteTarget:
+        provider = str(route["provider"]).strip()
+        model = str(route.get("model") or "").strip()
+        route_kind = self._route_kind(task_type)
+        if route_kind and provider not in {"mock", "local"}:
+            provider = (
+                self._route_env(task_type, "PROVIDER")
+                or os.getenv(f"AI_{route_kind}_PROVIDER", "")
+                or provider
+            ).strip()
+            model = (
+                self._route_env(task_type, "MODEL")
+                or os.getenv(f"AI_{route_kind}_MODEL", "")
+                or model
+            ).strip()
         return RouteTarget(
-            provider=route["provider"],
-            model=route["model"],
+            provider=provider,
+            model=model,
             temperature=route.get("temperature"),
             output=route.get("output"),
             schema_name=route.get("schema"),
@@ -171,6 +185,13 @@ class ModelRouter:
 
     def _apply_provider_mode(self, config: dict[str, Any]) -> dict[str, Any]:
         effective = deepcopy(config)
+        allow_mock_fallback = self._allow_mock_fallback()
+        if not allow_mock_fallback:
+            for route in effective.get("routes", {}).values():
+                fallback = route.get("fallback", [])
+                if isinstance(fallback, list):
+                    route["fallback"] = [item for item in fallback if item.get("provider") != "mock"]
+
         if os.getenv("USE_MOCK_PROVIDERS", "true").strip().lower() not in {"0", "false", "no"}:
             return effective
 
@@ -195,11 +216,6 @@ class ModelRouter:
             primary["provider"] = provider
             primary["model"] = model
             fallback = route.setdefault("fallback", [])
-            allow_mock_fallback = os.getenv("ALLOW_MOCK_FALLBACK", "true").strip().lower() not in {
-                "0",
-                "false",
-                "no",
-            }
             if allow_mock_fallback and not any(item.get("provider") == "mock" for item in fallback):
                 fallback.append(mock_primary)
         return effective
@@ -218,3 +234,10 @@ class ModelRouter:
     def _route_env(self, task_type: str, suffix: str) -> str:
         key = task_type.upper().replace("-", "_") + "_" + suffix
         return os.getenv(key, "")
+
+    def _allow_mock_fallback(self) -> bool:
+        return os.getenv("ALLOW_MOCK_FALLBACK", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+        }

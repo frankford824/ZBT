@@ -48,7 +48,7 @@ knowledge_documents、knowledge_categories、knowledge_tags、knowledge_document
 
 `knowledge_documents` 关联 `file_assets`，记录文档标题、类型、分类、解析状态、摘要和元数据。`knowledge_categories` / `knowledge_tags` 支撑文档库分类树和标签管理，`knowledge_document_tags` 保存文档与标签关系。`ai_tasks` 记录 Go 编排的 AI/文档处理任务，Python AI 服务只返回任务状态或回调结果，最终由 Go 验签后更新业务状态。
 
-`knowledge_chunks` 保存解析切片正文、页码、section_path、metadata 和 `embedding vector(1024)`。当前实现使用 Python MockProvider 生成 embedding，Go 回调写入 pgvector，并通过 `idx_knowledge_chunks_embedding_hnsw` 使用 HNSW cosine 索引支撑租户内语义搜索。`POST /knowledge/search` 会分别召回 pgvector 候选和全文关键词候选，RRF 融合后调用 RerankProvider 精排。
+`knowledge_chunks` 保存解析切片正文、页码、section_path、metadata 和 `embedding vector(1024)`。当前实现通过 Python AI 服务的 `knowledge_embedding` 路由生成 embedding，随仓配置优先使用 OpenAI-compatible Provider，未配置真实 Key 时才走显式 Mock fallback；Go 回调写入 pgvector，并通过 `idx_knowledge_chunks_embedding_hnsw` 使用 HNSW cosine 索引支撑租户内语义搜索。`POST /knowledge/search` 会分别召回 pgvector 候选和全文关键词候选，RRF 融合后调用 RerankProvider 精排。
 
 `knowledge_references` 是 AI 生成内容引用知识库的反向索引。章节生成引用真实 chunk 时写入 `source_document_id`、`chapter_id`、`chunk_id` 和解析 metadata，`GET /knowledge/documents/:id/references` 据此展示文档被哪些标书章节引用。
 

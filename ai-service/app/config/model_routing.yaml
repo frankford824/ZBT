@@ -21,27 +21,40 @@ providers:
 routes:
   tender_parse:
     primary:
-      provider: mock
-      model: configurable-high-quality-json-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.1
       output: json
       schema: TenderParseResult
     fallback:
       - provider: mock
         model: fallback-json-model
+        temperature: 0.1
+        output: json
+        schema: TenderParseResult
         timeout_s: 180
   outline_generate:
     primary:
-      provider: mock
-      model: configurable-json-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.2
       output: json
       schema: BidOutline
+    fallback:
+      - provider: mock
+        model: configurable-json-model
+        temperature: 0.2
+        output: json
+        schema: BidOutline
   knowledge_embedding:
     primary:
-      provider: mock
-      model: configurable-embedding-model
+      provider: openai_compatible_primary
+      model: text-embedding-3-large
       dimensions: 1024
+    fallback:
+      - provider: mock
+        model: configurable-embedding-model
+        dimensions: 1024
   knowledge_process:
     primary:
       provider: local
@@ -51,47 +64,76 @@ routes:
       timeout_s: 300
   knowledge_rerank:
     primary:
-      provider: mock
-      model: configurable-rerank-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       top_k_input: 30
       top_k_output: 8
+    fallback:
+      - provider: mock
+        model: configurable-rerank-model
+        top_k_input: 30
+        top_k_output: 8
   chapter_generate:
     primary:
-      provider: mock
-      model: configurable-high-quality-generation-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.3
       stream: true
       require_source_refs: true
+    fallback:
+      - provider: mock
+        model: configurable-high-quality-generation-model
+        temperature: 0.3
+        stream: true
+        require_source_refs: true
   chapter_self_check:
     primary:
-      provider: mock
-      model: configurable-low-cost-json-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.0
       output: json
       schema: ChapterSelfCheckResult
+    fallback:
+      - provider: mock
+        model: configurable-low-cost-json-model
+        temperature: 0.0
+        output: json
+        schema: ChapterSelfCheckResult
   compliance_check:
     primary:
-      provider: mock
-      model: configurable-high-quality-json-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.0
       output: json
       schema: ComplianceIssueList
+    fallback:
+      - provider: mock
+        model: configurable-high-quality-json-model
+        temperature: 0.0
+        output: json
+        schema: ComplianceIssueList
   rewrite_assistant:
     primary:
-      provider: mock
-      model: configurable-fast-generation-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.4
       stream: true
+    fallback:
+      - provider: mock
+        model: configurable-fast-generation-model
+        temperature: 0.4
+        stream: true
   cost_advice:
     primary:
-      provider: mock
-      model: configurable-low-cost-json-model
+      provider: openai_compatible_primary
+      model: gpt-4o-mini
       temperature: 0.2
       output: json
-  document_ocr:
-    primary:
-      provider: mock
-      model: configurable-ocr-model
+    fallback:
+      - provider: mock
+        model: configurable-low-cost-json-model
+        temperature: 0.2
+        output: json
   document_export:
     primary:
       provider: local

@@ -9,18 +9,45 @@ from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef
 @pytest.fixture(autouse=True)
 def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "true")
+    for key in (
+        "OPENAI_API_KEY",
+        "AI_LLM_PROVIDER",
+        "AI_LLM_MODEL",
+        "AI_EMBEDDING_PROVIDER",
+        "AI_EMBEDDING_MODEL",
+        "AI_RERANK_PROVIDER",
+        "AI_RERANK_MODEL",
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 def _dot(left: list[float], right: list[float]) -> float:
     return sum(left_value * right_value for left_value, right_value in zip(left, right, strict=True))
 
 
-def test_model_router_resolves_mock_provider() -> None:
+def test_model_router_uses_explicit_mock_fallback_without_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
     target = router.resolve("chapter_generate", tenant_id="tenant-demo")
 
     assert target.provider == "mock"
+    assert target.fallback_from == "openai_compatible_primary"
     assert target.require_source_refs is True
+
+
+def test_model_router_prefers_real_provider_when_key_is_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    target = router.resolve("chapter_generate", tenant_id="tenant-demo")
+
+    assert target.provider == "openai_compatible_primary"
+    assert target.model == "gpt-4o-mini"
+    assert target.fallback_from is None
 
 
 def test_mock_chapter_generation_has_source_refs() -> None:
@@ -172,6 +199,30 @@ def test_shipped_routing_config_declares_only_buildable_providers() -> None:
     router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
     declared = set(router.config.get("providers", {}).keys())
     assert declared == set(router.providers.keys())
+
+
+def test_shipped_routing_config_can_disable_all_mock_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+
+    assert router.resolve("chapter_generate", tenant_id="tenant-demo").provider == "openai_compatible_primary"
+    assert router.provider_backed_mock_routes() == []
+
+
+def test_real_provider_routes_accept_environment_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("AI_LLM_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.example/v1")
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    target = router.resolve("chapter_generate", tenant_id="tenant-demo")
+
+    assert target.provider == "deepseek"
+    assert target.model == "deepseek-chat"
+    assert target.fallback_from is None
 
 
 def test_router_rejects_unsupported_provider_type() -> None:

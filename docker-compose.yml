@@ -76,7 +76,8 @@ services:
     build:
       context: ./ai-service
     environment:
-      USE_MOCK_PROVIDERS: ${USE_MOCK_PROVIDERS:-true}
+      USE_MOCK_PROVIDERS: ${USE_MOCK_PROVIDERS:-false}
+      ALLOW_MOCK_FALLBACK: ${ALLOW_MOCK_FALLBACK:-true}
       MODEL_ROUTING_FILE: ./app/config/model_routing.yaml
       AI_LLM_PROVIDER: ${AI_LLM_PROVIDER:-openai_compatible_primary}
       AI_LLM_MODEL: ${AI_LLM_MODEL:-}
