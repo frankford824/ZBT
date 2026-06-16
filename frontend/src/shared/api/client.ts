@@ -286,6 +286,24 @@ export type TenderDTO = {
   updated_at: string
 }
 
+export type TenderPayload = {
+  source_id?: string | null
+  title: string
+  purchaser?: string
+  region?: string
+  budget_amount?: number | null
+  budget_text?: string
+  publish_date?: string | null
+  deadline?: string | null
+  status?: TenderDTO['status']
+  match_score?: number
+  summary?: string
+  requirements?: string[]
+  risk_flags?: string[]
+  source_url?: string
+  metadata?: Record<string, unknown>
+}
+
 export type TenderSourceDTO = {
   id: string
   name: string
@@ -389,6 +407,17 @@ export type CostItemDTO = {
   note: string
   created_at: string
   updated_at: string
+}
+
+export type CostItemPayload = {
+  category?: string
+  name: string
+  cost_type?: CostItemDTO['cost_type']
+  budget_amount?: number
+  actual_amount?: number
+  status?: CostItemDTO['status']
+  vendor?: string
+  note?: string
 }
 
 export type CostAnalysisDTO = {
@@ -952,7 +981,7 @@ export async function fetchTender(tenderId: string): Promise<TenderDTO> {
   return data
 }
 
-export async function createTender(payload: Partial<TenderDTO>): Promise<TenderDTO> {
+export async function createTender(payload: TenderPayload): Promise<TenderDTO> {
   const { data } = await apiClient.post<TenderDTO>('/tenders', payload)
   return data
 }
@@ -1107,7 +1136,7 @@ export async function fetchCostItems(costProjectId: string): Promise<CostItemDTO
 
 export async function createCostItem(
   costProjectId: string,
-  payload: Partial<CostItemDTO> & { name: string },
+  payload: CostItemPayload,
 ): Promise<CostItemDTO> {
   const { data } = await apiClient.post<CostItemDTO>(`/cost-projects/${costProjectId}/items`, payload)
   return data
@@ -1115,7 +1144,7 @@ export async function createCostItem(
 
 export async function updateCostItem(
   costItemId: string,
-  payload: Partial<CostItemDTO> & { name: string },
+  payload: CostItemPayload,
 ): Promise<CostItemDTO> {
   const { data } = await apiClient.patch<CostItemDTO>(`/cost-items/${costItemId}`, payload)
   return data

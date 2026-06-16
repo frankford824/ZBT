@@ -29,7 +29,7 @@ import {
   fetchCostProject,
   fetchCostProjects,
   getApiErrorMessage,
-  type CostItemDTO,
+  type CostItemPayload,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
@@ -153,7 +153,7 @@ export function CostDetailPage() {
     },
   })
   const itemMutation = useMutation({
-    mutationFn: (payload: Partial<CostItemDTO> & { name: string }) => createCostItem(costProjectId, payload),
+    mutationFn: (payload: CostItemPayload) => createCostItem(costProjectId, payload),
     onSuccess: () => {
       setOpen(false)
       form.resetFields()
