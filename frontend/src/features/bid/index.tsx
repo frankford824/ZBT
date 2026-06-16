@@ -579,7 +579,7 @@ export function BidWizardPage() {
     enabled: Boolean(bidId),
     refetchInterval: (query) => {
       const items = query.state.data ?? []
-      return items.some((item) => item.status === 'queued' || item.status === 'running' || item.status === 'paused') ? 2000 : false
+      return items.some((item) => item.status === 'queued' || item.status === 'running') ? 2000 : false
     },
   })
   useEffect(() => {
