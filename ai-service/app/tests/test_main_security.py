@@ -181,7 +181,7 @@ def test_process_knowledge_document_batches_embeddings(monkeypatch) -> None:
             tenant_id="tenant-demo",
             document_id="doc-demo",
             file_id="file-demo",
-            object_key="tenant/knowledge/file-demo",
+            object_key="tenant-demo/knowledge/file-demo",
             filename="large.txt",
             content_type="text/plain",
             callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
@@ -196,6 +196,34 @@ def test_process_knowledge_document_batches_embeddings(monkeypatch) -> None:
     callback_chunks = callbacks[0]["chunks"]
     assert isinstance(callback_chunks, list)
     assert all(chunk["embedding"] for chunk in callback_chunks)
+
+
+def test_process_knowledge_document_rejects_cross_tenant_object_key(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> object:
+            raise AssertionError("cross-tenant object should be rejected before MinIO fetch")
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_knowledge_document(
+        "task-knowledge-demo",
+        KnowledgeProcessRequest(
+            tenant_id="tenant-demo",
+            document_id="doc-demo",
+            file_id="file-demo",
+            object_key="other-tenant/knowledge/file-demo",
+            filename="large.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks[0]["status"] == "failed", callbacks[0]
+    assert callbacks[0]["error_message"] == "知识库文档整理失败，请稍后重试"
+    assert "outside tenant scope" not in str(callbacks[0])
 
 
 def test_embed_knowledge_inputs_rejects_dimension_mismatch() -> None:
@@ -495,7 +523,7 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
             tenant_id="tenant-demo",
             bid_id="bid-demo",
             file_id="file-demo",
-            object_key="tenant/bid_tender/file-demo",
+            object_key="tenant-demo/bid_tender/file-demo",
             filename="采购文件.txt",
             content_type="text/plain",
             callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
@@ -510,6 +538,34 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert result["model_metadata"]["provider"] == "fake-llm"
     assert result["model_metadata"]["model"] == "fake-model"
     assert result["token_usage"]["input_tokens"] > 0
+
+
+def test_process_tender_parse_rejects_cross_tenant_object_key(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> object:
+            raise AssertionError("cross-tenant object should be rejected before MinIO fetch")
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="other-tenant/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks[0]["status"] == "failed", callbacks[0]
+    assert callbacks[0]["error_message"] == "招标文件解读失败，请检查文件后重试"
+    assert "outside tenant scope" not in str(callbacks[0])
 
 
 def test_production_mode_detects_release_environment(monkeypatch) -> None:

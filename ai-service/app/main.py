@@ -130,6 +130,7 @@ async def tender_parse(
 def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
     try:
         client = minio_client()
+        ensure_tenant_object_key_allowed(payload.tenant_id, payload.object_key)
         response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), payload.object_key)
         try:
             content = response.read()
@@ -262,6 +263,7 @@ async def knowledge_rerank(payload: KnowledgeRerankRequest) -> KnowledgeRerankRe
 def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -> None:
     try:
         client = minio_client()
+        ensure_tenant_object_key_allowed(payload.tenant_id, payload.object_key)
         response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), payload.object_key)
         try:
             content = response.read()
@@ -582,7 +584,7 @@ def process_document_export(task_id: str, payload: DocumentExportRequest, export
         output_path = Path(tmpdir) / safe_output_filename(payload.filename, export_type)
         try:
             client = minio_client()
-            ensure_export_object_key_allowed(payload.tenant_id, payload.object_key)
+            ensure_tenant_object_key_allowed(payload.tenant_id, payload.object_key)
             payload = hydrate_export_attachment_content(client, payload)
             content_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             if export_type == "zip":
@@ -703,7 +705,7 @@ def hydrate_export_attachment(
     attachment: ExportAttachment,
 ) -> ExportAttachment:
     if attachment.object_key:
-        ensure_export_object_key_allowed(tenant_id, attachment.object_key)
+        ensure_tenant_object_key_allowed(tenant_id, attachment.object_key)
     if attachment.content_base64 or attachment.local_path or not attachment.object_key:
         return attachment
     return attachment.model_copy(
@@ -711,10 +713,10 @@ def hydrate_export_attachment(
     )
 
 
-def ensure_export_object_key_allowed(tenant_id: str, object_key: str) -> None:
+def ensure_tenant_object_key_allowed(tenant_id: str, object_key: str) -> None:
     expected_prefix = tenant_id.strip().rstrip("/") + "/"
     if not expected_prefix.strip("/") or not object_key.startswith(expected_prefix):
-        raise RuntimeError("attachment object_key is outside tenant scope")
+        raise RuntimeError("object_key is outside tenant scope")
 
 
 def download_minio_object_base64(client: Minio, object_key: str) -> str:
