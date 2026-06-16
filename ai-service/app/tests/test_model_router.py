@@ -225,6 +225,35 @@ def test_real_provider_routes_accept_environment_model_override(monkeypatch: pyt
     assert target.fallback_from is None
 
 
+def test_provider_backed_mock_routes_detects_environment_provider_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("AI_LLM_MODEL", "mock-model")
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                }
+            },
+        }
+    )
+
+    assert router.resolve("chapter_generate", tenant_id="tenant-demo").provider == "mock"
+    assert router.provider_backed_mock_routes() == ["chapter_generate.primary"]
+
+
 def test_router_rejects_unsupported_provider_type() -> None:
     with pytest.raises(ValueError, match="unsupported type"):
         ModelRouter(

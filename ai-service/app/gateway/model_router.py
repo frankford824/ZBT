@@ -98,10 +98,10 @@ class ModelRouter:
             if task_type not in provider_backed_routes:
                 continue
             primary = route.get("primary", {})
-            if primary.get("provider") == "mock":
+            if self._route_target(task_type, primary).provider == "mock":
                 mock_routes.append(f"{task_type}.primary")
             for index, fallback in enumerate(route.get("fallback", []), start=1):
-                if fallback.get("provider") == "mock":
+                if self._route_target(task_type, fallback).provider == "mock":
                     mock_routes.append(f"{task_type}.fallback[{index}]")
         return mock_routes
 

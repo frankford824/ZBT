@@ -1026,6 +1026,37 @@ def test_validate_production_config_rejects_mock_model_routes(monkeypatch) -> No
         validate_production_config()
 
 
+def test_validate_production_config_rejects_mock_environment_override(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+    monkeypatch.setenv("AI_LLM_PROVIDER", "mock")
+    monkeypatch.setenv("AI_LLM_MODEL", "mock-model")
+    monkeypatch.setattr(
+        "app.main.router",
+        ModelRouter(
+            {
+                "providers": {
+                    "openai_compatible_primary": {
+                        "type": "openai_compatible",
+                        "base_url_env": "OPENAI_BASE_URL",
+                        "api_key_env": "OPENAI_API_KEY",
+                        "default_base_url": "https://example.test/v1",
+                    }
+                },
+                "routes": {
+                    "chapter_generate": {
+                        "primary": {"provider": "openai_compatible_primary", "model": "real-model"}
+                    }
+                },
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="chapter_generate.primary"):
+        validate_production_config()
+
+
 def test_validate_production_config_allows_explicit_production_config(monkeypatch) -> None:
     _set_production_security_env(monkeypatch)
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
