@@ -200,6 +200,7 @@ export type KnowledgeDocumentDTO = {
   parse_status: 'ready' | 'queued' | 'processing' | 'processed' | 'failed'
   summary: string
   metadata: Record<string, unknown>
+  error_message: string | null
   file: {
     id: string
     filename: string

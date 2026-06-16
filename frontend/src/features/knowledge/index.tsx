@@ -10,7 +10,7 @@ import {
   TagsOutlined,
 } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { App as AntApp, Button, Card, Col, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Upload } from 'antd'
+import { App as AntApp, Button, Card, Col, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography, Upload } from 'antd'
 import type { UploadProps } from 'antd'
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
@@ -426,9 +426,7 @@ export function KnowledgeDocsPage() {
                 {
                   title: '状态',
                   dataIndex: 'parse_status',
-                  render: (status: KnowledgeDocumentDTO['parse_status']) => (
-                    <Tag color={statusColor(status)}>{statusLabel(status)}</Tag>
-                  ),
+                  render: (_, row: KnowledgeDocumentDTO) => documentStatusCell(row),
                 },
                 {
                   title: '标签',
@@ -1005,4 +1003,19 @@ function statusColor(status: KnowledgeDocumentDTO['parse_status']) {
     failed: 'red',
   }
   return colors[status]
+}
+
+function documentStatusCell(document: KnowledgeDocumentDTO) {
+  const failureMessage = documentFailureMessage(document)
+  return (
+    <Space orientation="vertical" size={2}>
+      <Tag color={statusColor(document.parse_status)}>{statusLabel(document.parse_status)}</Tag>
+      {failureMessage ? <Typography.Text type="danger">{failureMessage}</Typography.Text> : null}
+    </Space>
+  )
+}
+
+function documentFailureMessage(document: KnowledgeDocumentDTO) {
+  if (document.parse_status !== 'failed') return ''
+  return document.error_message?.trim() || '文档整理失败，请重新整理'
 }

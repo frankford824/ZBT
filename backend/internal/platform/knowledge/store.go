@@ -72,18 +72,19 @@ type FileInfo struct {
 }
 
 type Document struct {
-	ID          string         `json:"id"`
-	Title       string         `json:"title"`
-	DocType     string         `json:"doc_type"`
-	ParseStatus string         `json:"parse_status"`
-	Summary     string         `json:"summary"`
-	Metadata    map[string]any `json:"metadata"`
-	File        FileInfo       `json:"file"`
-	Category    *Category      `json:"category"`
-	Tags        []Tag          `json:"tags"`
-	ProcessedAt *time.Time     `json:"processed_at"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	ID           string         `json:"id"`
+	Title        string         `json:"title"`
+	DocType      string         `json:"doc_type"`
+	ParseStatus  string         `json:"parse_status"`
+	Summary      string         `json:"summary"`
+	Metadata     map[string]any `json:"metadata"`
+	ErrorMessage *string        `json:"error_message"`
+	File         FileInfo       `json:"file"`
+	Category     *Category      `json:"category"`
+	Tags         []Tag          `json:"tags"`
+	ProcessedAt  *time.Time     `json:"processed_at"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 type Task struct {
@@ -1545,6 +1546,7 @@ func documentSelectSQL(suffix string) string {
 	return `
 		select
 			d.id::text, d.title, d.doc_type, d.parse_status, d.summary, d.metadata,
+			case when d.parse_status = 'failed' then nullif(max(latest_task.error_message), '') else null end,
 			d.processed_at, d.created_at, d.updated_at,
 			fa.id::text, fa.filename, fa.content_type, fa.size_bytes, fa.status,
 			c.id::text, c.name, c.description, c.parent_id::text, c.created_at, c.updated_at,
@@ -1562,6 +1564,16 @@ func documentSelectSQL(suffix string) string {
 		left join knowledge_categories c on c.id = d.category_id and c.tenant_id = d.tenant_id
 		left join knowledge_document_tags kdt on kdt.document_id = d.id and kdt.tenant_id = d.tenant_id
 		left join knowledge_tags t on t.id = kdt.tag_id and t.tenant_id = d.tenant_id
+		left join lateral (
+			select task.error_message
+			from ai_tasks task
+			where task.tenant_id = d.tenant_id
+				and task.resource_type = 'knowledge_document'
+				and task.resource_id = d.id
+				and task.status in ('failed', 'cancelled')
+			order by task.updated_at desc
+			limit 1
+		) latest_task on true
 	` + suffix
 }
 
@@ -1599,12 +1611,14 @@ func scanTag(row scanner) (Tag, error) {
 func scanDocument(row scanner) (Document, error) {
 	var document Document
 	var metadataRaw []byte
+	var errorMessage sql.NullString
 	var processedAt sql.NullTime
 	var categoryID, categoryName, categoryDescription, categoryParentID sql.NullString
 	var categoryCreatedAt, categoryUpdatedAt sql.NullTime
 	var tagsRaw []byte
 	err := row.Scan(
 		&document.ID, &document.Title, &document.DocType, &document.ParseStatus, &document.Summary, &metadataRaw,
+		&errorMessage,
 		&processedAt, &document.CreatedAt, &document.UpdatedAt,
 		&document.File.ID, &document.File.Filename, &document.File.ContentType, &document.File.SizeBytes, &document.File.Status,
 		&categoryID, &categoryName, &categoryDescription, &categoryParentID, &categoryCreatedAt, &categoryUpdatedAt,
@@ -1616,6 +1630,9 @@ func scanDocument(row scanner) (Document, error) {
 	document.Metadata = map[string]any{}
 	if len(metadataRaw) > 0 {
 		_ = json.Unmarshal(metadataRaw, &document.Metadata)
+	}
+	if errorMessage.Valid {
+		document.ErrorMessage = &errorMessage.String
 	}
 	if processedAt.Valid {
 		document.ProcessedAt = &processedAt.Time
