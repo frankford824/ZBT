@@ -304,6 +304,8 @@ export type TenderPayload = {
   metadata?: Record<string, unknown>
 }
 
+export type TenderUpdatePayload = Partial<TenderPayload>
+
 export type TenderSourceDTO = {
   id: string
   name: string
@@ -985,6 +987,11 @@ export async function fetchTender(tenderId: string): Promise<TenderDTO> {
 
 export async function createTender(payload: TenderPayload): Promise<TenderDTO> {
   const { data } = await apiClient.post<TenderDTO>('/tenders', payload)
+  return data
+}
+
+export async function updateTender(tenderId: string, payload: TenderUpdatePayload): Promise<TenderDTO> {
+  const { data } = await apiClient.patch<TenderDTO>(`/tenders/${tenderId}`, payload)
   return data
 }
 

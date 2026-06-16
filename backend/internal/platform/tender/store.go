@@ -107,7 +107,23 @@ type CreateTenderRequest struct {
 	Metadata     any      `json:"metadata"`
 }
 
-type UpdateTenderRequest = CreateTenderRequest
+type UpdateTenderRequest struct {
+	SourceID     *string         `json:"source_id"`
+	Title        *string         `json:"title"`
+	Purchaser    *string         `json:"purchaser"`
+	Region       *string         `json:"region"`
+	BudgetAmount *float64        `json:"budget_amount"`
+	BudgetText   *string         `json:"budget_text"`
+	PublishDate  *string         `json:"publish_date"`
+	Deadline     *string         `json:"deadline"`
+	Status       *string         `json:"status"`
+	MatchScore   *int            `json:"match_score"`
+	Summary      *string         `json:"summary"`
+	Requirements *[]string       `json:"requirements"`
+	RiskFlags    *[]string       `json:"risk_flags"`
+	SourceURL    *string         `json:"source_url"`
+	Metadata     *map[string]any `json:"metadata"`
+}
 
 type CreateSourceRequest struct {
 	Name       string         `json:"name"`
@@ -118,6 +134,24 @@ type CreateSourceRequest struct {
 }
 
 type UpdateSourceRequest = CreateSourceRequest
+
+type normalizedTenderWriteRequest struct {
+	SourceID     any
+	Title        string
+	Purchaser    string
+	Region       string
+	BudgetAmount *float64
+	BudgetText   string
+	PublishDate  any
+	Deadline     any
+	Status       string
+	MatchScore   int
+	Summary      string
+	Requirements []string
+	RiskFlags    []string
+	SourceURL    string
+	Metadata     []byte
+}
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{
@@ -217,34 +251,10 @@ func (s *Store) Get(ctx context.Context, tenantID, userID, id string) (Tender, e
 }
 
 func (s *Store) Create(ctx context.Context, tenantID, userID string, req CreateTenderRequest) (Tender, error) {
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		return Tender{}, ErrInvalidRequest
-	}
-	status, err := normalizeTenderStatus(req.Status)
+	normalized, err := normalizeTenderWriteRequest(req)
 	if err != nil {
 		return Tender{}, err
 	}
-	if status == "" {
-		status = "open"
-	}
-	publishDate, err := parseOptionalDate(req.PublishDate)
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	deadline, err := parseOptionalDate(req.Deadline)
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	sourceID, err := nullableUUID(req.SourceID)
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	metadata, err := json.Marshal(normalizeMetadata(req.Metadata))
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	matchScore := clampScore(req.MatchScore)
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
@@ -254,9 +264,9 @@ func (s *Store) Create(ctx context.Context, tenantID, userID string, req CreateT
 			)
 			values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 			returning id::text
-		`, tenantID, sourceID, title, strings.TrimSpace(req.Purchaser), strings.TrimSpace(req.Region), req.BudgetAmount,
-			strings.TrimSpace(req.BudgetText), publishDate, deadline, status, matchScore, strings.TrimSpace(req.Summary),
-			req.Requirements, req.RiskFlags, strings.TrimSpace(req.SourceURL), metadata).Scan(&id); err != nil {
+		`, tenantID, normalized.SourceID, normalized.Title, normalized.Purchaser, normalized.Region, normalized.BudgetAmount,
+			normalized.BudgetText, normalized.PublishDate, normalized.Deadline, normalized.Status, normalized.MatchScore, normalized.Summary,
+			normalized.Requirements, normalized.RiskFlags, normalized.SourceURL, normalized.Metadata).Scan(&id); err != nil {
 			return err
 		}
 		return nil
@@ -271,43 +281,33 @@ func (s *Store) Update(ctx context.Context, tenantID, userID, id string, req Upd
 	if _, err := uuid.Parse(strings.TrimSpace(id)); err != nil {
 		return Tender{}, ErrInvalidRequest
 	}
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		return Tender{}, ErrInvalidRequest
-	}
-	status, err := normalizeTenderStatus(req.Status)
-	if err != nil {
-		return Tender{}, err
-	}
-	if status == "" {
-		status = "open"
-	}
-	publishDate, err := parseOptionalDate(req.PublishDate)
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	deadline, err := parseOptionalDate(req.Deadline)
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	sourceID, err := nullableUUID(req.SourceID)
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	metadata, err := json.Marshal(normalizeMetadata(req.Metadata))
-	if err != nil {
-		return Tender{}, ErrInvalidRequest
-	}
-	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		current, err := scanTender(tx.QueryRow(ctx, `
+			select t.id::text, t.source_id::text, coalesce(ts.name, ''), t.title, t.purchaser, t.region,
+				t.budget_amount::float8, t.budget_text, t.publish_date, t.deadline, t.status, t.match_score,
+				t.summary, t.requirements, t.risk_flags, t.source_url, t.metadata, false,
+				t.created_at, t.updated_at
+			from tenders t
+			left join tender_sources ts on ts.id = t.source_id and ts.tenant_id = t.tenant_id
+			where t.tenant_id = $1 and t.id = $2
+			for update of t
+		`, tenantID, id))
+		if err != nil {
+			return err
+		}
+		normalized, err := normalizeTenderWriteRequest(mergeTenderUpdateRequest(current, req))
+		if err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			update tenders
 			set source_id = $3, title = $4, purchaser = $5, region = $6, budget_amount = $7, budget_text = $8,
 				publish_date = $9, deadline = $10, status = $11, match_score = $12, summary = $13,
 				requirements = $14, risk_flags = $15, source_url = $16, metadata = $17, updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, id, sourceID, title, strings.TrimSpace(req.Purchaser), strings.TrimSpace(req.Region), req.BudgetAmount,
-			strings.TrimSpace(req.BudgetText), publishDate, deadline, status, clampScore(req.MatchScore), strings.TrimSpace(req.Summary),
-			req.Requirements, req.RiskFlags, strings.TrimSpace(req.SourceURL), metadata)
+		`, tenantID, id, normalized.SourceID, normalized.Title, normalized.Purchaser, normalized.Region, normalized.BudgetAmount,
+			normalized.BudgetText, normalized.PublishDate, normalized.Deadline, normalized.Status, normalized.MatchScore, normalized.Summary,
+			normalized.Requirements, normalized.RiskFlags, normalized.SourceURL, normalized.Metadata)
 		if err != nil {
 			return err
 		}
@@ -614,6 +614,135 @@ func scanTender(row scanner) (Tender, error) {
 		_ = json.Unmarshal(metadataRaw, &tender.Metadata)
 	}
 	return tender, err
+}
+
+func mergeTenderUpdateRequest(current Tender, req UpdateTenderRequest) CreateTenderRequest {
+	sourceID := ""
+	if current.SourceID != nil {
+		sourceID = *current.SourceID
+	}
+	budgetAmount := current.BudgetAmount
+	metadata := current.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	merged := CreateTenderRequest{
+		SourceID:     sourceID,
+		Title:        current.Title,
+		Purchaser:    current.Purchaser,
+		Region:       current.Region,
+		BudgetAmount: budgetAmount,
+		BudgetText:   current.BudgetText,
+		PublishDate:  formatOptionalDate(current.PublishDate),
+		Deadline:     formatOptionalDate(current.Deadline),
+		Status:       current.Status,
+		MatchScore:   current.MatchScore,
+		Summary:      current.Summary,
+		Requirements: current.Requirements,
+		RiskFlags:    current.RiskFlags,
+		SourceURL:    current.SourceURL,
+		Metadata:     metadata,
+	}
+	if req.SourceID != nil {
+		merged.SourceID = *req.SourceID
+	}
+	if req.Title != nil {
+		merged.Title = *req.Title
+	}
+	if req.Purchaser != nil {
+		merged.Purchaser = *req.Purchaser
+	}
+	if req.Region != nil {
+		merged.Region = *req.Region
+	}
+	if req.BudgetAmount != nil {
+		merged.BudgetAmount = req.BudgetAmount
+	}
+	if req.BudgetText != nil {
+		merged.BudgetText = *req.BudgetText
+	}
+	if req.PublishDate != nil {
+		merged.PublishDate = *req.PublishDate
+	}
+	if req.Deadline != nil {
+		merged.Deadline = *req.Deadline
+	}
+	if req.Status != nil {
+		merged.Status = *req.Status
+	}
+	if req.MatchScore != nil {
+		merged.MatchScore = *req.MatchScore
+	}
+	if req.Summary != nil {
+		merged.Summary = *req.Summary
+	}
+	if req.Requirements != nil {
+		merged.Requirements = *req.Requirements
+	}
+	if req.RiskFlags != nil {
+		merged.RiskFlags = *req.RiskFlags
+	}
+	if req.SourceURL != nil {
+		merged.SourceURL = *req.SourceURL
+	}
+	if req.Metadata != nil {
+		merged.Metadata = *req.Metadata
+	}
+	return merged
+}
+
+func formatOptionalDate(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.Format("2006-01-02")
+}
+
+func normalizeTenderWriteRequest(req CreateTenderRequest) (normalizedTenderWriteRequest, error) {
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		return normalizedTenderWriteRequest{}, ErrInvalidRequest
+	}
+	status, err := normalizeTenderStatus(req.Status)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	if status == "" {
+		status = "open"
+	}
+	publishDate, err := parseOptionalDate(req.PublishDate)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, ErrInvalidRequest
+	}
+	deadline, err := parseOptionalDate(req.Deadline)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, ErrInvalidRequest
+	}
+	sourceID, err := nullableUUID(req.SourceID)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, ErrInvalidRequest
+	}
+	metadata, err := json.Marshal(normalizeMetadata(req.Metadata))
+	if err != nil {
+		return normalizedTenderWriteRequest{}, ErrInvalidRequest
+	}
+	return normalizedTenderWriteRequest{
+		SourceID:     sourceID,
+		Title:        title,
+		Purchaser:    strings.TrimSpace(req.Purchaser),
+		Region:       strings.TrimSpace(req.Region),
+		BudgetAmount: req.BudgetAmount,
+		BudgetText:   strings.TrimSpace(req.BudgetText),
+		PublishDate:  publishDate,
+		Deadline:     deadline,
+		Status:       status,
+		MatchScore:   clampScore(req.MatchScore),
+		Summary:      strings.TrimSpace(req.Summary),
+		Requirements: req.Requirements,
+		RiskFlags:    req.RiskFlags,
+		SourceURL:    strings.TrimSpace(req.SourceURL),
+		Metadata:     metadata,
+	}, nil
 }
 
 func scanSource(row scanner) (Source, error) {
