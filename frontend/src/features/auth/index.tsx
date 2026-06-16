@@ -15,7 +15,7 @@ type OnboardingValues = {
   knowledge_categories?: string
 }
 
-const showDemoLogin = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true'
+const showDemoLogin = import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true'
 
 export function LoginPage() {
   const navigate = useNavigate()
