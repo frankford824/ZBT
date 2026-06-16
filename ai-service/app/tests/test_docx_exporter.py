@@ -8,9 +8,9 @@ from zipfile import ZipFile
 import fitz
 import pytest
 from docx import Document
+from pydantic import ValidationError
 
 from app.pipelines.export.docx_exporter import (
-    _attachment_content,
     _replace_template_fields,
     _safe_zip_path,
     _validate_pdf_output,
@@ -271,10 +271,8 @@ def test_validate_pdf_output_rejects_blank_pdf(tmp_path) -> None:
 
 
 def test_attachment_local_path_is_rejected() -> None:
-    attachment = ExportAttachment(filename="secret.txt", local_path="/etc/passwd")
-
-    with pytest.raises(RuntimeError, match="local_path is not allowed"):
-        _attachment_content(attachment)
+    with pytest.raises(ValidationError, match="local_path is not allowed"):
+        ExportAttachment(filename="secret.txt", local_path="/etc/passwd")
 
 
 def test_zip_path_removes_parent_segments() -> None:

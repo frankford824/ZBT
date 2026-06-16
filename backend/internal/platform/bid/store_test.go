@@ -1,6 +1,10 @@
 package bid
 
-import "testing"
+import (
+	"encoding/base64"
+	"strings"
+	"testing"
+)
 
 func TestTenderStructuredResultFromCallbackExtractsNestedResult(t *testing.T) {
 	structured, ok := tenderStructuredResultFromCallback(map[string]any{
@@ -80,10 +84,43 @@ func TestValidateExportAttachmentsRejectsUnsafeInputs(t *testing.T) {
 		"non string inline content": {
 			{"filename": "bad.txt", "content_base64": 42},
 		},
+		"missing filename": {
+			{"object_key": "tenant-demo/assets/file.txt"},
+		},
+		"mixed content sources": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets/file.txt", "content_base64": "YQ=="},
+		},
+		"invalid inline content": {
+			{"filename": "bad.txt", "content_base64": "not-base64"},
+		},
+		"non string zip path": {
+			{"filename": "bad.txt", "content_base64": "YQ==", "zip_path": 42},
+		},
 	} {
 		if err := validateExportAttachments("tenant-demo", attachments); err == nil {
 			t.Fatalf("expected %s to be rejected", name)
 		}
+	}
+}
+
+func TestValidateExportAttachmentsRejectsTooManyAttachments(t *testing.T) {
+	attachments := make([]map[string]any, 0, maxExportAttachmentCount+1)
+	for i := 0; i <= maxExportAttachmentCount; i++ {
+		attachments = append(attachments, map[string]any{
+			"filename":   "file.txt",
+			"object_key": "tenant-demo/assets/file.txt",
+		})
+	}
+
+	if err := validateExportAttachments("tenant-demo", attachments); err != ErrInvalidRequest {
+		t.Fatalf("expected too many attachments to be rejected, got %v", err)
+	}
+}
+
+func TestValidateExportInlineAttachmentContentRejectsOversizedEncodedContent(t *testing.T) {
+	encoded := strings.Repeat("A", base64.StdEncoding.EncodedLen(maxExportInlineAttachmentBytes)+1)
+	if _, err := validateExportInlineAttachmentContent(encoded); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized inline content to be rejected, got %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,10 @@ const (
 	chapterGenerateSubmitFailureMessage = "章节生成启动失败，请稍后重试"
 	chapterActionSubmitFailureMessage   = "章节处理启动失败，请稍后重试"
 	documentExportSubmitFailureMessage  = "导出任务启动失败，请稍后重试"
+
+	maxExportAttachmentCount            = 50
+	maxExportInlineAttachmentBytes      = 20 * 1024 * 1024
+	maxExportInlineAttachmentTotalBytes = 50 * 1024 * 1024
 )
 
 type Store struct {
@@ -4132,10 +4137,25 @@ func validateExportAttachments(tenantID string, groups ...[]map[string]any) erro
 		return ErrInvalidRequest
 	}
 	tenantPrefix = strings.TrimRight(tenantPrefix, "/") + "/"
+	attachmentCount := 0
+	inlineBytesTotal := 0
 	for _, attachments := range groups {
 		for _, attachment := range attachments {
+			attachmentCount++
+			if attachmentCount > maxExportAttachmentCount {
+				return ErrInvalidRequest
+			}
 			if attachment == nil {
 				return ErrInvalidRequest
+			}
+			filename, filenamePresent, filenameOK := exportStringField(attachment, "filename")
+			if !filenameOK || !filenamePresent || filename == "" {
+				return ErrInvalidRequest
+			}
+			for _, optionalStringField := range []string{"category", "content_type", "zip_path"} {
+				if _, _, ok := exportStringField(attachment, optionalStringField); !ok {
+					return ErrInvalidRequest
+				}
 			}
 			if localPath, present, ok := exportStringField(attachment, "local_path"); !ok || (present && localPath != "") {
 				return ErrInvalidRequest
@@ -4148,15 +4168,38 @@ func validateExportAttachments(tenantID string, groups ...[]map[string]any) erro
 			if !contentOK {
 				return ErrInvalidRequest
 			}
-			if objectPresent && objectKey != "" && !strings.HasPrefix(objectKey, tenantPrefix) {
+			hasObjectKey := objectPresent && objectKey != ""
+			hasInlineContent := contentPresent && contentBase64 != ""
+			if hasObjectKey && !strings.HasPrefix(objectKey, tenantPrefix) {
 				return ErrInvalidRequest
 			}
-			if strings.TrimSpace(objectKey) == "" && (!contentPresent || strings.TrimSpace(contentBase64) == "") {
+			if hasObjectKey == hasInlineContent {
 				return ErrInvalidRequest
+			}
+			if hasInlineContent {
+				contentSize, err := validateExportInlineAttachmentContent(contentBase64)
+				if err != nil {
+					return err
+				}
+				inlineBytesTotal += contentSize
+				if inlineBytesTotal > maxExportInlineAttachmentTotalBytes {
+					return ErrInvalidRequest
+				}
 			}
 		}
 	}
 	return nil
+}
+
+func validateExportInlineAttachmentContent(contentBase64 string) (int, error) {
+	if len(contentBase64) > base64.StdEncoding.EncodedLen(maxExportInlineAttachmentBytes) {
+		return 0, ErrInvalidRequest
+	}
+	content, err := base64.StdEncoding.DecodeString(contentBase64)
+	if err != nil || len(content) == 0 || len(content) > maxExportInlineAttachmentBytes {
+		return 0, ErrInvalidRequest
+	}
+	return len(content), nil
 }
 
 func exportStringField(values map[string]any, key string) (string, bool, bool) {
