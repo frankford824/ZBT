@@ -476,7 +476,7 @@ func normalizeContentType(value string) (string, error) {
 	if contentType == "" {
 		return "application/octet-stream", nil
 	}
-	if len(contentType) > maxContentTypeBytes {
+	if len(contentType) > maxContentTypeBytes || hasControlChars(contentType) {
 		return "", ErrInvalidRequest
 	}
 	return contentType, nil
@@ -514,11 +514,24 @@ func contentDisposition(dispositionType, filename string) string {
 
 func stripControlChars(value string) string {
 	return strings.Map(func(ch rune) rune {
-		if ch < 0x20 || ch == 0x7f {
+		if isControlChar(ch) {
 			return -1
 		}
 		return ch
 	}, value)
+}
+
+func hasControlChars(value string) bool {
+	for _, ch := range value {
+		if isControlChar(ch) {
+			return true
+		}
+	}
+	return false
+}
+
+func isControlChar(ch rune) bool {
+	return ch < 0x20 || ch == 0x7f
 }
 
 func headerFallbackFilename(filename string) string {

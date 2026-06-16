@@ -106,6 +106,12 @@ func TestNormalizeContentTypeDefaultsAndRejectsOversizedValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeContentTypeRejectsControlCharacters(t *testing.T) {
+	if _, err := normalizeContentType("text/plain\r\nX-Injected: yes"); err != ErrInvalidRequest {
+		t.Fatalf("expected content type with controls to be rejected, got %v", err)
+	}
+}
+
 func TestValidateUploadSizeRejectsEmptyNegativeAndOversizedFiles(t *testing.T) {
 	for _, size := range []int64{-1, 0, maxUploadSizeBytes + 1} {
 		if err := validateUploadSize(size); err != ErrInvalidRequest {
