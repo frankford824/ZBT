@@ -2282,6 +2282,18 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					return err
 				}
 			}
+			if status == "failed" || status == "cancelled" {
+				if _, err := tx.Exec(ctx, `
+					update file_assets
+					set status = 'failed',
+						updated_at = now()
+					where tenant_id = $1
+						and id = (select file_asset_id from bid_exports where tenant_id = $1 and id = $2)
+						and status <> 'ready'
+				`, payload.TenantID, task.ResourceID); err != nil {
+					return err
+				}
+			}
 			if _, err := tx.Exec(ctx, `
 				update bid_exports
 				set status = $3,
@@ -2667,6 +2679,16 @@ func (s *Store) markExportFailed(ctx context.Context, tenantID, exportID, taskID
 			set status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
 			where tenant_id = $1 and id = $2
 		`, tenantID, taskID, message); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			update file_assets
+			set status = 'failed',
+				updated_at = now()
+			where tenant_id = $1
+				and id = (select file_asset_id from bid_exports where tenant_id = $1 and id = $2)
+				and status <> 'ready'
+		`, tenantID, exportID); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `
