@@ -375,13 +375,18 @@ func (s *server) logout(c *gin.Context) {
 }
 
 func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
+	ttl := cfg.JWTAccessTTL
+	if ttl <= 0 {
+		ttl = config.DefaultJWTAccessTTL
+	}
+	expiresAt := time.Now().Add(ttl)
 	token, err := auth.SignJWT(cfg.JWTSecret, auth.Claims{
 		UserID:    session.User.ID,
 		TenantID:  session.Tenant.ID,
 		RoleID:    session.Role.ID,
 		RoleCode:  session.Role.Code,
 		Roles:     []string{session.Role.Code},
-		ExpiresAt: time.Now().Add(8 * time.Hour).Unix(),
+		ExpiresAt: expiresAt.Unix(),
 	})
 	if err != nil {
 		respondInternal(c)
@@ -390,7 +395,7 @@ func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
 	c.JSON(http.StatusOK, gin.H{
 		"access_token": token,
 		"token_type":   "Bearer",
-		"expires_in":   28800,
+		"expires_in":   int(ttl.Seconds()),
 		"session":      session,
 	})
 }

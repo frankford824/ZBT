@@ -1,14 +1,19 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
+	"github.com/frankford824/ZBT/backend/internal/platform/auth"
+	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
+	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/gin-gonic/gin"
 )
 
@@ -45,6 +50,47 @@ func TestRespondStatusMapsAICallInvalidRequestToBadRequest(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid AI call request, got %d", recorder.Code)
+	}
+}
+
+func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+
+	respondSession(
+		context,
+		config.Config{JWTSecret: "secret", JWTAccessTTL: 15 * time.Minute},
+		saas.Session{
+			User:   saas.User{ID: "user-1", Email: "admin@example.com", Name: "管理员"},
+			Tenant: saas.Tenant{ID: "tenant-1", Name: "企业"},
+			Role:   saas.Role{ID: "role-1", Code: "admin", Name: "管理员"},
+			Permissions: map[string]rbac.Level{
+				"dashboard": rbac.LevelRead,
+			},
+		},
+	)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected session response, got %d", recorder.Code)
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode session response: %v", err)
+	}
+	if body.ExpiresIn != 900 {
+		t.Fatalf("expected 15 minute expires_in, got %d", body.ExpiresIn)
+	}
+	claims, err := auth.ParseJWT("secret", body.AccessToken)
+	if err != nil {
+		t.Fatalf("parse signed token: %v", err)
+	}
+	remaining := time.Until(time.Unix(claims.ExpiresAt, 0))
+	if remaining < 14*time.Minute || remaining > 16*time.Minute {
+		t.Fatalf("expected token exp to use configured TTL, remaining %s", remaining)
 	}
 }
 

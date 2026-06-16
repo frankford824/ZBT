@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadUsesDevelopmentAIHMACSecretWhenUnset(t *testing.T) {
 	t.Setenv("AI_SERVICE_HMAC_SECRET", "")
@@ -19,6 +22,28 @@ func TestLoadAllowsAIHMACSecretOverride(t *testing.T) {
 
 	if cfg.AIServiceHMACSecret != "custom-secret" {
 		t.Fatalf("expected configured AI service HMAC secret")
+	}
+}
+
+func TestLoadUsesConfiguredJWTAccessTTL(t *testing.T) {
+	t.Setenv("JWT_ACCESS_TTL", "15m")
+
+	cfg := Load()
+
+	if cfg.JWTAccessTTL != 15*time.Minute {
+		t.Fatalf("expected configured JWT access TTL, got %s", cfg.JWTAccessTTL)
+	}
+}
+
+func TestLoadBoundsJWTAccessTTL(t *testing.T) {
+	t.Setenv("JWT_ACCESS_TTL", "1s")
+	if cfg := Load(); cfg.JWTAccessTTL != DefaultJWTAccessTTL {
+		t.Fatalf("expected tiny JWT access TTL to fall back, got %s", cfg.JWTAccessTTL)
+	}
+
+	t.Setenv("JWT_ACCESS_TTL", "999h")
+	if cfg := Load(); cfg.JWTAccessTTL != maxJWTAccessTTL {
+		t.Fatalf("expected huge JWT access TTL to clamp, got %s", cfg.JWTAccessTTL)
 	}
 }
 

@@ -4,14 +4,18 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
 	DefaultAIServiceHMACSecret = "dev-only-zbt-ai-callback-secret"
 	DefaultJWTSecret           = "dev-only-zbt-jwt-secret"
+	DefaultJWTAccessTTL        = 8 * time.Hour
 	DefaultMinIOAccessKey      = "zbt_minio"
 	DefaultMinIOSecretKey      = "zbt_minio_secret"
 	minProductionSecretLength  = 16
+	minJWTAccessTTL            = time.Minute
+	maxJWTAccessTTL            = 24 * time.Hour
 )
 
 type Config struct {
@@ -30,6 +34,7 @@ type Config struct {
 	MinIORegion          string
 	MinIOBucket          string
 	JWTSecret            string
+	JWTAccessTTL         time.Duration
 	DefaultTenantID      string
 }
 
@@ -50,6 +55,7 @@ func Load() Config {
 		MinIORegion:          env("MINIO_REGION", "us-east-1"),
 		MinIOBucket:          env("MINIO_BUCKET", "zbt-files"),
 		JWTSecret:            env("JWT_SECRET", DefaultJWTSecret),
+		JWTAccessTTL:         envDuration("JWT_ACCESS_TTL", DefaultJWTAccessTTL, minJWTAccessTTL, maxJWTAccessTTL),
 		DefaultTenantID:      env("DEFAULT_TENANT_ID", "00000000-0000-4000-8000-000000000001"),
 	}
 }
@@ -106,4 +112,19 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return value == "1" || value == "true" || value == "TRUE" || value == "yes" || value == "YES"
+}
+
+func envDuration(key string, fallback, minimum, maximum time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < minimum {
+		return fallback
+	}
+	if duration > maximum {
+		return maximum
+	}
+	return duration
 }
