@@ -301,6 +301,49 @@ cp "$input" "$outdir/source.pdf"
     assert "TOC" in _docx_xml(output, "word/document.xml")
 
 
+def test_export_bid_pdf_falls_back_to_libreoffice_binary(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
+    monkeypatch.delenv("LIBREOFFICE_PATH", raising=False)
+    fake_libreoffice = tmp_path / "fake-libreoffice.sh"
+    fake_libreoffice.write_text(
+        """#!/bin/sh
+outdir=""
+input=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--outdir" ]; then
+    shift
+    outdir="$1"
+  else
+    input="$1"
+  fi
+  shift
+done
+cp "$input" "$outdir/source.pdf"
+""",
+        encoding="utf-8",
+    )
+    fake_libreoffice.chmod(0o755)
+
+    def fake_which(name: str) -> str | None:
+        if name == "libreoffice":
+            return str(fake_libreoffice)
+        return None
+
+    monkeypatch.setattr("app.pipelines.export.docx_exporter.shutil.which", fake_which)
+    output = tmp_path / "bid.pdf"
+
+    export_bid_pdf(
+        "智慧交通平台",
+        "技术标",
+        [ExportChapter(title="实施计划", plain_text="项目实施内容。")],
+        output,
+        layout=ExportLayoutOptions(validate_pdf=False),
+    )
+
+    assert output.exists()
+    assert "实施计划" in _docx_xml(output, "word/document.xml")
+
+
 def test_validate_pdf_output_checks_text_and_rendered_pixels(tmp_path) -> None:
     valid_pdf = tmp_path / "valid.pdf"
     pdf = fitz.open()

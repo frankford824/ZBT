@@ -166,7 +166,7 @@ def export_bid_pdf(
         tmp_path = Path(tmpdir)
         docx_path = tmp_path / "source.docx"
         export_bid_docx(title, part_title, chapters, docx_path, layout=layout)
-        soffice = os.getenv("LIBREOFFICE_PATH", "soffice")
+        soffice = _libreoffice_executable()
         completed = subprocess.run(
             [
                 soffice,
@@ -191,6 +191,16 @@ def export_bid_pdf(
             _validate_pdf_output(pdf_path)
         shutil.move(str(pdf_path), output_path)
     return output_path
+
+
+def _libreoffice_executable() -> str:
+    configured = os.getenv("LIBREOFFICE_PATH", "").strip()
+    if configured:
+        return configured
+    executable = shutil.which("soffice") or shutil.which("libreoffice")
+    if not executable:
+        raise RuntimeError("LibreOffice executable not found; set LIBREOFFICE_PATH")
+    return executable
 
 
 def _new_document(context: dict[str, object]) -> DocxDocument:
