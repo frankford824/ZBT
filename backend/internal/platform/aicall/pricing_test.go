@@ -145,3 +145,21 @@ func TestNormalizeStatusRejectsUnsupportedValues(t *testing.T) {
 		t.Fatalf("expected unsupported status to be rejected, got %q", got)
 	}
 }
+
+func TestShouldUpdateExistingLogUsesCallbackStatusOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		current string
+		next    string
+		want    bool
+	}{
+		{current: "queued", next: "running", want: true},
+		{current: "running", next: "done", want: true},
+		{current: "running", next: "queued", want: false},
+		{current: "done", next: "failed", want: false},
+		{current: "failed", next: "done", want: false},
+	} {
+		if got := shouldUpdateExistingLog(tc.current, tc.next); got != tc.want {
+			t.Fatalf("expected %q -> %q update=%v, got %v", tc.current, tc.next, tc.want, got)
+		}
+	}
+}

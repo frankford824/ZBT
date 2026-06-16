@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/taskstatus"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -146,6 +147,33 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 				`, input.TenantID, input.TraceID, input.TaskType, stringFromMap(input.BizRef, "external_task_id")))
 				if err != nil {
 					return err
+				}
+				if shouldUpdateExistingLog(existing.Status, input.Status) {
+					updated, err := scanLog(tx.QueryRow(ctx, `
+						update ai_call_logs
+						set user_id = nullif($3, '')::uuid,
+							provider = $4,
+							model = $5,
+							input_tokens = $6,
+							output_tokens = $7,
+							estimated_cost = $8,
+							latency_ms = $9,
+							status = $10,
+							error_message = nullif($11, ''),
+							fallback_from = nullif($12, ''),
+							biz_ref = $13
+						where tenant_id = $1 and id = $2
+						returning id::text, user_id::text, '', trace_id, task_type, provider, model,
+							input_tokens, output_tokens, estimated_cost::float8, latency_ms, status,
+							error_message, fallback_from, biz_ref, created_at
+					`, input.TenantID, existing.ID, input.UserID, input.Provider, input.Model, input.InputTokens,
+						input.OutputTokens, input.EstimatedCost, input.LatencyMS, input.Status, input.ErrorMessage,
+						input.FallbackFrom, bizRefJSON))
+					if err != nil {
+						return err
+					}
+					log = updated
+					return nil
 				}
 				log = existing
 				return nil
@@ -315,6 +343,10 @@ func normalizeRecord(input RecordInput) RecordInput {
 		input.LatencyMS = 0
 	}
 	return input
+}
+
+func shouldUpdateExistingLog(currentStatus, nextStatus string) bool {
+	return taskstatus.ShouldApplyCallback(currentStatus, nextStatus)
 }
 
 type pricingRate struct {
