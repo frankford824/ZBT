@@ -9,7 +9,7 @@ import subprocess
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib import request
+from urllib import error, request
 
 import fitz
 from openpyxl import load_workbook
@@ -218,8 +218,15 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
             "text": text,
             "metadata": result.get("metadata", {}),
         }
-    except Exception as exc:
-        return {"status": "failed", "provider": provider, "error": str(exc)}
+    except error.HTTPError as exc:
+        return {
+            "status": "failed",
+            "provider": provider,
+            "error": "ocr request failed",
+            "http_status": exc.code,
+        }
+    except Exception:
+        return {"status": "failed", "provider": provider, "error": "ocr request failed"}
 
 
 def _parse_docx(content: bytes) -> str:

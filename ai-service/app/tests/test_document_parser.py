@@ -1,4 +1,5 @@
 from io import BytesIO
+import urllib.error
 
 import fitz
 from docx import Document
@@ -85,6 +86,28 @@ def test_image_parser_clears_ocr_required_after_successful_ocr(monkeypatch) -> N
     assert result.metadata["ocr_required"] is False
     assert result.metadata["ocr"]["status"] == "done"
     assert "图片识别文本" in text
+
+
+def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+
+    def raise_http_error(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://ocr.example.test/parse",
+            502,
+            "Bad Gateway",
+            {},
+            BytesIO(b'{"error":"secret OCR payload fragment"}'),
+        )
+
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", raise_http_error)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr"]["status"] == "failed"
+    assert result.metadata["ocr"]["error"] == "ocr request failed"
+    assert result.metadata["ocr"]["http_status"] == 502
+    assert "secret OCR" not in str(result.metadata["ocr"])
 
 
 def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> None:
