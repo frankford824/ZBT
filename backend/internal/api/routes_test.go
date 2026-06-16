@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
+	platformapproval "github.com/frankford824/ZBT/backend/internal/platform/approval"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
@@ -50,6 +51,27 @@ func TestRespondStatusMapsAICallInvalidRequestToBadRequest(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid AI call request, got %d", recorder.Code)
+	}
+}
+
+func TestRespondStatusMapsApprovalForbiddenToForbidden(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+
+	respondStatus(context, http.StatusOK, gin.H{"status": "ok"}, platformapproval.ErrForbidden)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for forbidden approval action, got %d", recorder.Code)
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode forbidden response: %v", err)
+	}
+	if body.Code != "permission_denied" {
+		t.Fatalf("expected permission_denied response code, got %q", body.Code)
 	}
 }
 

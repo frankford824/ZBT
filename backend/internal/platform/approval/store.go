@@ -16,6 +16,7 @@ import (
 var (
 	ErrNotFound       = errors.New("approval resource not found")
 	ErrInvalidRequest = errors.New("invalid approval request")
+	ErrForbidden      = errors.New("approval action forbidden")
 )
 
 type Store struct {
@@ -128,6 +129,9 @@ func (s *Store) CreateChain(ctx context.Context, tenantID string, req CreateChai
 	stepsRaw, _ := json.Marshal(normalized.Steps)
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := validateChainStepUsers(ctx, tx, tenantID, normalized.Steps); err != nil {
+			return err
+		}
 		return tx.QueryRow(ctx, `
 			insert into approval_chains (tenant_id, name, description, resource_type, steps, enabled)
 			values ($1, $2, $3, $4, $5, $6)
@@ -173,6 +177,9 @@ func (s *Store) UpdateChain(ctx context.Context, tenantID, id string, req Update
 	}
 	stepsRaw, _ := json.Marshal(normalized.Steps)
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := validateChainStepUsers(ctx, tx, tenantID, normalized.Steps); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			update approval_chains
 			set name = $3, description = $4, resource_type = $5, steps = $6, enabled = $7, updated_at = now()
@@ -347,13 +354,19 @@ func (s *Store) Approve(ctx context.Context, tenantID, userID, instanceID string
 		if instance.Status != "pending" {
 			return ErrInvalidRequest
 		}
+		step, steps, err := currentApprovalStep(instance.Snapshot, instance.CurrentStep)
+		if err != nil {
+			return err
+		}
+		if err := ensureStepActor(ctx, tx, tenantID, userID, step); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			insert into approval_actions (tenant_id, instance_id, actor_user_id, action, step_order, comment)
 			values ($1, $2, $3, 'approve', $4, $5)
 		`, tenantID, instance.ID, userID, instance.CurrentStep, strings.TrimSpace(req.Comment)); err != nil {
 			return err
 		}
-		steps := activeSteps(instance.Snapshot)
 		if instance.CurrentStep >= len(steps) {
 			if _, err := tx.Exec(ctx, `
 				update approval_instances
@@ -403,6 +416,13 @@ func (s *Store) Reject(ctx context.Context, tenantID, userID, instanceID string,
 		}
 		if instance.Status != "pending" {
 			return ErrInvalidRequest
+		}
+		step, _, err := currentApprovalStep(instance.Snapshot, instance.CurrentStep)
+		if err != nil {
+			return err
+		}
+		if err := ensureStepActor(ctx, tx, tenantID, userID, step); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			insert into approval_actions (tenant_id, instance_id, actor_user_id, action, step_order, comment)
@@ -622,6 +642,88 @@ func notifySubmitter(ctx context.Context, tx pgx.Tx, tenantID string, submittedB
 	return err
 }
 
+func currentApprovalStep(snapshot []Step, currentStep int) (Step, []Step, error) {
+	steps := activeSteps(snapshot)
+	if len(steps) == 0 || currentStep <= 0 || currentStep > len(steps) {
+		return Step{}, nil, ErrInvalidRequest
+	}
+	return steps[currentStep-1], steps, nil
+}
+
+func ensureStepActor(ctx context.Context, tx pgx.Tx, tenantID, userID string, step Step) error {
+	actorID, err := normalizeUUID(userID)
+	if err != nil {
+		return err
+	}
+	stepUserID := strings.TrimSpace(step.UserID)
+	if stepUserID != "" {
+		allowedUserID, err := normalizeUUID(stepUserID)
+		if err != nil {
+			return err
+		}
+		if actorID != allowedUserID {
+			return ErrForbidden
+		}
+		return nil
+	}
+	roleCode := strings.TrimSpace(step.RoleCode)
+	if roleCode == "" {
+		return ErrInvalidRequest
+	}
+	var allowed bool
+	if err := tx.QueryRow(ctx, `
+		select exists(
+			select 1
+			from tenant_members tm
+			join tenant_member_roles tmr on tmr.tenant_member_id = tm.id and tmr.tenant_id = tm.tenant_id
+			join roles r on r.id = tmr.role_id and r.tenant_id = tm.tenant_id
+			where tm.tenant_id = $1
+				and tm.user_id = $2
+				and tm.status = 'active'
+				and r.code = $3
+		)
+	`, tenantID, actorID, roleCode).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func validateChainStepUsers(ctx context.Context, tx pgx.Tx, tenantID string, steps []Step) error {
+	seen := map[string]bool{}
+	for _, step := range steps {
+		if strings.TrimSpace(step.UserID) == "" {
+			continue
+		}
+		userID, err := normalizeUUID(step.UserID)
+		if err != nil {
+			return err
+		}
+		if seen[userID] {
+			continue
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			select exists(
+				select 1
+				from tenant_members
+				where tenant_id = $1
+					and user_id = $2
+					and status = 'active'
+			)
+		`, tenantID, userID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrInvalidRequest
+		}
+		seen[userID] = true
+	}
+	return nil
+}
+
 func normalizeChain(req CreateChainRequest) (CreateChainRequest, error) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Description = strings.TrimSpace(req.Description)
@@ -647,6 +749,13 @@ func normalizeChain(req CreateChainRequest) (CreateChainRequest, error) {
 		req.Steps[i].RoleCode = strings.TrimSpace(req.Steps[i].RoleCode)
 		req.Steps[i].UserID = strings.TrimSpace(req.Steps[i].UserID)
 		req.Steps[i].Condition = strings.TrimSpace(req.Steps[i].Condition)
+		if req.Steps[i].UserID != "" {
+			userID, err := normalizeUUID(req.Steps[i].UserID)
+			if err != nil {
+				return req, err
+			}
+			req.Steps[i].UserID = userID
+		}
 		if req.Steps[i].Name == "" {
 			req.Steps[i].Name = "审批级"
 		}
@@ -671,10 +780,16 @@ func activeSteps(steps []Step) []Step {
 }
 
 func validateUUID(value string) error {
-	if _, err := uuid.Parse(strings.TrimSpace(value)); err != nil {
-		return ErrInvalidRequest
+	_, err := normalizeUUID(value)
+	return err
+}
+
+func normalizeUUID(value string) (string, error) {
+	id, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", ErrInvalidRequest
 	}
-	return nil
+	return id.String(), nil
 }
 
 func normalizeInstanceStatusFilter(value string) (string, error) {

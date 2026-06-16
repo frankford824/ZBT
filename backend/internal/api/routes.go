@@ -2190,6 +2190,10 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return
 	}
+	if errors.Is(err, platformapproval.ErrForbidden) {
+		c.JSON(http.StatusForbidden, apiError("permission_denied", "当前账号没有此操作权限"))
+		return
+	}
 	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
