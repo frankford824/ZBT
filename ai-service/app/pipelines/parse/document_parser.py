@@ -388,7 +388,7 @@ def _parse_legacy_office(
 
 
 def _convert_with_libreoffice(filename: str, content: bytes, target_suffix: str) -> dict[str, object]:
-    executable = os.getenv("LIBREOFFICE_BIN", "").strip() or shutil.which("soffice") or shutil.which("libreoffice")
+    executable = _libreoffice_convert_executable()
     if not executable:
         return {"status": "converter_not_configured", "target_suffix": target_suffix}
     source_name = Path(filename).name or f"input{target_suffix}"
@@ -431,6 +431,15 @@ def _convert_with_libreoffice(filename: str, content: bytes, target_suffix: str)
             "filename": converted_path.name,
             "content": converted_path.read_bytes(),
         }
+
+
+def _libreoffice_convert_executable() -> str | None:
+    return (
+        os.getenv("LIBREOFFICE_BIN", "").strip()
+        or os.getenv("LIBREOFFICE_PATH", "").strip()
+        or shutil.which("soffice")
+        or shutil.which("libreoffice")
+    )
 
 
 def _cell_text(value: object) -> str:

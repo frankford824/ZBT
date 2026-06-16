@@ -6,7 +6,7 @@ from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
 
-from app.pipelines.parse.document_parser import _env_int, _extract_pdf_tables, parse_document
+from app.pipelines.parse.document_parser import _env_int, _extract_pdf_tables, _libreoffice_convert_executable, parse_document
 from app.schemas.knowledge import KnowledgeProcessRequest
 
 
@@ -192,6 +192,7 @@ def test_ocr_skips_oversized_content_without_external_request(monkeypatch) -> No
 
 def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> None:
     monkeypatch.delenv("LIBREOFFICE_BIN", raising=False)
+    monkeypatch.delenv("LIBREOFFICE_PATH", raising=False)
     monkeypatch.setattr("app.pipelines.parse.document_parser.shutil.which", lambda _name: None)
 
     result = parse_document(_request("legacy.doc"), b"legacy-binary")
@@ -200,6 +201,14 @@ def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> 
     assert result.metadata["legacy_conversion"]["status"] == "converter_not_configured"
     assert result.metadata["needs_human_input"] is True
     assert result.chunks[0].metadata["needs_human_input"] is True
+
+
+def test_legacy_office_converter_uses_libreoffice_path(monkeypatch) -> None:
+    monkeypatch.delenv("LIBREOFFICE_BIN", raising=False)
+    monkeypatch.setenv("LIBREOFFICE_PATH", "/opt/libreoffice/program/soffice")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.shutil.which", lambda _name: None)
+
+    assert _libreoffice_convert_executable() == "/opt/libreoffice/program/soffice"
 
 
 def test_docx_parser_includes_paragraphs_and_tables() -> None:
