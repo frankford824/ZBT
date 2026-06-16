@@ -732,13 +732,17 @@ a {
 }
 
 .auth-form-panel {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   display: grid;
   place-items: center;
   padding: 40px 24px;
 }
 
 .auth-card {
-  width: min(420px, 100%);
+  width: 100%;
+  max-width: 420px;
   border: none;
   box-shadow: var(--shadow-card);
   animation: auth-rise 0.45s ease both;
@@ -757,6 +761,15 @@ a {
 
 .auth-card .ant-card-body {
   padding: 32px;
+}
+
+.auth-card .ant-form,
+.auth-card .ant-form-item,
+.auth-card .ant-form-item-control,
+.auth-card .ant-input,
+.auth-card .ant-input-affix-wrapper,
+.auth-card .ant-btn {
+  max-width: 100%;
 }
 
 .auth-stack {
@@ -1251,12 +1264,48 @@ a {
     padding: 28px 24px;
   }
 
+  .auth-form-panel {
+    padding: 80px 32px;
+  }
+
+  .auth-card {
+    max-width: min(360px, calc(100vw - 96px));
+  }
+
   .auth-thesis {
     margin-top: 20px;
   }
 
   .auth-chain {
     display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-form-panel {
+    padding: 80px 24px;
+  }
+
+  .auth-card {
+    max-width: min(300px, calc(100vw - 64px));
+  }
+
+  .auth-card .ant-card-body {
+    padding: 28px 24px;
+  }
+}
+
+@media (max-width: 360px) {
+  .auth-form-panel {
+    padding-inline: 16px;
+  }
+
+  .auth-card {
+    max-width: calc(100vw - 32px);
+  }
+
+  .auth-card .ant-card-body {
+    padding: 24px;
   }
 }
 

@@ -344,7 +344,7 @@ export function TeamPage() {
             key: 'approvals',
             label: '审批',
             children: (
-              <Space direction="vertical" size={16} className="full-width">
+              <Space orientation="vertical" size={16} className="full-width">
                 <Row gutter={[16, 16]}>
                   <Col xs={24} xl={14}>
                     <Typography.Title level={4}>待办审批</Typography.Title>
@@ -489,7 +489,7 @@ export function TeamPage() {
             ) : notificationsQuery.isError ? (
               <ErrorBlock />
             ) : (
-              <Space direction="vertical" size={16} className="full-width">
+              <Space orientation="vertical" size={16} className="full-width">
                 <Button loading={readMutation.isPending} onClick={() => readMutation.mutate()}>
                   全部标记已读
                 </Button>

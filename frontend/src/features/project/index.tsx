@@ -135,7 +135,7 @@ export function ProjectsPage() {
         {statuses.map((status) => (
           <Col flex="1 1 220px" style={{ minWidth: 0 }} key={status}>
             <Card title={projectStatusLabel(status)} size="small">
-              <Space direction="vertical" className="full-width">
+              <Space orientation="vertical" className="full-width">
                 {projects.data
                   .filter((project) => project.status === status)
                   .map((project) => (

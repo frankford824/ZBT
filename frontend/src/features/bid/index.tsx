@@ -300,7 +300,7 @@ export function BidListPage() {
         </Button> : null,
       ]}
     >
-      <Space direction="vertical" size={16} className="full-width">
+      <Space orientation="vertical" size={16} className="full-width">
         <Segmented
           options={Object.keys(bidStatusFilters)}
           value={statusFilter}
@@ -440,7 +440,7 @@ export function BidTemplatesPage() {
                     </Link> : null,
                   ]}
               >
-                <Space direction="vertical" size={8}>
+                <Space orientation="vertical" size={8}>
                   <Space wrap>
                     <Tag color={template.bid_type === 'combined' ? 'green' : 'blue'}>
                       {template.bid_type === 'combined' ? '综合标' : template.bid_type === 'separated' ? '分册标' : '自定义'}
@@ -763,7 +763,7 @@ export function BidWizardPage() {
       permission={canWrite}
       bare
     >
-      <Space direction="vertical" size={20} className="full-width">
+      <Space orientation="vertical" size={20} className="full-width">
         <Steps
           current={current}
           items={steps.map((title) => ({ title }))}
@@ -771,7 +771,7 @@ export function BidWizardPage() {
         />
         <Card title={steps[current]}>
           {current === 0 ? (
-            <Space direction="vertical" size={16} className="full-width">
+            <Space orientation="vertical" size={16} className="full-width">
               <Space wrap>
                 <Upload
                   accept=".pdf,.doc,.docx,.txt,.xlsx,.xlsm,.xls,.pptx,.pptm,.ppt,.png,.jpg,.jpeg,.webp,.tif,.tiff"
@@ -805,7 +805,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 1 ? (
-            <Space direction="vertical" size={16} className="full-width">
+            <Space orientation="vertical" size={16} className="full-width">
               <Space wrap>
                 <Button
                   type="primary"
@@ -840,7 +840,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 2 ? (
-            <Space direction="vertical" size={16} className="full-width">
+            <Space orientation="vertical" size={16} className="full-width">
               <Space wrap>
                 <Button
                   type="primary"
@@ -857,7 +857,7 @@ export function BidWizardPage() {
                   key: part.id,
                   label: part.title,
                   children: (
-                    <Space direction="vertical" size={12} className="full-width">
+                    <Space orientation="vertical" size={12} className="full-width">
                       <Space wrap>
                         <Button icon={<PlusOutlined />} onClick={() => addOutlineDraft(part.id)}>
                           新增章节
@@ -918,7 +918,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 3 ? (
-            <Space direction="vertical" size={16} className="full-width">
+            <Space orientation="vertical" size={16} className="full-width">
               <Table
                 size="small"
                 pagination={false}
@@ -956,7 +956,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 4 ? (
-            <Space direction="vertical" size={16} className="full-width">
+            <Space orientation="vertical" size={16} className="full-width">
               <Space wrap>
                 <Button
                   type="primary"
@@ -986,7 +986,7 @@ export function BidWizardPage() {
                     key: part.id,
                     label: part.title,
                     children: (
-                      <Space direction="vertical" className="full-width">
+                      <Space orientation="vertical" className="full-width">
                         <Progress percent={percent} />
                         <Timeline
                           items={partChapters.map((chapter) => ({
@@ -1063,7 +1063,7 @@ export function BidWizardPage() {
             </Button>
           ) : null}
           {current === 6 ? (
-            <Space direction="vertical" className="full-width">
+            <Space orientation="vertical" className="full-width">
               <Space wrap>
                 {exportableParts.map((part) => (
                   <Space.Compact key={part.id}>
@@ -1560,7 +1560,7 @@ export function BidEditorPage() {
           </Card>
         </div>
         <Card title="智能助手" className="ai-card" size="small">
-          <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={14} style={{ width: '100%' }}>
             <div className="ai-panel-row">
               <span>
                 <span className={`conn-dot ${generationStreamStatus}`} />

@@ -97,7 +97,7 @@ export function TendersPage() {
   })
 
   const tenderTable = () => (
-    <Space direction="vertical" size={16} className="full-width">
+    <Space orientation="vertical" size={16} className="full-width">
       <Input.Search
         allowClear
         placeholder="搜索标讯名称、招标单位关键词"

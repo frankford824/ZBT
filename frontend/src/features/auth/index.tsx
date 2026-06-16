@@ -35,7 +35,7 @@ export function LoginPage() {
   })
 
   return (
-    <Space direction="vertical" size={20} className="auth-stack">
+    <Space orientation="vertical" size={20} className="auth-stack">
       <div>
         <Typography.Title level={3} className="auth-form-title">
           登录工作台
@@ -68,7 +68,7 @@ export function LoginPage() {
           登录
         </Button>
       </Form>
-      <Space split={<Typography.Text type="secondary">·</Typography.Text>}>
+      <Space separator={<Typography.Text type="secondary">·</Typography.Text>}>
         <Link to="/register">注册企业</Link>
         <Link to="/onboarding">企业初始化</Link>
       </Space>
@@ -88,7 +88,7 @@ export function RegisterPage() {
   })
 
   return (
-    <Space direction="vertical" size={20} className="auth-stack">
+    <Space orientation="vertical" size={20} className="auth-stack">
       <div>
         <Typography.Title level={3} className="auth-form-title">
           注册企业
@@ -158,7 +158,7 @@ export function OnboardingPage() {
   }
 
   return (
-    <Space direction="vertical" size={20} className="auth-stack">
+    <Space orientation="vertical" size={20} className="auth-stack">
       <div>
         <Typography.Title level={3} className="auth-form-title">
           企业初始化

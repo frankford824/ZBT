@@ -25,7 +25,7 @@ export function PageFrame({
   children,
 }: PageFrameProps) {
   return (
-    <Space direction="vertical" size={16} className="page-stack" data-page-tags={tags.join(' ')}>
+    <Space orientation="vertical" size={16} className="page-stack" data-page-tags={tags.join(' ')}>
       <Flex justify="space-between" gap={16} align="flex-end" wrap>
         <div>
           <Typography.Text className="page-eyebrow">{module}</Typography.Text>

@@ -80,7 +80,7 @@ export function KnowledgeHomePage() {
       tags={['page-knowledge', '/knowledge']}
       bare
     >
-      <Space direction="vertical" size={16} className="full-width">
+      <Space orientation="vertical" size={16} className="full-width">
         <Input.Search
           placeholder="搜索企业资质、案例、技术方案"
           enterButton="搜索"
@@ -387,7 +387,7 @@ export function KnowledgeDocsPage() {
           </Card>
         </Col>
         <Col xs={24} xl={18}>
-          <Space direction="vertical" className="full-width">
+          <Space orientation="vertical" className="full-width">
               {canWrite ? (
                 <Upload.Dragger {...uploadProps}>
                   <CloudUploadOutlined />
