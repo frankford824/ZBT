@@ -45,6 +45,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../../shared/files/uploadLimits'
 import { formatDateOnly, formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
@@ -241,6 +242,12 @@ export function KnowledgeDocsPage() {
     showUploadList: false,
     customRequest: async ({ file, onError, onSuccess }) => {
       const uploadFile = file as File
+      if (isUploadFileTooLarge(uploadFile)) {
+        const error = new Error(uploadSizeLimitMessage())
+        message.error(error.message)
+        onError?.(error)
+        return
+      }
       try {
         const presigned = await createPresignedUpload({
           filename: uploadFile.name,
@@ -998,14 +1005,4 @@ function statusColor(status: KnowledgeDocumentDTO['parse_status']) {
     failed: 'red',
   }
   return colors[status]
-}
-
-function formatBytes(value: number) {
-  if (value < 1024) {
-    return `${value} B`
-  }
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`
-  }
-  return `${(value / 1024 / 1024).toFixed(1)} MB`
 }

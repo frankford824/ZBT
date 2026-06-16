@@ -93,6 +93,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../../shared/files/uploadLimits'
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 import { openSse } from '../../shared/sse/client'
@@ -777,6 +778,11 @@ export function BidWizardPage() {
                   accept=".pdf,.doc,.docx,.txt,.xlsx,.xlsm,.xls,.pptx,.pptm,.ppt,.png,.jpg,.jpeg,.webp,.tif,.tiff"
                   maxCount={1}
                   beforeUpload={(file) => {
+                    if (isUploadFileTooLarge(file)) {
+                      message.error(uploadSizeLimitMessage())
+                      setTenderFile(null)
+                      return Upload.LIST_IGNORE
+                    }
                     setTenderFile(file)
                     return false
                   }}
@@ -800,7 +806,7 @@ export function BidWizardPage() {
                 </Tag>
               </Space>
               <Typography.Text type="secondary">
-                {tenderFile ? `${tenderFile.name} · ${Math.ceil(tenderFile.size / 1024)} KB` : '支持招标文件、清单表格、演示文稿或扫描图片'}
+                {tenderFile ? `${tenderFile.name} · ${formatBytes(tenderFile.size)}` : '支持招标文件、清单表格、演示文稿或扫描图片'}
               </Typography.Text>
             </Space>
           ) : null}

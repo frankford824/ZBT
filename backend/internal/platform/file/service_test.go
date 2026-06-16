@@ -1,6 +1,9 @@
 package file
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeOptionalUUIDRejectsInvalidValue(t *testing.T) {
 	if _, err := normalizeOptionalUUID("not-a-uuid"); err == nil {
@@ -67,6 +70,14 @@ func TestSanitizeFilenameKeepsOnlyBaseName(t *testing.T) {
 	}
 }
 
+func TestSanitizeFilenameRejectsSpecialPathSegments(t *testing.T) {
+	for _, filename := range []string{".", "..", "../.."} {
+		if got := sanitizeFilename(filename); got != "" {
+			t.Fatalf("expected %q to be rejected, got %q", filename, got)
+		}
+	}
+}
+
 func TestSanitizeFilenameRemovesControlCharacters(t *testing.T) {
 	got := sanitizeFilename("..\\bad\r\nX-Injected: yes.pdf")
 	if got != "badX-Injected: yes.pdf" {
@@ -78,5 +89,33 @@ func TestContentDispositionUsesHeaderSafeFallbackName(t *testing.T) {
 	header := contentDisposition("attachment", "投标\"\r\n文件\\demo.pdf")
 	if header != `attachment; filename="投标文件demo.pdf"; filename*=UTF-8''%E6%8A%95%E6%A0%87%22%E6%96%87%E4%BB%B6%5Cdemo.pdf` {
 		t.Fatalf("unexpected content disposition: %q", header)
+	}
+}
+
+func TestNormalizeContentTypeDefaultsAndRejectsOversizedValues(t *testing.T) {
+	contentType, err := normalizeContentType(" ")
+	if err != nil {
+		t.Fatalf("expected default content type: %v", err)
+	}
+	if contentType != "application/octet-stream" {
+		t.Fatalf("unexpected default content type: %q", contentType)
+	}
+
+	if _, err := normalizeContentType(strings.Repeat("a", maxContentTypeBytes+1)); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized content type to be rejected, got %v", err)
+	}
+}
+
+func TestValidateUploadSizeRejectsEmptyNegativeAndOversizedFiles(t *testing.T) {
+	for _, size := range []int64{-1, 0, maxUploadSizeBytes + 1} {
+		if err := validateUploadSize(size); err != ErrInvalidRequest {
+			t.Fatalf("expected size %d to be rejected, got %v", size, err)
+		}
+	}
+
+	for _, size := range []int64{1, maxUploadSizeBytes} {
+		if err := validateUploadSize(size); err != nil {
+			t.Fatalf("expected size %d to be accepted, got %v", size, err)
+		}
 	}
 }

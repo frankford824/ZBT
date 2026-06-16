@@ -30,6 +30,8 @@ const presignTTL = 15 * time.Minute
 const (
 	defaultUploadBizType    = "knowledge"
 	defaultGeneratedBizType = "generated"
+	maxUploadSizeBytes      = 200 * 1024 * 1024
+	maxContentTypeBytes     = 255
 )
 
 var bizTypeAccessModules = map[string]string{
@@ -140,16 +142,16 @@ func (s *Service) PresignUpload(ctx context.Context, tenantID, userID string, re
 	if err != nil {
 		return PresignUploadResponse{}, err
 	}
-	if req.SizeBytes < 0 {
+	if err := validateUploadSize(req.SizeBytes); err != nil {
 		return PresignUploadResponse{}, ErrInvalidRequest
 	}
 	filename := sanitizeFilename(req.Filename)
 	if filename == "" {
 		return PresignUploadResponse{}, ErrInvalidRequest
 	}
-	contentType := strings.TrimSpace(req.ContentType)
-	if contentType == "" {
-		contentType = "application/octet-stream"
+	contentType, err := normalizeContentType(req.ContentType)
+	if err != nil {
+		return PresignUploadResponse{}, err
 	}
 
 	objectKey := ObjectKey(tenantID, bizType)
@@ -202,9 +204,12 @@ func (s *Service) CreateGeneratedAsset(ctx context.Context, tenantID, userID str
 	if filename == "" || len(req.Content) == 0 {
 		return Asset{}, ErrInvalidRequest
 	}
-	contentType := strings.TrimSpace(req.ContentType)
-	if contentType == "" {
-		contentType = "application/octet-stream"
+	if err := validateUploadSize(int64(len(req.Content))); err != nil {
+		return Asset{}, err
+	}
+	contentType, err := normalizeContentType(req.ContentType)
+	if err != nil {
+		return Asset{}, err
 	}
 	objectKey := GeneratedObjectKey(tenantID, bizType, bizID)
 	if _, err := s.internal.PutObject(ctx, s.bucket, objectKey, bytes.NewReader(req.Content), int64(len(req.Content)), minio.PutObjectOptions{ContentType: contentType}); err != nil {
@@ -268,6 +273,9 @@ func (s *Service) ConfirmUpload(ctx context.Context, tenantID, fileID string) (A
 		asset.ContentType = info.ContentType
 	}
 	asset.SizeBytes = info.Size
+	if err := validateUploadSize(asset.SizeBytes); err != nil {
+		return Asset{}, err
+	}
 
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		updated, err := scanAsset(tx.QueryRow(ctx, `
@@ -420,7 +428,11 @@ func sanitizeFilename(filename string) string {
 	if cleaned == "" {
 		return ""
 	}
-	return stripControlChars(path.Base(cleaned))
+	base := stripControlChars(path.Base(cleaned))
+	if base == "." || base == ".." {
+		return ""
+	}
+	return base
 }
 
 func sanitizeSegment(value string) string {
@@ -457,6 +469,24 @@ func normalizeBizType(value, fallback string) (string, error) {
 		return "", ErrInvalidRequest
 	}
 	return bizType, nil
+}
+
+func normalizeContentType(value string) (string, error) {
+	contentType := strings.TrimSpace(value)
+	if contentType == "" {
+		return "application/octet-stream", nil
+	}
+	if len(contentType) > maxContentTypeBytes {
+		return "", ErrInvalidRequest
+	}
+	return contentType, nil
+}
+
+func validateUploadSize(sizeBytes int64) error {
+	if sizeBytes <= 0 || sizeBytes > maxUploadSizeBytes {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func AccessModuleForBizType(bizType string) (string, bool) {
