@@ -203,6 +203,29 @@ def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> 
     assert result.chunks[0].metadata["needs_human_input"] is True
 
 
+def test_legacy_office_conversion_failure_does_not_expose_converter_output(monkeypatch) -> None:
+    class FailedConversion:
+        returncode = 1
+        stderr = "secret tender body fragment"
+        stdout = "C:\\sensitive\\legacy.doc"
+
+    monkeypatch.setattr("app.pipelines.parse.document_parser._libreoffice_convert_executable", lambda: "/usr/bin/soffice")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.subprocess.run", lambda *_args, **_kwargs: FailedConversion())
+
+    result = parse_document(_request("legacy.doc"), b"legacy-binary")
+    conversion = result.metadata["legacy_conversion"]
+
+    assert conversion == {
+        "status": "failed",
+        "target_suffix": ".docx",
+        "error": "conversion_failed",
+        "return_code": 1,
+    }
+    assert "secret tender" not in str(conversion)
+    assert "sensitive" not in str(conversion)
+    assert result.metadata["needs_human_input"] is True
+
+
 def test_legacy_office_converter_uses_libreoffice_path(monkeypatch) -> None:
     monkeypatch.delenv("LIBREOFFICE_BIN", raising=False)
     monkeypatch.setenv("LIBREOFFICE_PATH", "/opt/libreoffice/program/soffice")

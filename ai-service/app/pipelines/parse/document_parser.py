@@ -509,10 +509,19 @@ def _convert_with_libreoffice(filename: str, content: bytes, target_suffix: str)
                 timeout=timeout,
             )
         except Exception as exc:
-            return {"status": "failed", "target_suffix": target_suffix, "error": str(exc)}
+            return {
+                "status": "failed",
+                "target_suffix": target_suffix,
+                "error": "conversion_failed",
+                "error_type": type(exc).__name__,
+            }
         if completed.returncode != 0:
-            message = completed.stderr.strip() or completed.stdout.strip() or "LibreOffice conversion failed"
-            return {"status": "failed", "target_suffix": target_suffix, "error": message[:500]}
+            return {
+                "status": "failed",
+                "target_suffix": target_suffix,
+                "error": "conversion_failed",
+                "return_code": completed.returncode,
+            }
         converted_files = [
             path
             for path in Path(tmpdir).iterdir()
