@@ -2024,6 +2024,9 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		if err != nil {
 			return err
 		}
+		if err := ensureExportAttachmentObjectKeysReady(ctx, tx, tenantID, req.Attachments, req.BOQFiles); err != nil {
+			return err
+		}
 
 		exportID := uuid.NewString()
 		fileID := uuid.NewString()
@@ -4200,6 +4203,44 @@ func validateExportInlineAttachmentContent(contentBase64 string) (int, error) {
 		return 0, ErrInvalidRequest
 	}
 	return len(content), nil
+}
+
+func ensureExportAttachmentObjectKeysReady(ctx context.Context, tx pgx.Tx, tenantID string, groups ...[]map[string]any) error {
+	for _, objectKey := range exportAttachmentObjectKeys(groups...) {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			select exists(
+				select 1
+				from file_assets
+				where tenant_id = $1 and object_key = $2 and status = 'ready'
+			)
+		`, tenantID, objectKey).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrInvalidRequest
+		}
+	}
+	return nil
+}
+
+func exportAttachmentObjectKeys(groups ...[]map[string]any) []string {
+	objectKeys := []string{}
+	seen := map[string]struct{}{}
+	for _, attachments := range groups {
+		for _, attachment := range attachments {
+			objectKey, _, ok := exportStringField(attachment, "object_key")
+			if !ok || objectKey == "" {
+				continue
+			}
+			if _, exists := seen[objectKey]; exists {
+				continue
+			}
+			seen[objectKey] = struct{}{}
+			objectKeys = append(objectKeys, objectKey)
+		}
+	}
+	return objectKeys
 }
 
 func exportStringField(values map[string]any, key string) (string, bool, bool) {

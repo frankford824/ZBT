@@ -124,6 +124,29 @@ func TestValidateExportInlineAttachmentContentRejectsOversizedEncodedContent(t *
 	}
 }
 
+func TestExportAttachmentObjectKeysDedupesObjectBackedAttachments(t *testing.T) {
+	got := exportAttachmentObjectKeys(
+		[]map[string]any{
+			{"filename": "a.txt", "object_key": "tenant-demo/assets/a.txt"},
+			{"filename": "inline.txt", "content_base64": "YQ=="},
+		},
+		[]map[string]any{
+			{"filename": "a-copy.txt", "object_key": "tenant-demo/assets/a.txt"},
+			{"filename": "b.txt", "object_key": "tenant-demo/assets/b.txt"},
+		},
+	)
+
+	want := []string{"tenant-demo/assets/a.txt", "tenant-demo/assets/b.txt"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected object keys: got %v want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("unexpected object keys: got %v want %v", got, want)
+		}
+	}
+}
+
 func TestNormalizeBidTypeDefaultsOnlyBlankType(t *testing.T) {
 	bidType, err := normalizeBidType(" ")
 	if err != nil {
