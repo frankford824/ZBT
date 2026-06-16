@@ -83,7 +83,7 @@ export type MemberDTO = {
     email: string
     name: string
   }
-  status: string
+  status: 'active' | 'invited' | 'disabled'
   roles: RoleDTO[]
 }
 
@@ -205,7 +205,7 @@ export type KnowledgeDocumentDTO = {
     filename: string
     content_type: string
     size_bytes: number
-    status: string
+    status: FileAssetDTO['status']
   }
   category: KnowledgeCategoryDTO | null
   tags: KnowledgeTagDTO[]
@@ -256,7 +256,7 @@ export type AICallLogDTO = {
   output_tokens: number
   estimated_cost: number
   latency_ms: number
-  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | string
+  status: AITaskDTO['status']
   error_message: string | null
   fallback_from: string | null
   biz_ref: Record<string, unknown>
@@ -293,7 +293,7 @@ export type TenderSourceDTO = {
   url: string
   status: 'active' | 'inactive' | 'failed'
   last_verified_at: string | null
-  last_verify_status: string | null
+  last_verify_status: 'ok' | 'failed' | null
   last_verify_message: string
   config: Record<string, unknown>
   created_at: string
@@ -303,7 +303,7 @@ export type TenderSourceDTO = {
 export type TenderProjectDTO = {
   id: string
   name: string
-  status: string
+  status: ProjectDTO['status']
   created_at: string
   updated_at: string
 }
@@ -501,7 +501,7 @@ export type BidGenerationSnapshotDTO = {
     id: string
     bid_part_id: string
     title: string
-    status: string
+    status: BidChapterDTO['status']
     sort_order: number
     source_ref_count: number
     needs_human_input_count: number
@@ -580,7 +580,7 @@ export type BidDocumentDTO = {
   project_name: string
   title: string
   bid_type: 'combined' | 'separated' | 'custom'
-  status: string
+  status: 'draft' | 'generating' | 'editing' | 'in_review' | 'approved' | 'submitted' | 'archived'
   created_at: string
   updated_at: string
 }
@@ -915,7 +915,7 @@ export async function submitBidForApproval(bidId: string): Promise<ApprovalDetai
   return data
 }
 
-export async function fetchApprovals(params?: { status?: string }): Promise<ApprovalInstanceDTO[]> {
+export async function fetchApprovals(params?: { status?: ApprovalInstanceDTO['status'] }): Promise<ApprovalInstanceDTO[]> {
   const { data } = await apiClient.get<{ items: ApprovalInstanceDTO[] }>('/approvals', { params })
   return data.items
 }
@@ -938,7 +938,7 @@ export async function rejectApproval(approvalId: string, comment?: string): Prom
 export async function fetchTenders(params?: {
   q?: string
   region?: string
-  status?: string
+  status?: TenderDTO['status']
   source_id?: string
   favorite?: boolean
   recommended?: boolean
@@ -996,7 +996,7 @@ export async function verifyTenderSource(sourceId: string): Promise<TenderSource
   return data
 }
 
-export async function fetchProjects(params?: { status?: string }): Promise<ProjectDTO[]> {
+export async function fetchProjects(params?: { status?: ProjectDTO['status'] }): Promise<ProjectDTO[]> {
   const { data } = await apiClient.get<{ items: ProjectDTO[] }>('/projects', { params })
   return data.items
 }
