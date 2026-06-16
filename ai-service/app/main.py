@@ -30,7 +30,11 @@ from app.pipelines.parse.tender_parser import (
 )
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.cost import CostAdviceRequest
-from app.schemas.export import DocumentExportRequest, ExportAttachment
+from app.schemas.export import (
+    MAX_EXPORT_INLINE_ATTACHMENT_BYTES,
+    DocumentExportRequest,
+    ExportAttachment,
+)
 from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest
 from app.schemas.knowledge import (
     KnowledgeEmbeddingRequest,
@@ -72,6 +76,9 @@ DEFAULT_CALLBACK_ALLOWED_HOSTS = {"backend", "localhost", "127.0.0.1", "host.doc
 DEFAULT_CALLBACK_MAX_ATTEMPTS = 3
 DEFAULT_CALLBACK_RETRY_DELAY_SECONDS = 0.25
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
+DEFAULT_TASK_OBJECT_MAX_BYTES = 128 * 1024 * 1024
+MAX_TASK_OBJECT_MAX_BYTES = 256 * 1024 * 1024
+MINIO_READ_CHUNK_BYTES = 1024 * 1024
 
 
 @app.middleware("http")
@@ -134,12 +141,12 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
     try:
         client = minio_client()
         ensure_tenant_object_key_allowed(payload.tenant_id, payload.object_key)
-        response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), payload.object_key)
-        try:
-            content = response.read()
-        finally:
-            response.close()
-            response.release_conn()
+        content = download_minio_object_bytes(
+            client,
+            payload.object_key,
+            max_bytes=task_object_max_bytes(),
+            limit_name="task source object",
+        )
         parse_payload = KnowledgeProcessRequest(
             tenant_id=payload.tenant_id,
             document_id=payload.bid_id or payload.file_id,
@@ -277,12 +284,12 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
     try:
         client = minio_client()
         ensure_tenant_object_key_allowed(payload.tenant_id, payload.object_key)
-        response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), payload.object_key)
-        try:
-            content = response.read()
-        finally:
-            response.close()
-            response.release_conn()
+        content = download_minio_object_bytes(
+            client,
+            payload.object_key,
+            max_bytes=task_object_max_bytes(),
+            limit_name="task source object",
+        )
         parsed = parse_document(payload, content)
         embedding_inputs = [
             f"{chunk.title}\n{chunk.section_path}\n{chunk.content}" for chunk in parsed.chunks
@@ -838,18 +845,102 @@ def hydrate_export_attachment(
 
 
 def ensure_tenant_object_key_allowed(tenant_id: str, object_key: str) -> None:
-    expected_prefix = tenant_id.strip().rstrip("/") + "/"
-    if not expected_prefix.strip("/") or not object_key.startswith(expected_prefix):
+    tenant = tenant_id.strip()
+    key = object_key.strip()
+    key_parts = key.split("/")
+    if (
+        not tenant
+        or tenant != tenant.strip("/")
+        or "/" in tenant
+        or "\\" in tenant
+        or not key
+        or key != object_key
+        or key.startswith("/")
+        or "\\" in key
+        or "://" in key
+        or len(key_parts) < 2
+        or key_parts[0] != tenant
+        or any(part in {"", ".", ".."} for part in key_parts)
+    ):
         raise RuntimeError("object_key is outside tenant scope")
 
 
-def download_minio_object_base64(client: Minio, object_key: str) -> str:
+def task_object_max_bytes() -> int:
+    return bounded_env_int(
+        "AI_TASK_OBJECT_MAX_BYTES",
+        DEFAULT_TASK_OBJECT_MAX_BYTES,
+        minimum=1,
+        maximum=MAX_TASK_OBJECT_MAX_BYTES,
+    )
+
+
+def export_attachment_max_bytes() -> int:
+    return bounded_env_int(
+        "AI_EXPORT_ATTACHMENT_MAX_BYTES",
+        MAX_EXPORT_INLINE_ATTACHMENT_BYTES,
+        minimum=1,
+        maximum=MAX_EXPORT_INLINE_ATTACHMENT_BYTES,
+    )
+
+
+def bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    configured = os.getenv(name, "").strip()
+    if not configured:
+        return default
+    try:
+        value = int(configured)
+    except ValueError:
+        return default
+    return min(max(value, minimum), maximum)
+
+
+def download_minio_object_bytes(
+    client: Minio,
+    object_key: str,
+    *,
+    max_bytes: int,
+    limit_name: str,
+) -> bytes:
     response = client.get_object(os.getenv("MINIO_BUCKET", "zbt-files"), object_key)
     try:
-        content = response.read()
+        return read_response_bytes(response, max_bytes=max_bytes, limit_name=limit_name)
     finally:
         response.close()
         response.release_conn()
+
+
+def read_response_bytes(response: object, *, max_bytes: int, limit_name: str) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        remaining = max_bytes + 1 - total
+        try:
+            chunk = response.read(min(MINIO_READ_CHUNK_BYTES, max(remaining, 1)))
+        except TypeError:
+            chunk = response.read()
+            if isinstance(chunk, str):
+                chunk = chunk.encode()
+            if len(chunk) > max_bytes:
+                raise RuntimeError(f"{limit_name} exceeds configured {max_bytes} byte limit")
+            return chunk
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode()
+        total += len(chunk)
+        if total > max_bytes:
+            raise RuntimeError(f"{limit_name} exceeds configured {max_bytes} byte limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def download_minio_object_base64(client: Minio, object_key: str) -> str:
+    content = download_minio_object_bytes(
+        client,
+        object_key,
+        max_bytes=export_attachment_max_bytes(),
+        limit_name="export attachment object",
+    )
     return base64.b64encode(content).decode("ascii")
 
 

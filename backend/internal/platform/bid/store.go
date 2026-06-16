@@ -4149,11 +4149,9 @@ func normalizeExportType(value string) string {
 }
 
 func validateExportAttachments(tenantID string, groups ...[]map[string]any) error {
-	tenantPrefix := strings.TrimSpace(tenantID)
-	if tenantPrefix == "" {
+	if strings.TrimSpace(tenantID) == "" {
 		return ErrInvalidRequest
 	}
-	tenantPrefix = strings.TrimRight(tenantPrefix, "/") + "/"
 	attachmentCount := 0
 	inlineBytesTotal := 0
 	for _, attachments := range groups {
@@ -4177,7 +4175,7 @@ func validateExportAttachments(tenantID string, groups ...[]map[string]any) erro
 			if localPath, present, ok := exportStringField(attachment, "local_path"); !ok || (present && localPath != "") {
 				return ErrInvalidRequest
 			}
-			objectKey, objectPresent, objectOK := exportStringField(attachment, "object_key")
+			objectKey, objectPresent, objectOK := exportRawStringField(attachment, "object_key")
 			if !objectOK {
 				return ErrInvalidRequest
 			}
@@ -4187,7 +4185,7 @@ func validateExportAttachments(tenantID string, groups ...[]map[string]any) erro
 			}
 			hasObjectKey := objectPresent && objectKey != ""
 			hasInlineContent := contentPresent && contentBase64 != ""
-			if hasObjectKey && !strings.HasPrefix(objectKey, tenantPrefix) {
+			if hasObjectKey && !validTenantObjectKey(tenantID, objectKey) {
 				return ErrInvalidRequest
 			}
 			if hasObjectKey == hasInlineContent {
@@ -4206,6 +4204,29 @@ func validateExportAttachments(tenantID string, groups ...[]map[string]any) erro
 		}
 	}
 	return nil
+}
+
+func validTenantObjectKey(tenantID, objectKey string) bool {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || strings.ContainsAny(tenantID, `/\`) {
+		return false
+	}
+	if objectKey == "" || strings.TrimSpace(objectKey) != objectKey {
+		return false
+	}
+	if strings.HasPrefix(objectKey, "/") || strings.Contains(objectKey, `\`) || strings.Contains(objectKey, "://") {
+		return false
+	}
+	parts := strings.Split(objectKey, "/")
+	if len(parts) < 2 || parts[0] != tenantID {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func validateExportInlineAttachmentContent(contentBase64 string) (int, error) {
@@ -4243,7 +4264,7 @@ func exportAttachmentObjectKeys(groups ...[]map[string]any) []string {
 	seen := map[string]struct{}{}
 	for _, attachments := range groups {
 		for _, attachment := range attachments {
-			objectKey, _, ok := exportStringField(attachment, "object_key")
+			objectKey, _, ok := exportRawStringField(attachment, "object_key")
 			if !ok || objectKey == "" {
 				continue
 			}
@@ -4267,6 +4288,18 @@ func exportStringField(values map[string]any, key string) (string, bool, bool) {
 		return "", true, false
 	}
 	return strings.TrimSpace(text), true, true
+}
+
+func exportRawStringField(values map[string]any, key string) (string, bool, bool) {
+	value, present := values[key]
+	if !present || value == nil {
+		return "", false, true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", true, false
+	}
+	return text, true, true
 }
 
 func normalizePartCode(value string) string {

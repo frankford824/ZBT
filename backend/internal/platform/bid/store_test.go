@@ -72,6 +72,24 @@ func TestValidateExportAttachmentsRejectsUnsafeInputs(t *testing.T) {
 		"cross tenant object": {
 			{"filename": "secret.txt", "object_key": "other-tenant/assets/secret.txt"},
 		},
+		"double slash object": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets//file.txt"},
+		},
+		"current directory object": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/./assets/file.txt"},
+		},
+		"parent directory object": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/../assets/file.txt"},
+		},
+		"backslash object": {
+			{"filename": "bad.txt", "object_key": `tenant-demo\assets\file.txt`},
+		},
+		"object with surrounding whitespace": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets/file.txt "},
+		},
+		"protocol shaped object": {
+			{"filename": "bad.txt", "object_key": "http://tenant-demo/assets/file.txt"},
+		},
 		"local path": {
 			{"filename": "secret.txt", "local_path": "/etc/passwd", "content_base64": "YQ=="},
 		},

@@ -14,8 +14,10 @@ from app.main import (
     DEFAULT_MINIO_SECRET_KEY,
     ai_service_hmac_secret,
     callback_allowed_hosts,
+    download_minio_object_base64,
     embed_knowledge_inputs,
     ensure_callback_url_allowed,
+    ensure_tenant_object_key_allowed,
     export_docx,
     knowledge_embeddings,
     knowledge_process,
@@ -109,6 +111,25 @@ def test_callback_url_rejects_non_http_or_unlisted_hosts(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="not allowed"):
         ensure_callback_url_allowed("http://evil.example/callback")
     ensure_callback_url_allowed("https://internal.example/callback")
+
+
+def test_tenant_object_key_rejects_ambiguous_paths() -> None:
+    ensure_tenant_object_key_allowed("tenant-demo", "tenant-demo/assets/file.txt")
+
+    for object_key in [
+        "",
+        "tenant-demo",
+        "tenant-demo//assets/file.txt",
+        "tenant-demo/./assets/file.txt",
+        "tenant-demo/../assets/file.txt",
+        "/tenant-demo/assets/file.txt",
+        "tenant-demo\\assets\\file.txt",
+        "tenant-demo/assets/file.txt ",
+        "http://tenant-demo/assets/file.txt",
+        "other-tenant/assets/file.txt",
+    ]:
+        with pytest.raises(RuntimeError, match="outside tenant scope"):
+            ensure_tenant_object_key_allowed("tenant-demo", object_key)
 
 
 def test_post_callback_retries_transient_delivery_failures(monkeypatch) -> None:
@@ -623,6 +644,35 @@ def test_process_document_export_rejects_cross_tenant_attachment_object_key(monk
     assert "outside tenant scope" not in str(callbacks[0])
 
 
+def test_download_minio_object_base64_rejects_oversized_attachment_object(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+            self.offset = 0
+
+        def read(self, size: int = -1) -> bytes:
+            if size < 0:
+                size = len(self.content) - self.offset
+            chunk = self.content[self.offset : self.offset + size]
+            self.offset += len(chunk)
+            return chunk
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse(b"abcde")
+
+    monkeypatch.setenv("AI_EXPORT_ATTACHMENT_MAX_BYTES", "4")
+
+    with pytest.raises(RuntimeError, match="export attachment object exceeds"):
+        download_minio_object_base64(FakeMinio(), "tenant-demo/assets/big.bin")
+
+
 def test_tender_parse_accepts_backend_task_id() -> None:
     payload = TenderParseRequest(
         task_id="task-tender-parse-backend-owned",
@@ -850,6 +900,54 @@ def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkey
     assert result["model_metadata"]["provider"] == "fallback-llm"
     assert result["model_metadata"]["model"] == "fallback-model"
     assert result["model_metadata"]["fallback_from"] == "primary-llm"
+
+
+def test_process_tender_parse_rejects_oversized_source_object(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+            self.offset = 0
+
+        def read(self, size: int = -1) -> bytes:
+            if size < 0:
+                size = len(self.content) - self.offset
+            chunk = self.content[self.offset : self.offset + size]
+            self.offset += len(chunk)
+            return chunk
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse(b"abcde")
+
+    monkeypatch.setenv("AI_TASK_OBJECT_MAX_BYTES", "4")
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.parse_document", lambda _payload, _content: pytest.fail("parse should not run"))
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="tenant-demo/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks[0]["status"] == "failed", callbacks[0]
+    assert callbacks[0]["error_message"] == "招标文件解读失败，请检查文件后重试"
+    assert "byte limit" not in str(callbacks[0])
 
 
 def test_process_tender_parse_rejects_cross_tenant_object_key(monkeypatch) -> None:
