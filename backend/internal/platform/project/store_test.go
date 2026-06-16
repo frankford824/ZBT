@@ -160,3 +160,41 @@ func TestMergeMilestoneUpdateRequestRejectsBlankProvidedTitle(t *testing.T) {
 		t.Fatalf("expected provided blank title to win before validation, got %+v", merged)
 	}
 }
+
+func TestNormalizeProjectMemberRoleDefaultsAndNormalizes(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: " ", want: "member"},
+		{input: " OWNER ", want: "owner"},
+		{input: "member", want: "member"},
+		{input: "Viewer", want: "viewer"},
+	} {
+		got, err := normalizeProjectMemberRole(tc.input)
+		if err != nil {
+			t.Fatalf("expected role %q to normalize: %v", tc.input, err)
+		}
+		if got != tc.want {
+			t.Fatalf("expected role %q to normalize to %q, got %q", tc.input, tc.want, got)
+		}
+	}
+}
+
+func TestNormalizeProjectMemberRoleRejectsUnsupportedValues(t *testing.T) {
+	if _, err := normalizeProjectMemberRole("admin"); err != ErrInvalidRequest {
+		t.Fatalf("expected unsupported project member role to be rejected, got %v", err)
+	}
+}
+
+func TestEnsureProjectMemberRemovalAllowedKeepsLastOwner(t *testing.T) {
+	if err := ensureProjectMemberRemovalAllowed("owner", 0); err != ErrInvalidRequest {
+		t.Fatalf("expected last owner removal to be rejected, got %v", err)
+	}
+	if err := ensureProjectMemberRemovalAllowed("owner", 1); err != nil {
+		t.Fatalf("expected owner removal with another owner to pass: %v", err)
+	}
+	if err := ensureProjectMemberRemovalAllowed("member", 0); err != nil {
+		t.Fatalf("expected non-owner removal to pass: %v", err)
+	}
+}

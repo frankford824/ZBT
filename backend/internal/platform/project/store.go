@@ -508,12 +508,12 @@ func (s *Store) AddMember(ctx context.Context, tenantID, userID, projectID strin
 	if err := validateUUID(req.UserID); err != nil {
 		return Member{}, err
 	}
-	role := strings.TrimSpace(req.Role)
-	if role == "" {
-		role = "member"
+	role, err := normalizeProjectMemberRole(req.Role)
+	if err != nil {
+		return Member{}, err
 	}
 	var id string
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := ensureProject(ctx, tx, tenantID, projectID); err != nil {
 			return err
 		}
@@ -554,6 +554,31 @@ func (s *Store) DeleteMember(ctx context.Context, tenantID, userID, projectID, m
 		return err
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var role string
+		if err := tx.QueryRow(ctx, `
+			select role
+			from project_members
+			where tenant_id = $1 and project_id = $2 and id = $3
+			for update
+		`, tenantID, projectID, memberID).Scan(&role); err != nil {
+			return err
+		}
+		if role == "owner" {
+			var otherOwners int
+			if err := tx.QueryRow(ctx, `
+				select count(*)::int
+				from project_members
+				where tenant_id = $1
+					and project_id = $2
+					and role = 'owner'
+					and id <> $3
+			`, tenantID, projectID, memberID).Scan(&otherOwners); err != nil {
+				return err
+			}
+			if err := ensureProjectMemberRemovalAllowed(role, otherOwners); err != nil {
+				return err
+			}
+		}
 		tag, err := tx.Exec(ctx, `delete from project_members where tenant_id = $1 and project_id = $2 and id = $3`, tenantID, projectID, memberID)
 		if err != nil {
 			return err
@@ -1157,7 +1182,11 @@ func ensureProject(ctx context.Context, tx pgx.Tx, tenantID, projectID string) e
 }
 
 func insertProjectMember(ctx context.Context, tx pgx.Tx, tenantID, projectID, userID, role string) error {
-	_, err := tx.Exec(ctx, `
+	role, err := normalizeProjectMemberRole(role)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		insert into project_members (tenant_id, project_id, user_id, role)
 		values ($1, $2, $3, $4)
 		on conflict (tenant_id, project_id, user_id)
@@ -1190,6 +1219,25 @@ func nullableUserID(value string) any {
 		return nil
 	}
 	return value
+}
+
+func normalizeProjectMemberRole(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "member", nil
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "owner", "member", "viewer":
+		return strings.ToLower(strings.TrimSpace(value)), nil
+	default:
+		return "", ErrInvalidRequest
+	}
+}
+
+func ensureProjectMemberRemovalAllowed(role string, otherOwners int) error {
+	if role == "owner" && otherOwners <= 0 {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func normalizeStatus(value string) (string, error) {
