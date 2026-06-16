@@ -68,6 +68,8 @@ DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
 DEFAULT_MINIO_ACCESS_KEY = "zbt_minio"
 DEFAULT_MINIO_SECRET_KEY = "zbt_minio_secret"
 DEFAULT_CALLBACK_ALLOWED_HOSTS = {"backend", "localhost", "127.0.0.1", "host.docker.internal"}
+DEFAULT_CALLBACK_MAX_ATTEMPTS = 3
+DEFAULT_CALLBACK_RETRY_DELAY_SECONDS = 0.25
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 
 
@@ -360,21 +362,55 @@ def embedding_batch_size() -> int:
 def post_callback(callback_url: str, payload: dict[str, object]) -> None:
     ensure_callback_url_allowed(callback_url)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    timestamp = str(int(time.time()))
-    secret = ai_service_hmac_secret()
-    signature = hmac.new(secret.encode("utf-8"), timestamp.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
-    req = request.Request(
-        callback_url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-ZBT-Timestamp": timestamp,
-            "X-ZBT-Signature": signature,
-        },
-    )
-    with request.urlopen(req, timeout=10) as response:
-        response.read()
+    attempts = callback_max_attempts()
+    delay = callback_retry_delay_seconds()
+    host = urlparse(callback_url).hostname or ""
+    for attempt in range(1, attempts + 1):
+        timestamp = str(int(time.time()))
+        secret = ai_service_hmac_secret()
+        signature = hmac.new(secret.encode("utf-8"), timestamp.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
+        req = request.Request(
+            callback_url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-ZBT-Timestamp": timestamp,
+                "X-ZBT-Signature": signature,
+            },
+        )
+        try:
+            with request.urlopen(req, timeout=10) as response:
+                response.read()
+            return
+        except Exception:
+            if attempt >= attempts:
+                raise
+            logger.warning("AI task callback delivery retrying: host=%s attempt=%s/%s", host, attempt, attempts)
+            if delay > 0:
+                time.sleep(delay)
+
+
+def callback_max_attempts() -> int:
+    configured = os.getenv("AI_CALLBACK_MAX_ATTEMPTS", "").strip()
+    if not configured:
+        return DEFAULT_CALLBACK_MAX_ATTEMPTS
+    try:
+        value = int(configured)
+    except ValueError:
+        return DEFAULT_CALLBACK_MAX_ATTEMPTS
+    return min(max(value, 1), 5)
+
+
+def callback_retry_delay_seconds() -> float:
+    configured = os.getenv("AI_CALLBACK_RETRY_DELAY_SECONDS", "").strip()
+    if not configured:
+        return DEFAULT_CALLBACK_RETRY_DELAY_SECONDS
+    try:
+        value = float(configured)
+    except ValueError:
+        return DEFAULT_CALLBACK_RETRY_DELAY_SECONDS
+    return min(max(value, 0.0), 5.0)
 
 
 def ensure_callback_url_allowed(callback_url: str) -> None:

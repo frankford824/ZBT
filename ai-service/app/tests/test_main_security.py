@@ -21,6 +21,7 @@ from app.main import (
     process_document_export,
     process_knowledge_document,
     process_tender_parse,
+    post_callback,
     production_mode,
     safe_output_filename,
     tender_parse,
@@ -99,6 +100,38 @@ def test_callback_url_rejects_non_http_or_unlisted_hosts(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="not allowed"):
         ensure_callback_url_allowed("http://evil.example/callback")
     ensure_callback_url_allowed("https://internal.example/callback")
+
+
+def test_post_callback_retries_transient_delivery_failures(monkeypatch) -> None:
+    calls: list[object] = []
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"ok"
+
+    def flaky_urlopen(req: object, timeout: int) -> FakeResponse:
+        assert timeout == 10
+        calls.append(req)
+        if len(calls) < 3:
+            raise RuntimeError("temporary backend outage")
+        return FakeResponse()
+
+    monkeypatch.setenv("AI_CALLBACK_ALLOWED_HOSTS", "backend")
+    monkeypatch.setenv("AI_CALLBACK_RETRY_DELAY_SECONDS", "0")
+    monkeypatch.setattr("app.main.request.urlopen", flaky_urlopen)
+
+    post_callback(
+        "http://backend:8080/api/v1/ai/callbacks/tasks",
+        {"tenant_id": "tenant-demo", "task_id": "task-demo", "status": "done"},
+    )
+
+    assert len(calls) == 3
 
 
 def test_knowledge_process_accepts_backend_task_id() -> None:
