@@ -118,6 +118,12 @@ function formatUsage(input: number, output: number) {
   return `${total.toLocaleString()} 字`
 }
 
+function formatEstimatedCost(value: number) {
+  const cost = Number(value || 0)
+  if (!cost) return '-'
+  return `¥${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`
+}
+
 function formatLatency(value: number) {
   if (!value) return '-'
   return value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${value} 毫秒`
@@ -466,6 +472,12 @@ export function TeamPage() {
                     title: '用量',
                     width: 110,
                     render: (_, row) => formatUsage(row.input_tokens, row.output_tokens),
+                  },
+                  {
+                    title: '预估费用',
+                    dataIndex: 'estimated_cost',
+                    width: 110,
+                    render: formatEstimatedCost,
                   },
                   { title: '处理时长', dataIndex: 'latency_ms', width: 110, render: formatLatency },
                   { title: '状态', dataIndex: 'status', width: 90, render: statusTag },
