@@ -1,6 +1,12 @@
 package cost
 
-import "testing"
+import (
+	"context"
+	"math"
+	"testing"
+
+	"github.com/frankford824/ZBT/backend/internal/platform/config"
+)
 
 func TestNormalizeProjectStatusDefaultsOnlyBlankStatus(t *testing.T) {
 	status, err := normalizeProjectStatus(" ")
@@ -109,5 +115,50 @@ func TestMergeItemUpdateRequestRejectsInvalidProvidedFields(t *testing.T) {
 	}, UpdateItemRequest{Name: &name})
 	if err != ErrInvalidRequest {
 		t.Fatalf("expected blank provided name to be rejected, got %v", err)
+	}
+}
+
+func TestProjectBudgetRejectsInvalidAmountsBeforeDB(t *testing.T) {
+	store := NewStore(config.Config{}, nil)
+	projectID := "00000000-0000-4000-8000-000000000001"
+	for _, amount := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := store.CreateProject(context.Background(), "tenant-id", CreateProjectRequest{
+			ProjectID:    projectID,
+			Name:         "成本项目",
+			BudgetAmount: &amount,
+		})
+		if err != ErrInvalidRequest {
+			t.Fatalf("expected create project budget %v to be rejected before DB, got %v", amount, err)
+		}
+
+		_, err = store.UpdateProject(context.Background(), "tenant-id", projectID, UpdateProjectRequest{
+			BudgetAmount: &amount,
+		})
+		if err != ErrInvalidRequest {
+			t.Fatalf("expected update project budget %v to be rejected before DB, got %v", amount, err)
+		}
+	}
+}
+
+func TestNormalizeItemRequestRejectsInvalidAmounts(t *testing.T) {
+	for _, req := range []CreateItemRequest{
+		{Name: "实施顾问", BudgetAmount: -1},
+		{Name: "实施顾问", ActualAmount: -1},
+		{Name: "实施顾问", BudgetAmount: math.NaN()},
+		{Name: "实施顾问", ActualAmount: math.Inf(1)},
+	} {
+		if _, err := normalizeItemRequest(req); err != ErrInvalidRequest {
+			t.Fatalf("expected invalid item amount in %+v to be rejected, got %v", req, err)
+		}
+	}
+}
+
+func TestNormalizeItemRequestPreservesZeroAmounts(t *testing.T) {
+	normalized, err := normalizeItemRequest(CreateItemRequest{Name: "实施顾问"})
+	if err != nil {
+		t.Fatalf("expected zero amounts to normalize: %v", err)
+	}
+	if normalized.BudgetAmount != 0 || normalized.ActualAmount != 0 {
+		t.Fatalf("expected zero amounts to be preserved, got %+v", normalized)
 	}
 }

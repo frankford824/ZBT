@@ -193,6 +193,9 @@ func (s *Store) CreateProject(ctx context.Context, tenantID string, req CreatePr
 	if err := validateUUID(req.ProjectID); err != nil {
 		return Project{}, err
 	}
+	if err := validateOptionalAmount(req.BudgetAmount); err != nil {
+		return Project{}, err
+	}
 	status, err := normalizeProjectStatus(req.Status)
 	if err != nil {
 		return Project{}, err
@@ -250,6 +253,9 @@ func (s *Store) GetProject(ctx context.Context, tenantID, id string) (Project, e
 
 func (s *Store) UpdateProject(ctx context.Context, tenantID, id string, req UpdateProjectRequest) (Project, error) {
 	if err := validateUUID(id); err != nil {
+		return Project{}, err
+	}
+	if err := validateOptionalAmount(req.BudgetAmount); err != nil {
 		return Project{}, err
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -886,8 +892,12 @@ func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 	req.Status = status
 	req.Vendor = strings.TrimSpace(req.Vendor)
 	req.Note = strings.TrimSpace(req.Note)
-	req.BudgetAmount = math.Max(req.BudgetAmount, 0)
-	req.ActualAmount = math.Max(req.ActualAmount, 0)
+	if err := validateAmount(req.BudgetAmount); err != nil {
+		return req, err
+	}
+	if err := validateAmount(req.ActualAmount); err != nil {
+		return req, err
+	}
 	if req.Category == "" {
 		req.Category = "其他"
 	}
@@ -957,6 +967,20 @@ func normalizeItemStatus(value string) (string, error) {
 	default:
 		return "", ErrInvalidRequest
 	}
+}
+
+func validateOptionalAmount(value *float64) error {
+	if value == nil {
+		return nil
+	}
+	return validateAmount(*value)
+}
+
+func validateAmount(value float64) error {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func normalizeTaskStatus(status string) string {
