@@ -1,4 +1,8 @@
 -- +goose Up
+update project_members
+set role = 'member', updated_at = now()
+where role not in ('owner', 'member', 'viewer');
+
 do $$
 begin
     if not exists (
