@@ -733,6 +733,10 @@ func normalizeTenderWriteRequest(req CreateTenderRequest) (normalizedTenderWrite
 	if err != nil {
 		return normalizedTenderWriteRequest{}, ErrInvalidRequest
 	}
+	sourceURL, err := normalizeOptionalSourceURL(req.SourceURL)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
 	metadata, err := json.Marshal(normalizeMetadata(req.Metadata))
 	if err != nil {
 		return normalizedTenderWriteRequest{}, ErrInvalidRequest
@@ -751,7 +755,7 @@ func normalizeTenderWriteRequest(req CreateTenderRequest) (normalizedTenderWrite
 		Summary:      strings.TrimSpace(req.Summary),
 		Requirements: req.Requirements,
 		RiskFlags:    req.RiskFlags,
-		SourceURL:    strings.TrimSpace(req.SourceURL),
+		SourceURL:    sourceURL,
 		Metadata:     metadata,
 	}, nil
 }
@@ -897,6 +901,9 @@ func validHTTPURL(value string) bool {
 	if err != nil {
 		return false
 	}
+	if parsed.User != nil {
+		return false
+	}
 	scheme := strings.ToLower(parsed.Scheme)
 	if scheme != "http" && scheme != "https" {
 		return false
@@ -909,6 +916,17 @@ func validHTTPURL(value string) bool {
 		return publicNetIP(addr)
 	}
 	return strings.Contains(host, ".")
+}
+
+func normalizeOptionalSourceURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if !validHTTPURL(value) {
+		return "", ErrInvalidRequest
+	}
+	return value, nil
 }
 
 func newVerificationHTTPClient() *http.Client {

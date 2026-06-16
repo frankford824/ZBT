@@ -58,6 +58,18 @@ func TestValidHTTPURLRejectsSpecialUseIPHosts(t *testing.T) {
 	}
 }
 
+func TestValidHTTPURLRejectsUserinfo(t *testing.T) {
+	for _, value := range []string{
+		"https://user:pass@example.com/source",
+		"https://127.0.0.1@example.com/source",
+		"https://example.com@127.0.0.1/path",
+	} {
+		if validHTTPURL(value) {
+			t.Fatalf("expected URL with userinfo %q to be rejected", value)
+		}
+	}
+}
+
 func TestPublicNetIPRejectsNonPublicRanges(t *testing.T) {
 	for _, value := range []string{
 		"0.0.0.0",
@@ -80,6 +92,44 @@ func TestPublicNetIPRejectsNonPublicRanges(t *testing.T) {
 	} {
 		if publicNetIP(netip.MustParseAddr(value)) {
 			t.Fatalf("expected %s to be rejected", value)
+		}
+	}
+}
+
+func TestNormalizeTenderWriteRequestValidatesOptionalSourceURL(t *testing.T) {
+	base := CreateTenderRequest{
+		Title:  "测试标讯",
+		Status: "open",
+	}
+
+	normalized, err := normalizeTenderWriteRequest(base)
+	if err != nil {
+		t.Fatalf("expected blank source URL to normalize: %v", err)
+	}
+	if normalized.SourceURL != "" {
+		t.Fatalf("expected blank source URL to stay empty, got %q", normalized.SourceURL)
+	}
+
+	withPublicURL := base
+	withPublicURL.SourceURL = " https://example.com/tender "
+	normalized, err = normalizeTenderWriteRequest(withPublicURL)
+	if err != nil {
+		t.Fatalf("expected public source URL to normalize: %v", err)
+	}
+	if normalized.SourceURL != "https://example.com/tender" {
+		t.Fatalf("expected source URL to be trimmed, got %q", normalized.SourceURL)
+	}
+
+	for _, value := range []string{
+		"javascript:alert(1)",
+		"http://127.0.0.1/admin",
+		"http://100.64.0.1/admin",
+		"https://user@example.com/tender",
+	} {
+		req := base
+		req.SourceURL = value
+		if _, err := normalizeTenderWriteRequest(req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected source URL %q to be rejected, got %v", value, err)
 		}
 	}
 }
