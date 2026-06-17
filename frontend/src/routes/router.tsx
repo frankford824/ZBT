@@ -5,7 +5,7 @@ import { AuthLayout } from '../layouts/AuthLayout'
 import { ShellLayout } from '../layouts/ShellLayout'
 import { ForbiddenPage } from '../shared/components/ForbiddenPage'
 import { LoadingBlock } from '../shared/components/StateBlocks'
-import { useCanAccess } from '../shared/permissions/permissions'
+import { permissionAllows, useCanAccess } from '../shared/permissions/permissions'
 import type { ModuleKey } from './routeManifest'
 
 const LoginPage = lazy(() => import('../features/auth').then((mod) => ({ default: mod.LoginPage })))
@@ -53,6 +53,19 @@ function RequirePermission({
   required?: ModulePermission
 }) {
   const allowed = useCanAccess(module, required)
+  if (!allowed) return <ForbiddenPage />
+  return <Outlet />
+}
+
+function RequireAnyPermission({
+  modules,
+  required = 'read',
+}: {
+  modules: ModuleKey[]
+  required?: ModulePermission
+}) {
+  const permissions = useSessionStore((state) => state.permissions)
+  const allowed = modules.some((module) => permissionAllows(permissions[module], required))
   if (!allowed) return <ForbiddenPage />
   return <Outlet />
 }
@@ -105,7 +118,9 @@ export function AppRouter() {
               <Route path="/knowledge/templates" element={page(<KnowledgeTemplatesPage />)} />
               <Route path="/knowledge/tags" element={page(<KnowledgeTagsPage />)} />
             </Route>
-            <Route path="/files/:fileId/preview" element={page(<FilePreviewPage />)} />
+            <Route element={<RequireAnyPermission modules={['knowledge', 'bid']} />}>
+              <Route path="/files/:fileId/preview" element={page(<FilePreviewPage />)} />
+            </Route>
             <Route element={<RequirePermission module="team" />}>
               <Route path="/team" element={page(<TeamPage />)} />
             </Route>
