@@ -496,6 +496,127 @@ def test_provider_backed_mock_routes_includes_ocr_routes() -> None:
     assert router.provider_backed_mock_routes() == ["document_ocr.primary"]
 
 
+def test_router_log_call_tracks_estimated_cost_by_tenant() -> None:
+    router = ModelRouter(
+        {
+            "providers": {},
+            "routes": {},
+            "quotas": {"default_tenant_monthly_budget": 1.0, "currency": "CNY"},
+        }
+    )
+
+    result = router.log_call(
+        tenant_id="tenant-a",
+        task_type="chapter_generate",
+        provider="deepseek",
+        model="deepseek-chat",
+        estimated_cost="0.25",
+        input_tokens=200,
+        output_tokens=80,
+    )
+
+    assert result["logged"] is True
+    assert result["estimated_cost"] == 0.25
+    assert result["usage"]["used"] == 0.25
+    assert result["usage"]["remaining"] == 0.75
+    assert router.enforce_quota("tenant-a") is True
+    assert router.call_log_snapshot()[0]["provider"] == "deepseek"
+
+
+def test_router_quota_supports_per_tenant_budget() -> None:
+    router = ModelRouter(
+        {
+            "providers": {},
+            "routes": {},
+            "quotas": {
+                "default_tenant_monthly_budget": 10,
+                "per_tenant_monthly_budget": {"trial": 0.5, "vip": 2},
+            },
+        }
+    )
+
+    router.log_call(tenant_id="trial", estimated_cost=0.5)
+    router.log_call(tenant_id="vip", estimated_cost=0.5)
+
+    assert router.enforce_quota("trial") is False
+    assert router.quota_status("trial")["remaining"] == 0
+    assert router.enforce_quota("vip") is True
+    assert router.quota_status("vip")["remaining"] == 1.5
+
+
+@pytest.mark.parametrize("value", [-1, "-0.2", "nan", "inf", True, "bad", None])
+def test_router_log_call_ignores_invalid_estimated_cost(value: object) -> None:
+    router = ModelRouter(
+        {
+            "providers": {},
+            "routes": {},
+            "quotas": {"default_tenant_monthly_budget": 0.1},
+        }
+    )
+
+    result = router.log_call(tenant_id="tenant-a", estimated_cost=value)
+
+    assert result["estimated_cost"] == 0
+    assert result["usage"]["used"] == 0
+    assert router.enforce_quota("tenant-a") is True
+
+
+def test_router_quota_downgrades_to_zero_cost_fallback_after_budget_exhausted() -> None:
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                    "api_key_required": False,
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                    "fallback": [{"provider": "mock", "model": "mock-model"}],
+                }
+            },
+            "quotas": {"default_tenant_monthly_budget": 1, "on_exceed": "downgrade_then_block"},
+        }
+    )
+    router.log_call(tenant_id="tenant-a", estimated_cost=1)
+
+    targets = router.resolve_candidates("chapter_generate", tenant_id="tenant-a")
+
+    assert [target.provider for target in targets] == ["mock"]
+    assert targets[0].fallback_from == "openai_compatible_primary"
+
+
+def test_router_quota_blocks_after_budget_exhausted_when_no_downgrade_exists() -> None:
+    router = ModelRouter(
+        {
+            "providers": {
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                    "api_key_required": False,
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                }
+            },
+            "quotas": {"default_tenant_monthly_budget": 1, "on_exceed": "downgrade_then_block"},
+        }
+    )
+    router.log_call(tenant_id="tenant-a", estimated_cost=1.25)
+
+    with pytest.raises(RuntimeError, match="tenant AI quota exceeded"):
+        router.resolve("chapter_generate", tenant_id="tenant-a")
+
+
 def test_use_mock_providers_false_requires_real_route_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2335,3 +2335,43 @@ docker compose ps backend ai-service frontend
 
 1. 电子标目录结构已具备标准目录和 manifest，但仍不是对接某个具体省市投标软件的专用二进制包格式。
 2. PDF 校验已覆盖文本层和首屏非空，不等同于人工逐页版式审阅；后续若有真实黄金样本，可继续固化像素级对比。
+
+## Loop-34 / 模型网关额度与运行期账本 - 2026-06-17
+
+### 本轮目标
+
+1. 收敛审查报告中 `ModelRouter.log_call()` / `enforce_quota()` 仍为空壳的缺口。
+2. 在不改变 Go 侧持久化审计职责的前提下，补齐 Python AI 服务运行期租户预算判断。
+3. 让 `quotas.on_exceed=downgrade_then_block` 成为可执行策略，而不是配置占位。
+
+### 代码交付
+
+1. `ModelRouter` 新增运行期 `_tenant_usage` 和 `_call_log`，`log_call()` 会归一化 `estimated_cost`、按租户累计用量，并返回 `quota_status` 快照。
+2. `quota_status()` 支持 `default_tenant_monthly_budget` 和 `per_tenant_monthly_budget`，非法、负数、非有限成本统一按 0 处理。
+3. Provider-backed 路由解析前执行额度判断；预算耗尽后优先降级到 `mock/local` 零外部模型成本 Provider，没有可降级候选时明确拒绝解析。
+4. `MODEL_GATEWAY.md` 更新为当前职责边界：Python 侧维护运行期账本和额度快照，Go 侧继续负责 `ai_call_logs` 持久化审计与计价落库。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_model_router.py -q -s
+cd ai-service && .venv/bin/ruff check app/gateway/model_router.py app/tests/test_model_router.py
+cd ai-service && .venv/bin/python -m compileall -q app/gateway/model_router.py app/tests/test_model_router.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 模型网关专项测试 45 条全部通过。
+2. AI 服务完整测试 206 条全部通过。
+3. Ruff、compileall 和 `git diff --check` 均通过。
+4. Go 后端全量测试通过。
+
+### 偏离蓝图
+
+1. Python 侧账本仍是进程内存级，用于路由和运行期快照；跨进程、跨重启、月度重置和账单聚合仍以 Go/PostgreSQL `ai_call_logs` 为准。
+2. 当前降级策略只区分 `mock/local` 与真实外部 Provider，尚未实现按模型单价自动选择更便宜的真实 Provider。

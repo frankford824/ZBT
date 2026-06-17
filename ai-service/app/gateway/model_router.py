@@ -81,6 +81,8 @@ class ModelRouter:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = self._apply_provider_mode(config)
         self.providers = self._build_providers(self.config.get("providers", {}))
+        self._tenant_usage: dict[str, float] = {}
+        self._call_log: list[dict[str, object]] = []
 
     @classmethod
     def from_yaml(cls, path: Path) -> "ModelRouter":
@@ -91,7 +93,8 @@ class ModelRouter:
         return self.resolve_candidates(task_type, tenant_id)[0]
 
     def resolve_candidates(self, task_type: str, tenant_id: str) -> list[RouteTarget]:
-        _ = tenant_id
+        route_kind = self._route_kind(task_type)
+        tenant_over_budget = bool(route_kind and not self.enforce_quota(tenant_id))
         candidates = [self.config["routes"][task_type]["primary"], *self.config["routes"][task_type].get("fallback", [])]
         candidate_targets = [self._route_target(task_type, route) for route in candidates]
         missing_providers = [target.provider for target in candidate_targets if target.provider not in self.providers]
@@ -106,6 +109,13 @@ class ModelRouter:
                 if target.provider != primary_provider:
                     target.fallback_from = primary_provider
                 targets.append(target)
+        if tenant_over_budget:
+            downgraded = []
+            if self._quota_exceed_policy() == "downgrade_then_block":
+                downgraded = [target for target in targets if self._is_zero_cost_provider(target.provider)]
+            if downgraded:
+                return downgraded
+            raise RuntimeError(f"tenant AI quota exceeded for {self._tenant_key(tenant_id)}")
         if targets:
             return targets
         provider_names = ", ".join(str(route["provider"]) for route in candidates)
@@ -127,11 +137,34 @@ class ModelRouter:
         return self._provider_for_target(target)
 
     def log_call(self, **kwargs: object) -> dict[str, object]:
-        return {"logged": True, **kwargs}
+        tenant_id = self._tenant_key(kwargs.get("tenant_id", ""))
+        estimated_cost = self._cost_from_call(kwargs)
+        self._tenant_usage[tenant_id] = self._round_money(self._tenant_usage.get(tenant_id, 0.0) + estimated_cost)
+        usage = self.quota_status(tenant_id)
+        event = self._call_event(tenant_id, estimated_cost, usage, kwargs)
+        self._call_log.append(event)
+        return {"logged": True, **event, "usage": usage}
 
     def enforce_quota(self, tenant_id: str) -> bool:
-        _ = tenant_id
-        return True
+        return not bool(self.quota_status(tenant_id)["exceeded"])
+
+    def quota_status(self, tenant_id: str) -> dict[str, object]:
+        tenant_key = self._tenant_key(tenant_id)
+        used = self._round_money(self._tenant_usage.get(tenant_key, 0.0))
+        budget = self._tenant_budget(tenant_key)
+        remaining = None if budget is None else self._round_money(max(0.0, budget - used))
+        return {
+            "tenant_id": tenant_key,
+            "currency": str(self._quota_config().get("currency") or "CNY"),
+            "budget": budget,
+            "used": used,
+            "remaining": remaining,
+            "exceeded": budget is not None and used >= budget,
+            "policy": self._quota_exceed_policy(),
+        }
+
+    def call_log_snapshot(self) -> list[dict[str, object]]:
+        return deepcopy(self._call_log)
 
     def health_check(self) -> dict[str, bool]:
         return {name: provider.health_check() for name, provider in self.providers.items()}
@@ -290,3 +323,88 @@ class ModelRouter:
             "false",
             "no",
         }
+
+    def _quota_config(self) -> dict[str, Any]:
+        config = self.config.get("quotas", {})
+        return config if isinstance(config, dict) else {}
+
+    def _quota_exceed_policy(self) -> str:
+        policy = str(self._quota_config().get("on_exceed") or "block").strip().lower()
+        return policy or "block"
+
+    def _tenant_key(self, tenant_id: object) -> str:
+        text = "" if tenant_id is None else str(tenant_id).strip()
+        return text or "__unknown__"
+
+    def _tenant_budget(self, tenant_id: str) -> float | None:
+        quotas = self._quota_config()
+        per_tenant = quotas.get("per_tenant_monthly_budget")
+        if isinstance(per_tenant, dict) and tenant_id in per_tenant:
+            return self._positive_money_or_none(per_tenant[tenant_id])
+        return self._positive_money_or_none(quotas.get("default_tenant_monthly_budget"))
+
+    def _positive_money_or_none(self, value: object) -> float | None:
+        amount = self._finite_float(value)
+        if amount is None or amount <= 0:
+            return None
+        return self._round_money(amount)
+
+    def _cost_from_call(self, payload: dict[str, object]) -> float:
+        for source in (payload, payload.get("model_metadata"), payload.get("result")):
+            if isinstance(source, dict) and "estimated_cost" in source:
+                amount = self._finite_float(source["estimated_cost"])
+                if amount is not None and amount > 0:
+                    return self._round_money(amount)
+                return 0.0
+        return 0.0
+
+    def _finite_float(self, value: object) -> float | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(amount):
+            return None
+        return amount
+
+    def _round_money(self, value: float) -> float:
+        return round(value, 10)
+
+    def _call_event(
+        self,
+        tenant_id: str,
+        estimated_cost: float,
+        usage: dict[str, object],
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        event: dict[str, object] = {
+            "sequence": len(self._call_log) + 1,
+            "tenant_id": tenant_id,
+            "estimated_cost": estimated_cost,
+            "usage_after_call": usage,
+        }
+        safe_fields = (
+            "task_type",
+            "provider",
+            "model",
+            "status",
+            "input_tokens",
+            "output_tokens",
+            "latency_ms",
+            "trace_id",
+            "fallback_from",
+        )
+        for field in safe_fields:
+            value = payload.get(field)
+            if isinstance(value, str | int | float | bool) or value is None:
+                event[field] = value
+        return event
+
+    def _is_zero_cost_provider(self, provider_name: str) -> bool:
+        provider_config = self.config.get("providers", {}).get(provider_name, {})
+        provider_type = ""
+        if isinstance(provider_config, dict):
+            provider_type = str(provider_config.get("type") or "").strip()
+        return provider_name in {"mock", "local"} or provider_type in {"mock", "local"}
