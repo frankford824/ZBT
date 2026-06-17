@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.main import (
+    CallbackResponseTooLargeError,
     DEFAULT_AI_HMAC_SECRET,
     DEFAULT_MINIO_ACCESS_KEY,
     DEFAULT_MINIO_SECRET_KEY,
@@ -154,7 +155,8 @@ def test_post_callback_retries_transient_delivery_failures(monkeypatch) -> None:
         def __exit__(self, _exc_type, _exc, _traceback) -> None:
             return None
 
-        def read(self) -> bytes:
+        def read(self, size: int = -1) -> bytes:
+            _ = size
             return b"ok"
 
     def flaky_urlopen(req: object, timeout: int) -> FakeResponse:
@@ -174,6 +176,36 @@ def test_post_callback_retries_transient_delivery_failures(monkeypatch) -> None:
     )
 
     assert len(calls) == 3
+
+
+def test_post_callback_rejects_oversized_response_without_leaking_body(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self) -> None:
+            self._body = b"secret backend response body"
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            return self._body[:size]
+
+    monkeypatch.setenv("AI_CALLBACK_ALLOWED_HOSTS", "backend")
+    monkeypatch.setenv("AI_CALLBACK_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("AI_CALLBACK_MAX_RESPONSE_BYTES", "4")
+    monkeypatch.setattr("app.main.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    with pytest.raises(CallbackResponseTooLargeError) as exc_info:
+        post_callback(
+            "http://backend:8080/api/v1/ai/callbacks/tasks",
+            {"tenant_id": "tenant-demo", "task_id": "task-demo", "status": "done"},
+        )
+
+    message = str(exc_info.value)
+    assert "too large" in message
+    assert "secret backend" not in message
 
 
 def test_knowledge_process_accepts_backend_task_id() -> None:

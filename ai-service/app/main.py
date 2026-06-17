@@ -75,10 +75,16 @@ MIN_PRODUCTION_SECRET_LENGTH = 16
 DEFAULT_CALLBACK_ALLOWED_HOSTS = {"backend", "localhost", "127.0.0.1", "host.docker.internal"}
 DEFAULT_CALLBACK_MAX_ATTEMPTS = 3
 DEFAULT_CALLBACK_RETRY_DELAY_SECONDS = 0.25
+DEFAULT_CALLBACK_MAX_RESPONSE_BYTES = 64 * 1024
+MAX_CALLBACK_MAX_RESPONSE_BYTES = 1024 * 1024
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_TASK_OBJECT_MAX_BYTES = 128 * 1024 * 1024
 MAX_TASK_OBJECT_MAX_BYTES = 256 * 1024 * 1024
 MINIO_READ_CHUNK_BYTES = 1024 * 1024
+
+
+class CallbackResponseTooLargeError(RuntimeError):
+    pass
 
 
 @app.middleware("http")
@@ -434,7 +440,7 @@ def post_callback(callback_url: str, payload: dict[str, object]) -> None:
         )
         try:
             with request.urlopen(req, timeout=10) as response:
-                response.read()
+                read_limited_callback_response(response)
             return
         except Exception:
             if attempt >= attempts:
@@ -464,6 +470,23 @@ def callback_retry_delay_seconds() -> float:
     except ValueError:
         return DEFAULT_CALLBACK_RETRY_DELAY_SECONDS
     return min(max(value, 0.0), 5.0)
+
+
+def callback_response_max_bytes() -> int:
+    return bounded_env_int(
+        "AI_CALLBACK_MAX_RESPONSE_BYTES",
+        DEFAULT_CALLBACK_MAX_RESPONSE_BYTES,
+        minimum=1,
+        maximum=MAX_CALLBACK_MAX_RESPONSE_BYTES,
+    )
+
+
+def read_limited_callback_response(response: object) -> bytes:
+    max_bytes = callback_response_max_bytes()
+    content = response.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise CallbackResponseTooLargeError("AI task callback response is too large")
+    return content
 
 
 def ensure_callback_url_allowed(callback_url: str) -> None:
