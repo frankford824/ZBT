@@ -1,8 +1,9 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
 import { ConfigProvider, App as AntApp, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import type { PropsWithChildren } from 'react'
+import { useEffect, useRef, type PropsWithChildren } from 'react'
+import { useSessionStore } from './store/session'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -110,8 +111,27 @@ export function AppProviders({ children }: PropsWithChildren) {
       }}
     >
       <AntApp>
-        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+          <SessionScopedQueryCache>{children}</SessionScopedQueryCache>
+        </QueryClientProvider>
       </AntApp>
     </ConfigProvider>
   )
+}
+
+function SessionScopedQueryCache({ children }: PropsWithChildren) {
+  const client = useQueryClient()
+  const isAuthenticated = useSessionStore((state) => state.isAuthenticated)
+  const userId = useSessionStore((state) => state.user.id)
+  const tenantId = useSessionStore((state) => state.tenant.id)
+  const scope = isAuthenticated ? `${tenantId}:${userId}` : 'anonymous'
+  const lastScope = useRef(scope)
+
+  useEffect(() => {
+    if (lastScope.current === scope) return
+    client.clear()
+    lastScope.current = scope
+  }, [client, scope])
+
+  return children
 }
