@@ -33,6 +33,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { useCanAccess } from '../../shared/permissions/permissions'
 
 const tabParams: Record<string, Parameters<typeof fetchTenders>[0]> = {
   全部: {},
@@ -58,6 +59,7 @@ function tenderStatusLabel(value: string) {
 export function TendersPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
+  const canWrite = useCanAccess('tender', 'full')
   const [activeTab, setActiveTab] = useState('全部')
   const [keyword, setKeyword] = useState('')
   const [sourceForm] = Form.useForm()
@@ -153,25 +155,27 @@ export function TendersPage() {
 
   const sourcePanel = () => (
     <Row gutter={[16, 16]}>
-      <Col xs={24} lg={10}>
-        <Card title="标讯来源">
-          <Form form={sourceForm} layout="vertical" onFinish={sourceMutation.mutate}>
-            <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '平台名称必填' }]}>
-              <Input placeholder="中国招标投标公共服务平台" />
-            </Form.Item>
-            <Form.Item name="url" label="平台网址" rules={[{ required: true, message: '平台网址必填' }]}>
-              <Input placeholder="https://www.example.com" />
-            </Form.Item>
-            <Form.Item name="source_type" label="平台类型" initialValue="政府采购">
-              <Select options={['政府采购', '建设工程', '产权交易', '公共资源', '其他'].map((value) => ({ value }))} />
-            </Form.Item>
-            <Button htmlType="submit" type="primary" loading={sourceMutation.isPending}>
-              添加来源
-            </Button>
-          </Form>
-        </Card>
-      </Col>
-      <Col xs={24} lg={14}>
+      {canWrite ? (
+        <Col xs={24} lg={10}>
+          <Card title="标讯来源">
+            <Form form={sourceForm} layout="vertical" onFinish={sourceMutation.mutate}>
+              <Form.Item name="name" label="平台名称" rules={[{ required: true, message: '平台名称必填' }]}>
+                <Input placeholder="中国招标投标公共服务平台" />
+              </Form.Item>
+              <Form.Item name="url" label="平台网址" rules={[{ required: true, message: '平台网址必填' }]}>
+                <Input placeholder="https://www.example.com" />
+              </Form.Item>
+              <Form.Item name="source_type" label="平台类型" initialValue="政府采购">
+                <Select options={['政府采购', '建设工程', '产权交易', '公共资源', '其他'].map((value) => ({ value }))} />
+              </Form.Item>
+              <Button htmlType="submit" type="primary" loading={sourceMutation.isPending}>
+                添加来源
+              </Button>
+            </Form>
+          </Card>
+        </Col>
+      ) : null}
+      <Col xs={24} lg={canWrite ? 14 : 24}>
         <Card title="已添加来源">
           {sources.isLoading && <LoadingBlock />}
           {sources.isError && <ErrorBlock />}
@@ -180,16 +184,20 @@ export function TendersPage() {
             dataSource={sources.data}
             renderItem={(source: TenderSourceDTO) => (
               <List.Item
-                actions={[
-                  <Button
-                    key="verify"
-                    type="link"
-                    loading={verifyMutation.isPending && verifyMutation.variables === source.id}
-                    onClick={() => verifyMutation.mutate(source.id)}
-                  >
-                    检测连接
-                  </Button>,
-                ]}
+                actions={
+                  canWrite
+                    ? [
+                        <Button
+                          key="verify"
+                          type="link"
+                          loading={verifyMutation.isPending && verifyMutation.variables === source.id}
+                          onClick={() => verifyMutation.mutate(source.id)}
+                        >
+                          检测连接
+                        </Button>,
+                      ]
+                    : undefined
+                }
               >
                 <List.Item.Meta
                   title={
@@ -234,6 +242,7 @@ export function TenderDetailPage() {
   const { tenderId } = useParams()
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
+  const canWrite = useCanAccess('tender', 'full')
   const tender = useQuery({
     queryKey: ['tender', tenderId],
     queryFn: () => fetchTender(tenderId || ''),
@@ -266,14 +275,18 @@ export function TenderDetailPage() {
       title={tender.data.title}
       subtitle={tender.data.source_name || tender.data.region}
       tags={['招标详情']}
-      actions={[
-        <Button key="project" loading={projectMutation.isPending} onClick={() => projectMutation.mutate()}>
-          创建项目
-        </Button>,
-        <Button key="bid" type="primary" loading={bidMutation.isPending} onClick={() => bidMutation.mutate()}>
-          生成标书
-        </Button>,
-      ]}
+      actions={
+        canWrite
+          ? [
+              <Button key="project" loading={projectMutation.isPending} onClick={() => projectMutation.mutate()}>
+                创建项目
+              </Button>,
+              <Button key="bid" type="primary" loading={bidMutation.isPending} onClick={() => bidMutation.mutate()}>
+                生成标书
+              </Button>,
+            ]
+          : undefined
+      }
     >
       <Descriptions bordered column={2}>
         <Descriptions.Item label="招标单位">{tender.data.purchaser || '-'}</Descriptions.Item>
