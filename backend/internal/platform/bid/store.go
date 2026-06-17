@@ -4272,13 +4272,13 @@ func validateExportAttachments(tenantID string, groups ...[]map[string]any) erro
 
 func validTenantObjectKey(tenantID, objectKey string) bool {
 	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || strings.ContainsAny(tenantID, `/\`) {
+	if tenantID == "" || strings.ContainsAny(tenantID, `/\`) || hasObjectKeyControlChars(tenantID) {
 		return false
 	}
-	if objectKey == "" || strings.TrimSpace(objectKey) != objectKey {
+	if objectKey == "" || strings.TrimSpace(objectKey) != objectKey || hasObjectKeyControlChars(objectKey) {
 		return false
 	}
-	if strings.HasPrefix(objectKey, "/") || strings.Contains(objectKey, `\`) || strings.Contains(objectKey, "://") {
+	if strings.HasPrefix(objectKey, "/") || strings.ContainsAny(objectKey, `\?#`) || strings.Contains(objectKey, "://") {
 		return false
 	}
 	parts := strings.Split(objectKey, "/")
@@ -4286,11 +4286,20 @@ func validTenantObjectKey(tenantID, objectKey string) bool {
 		return false
 	}
 	for _, part := range parts {
-		if part == "" || part == "." || part == ".." {
+		if part == "" || strings.TrimSpace(part) != part || part == "." || part == ".." {
 			return false
 		}
 	}
 	return true
+}
+
+func hasObjectKeyControlChars(value string) bool {
+	for _, ch := range value {
+		if ch < 0x20 || ch == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func validateExportInlineAttachmentContent(contentBase64 string) (int, error) {

@@ -169,6 +169,10 @@ def test_tenant_object_key_rejects_ambiguous_paths() -> None:
         "/tenant-demo/assets/file.txt",
         "tenant-demo\\assets\\file.txt",
         "tenant-demo/assets/file.txt ",
+        "tenant-demo/assets/ file.txt",
+        "tenant-demo/assets/file\n.txt",
+        "tenant-demo/assets/file.txt?download=1",
+        "tenant-demo/assets/file.txt#preview",
         "http://tenant-demo/assets/file.txt",
         "other-tenant/assets/file.txt",
     ]:

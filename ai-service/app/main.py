@@ -952,16 +952,24 @@ def ensure_tenant_object_key_allowed(tenant_id: str, object_key: str) -> None:
         or tenant != tenant.strip("/")
         or "/" in tenant
         or "\\" in tenant
+        or _contains_object_key_control_char(tenant)
         or not key
         or key != object_key
         or key.startswith("/")
         or "\\" in key
+        or "?" in key
+        or "#" in key
         or "://" in key
         or len(key_parts) < 2
         or key_parts[0] != tenant
-        or any(part in {"", ".", ".."} for part in key_parts)
+        or any(part in {"", ".", ".."} or part.strip() != part for part in key_parts)
+        or _contains_object_key_control_char(key)
     ):
         raise RuntimeError("object_key is outside tenant scope")
+
+
+def _contains_object_key_control_char(value: str) -> bool:
+    return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
 
 
 def task_object_max_bytes() -> int:

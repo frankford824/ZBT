@@ -230,6 +230,18 @@ func TestValidateExportAttachmentsRejectsUnsafeInputs(t *testing.T) {
 		"protocol shaped object": {
 			{"filename": "bad.txt", "object_key": "http://tenant-demo/assets/file.txt"},
 		},
+		"query shaped object": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets/file.txt?download=1"},
+		},
+		"fragment shaped object": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets/file.txt#preview"},
+		},
+		"object with control character": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets/file\n.txt"},
+		},
+		"object segment with surrounding whitespace": {
+			{"filename": "bad.txt", "object_key": "tenant-demo/assets/ file.txt"},
+		},
 		"local path": {
 			{"filename": "secret.txt", "local_path": "/etc/passwd", "content_base64": "YQ=="},
 		},
