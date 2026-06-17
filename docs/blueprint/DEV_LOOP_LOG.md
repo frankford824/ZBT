@@ -2375,3 +2375,49 @@ git diff --check
 
 1. Python 侧账本仍是进程内存级，用于路由和运行期快照；跨进程、跨重启、月度重置和账单聚合仍以 Go/PostgreSQL `ai_call_logs` 为准。
 2. 当前降级策略只区分 `mock/local` 与真实外部 Provider，尚未实现按模型单价自动选择更便宜的真实 Provider。
+
+## Loop-35 / OCR Provider 异步轮询与容器配置补齐 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 OCR Provider 清单中“异步轮询”仍未落地的缺口。
+2. 确保 Docker 运行态能真正拿到通用 OCR、MinerU 和 PaddleOCR 的 endpoint/key/poll 配置。
+3. 保持同步 OCR Provider 兼容，并继续避免泄露 OCR 原始响应体或密钥。
+
+### 代码交付
+
+1. `document_parser.py` 支持 OCR 初始响应为 HTTP 202 或 `pending/running/processing` 时进入轮询流程。
+2. 轮询地址优先使用响应中的 `status_url` / `poll_url` / `result_url`，其次使用 `OCR_POLL_ENDPOINT`、`MINERU_POLL_ENDPOINT`、`PADDLEOCR_POLL_ENDPOINT`，最后回退到 `endpoint/{task_id}`。
+3. 轮询结果继续归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，同时把 `async_task_id` 和 `async_attempts` 写入安全的 `provider_metadata`。
+4. 修复 OCR 同时返回 markdown 和 pages 时只保留 markdown 的问题，现在会合并页级识别正文，避免丢失正文。
+5. `.env.example` 和 `docker-compose.yml` 补齐 `OCR_API_KEY`、通用轮询参数、MinerU 专属配置、PaddleOCR 专属配置和响应大小限制。
+6. README、AI_PIPELINE 和 AI_IMPLEMENTATION_CHECKLIST 更新 OCR 异步轮询与配置说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py -q -s
+cd ai-service && .venv/bin/ruff check app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+cd ai-service && .venv/bin/python -m compileall -q app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+docker compose config >/dev/null
+git diff --check
+```
+
+结果：
+
+1. 文档解析专项测试 42 条全部通过。
+2. AI 服务完整测试 209 条全部通过。
+3. Ruff 针对本轮 Python 改动文件检查通过。
+4. Python compileall 通过。
+5. Go 后端全量测试通过。
+6. Docker compose 配置检查通过。
+7. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮实现 Provider-agnostic HTTP 异步轮询；未内置某个厂商 SDK，也不把 MinerU/PaddleOCR 变成硬依赖。
+2. 轮询状态仍由 Python 进程内完成；若后续需要处理超长 OCR 任务，应把 OCR 任务拆成独立 ai_task 子任务并持久化进度。

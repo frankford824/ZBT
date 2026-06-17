@@ -348,6 +348,118 @@ def test_paddleocr_provider_requires_configured_endpoint(monkeypatch) -> None:
     assert result.metadata["ocr"]["endpoint_env"] == "PADDLEOCR_HTTP_ENDPOINT"
 
 
+def test_mineru_async_ocr_polls_status_url_and_normalizes_result(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    responses = [
+        _FakeHTTPResponse(
+            b'{"status":"processing","task_id":"mineru-task-1","status_url":"/jobs/mineru-task-1"}',
+            status=202,
+        ),
+        _FakeHTTPResponse(b'{"status":"running","task_id":"mineru-task-1"}'),
+        _FakeHTTPResponse(
+            b"""
+            {
+              "status": "completed",
+              "result": {
+                "markdown": "# \xe5\xbc\x82\xe6\xad\xa5\xe8\xaf\x86\xe5\x88\xab",
+                "pages": [{"page": 1, "text": "\xe5\xbc\x82\xe6\xad\xa5\xe8\xaf\x86\xe5\x88\xab\xe6\x96\x87\xe6\x9c\xac", "confidence": 0.95}],
+                "tables": [{"page": 1, "index": 1, "rows": [["\xe6\x9d\xa1\xe6\xac\xbe", "\xe8\xa6\x81\xe6\xb1\x82"]]}],
+                "metadata": {"request_id": "mineru-async"}
+              }
+            }
+            """
+        ),
+    ]
+
+    def fake_urlopen(req, timeout):
+        calls.append(
+            {
+                "url": req.full_url,
+                "method": req.get_method(),
+                "timeout": timeout,
+                "authorization": req.get_header("Authorization"),
+            }
+        )
+        return responses.pop(0)
+
+    monkeypatch.setenv("OCR_PROVIDER", "mineru")
+    monkeypatch.setenv("MINERU_HTTP_ENDPOINT", "https://mineru.example.test/file_parse")
+    monkeypatch.setenv("MINERU_API_KEY", "mineru-token")
+    monkeypatch.setenv("MINERU_POLL_INTERVAL_S", "0")
+    monkeypatch.setenv("MINERU_POLL_MAX_ATTEMPTS", "3")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+    ocr = result.metadata["ocr"]
+
+    assert [call["method"] for call in calls] == ["POST", "GET", "GET"]
+    assert calls[1]["url"] == "https://mineru.example.test/jobs/mineru-task-1"
+    assert calls[1]["authorization"] == "Bearer mineru-token"
+    assert result.metadata["ocr_required"] is False
+    assert "异步识别文本" in text
+    assert ocr["status"] == "done"
+    assert ocr["table_blocks"][0]["rows"] == [["条款", "要求"]]
+    assert ocr["provider_metadata"] == {
+        "request_id": "mineru-async",
+        "async_task_id": "mineru-task-1",
+        "async_attempts": 2,
+    }
+
+
+def test_paddleocr_async_ocr_uses_provider_poll_endpoint_template(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    responses = [
+        _FakeHTTPResponse(b'{"status":"pending","task_id":"paddle-task-1"}'),
+        _FakeHTTPResponse(b'{"data":{"text":"PaddleOCR async text","confidence":0.91}}'),
+    ]
+
+    def fake_urlopen(req, timeout):
+        calls.append({"url": req.full_url, "method": req.get_method(), "timeout": timeout})
+        return responses.pop(0)
+
+    monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
+    monkeypatch.setenv("PADDLEOCR_HTTP_ENDPOINT", "https://paddle.example.test/submit")
+    monkeypatch.setenv("PADDLEOCR_POLL_ENDPOINT", "https://paddle.example.test/tasks/{task_id}/result")
+    monkeypatch.setenv("PADDLEOCR_POLL_INTERVAL_S", "0")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert [call["method"] for call in calls] == ["POST", "GET"]
+    assert calls[1]["url"] == "https://paddle.example.test/tasks/paddle-task-1/result"
+    assert result.metadata["ocr"]["status"] == "done"
+    assert result.metadata["ocr"]["provider_profile"]["poll_endpoint_env"] == "PADDLEOCR_POLL_ENDPOINT"
+    assert "PaddleOCR async text" in text
+
+
+def test_ocr_async_timeout_returns_safe_failure(monkeypatch) -> None:
+    responses = [
+        _FakeHTTPResponse(b'{"status":"processing","task_id":"slow-task"}', status=202),
+        _FakeHTTPResponse(b'{"status":"running","debug":"secret OCR backend payload"}'),
+        _FakeHTTPResponse(b'{"status":"running","debug":"secret OCR backend payload"}'),
+    ]
+
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setenv("OCR_POLL_INTERVAL_S", "0")
+    monkeypatch.setenv("OCR_POLL_MAX_ATTEMPTS", "2")
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: responses.pop(0),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    ocr = result.metadata["ocr"]
+
+    assert result.metadata["ocr_required"] is True
+    assert ocr["status"] == "failed"
+    assert ocr["error"] == "ocr async task timed out"
+    assert ocr["task_id"] == "slow-task"
+    assert ocr["attempts"] == 2
+    assert "secret OCR" not in str(ocr)
+
+
 def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> None:
     monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
 
@@ -774,8 +886,10 @@ def _request(filename: str) -> KnowledgeProcessRequest:
 
 
 class _FakeHTTPResponse:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, status: int = 200) -> None:
         self._body = BytesIO(body)
+        self.status = status
+        self.code = status
 
     def __enter__(self) -> "_FakeHTTPResponse":
         return self

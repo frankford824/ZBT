@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from itertools import zip_longest
 from io import BytesIO
@@ -44,6 +45,10 @@ class OCRProviderConfig:
     api_key_env: str
     timeout_s: int
     mode: str
+    poll_endpoint: str
+    poll_endpoint_env: str
+    poll_interval_s: float
+    max_attempts: int
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -52,6 +57,17 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
         return default
     try:
         value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
     except ValueError:
         return default
     return value if value >= minimum else default
@@ -424,13 +440,21 @@ def _normalize_ocr_result(provider: str, result: dict[str, object]) -> dict[str,
     provider_metadata = payload.get("provider_metadata")
     if not isinstance(provider_metadata, dict):
         provider_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    provider_metadata = dict(provider_metadata)
+    async_task_id = str(payload.get("async_task_id") or "").strip()
+    if async_task_id:
+        provider_metadata["async_task_id"] = async_task_id
+        provider_metadata["async_attempts"] = _metadata_int(payload.get("async_attempts"), 0)
     pages = _normalize_ocr_pages(_first_list(payload, ("pages", "page_results", "page_info", "results")))
     markdown = _first_text(payload, ("markdown", "md", "md_content", "content"))
     text = _first_text(payload, ("text", "plain_text", "full_text"))
+    page_text = "\n\n".join(str(page.get("text") or "") for page in pages if str(page.get("text") or "").strip()).strip()
     if not text:
         text = markdown
-    if not text and pages:
-        text = "\n\n".join(str(page.get("text") or "") for page in pages).strip()
+    if not text:
+        text = page_text
+    elif page_text and page_text not in text:
+        text = f"{text}\n\n{page_text}"
     blocks = _normalize_ocr_blocks(_first_list(payload, ("blocks", "layout_blocks", "paragraphs")), pages)
     layout_blocks = _normalize_ocr_layout_blocks(_first_list(payload, ("layout_blocks", "layouts", "layout")), pages)
     raw_tables = _first_list(payload, ("tables", "table_blocks"))
@@ -662,12 +686,28 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
                 DEFAULT_OCR_RESPONSE_MAX_BYTES,
                 minimum=1024,
             )
+            status_code = _http_status(response)
             result = json.loads(_read_limited_response(response, max_response_bytes).decode("utf-8"))
         if not isinstance(result, dict):
             return {
                 "status": "failed",
                 "provider": config.provider,
                 "error": "ocr response invalid",
+            }
+        result = _resolve_async_ocr_result(config, endpoint, result, status_code)
+        if not isinstance(result, dict):
+            return {
+                "status": "failed",
+                "provider": config.provider,
+                "error": "ocr response invalid",
+            }
+        if result.get("status") in {"async_poll_failed", "async_poll_timeout", "async_poll_missing_target"}:
+            return {
+                "status": "failed",
+                "provider": config.provider,
+                "error": str(result.get("error") or "ocr async request failed"),
+                "task_id": result.get("task_id"),
+                "attempts": result.get("attempts"),
             }
         normalized = _normalize_ocr_result(config.provider, result)
         normalized["provider_profile"] = _ocr_provider_profile(config)
@@ -687,6 +727,137 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         }
     except Exception:
         return {"status": "failed", "provider": config.provider, "error": "ocr request failed"}
+
+
+def _http_status(response: object) -> int:
+    value = getattr(response, "status", None)
+    if value is None:
+        value = getattr(response, "code", None)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 200
+
+
+def _resolve_async_ocr_result(
+    config: OCRProviderConfig,
+    submit_endpoint: str,
+    result: dict[str, object],
+    status_code: int,
+) -> dict[str, object]:
+    if not _is_async_ocr_pending(result, status_code):
+        return result
+    task_id = _ocr_task_id(result)
+    poll_endpoint = _ocr_poll_endpoint(config, submit_endpoint, result, task_id)
+    if not poll_endpoint:
+        return {
+            "status": "async_poll_missing_target",
+            "provider": config.provider,
+            "task_id": task_id,
+            "error": "ocr async response missing poll target",
+        }
+    last_status = ""
+    for attempt in range(1, config.max_attempts + 1):
+        if config.poll_interval_s > 0:
+            time.sleep(config.poll_interval_s)
+        poll_result = _poll_ocr_task(config, poll_endpoint)
+        if _is_failed_ocr_status(poll_result):
+            return {
+                "status": "async_poll_failed",
+                "provider": config.provider,
+                "task_id": task_id,
+                "attempts": attempt,
+                "error": "ocr async task failed",
+            }
+        last_status = _ocr_status(poll_result)
+        if _is_async_ocr_pending(poll_result, 200):
+            continue
+        return {**poll_result, "async_task_id": task_id, "async_attempts": attempt}
+    return {
+        "status": "async_poll_timeout",
+        "provider": config.provider,
+        "task_id": task_id,
+        "attempts": config.max_attempts,
+        "last_status": last_status,
+        "error": "ocr async task timed out",
+    }
+
+
+def _is_async_ocr_pending(result: dict[str, object], status_code: int) -> bool:
+    if status_code == 202:
+        return True
+    return _ocr_status(result) in {"accepted", "created", "queued", "pending", "processing", "running", "started", "in_progress"}
+
+
+def _is_failed_ocr_status(result: dict[str, object]) -> bool:
+    return _ocr_status(result) in {"failed", "error", "errored", "cancelled", "canceled", "timeout", "timed_out"}
+
+
+def _ocr_status(result: dict[str, object]) -> str:
+    payload = _unwrap_ocr_payload(result)
+    for key in ("status", "state", "task_status", "job_status"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower().replace("-", "_")
+    return ""
+
+
+def _ocr_task_id(result: dict[str, object]) -> str:
+    payload = _unwrap_ocr_payload(result)
+    for key in ("task_id", "taskId", "job_id", "jobId", "request_id", "requestId", "id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _ocr_poll_endpoint(
+    config: OCRProviderConfig,
+    submit_endpoint: str,
+    result: dict[str, object],
+    task_id: str,
+) -> str:
+    payload = _unwrap_ocr_payload(result)
+    poll_target = _first_text(payload, ("status_url", "statusUrl", "poll_url", "pollUrl", "result_url", "resultUrl"))
+    if not poll_target:
+        poll_target = config.poll_endpoint
+    if poll_target:
+        if task_id:
+            poll_target = poll_target.replace("{task_id}", parse.quote(task_id, safe=""))
+        return _safe_joined_ocr_endpoint(submit_endpoint, poll_target)
+    if not task_id:
+        return ""
+    return _safe_joined_ocr_endpoint(submit_endpoint, parse.quote(task_id, safe=""))
+
+
+def _safe_joined_ocr_endpoint(base_endpoint: str, value: str) -> str:
+    if _contains_unsafe_url_character(value):
+        raise RuntimeError("OCR poll endpoint is invalid")
+    parsed = parse.urlparse(value)
+    if parsed.scheme or parsed.netloc:
+        return _safe_ocr_endpoint(value)
+    if value.startswith("/"):
+        base = parse.urlparse(base_endpoint)
+        return _safe_ocr_endpoint(parse.urlunparse((base.scheme, base.netloc, value, "", "", "")))
+    base_path = base_endpoint.rstrip("/") + "/"
+    return _safe_ocr_endpoint(parse.urljoin(base_path, value))
+
+
+def _poll_ocr_task(config: OCRProviderConfig, endpoint: str) -> dict[str, object]:
+    headers = {"Accept": "application/json"}
+    if config.api_key:
+        headers["Authorization"] = f"Bearer {_safe_ocr_header_value(config.api_key)}"
+    req = request.Request(endpoint, method="GET", headers=headers)
+    with request.urlopen(req, timeout=config.timeout_s) as response:
+        max_response_bytes = _env_int(
+            "OCR_MAX_RESPONSE_BYTES",
+            DEFAULT_OCR_RESPONSE_MAX_BYTES,
+            minimum=1024,
+        )
+        result = json.loads(_read_limited_response(response, max_response_bytes).decode("utf-8"))
+    if not isinstance(result, dict):
+        return {"status": "error"}
+    return result
 
 
 def _safe_ocr_endpoint(value: str) -> str:
@@ -742,6 +913,10 @@ def _ocr_provider_config() -> OCRProviderConfig:
         api_key_env=api_key_env,
         timeout_s=_env_int(_ocr_timeout_env(provider), _env_int("OCR_HTTP_TIMEOUT_S", 120)),
         mode=_ocr_mode(provider),
+        poll_endpoint=os.getenv(_ocr_poll_endpoint_env(provider), "").strip() or os.getenv("OCR_POLL_ENDPOINT", "").strip(),
+        poll_endpoint_env=_ocr_poll_endpoint_env(provider),
+        poll_interval_s=_env_float(_ocr_poll_interval_env(provider), _env_float("OCR_POLL_INTERVAL_S", 2.0)),
+        max_attempts=_env_int(_ocr_max_attempts_env(provider), _env_int("OCR_POLL_MAX_ATTEMPTS", 30)),
     )
 
 
@@ -767,6 +942,30 @@ def _ocr_timeout_env(provider: str) -> str:
     if provider == "paddleocr":
         return "PADDLEOCR_HTTP_TIMEOUT_S"
     return "OCR_HTTP_TIMEOUT_S"
+
+
+def _ocr_poll_endpoint_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_POLL_ENDPOINT"
+    if provider == "paddleocr":
+        return "PADDLEOCR_POLL_ENDPOINT"
+    return "OCR_POLL_ENDPOINT"
+
+
+def _ocr_poll_interval_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_POLL_INTERVAL_S"
+    if provider == "paddleocr":
+        return "PADDLEOCR_POLL_INTERVAL_S"
+    return "OCR_POLL_INTERVAL_S"
+
+
+def _ocr_max_attempts_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_POLL_MAX_ATTEMPTS"
+    if provider == "paddleocr":
+        return "PADDLEOCR_POLL_MAX_ATTEMPTS"
+    return "OCR_POLL_MAX_ATTEMPTS"
 
 
 def _ocr_mode(provider: str) -> str:
@@ -795,13 +994,18 @@ def _ocr_provider_options(config: OCRProviderConfig) -> dict[str, object]:
 
 
 def _ocr_provider_profile(config: OCRProviderConfig) -> dict[str, object]:
-    return {
+    profile: dict[str, object] = {
         "provider": config.provider,
         "endpoint_env": config.endpoint_env,
         "api_key_env": config.api_key_env,
         "mode": config.mode,
         "timeout_s": config.timeout_s,
     }
+    if config.poll_endpoint:
+        profile["poll_endpoint_env"] = config.poll_endpoint_env
+        profile["poll_interval_s"] = config.poll_interval_s
+        profile["max_attempts"] = config.max_attempts
+    return profile
 
 
 def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:
