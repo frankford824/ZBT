@@ -14,7 +14,7 @@
 
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测，仍需要继续做前端字段级编辑确认。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标和统一 `table_blocks`；仍缺少真实 OCR Provider 配置和样本回归评测。
-3. 标书生成已有章节 source_refs，但缺少 AutoRFP 式“问题矩阵/响应矩阵”，即从招标文件抽取逐条要求，再逐条匹配回答和引用来源。
+3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量；仍需继续补人工编辑覆盖状态、覆盖历史和评审矩阵导出。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 
 ## 当前落地进展
@@ -31,7 +31,7 @@
 - `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements` 只读接口。
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”筛选。
-- 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。
+- 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
 - `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 103 项检查。
 - `backend/internal/db/migrations/00032_bid_pipeline_gates.sql` 已新增 `bid_pipeline_gates` RLS 表。
 - `backend/internal/platform/bid/store.go` 已在上传、解析、解析回调、人工确认、大纲生成、整标生成和导出路径维护阶段闸门；`GenerateOutline` 会检查 `interpret=passed`，`GenerateBid` 会检查 `plan=passed`，`CreateExport` 会检查 `generate=passed` 和 `check=passed`。旧的已确认解析、大纲、已完成章节内容和已完成合规检查会按真实业务状态自动补齐闸门。
@@ -149,7 +149,7 @@
    - 大纲生成按 requirement_items 生成章节覆盖计划。
    - 章节生成 prompt 必须传入本章负责覆盖的 requirement_items。
    - 输出 `self_check` 必须逐条返回 `requirement_id`、`satisfied`、`evidence`、`source_refs`。
-   - 当前已落地：Go 从当前解析结果按章节标题提取 `requirement_refs`，单章重新生成、章节 AI 动作和整标逐章生成都会传给 Python；OpenAI-compatible Provider 提示词要求 `self_check.requirement_coverage`，模型未返回时补需复核覆盖矩阵；Go 回调会把 `self_check` 和 `requirement_coverage` 写入章节版本元数据，并同步回写要求项覆盖状态，前端编辑器和“响应要点”显示响应覆盖。
+   - 当前已落地：Go 从当前解析结果按章节标题提取 `requirement_refs`，单章重新生成、章节 AI 动作和整标逐章生成都会传给 Python；OpenAI-compatible Provider 提示词要求 `self_check.requirement_coverage`，模型未返回时补需复核覆盖矩阵；Go 回调会把 `self_check` 和 `requirement_coverage` 写入章节版本元数据，并同步回写要求项覆盖状态，前端编辑器和“响应要点”显示响应覆盖、证据摘要和来源数量。
 
 4. 来源引用：
    - 模型输出事实性段落必须带 `{{ref:chunk_id}}` 或结构化 `source_refs`。
@@ -160,7 +160,7 @@
    - 任一生成章节能追溯到对应 requirement_items。
    - 无引用的事实性段落进入 `needs_human_input`。
    - 前端能按“未覆盖/部分覆盖/已覆盖”过滤招标要求。
-   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”筛选。
+   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”筛选，并在响应要点表展示响应证据和来源数量。
 
 ## P1：Skill Pipeline 和阶段闸门
 

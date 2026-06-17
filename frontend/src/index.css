@@ -1090,6 +1090,23 @@ a {
   overflow-wrap: anywhere;
 }
 
+.requirement-evidence-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.requirement-evidence-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- 版本对比 ---------- */
 
 .diff-grid {

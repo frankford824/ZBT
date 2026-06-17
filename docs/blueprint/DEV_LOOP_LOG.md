@@ -2825,3 +2825,43 @@ git diff --check
 
 1. 本轮回写要求项覆盖状态，但不新增人工编辑覆盖状态接口；人工确认/调整仍沿用后续产品流程。
 2. 一个要求可能被多章覆盖时，当前以最新生成回调为准写入 `metadata.latest_coverage`；完整历史仍保留在各章节版本 `model_metadata.requirement_coverage` 中。
+
+## Loop-45 / 响应证据进入响应要点表 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式 `Requirement -> Coverage -> Source` 在文件解读页的用户可见闭环。
+2. `bid_requirement_items.metadata.latest_coverage` 已由后端回写后，前端不能只显示覆盖状态，必须显示响应证据和来源数量。
+3. 继续保持业务口径，不在页面中暴露模型、token、schema、provider 等技术字段。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 从要求项 `metadata.latest_coverage` 提取响应证据和 `source_refs` 数量。
+2. “响应要点”表新增“响应证据”列，展示证据摘要和“来源 N 处”；已覆盖但无证据的项标记为“待补证据”。
+3. `frontend/src/index.css` 新增响应证据单元格样式，使用固定栅格、单行省略和 Tooltip，防止长证据撑开表格。
+4. `AI_IMPLEMENTATION_CHECKLIST.md`、`AI_PIPELINE.md`、`API_SPEC.md` 同步更新当前状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend build
+git diff --check
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+```
+
+结果：
+
+1. 前端 TypeScript 构建和 Vite 打包通过。
+2. `git diff --check` 通过。
+3. Go 后端全量测试通过。
+4. 工程1 真实样本解析评测 103/103 通过。
+5. AI 服务完整测试 217 条全部通过。
+
+### 偏离蓝图
+
+1. 本轮只展示最新一次覆盖证据；多章节、多轮生成的覆盖历史仍保留在章节版本 `model_metadata.requirement_coverage`，暂未做历史时间线。
+2. 本轮不新增人工编辑覆盖状态接口，也不新增响应矩阵导出。

@@ -38,6 +38,7 @@ import {
   Tabs,
   Tag,
   Timeline,
+  Tooltip,
   Typography,
   Upload,
   App as AntApp,
@@ -939,6 +940,11 @@ export function BidWizardPage() {
                                 render: (_, row) => requirementCoverageTag(row.coverageStatus),
                               },
                               {
+                                title: '响应证据',
+                                width: 260,
+                                render: (_, row) => requirementEvidenceCell(row),
+                              },
+                              {
                                 title: '属性',
                                 width: 120,
                                 render: (_, row) => (
@@ -1438,6 +1444,8 @@ function structuredRequirementRows(result: Record<string, unknown> | undefined) 
         mandatory: Boolean(record.mandatory),
         needsReview: Boolean(record.needs_review || record.status === 'needs_review'),
         coverageStatus: requirementCoverageStatusValue(record.status),
+        coverageEvidence: '',
+        coverageSourceCount: 0,
       }
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row?.requirement))
@@ -1445,14 +1453,20 @@ function structuredRequirementRows(result: Record<string, unknown> | undefined) 
 
 function requirementRowsFromItems(items: BidRequirementItemDTO[]) {
   return items
-    .map((item) => ({
-      id: item.id || item.external_id,
-      module: parseModuleLabel(item.module),
-      requirement: item.requirement,
-      mandatory: item.mandatory,
-      needsReview: item.needs_review || item.coverage_status === 'needs_review',
-      coverageStatus: item.coverage_status,
-    }))
+    .map((item) => {
+      const latestCoverage = latestCoverageFromMetadata(item.metadata)
+      const sourceCount = arrayValue(latestCoverage?.source_refs).length
+      return {
+        id: item.id || item.external_id,
+        module: parseModuleLabel(item.module),
+        requirement: item.requirement,
+        mandatory: item.mandatory,
+        needsReview: item.needs_review || item.coverage_status === 'needs_review',
+        coverageStatus: item.coverage_status,
+        coverageEvidence: formatStructuredValue(latestCoverage?.evidence),
+        coverageSourceCount: sourceCount,
+      }
+    })
     .filter((row) => Boolean(row.requirement.trim()))
 }
 
@@ -1484,6 +1498,30 @@ function requirementCoverageTag(value: BidRequirementItemDTO['coverage_status'])
   if (value === 'planned') return <Tag color="blue">已规划</Tag>
   if (value === 'needs_review') return <Tag color="gold">待复核</Tag>
   return <Tag>未确认</Tag>
+}
+
+function requirementEvidenceCell(row: ParseRequirementRow) {
+  const evidence = row.coverageEvidence.trim()
+  const sourceCount = row.coverageSourceCount
+  if (!evidence && sourceCount === 0) {
+    return row.coverageStatus === 'covered' ? (
+      <Tag color="gold">待补证据</Tag>
+    ) : (
+      <Typography.Text type="secondary">-</Typography.Text>
+    )
+  }
+  return (
+    <div className="requirement-evidence-cell">
+      <Tooltip title={evidence || '已关联响应来源'}>
+        <Typography.Text className="requirement-evidence-text">{evidence || '已关联响应来源'}</Typography.Text>
+      </Tooltip>
+      {sourceCount > 0 ? <Tag color="green">来源 {sourceCount} 处</Tag> : <Tag color="gold">待补来源</Tag>}
+    </div>
+  )
+}
+
+function latestCoverageFromMetadata(metadata: Record<string, unknown> | undefined) {
+  return objectRecord(objectRecord(metadata)?.latest_coverage)
 }
 
 function parseModuleLabel(value: string) {
