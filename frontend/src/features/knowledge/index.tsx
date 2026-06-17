@@ -45,7 +45,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
-import { fileOpenErrorMessage, openFileUrl } from '../../shared/files/openFileUrl'
+import { fileOpenErrorMessage, openFileUrl, safeFileUrlString } from '../../shared/files/openFileUrl'
 import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../../shared/files/uploadLimits'
 import { formatDateOnly, formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
@@ -966,6 +966,7 @@ export function FilePreviewPage() {
       message.error(getApiErrorMessage(error, '获取下载链接失败'))
     }
   }
+  const previewUrl = preview.data ? safeFileUrlString(preview.data.url) : null
 
   return (
     <PageFrame
@@ -981,10 +982,17 @@ export function FilePreviewPage() {
     >
       {preview.isLoading ? <LoadingBlock /> : null}
       {preview.isError ? <ErrorBlock /> : null}
-      {preview.data ? (
+      {preview.data && !previewUrl ? <ErrorBlock description="文件链接不可用，请重新获取" /> : null}
+      {preview.data && previewUrl ? (
         <div className="file-preview-shell">
           <FileSearchOutlined className="preview-icon" />
-          <iframe title={preview.data.file.filename} src={preview.data.url} className="file-preview-frame" />
+          <iframe
+            title={preview.data.file.filename}
+            src={previewUrl}
+            className="file-preview-frame"
+            referrerPolicy="no-referrer"
+            sandbox="allow-downloads"
+          />
         </div>
       ) : null}
     </PageFrame>

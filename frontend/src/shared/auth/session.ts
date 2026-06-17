@@ -117,7 +117,7 @@ function isSafeAppPath(path: string) {
   if (containsUnsafePathCharacter(path)) return false
   try {
     const decoded = decodeURIComponent(path)
-    if (decoded.includes('\\') || decoded.startsWith('//')) return false
+    if (containsUnsafePathCharacter(decoded) || decoded.startsWith('//')) return false
   } catch {
     return false
   }

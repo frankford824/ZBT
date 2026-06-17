@@ -13,6 +13,10 @@ export function openFileUrl(rawUrl: string | null | undefined): OpenFileUrlResul
   return 'opened'
 }
 
+export function safeFileUrlString(rawUrl: string | null | undefined): string | null {
+  return normalizeFileUrl(rawUrl)?.toString() ?? null
+}
+
 export function fileOpenErrorMessage(result: OpenFileUrlResult): string | null {
   if (result === 'invalid') {
     return '文件链接不可用，请重新获取'

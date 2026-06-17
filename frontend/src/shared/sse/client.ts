@@ -148,7 +148,7 @@ function isSafeRelativeSsePath(path: string) {
   if (containsUnsafePathCharacter(path)) return false
   try {
     const decoded = decodeURIComponent(path)
-    return !decoded.includes('\\') && !decoded.startsWith('//')
+    return !containsUnsafePathCharacter(decoded) && !decoded.startsWith('//')
   } catch {
     return false
   }
