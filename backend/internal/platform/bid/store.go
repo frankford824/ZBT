@@ -2228,6 +2228,9 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		if err := requirePipelineGatePassed(ctx, tx, tenantID, bidID, "generate"); err != nil {
 			return err
 		}
+		if err := requirePipelineGatePassed(ctx, tx, tenantID, bidID, "check"); err != nil {
+			return err
+		}
 		if err := ensureExportAttachmentObjectKeysReady(ctx, tx, tenantID, req.Attachments, req.BOQFiles); err != nil {
 			return err
 		}
@@ -3611,6 +3614,8 @@ func requirePipelineGatePassed(ctx context.Context, tx pgx.Tx, tenantID, bidID, 
 			return backfillPlanGate(ctx, tx, tenantID, bidID)
 		case "generate":
 			return backfillGenerateGate(ctx, tx, tenantID, bidID)
+		case "check":
+			return backfillCheckGate(ctx, tx, tenantID, bidID)
 		default:
 			return ErrInvalidRequest
 		}
@@ -3676,6 +3681,41 @@ func backfillGenerateGate(ctx context.Context, tx pgx.Tx, tenantID, bidID string
 	})
 }
 
+func backfillCheckGate(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error {
+	var checkID, resultStatus string
+	var score int
+	err := tx.QueryRow(ctx, `
+		select id::text, result_status, score
+		from compliance_checks
+		where tenant_id = $1
+			and bid_document_id = $2
+			and status = 'done'
+		order by completed_at desc nulls last, created_at desc
+		limit 1
+	`, tenantID, bidID).Scan(&checkID, &resultStatus, &score)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalidRequest
+	}
+	if err != nil {
+		return err
+	}
+	gateStatus := pipelineGateStatusForComplianceResult(resultStatus)
+	if gateStatus == "" {
+		return ErrInvalidRequest
+	}
+	metadata, err := checkGateMetadata(ctx, tx, tenantID, checkID, resultStatus, score)
+	if err != nil {
+		return err
+	}
+	if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "check", gateStatus, "", pipelineGateReason("check", gateStatus), metadata); err != nil {
+		return err
+	}
+	if gateStatus != "passed" {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
 func parseGateMetadata(parseResultID string, structured map[string]any) map[string]any {
 	metadata := map[string]any{"parse_result_id": parseResultID}
 	if qualityGates, ok := structured["quality_gates"].(map[string]any); ok {
@@ -3719,6 +3759,40 @@ func exportGateMetadata(exportID, exportType string, result map[string]any) map[
 	return metadata
 }
 
+func checkGateMetadata(ctx context.Context, tx pgx.Tx, tenantID, checkID, resultStatus string, score int) (map[string]any, error) {
+	rows, err := tx.Query(ctx, `
+		select severity, count(*)
+		from compliance_issues
+		where tenant_id = $1 and check_id = $2 and status in ('open', 'confirmed_fail')
+		group by severity
+	`, tenantID, checkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	severityCounts := map[string]int{}
+	issueCount := 0
+	for rows.Next() {
+		var severity string
+		var count int
+		if err := rows.Scan(&severity, &count); err != nil {
+			return nil, err
+		}
+		severityCounts[severity] = count
+		issueCount += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"check_id":        checkID,
+		"result_status":   resultStatus,
+		"score":           score,
+		"issue_count":     issueCount,
+		"severity_counts": severityCounts,
+	}, nil
+}
+
 func pipelineGateStatusForTask(status string) string {
 	switch normalizeTaskStatus(status) {
 	case "queued", "running":
@@ -3745,6 +3819,19 @@ func pipelineGateStatusForGenerationJob(status string, total, done, failed, canc
 	return pipelineGateStatusForTask(status)
 }
 
+func pipelineGateStatusForComplianceResult(resultStatus string) string {
+	switch strings.TrimSpace(strings.ToLower(resultStatus)) {
+	case "pass":
+		return "passed"
+	case "warn", "fail_candidate":
+		return "needs_review"
+	case "fail":
+		return "blocked"
+	default:
+		return ""
+	}
+}
+
 func pipelineGateReason(stage, status string) string {
 	switch normalizePipelineStage(stage) + ":" + normalizePipelineGateStatus(status) {
 	case "generate:pending":
@@ -3759,6 +3846,12 @@ func pipelineGateReason(stage, status string) string {
 		return "投标文件已导出完成。"
 	case "format:blocked":
 		return "投标文件导出失败，请调整后重新导出。"
+	case "check:passed":
+		return "合规检查已通过。"
+	case "check:needs_review":
+		return "合规检查存在需复核事项。"
+	case "check:blocked":
+		return "合规检查存在阻断问题。"
 	default:
 		return ""
 	}

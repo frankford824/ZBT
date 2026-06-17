@@ -362,6 +362,20 @@ func TestPipelineGateStatusForGenerationJobBlocksPartialCancellation(t *testing.
 	}
 }
 
+func TestPipelineGateStatusForComplianceResult(t *testing.T) {
+	for resultStatus, want := range map[string]string{
+		"pass":           "passed",
+		"warn":           "needs_review",
+		"fail_candidate": "needs_review",
+		"fail":           "blocked",
+		"bad":            "",
+	} {
+		if got := pipelineGateStatusForComplianceResult(resultStatus); got != want {
+			t.Fatalf("expected compliance result %q to map to %q, got %q", resultStatus, want, got)
+		}
+	}
+}
+
 func TestParseGateMetadataCarriesQualityAndCounts(t *testing.T) {
 	metadata := parseGateMetadata("parse-demo", map[string]any{
 		"quality_gates": map[string]any{

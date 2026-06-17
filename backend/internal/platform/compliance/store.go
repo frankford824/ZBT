@@ -167,7 +167,7 @@ func (s *Store) CreateCheck(ctx context.Context, tenantID string, req CreateChec
 		`, tenantID, bidID, name, configRaw, taskID).Scan(&checkID); err != nil {
 			return err
 		}
-		bidDocumentID, _ := bidID.(string)
+		bidDocumentID := nullableUUIDString(bidID)
 		if err := s.generateIssues(ctx, tx, tenantID, checkID, bidDocumentID, levels); err != nil {
 			return err
 		}
@@ -180,7 +180,13 @@ func (s *Store) CreateCheck(ctx context.Context, tenantID string, req CreateChec
 			set status = 'done', result_status = $3, score = $4, completed_at = now(), updated_at = now()
 			where tenant_id = $1 and id = $2
 		`, tenantID, checkID, resultStatus, score)
-		return err
+		if err != nil {
+			return err
+		}
+		if bidDocumentID == "" {
+			return nil
+		}
+		return upsertCompliancePipelineGate(ctx, tx, tenantID, bidDocumentID, checkID, resultStatus, score)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CheckSnapshot{}, ErrNotFound
@@ -725,7 +731,13 @@ func scanRule(row scanner) (Rule, error) {
 
 func refreshCheckSummary(ctx context.Context, tx pgx.Tx, tenantID, issueID string) error {
 	var checkID string
-	if err := tx.QueryRow(ctx, `select check_id::text from compliance_issues where tenant_id = $1 and id = $2`, tenantID, issueID).Scan(&checkID); err != nil {
+	var bidID sql.NullString
+	if err := tx.QueryRow(ctx, `
+		select ci.check_id::text, cc.bid_document_id::text
+		from compliance_issues ci
+		join compliance_checks cc on cc.tenant_id = ci.tenant_id and cc.id = ci.check_id
+		where ci.tenant_id = $1 and ci.id = $2
+	`, tenantID, issueID).Scan(&checkID, &bidID); err != nil {
 		return err
 	}
 	resultStatus, score, err := summarizeIssues(ctx, tx, tenantID, checkID)
@@ -737,7 +749,13 @@ func refreshCheckSummary(ctx context.Context, tx pgx.Tx, tenantID, issueID strin
 		set result_status = $3, score = $4, updated_at = now()
 		where tenant_id = $1 and id = $2
 	`, tenantID, checkID, resultStatus, score)
-	return err
+	if err != nil {
+		return err
+	}
+	if !bidID.Valid {
+		return nil
+	}
+	return upsertCompliancePipelineGate(ctx, tx, tenantID, bidID.String, checkID, resultStatus, score)
 }
 
 func summarizeIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID string) (string, int, error) {
@@ -775,6 +793,104 @@ func summarizeIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID string) (
 		score = 0
 	}
 	return result, score, rows.Err()
+}
+
+func upsertCompliancePipelineGate(ctx context.Context, tx pgx.Tx, tenantID, bidID, checkID, resultStatus string, score int) error {
+	gateStatus := compliancePipelineGateStatus(resultStatus)
+	if gateStatus == "" {
+		return ErrInvalidRequest
+	}
+	metadata, err := compliancePipelineGateMetadata(ctx, tx, tenantID, checkID, resultStatus, score)
+	if err != nil {
+		return err
+	}
+	metadataJSON, _ := json.Marshal(metadata)
+	_, err = tx.Exec(ctx, `
+		insert into bid_pipeline_gates (
+			tenant_id, bid_document_id, stage, status, reviewed_by,
+			reviewed_at, reason, metadata
+		)
+		values (
+			$1, $2, 'check', $3, null,
+			case when $3 in ('passed', 'blocked') then now() else null end,
+			$4, $5
+		)
+		on conflict (tenant_id, bid_document_id, stage) do update
+		set status = excluded.status,
+			reviewed_by = excluded.reviewed_by,
+			reviewed_at = excluded.reviewed_at,
+			reason = excluded.reason,
+			metadata = excluded.metadata,
+			updated_at = now()
+	`, tenantID, bidID, gateStatus, compliancePipelineGateReason(gateStatus), metadataJSON)
+	return err
+}
+
+func compliancePipelineGateMetadata(ctx context.Context, tx pgx.Tx, tenantID, checkID, resultStatus string, score int) (map[string]any, error) {
+	rows, err := tx.Query(ctx, `
+		select severity, count(*)
+		from compliance_issues
+		where tenant_id = $1 and check_id = $2 and status in ('open', 'confirmed_fail')
+		group by severity
+	`, tenantID, checkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	severityCounts := map[string]int{}
+	issueCount := 0
+	for rows.Next() {
+		var severity string
+		var count int
+		if err := rows.Scan(&severity, &count); err != nil {
+			return nil, err
+		}
+		severityCounts[severity] = count
+		issueCount += count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"check_id":        checkID,
+		"result_status":   resultStatus,
+		"score":           score,
+		"issue_count":     issueCount,
+		"severity_counts": severityCounts,
+	}, nil
+}
+
+func compliancePipelineGateStatus(resultStatus string) string {
+	switch strings.TrimSpace(strings.ToLower(resultStatus)) {
+	case "pass":
+		return "passed"
+	case "warn", "fail_candidate":
+		return "needs_review"
+	case "fail":
+		return "blocked"
+	default:
+		return ""
+	}
+}
+
+func compliancePipelineGateReason(status string) string {
+	switch status {
+	case "passed":
+		return "合规检查已通过。"
+	case "needs_review":
+		return "合规检查存在需复核事项。"
+	case "blocked":
+		return "合规检查存在阻断问题。"
+	default:
+		return ""
+	}
+}
+
+func nullableUUIDString(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
 }
 
 func normalizeLevels(levels []string) ([]string, error) {

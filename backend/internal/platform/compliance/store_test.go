@@ -62,6 +62,29 @@ func TestNormalizeRuleDefaultsOnlyBlankEnums(t *testing.T) {
 	}
 }
 
+func TestCompliancePipelineGateStatusMapsResultStatus(t *testing.T) {
+	for resultStatus, want := range map[string]string{
+		"pass":           "passed",
+		"warn":           "needs_review",
+		"fail_candidate": "needs_review",
+		"fail":           "blocked",
+		"unknown":        "",
+	} {
+		if got := compliancePipelineGateStatus(resultStatus); got != want {
+			t.Fatalf("expected result status %q to map to %q, got %q", resultStatus, want, got)
+		}
+	}
+}
+
+func TestNullableUUIDStringOnlyReturnsConcreteUUIDString(t *testing.T) {
+	if got := nullableUUIDString("00000000-0000-4000-8000-000000000001"); got == "" {
+		t.Fatal("expected string value to be returned")
+	}
+	if got := nullableUUIDString(nil); got != "" {
+		t.Fatalf("expected nil to return empty string, got %q", got)
+	}
+}
+
 func levelsKey(levels []string) string {
 	result := ""
 	for index, level := range levels {

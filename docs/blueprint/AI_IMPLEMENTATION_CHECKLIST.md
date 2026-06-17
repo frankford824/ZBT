@@ -15,7 +15,7 @@
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测，仍需要继续做前端字段级编辑确认。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标和统一 `table_blocks`；仍缺少真实 OCR Provider 配置和样本回归评测。
 3. 标书生成已有章节 source_refs，但缺少 AutoRFP 式“问题矩阵/响应矩阵”，即从招标文件抽取逐条要求，再逐条匹配回答和引用来源。
-4. Skill/Gate 已开始从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`format` 阶段已落库并接入关键写操作；仍需继续把 `check` 阶段与 compliance store 打通。
+4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 
 ## 当前落地进展
 
@@ -32,7 +32,8 @@
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”筛选。
 - `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 63 项检查。
 - `backend/internal/db/migrations/00032_bid_pipeline_gates.sql` 已新增 `bid_pipeline_gates` RLS 表。
-- `backend/internal/platform/bid/store.go` 已在上传、解析、解析回调、人工确认、大纲生成、整标生成和导出路径维护阶段闸门；`GenerateOutline` 会检查 `interpret=passed`，`GenerateBid` 会检查 `plan=passed`，`CreateExport` 会检查 `generate=passed`。旧的已确认解析、大纲和已完成章节内容会按真实业务状态自动补齐闸门。
+- `backend/internal/platform/bid/store.go` 已在上传、解析、解析回调、人工确认、大纲生成、整标生成和导出路径维护阶段闸门；`GenerateOutline` 会检查 `interpret=passed`，`GenerateBid` 会检查 `plan=passed`，`CreateExport` 会检查 `generate=passed` 和 `check=passed`。旧的已确认解析、大纲、已完成章节内容和已完成合规检查会按真实业务状态自动补齐闸门。
+- `backend/internal/platform/compliance/store.go` 已在创建检查、问题修复、忽略和人工确认 fail 后同步 `check` 阶段闸门；`pass` 自动通过，`warn/fail_candidate` 进入待复核，`fail` 阻断。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/pipeline-gates` 只读接口，前端 API client 已提供对应 DTO 和查询函数。
 
 ## P0：6 模块招标解析
@@ -174,7 +175,7 @@
    - 新增 `bid_pipeline_gates` 表，保存 `stage`、`status`、`reviewed_by`、`reviewed_at`、`reason`、`metadata`。
    - 写操作检查前置 gate，未通过时返回业务错误。
    - 不采用 BidMaster 的文件系统 `.reviewed` 闸门；ZBT 必须走租户 RLS 和审计日志。
-   - 当前已落地：上传和解析创建 `interpret=pending`，AI 解析成功后进入 `needs_review`，人工确认进入 `passed`，解析失败进入 `blocked`；大纲生成前强制检查 `interpret=passed`，大纲生成成功后写入 `plan=passed`；整标生成前强制检查 `plan=passed`，全部章节生成完成后写入 `generate=passed`，失败或取消写入 `blocked`；导出前强制检查 `generate=passed`，导出完成写入 `format=passed`。
+   - 当前已落地：上传和解析创建 `interpret=pending`，AI 解析成功后进入 `needs_review`，人工确认进入 `passed`，解析失败进入 `blocked`；大纲生成前强制检查 `interpret=passed`，大纲生成成功后写入 `plan=passed`；整标生成前强制检查 `plan=passed`，全部章节生成完成后写入 `generate=passed`，失败或取消写入 `blocked`；合规检查完成和问题处理后写入 `check=passed|needs_review|blocked`；导出前强制检查 `generate=passed` 和 `check=passed`，导出完成写入 `format=passed`。
 
 2. Python skill 规范：
    - 不引入外部框架，新增轻量 `SkillResult` 数据约定：`status`、`data`、`evidence`、`token_usage`、`warnings`。
