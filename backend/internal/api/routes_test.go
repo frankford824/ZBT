@@ -215,6 +215,77 @@ func TestBindOptionalJSONRejectsMalformedUnknownLengthBody(t *testing.T) {
 	}
 }
 
+func TestBindJSONRejectsTrailingContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/payload", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name" binding:"required"`
+		}
+		if !bindJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	for _, body := range []string{
+		`{"name":"demo"} {"name":"extra"}`,
+		`{"name":"demo"} trailing`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader(body))
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected trailing body %q to be rejected, got %d", body, recorder.Code)
+		}
+	}
+}
+
+func TestBindJSONStillRunsBindingValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/payload", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name" binding:"required"`
+		}
+		if !bindJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader(`{"name":""}`))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected required field validation to be preserved, got %d", recorder.Code)
+	}
+}
+
+func TestBindOptionalJSONRejectsTrailingContent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/optional", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if !bindOptionalJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/optional", strings.NewReader(`{"name":"demo"} []`))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected optional trailing body to be rejected, got %d", recorder.Code)
+	}
+}
+
 func TestLimitRequestBodyRejectsKnownOversizedBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

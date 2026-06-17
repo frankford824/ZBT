@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,6 +32,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
 	platformtender "github.com/frankford824/ZBT/backend/internal/platform/tender"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/google/uuid"
 )
 
@@ -300,25 +302,57 @@ func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 }
 
 func bindJSON(c *gin.Context, target any) bool {
-	if err := c.ShouldBindJSON(target); err != nil {
+	return decodeJSONBody(c, target, false)
+}
+
+func bindOptionalJSON(c *gin.Context, target any) bool {
+	return decodeJSONBody(c, target, true)
+}
+
+var errTrailingJSONBody = errors.New("request body must contain a single JSON value")
+
+func decodeJSONBody(c *gin.Context, target any, optional bool) bool {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
 		respondBodyReadError(c, err)
 		return false
+	}
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		if optional {
+			return true
+		}
+		respondBadRequest(c)
+		return false
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	if err := decoder.Decode(target); err != nil {
+		respondBodyReadError(c, err)
+		return false
+	}
+	if err := ensureSingleJSONValue(decoder); err != nil {
+		respondBodyReadError(c, err)
+		return false
+	}
+	if binding.Validator != nil {
+		if err := binding.Validator.ValidateStruct(target); err != nil {
+			respondBodyReadError(c, err)
+			return false
+		}
 	}
 	return true
 }
 
-func bindOptionalJSON(c *gin.Context, target any) bool {
-	if c.Request.ContentLength == 0 {
-		return true
-	}
-	if err := c.ShouldBindJSON(target); err != nil {
+func ensureSingleJSONValue(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err != nil {
 		if errors.Is(err, io.EOF) {
-			return true
+			return nil
 		}
-		respondBodyReadError(c, err)
-		return false
+		return err
 	}
-	return true
+	return errTrailingJSONBody
 }
 
 func (s *server) login(c *gin.Context) {
