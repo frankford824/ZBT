@@ -2465,3 +2465,44 @@ git diff --check
 
 1. 本轮先提供离线 JSON 评测器；尚未把运行态章节生成结果自动导出为 `<生成覆盖样本>.json`。
 2. 评测器验证来源是否能解析到给定 `knowledge_chunks`，不直接查询 PostgreSQL；运行态解析仍由 Go 回调链路负责。
+
+## Loop-37 / 运行态生成覆盖样本导出 - 2026-06-17
+
+### 本轮目标
+
+1. 将 Loop-36 的离线评测输入从手工 JSON 推进到运行态后端导出。
+2. 从真实租户数据拼装 AutoRFP 式 `Requirement -> Coverage -> Source` 契约。
+3. 给前端共享 API client 暴露类型化读取函数，避免后续页面手写路径。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `GenerationCoverageSpec`、`GenerationCoverageRequirement`、`GenerationCoverageChapter`、`GenerationCoverageKnowledgeChunk` DTO。
+2. 新增 `Store.GenerationCoverageSpec()`，在 RLS 事务内读取 `bid_requirement_items`、最新 `bid_chapter_versions.model_metadata`、章节 `source_refs` 和已解析 `knowledge_references -> knowledge_chunks`。
+3. 新增 `GET /bids/:id/generation-coverage`，按 bid read 权限返回可直接交给 `generation_coverage_eval.py` 的 JSON。
+4. `frontend/src/shared/api/client.ts` 新增 `BidGenerationCoverageSpecDTO` 与 `fetchBidGenerationCoverage()`。
+5. 补充后端单元测试，验证 requirement 使用 `external_id` 作为评测 id、章节覆盖矩阵顶层暴露、阈值和来源要求默认值。
+6. 补充路由测试，确认新接口为同步只读 bid 路由。
+7. `API_SPEC.md`、`AI_IMPLEMENTATION_CHECKLIST.md`、`SAMPLE_DOCS_EVALUATION.md` 更新“运行态导出 -> 离线评测”链路说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && go test ./...
+cd frontend && pnpm build
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s
+git diff --check
+```
+
+结果：
+
+1. Go 后端全量测试通过，新增 bid store 与 route 测试覆盖本轮接口契约。
+2. 前端 TypeScript + Vite 生产构建通过。
+3. 生成覆盖离线评测器专项测试 2 条全部通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮只提供导出 JSON，不在 Go 服务内直接执行 Python 评测器；CI 或验收脚本仍需显式调用 `generation_coverage_eval.py`。
+2. 导出 `knowledge_chunks` 只包含已通过 `knowledge_references.chunk_id` 解析的引用；AI 返回但未解析的 source_ref 会留在章节 `source_refs` 中，由离线评测器按未解析项判失败或进入复核。

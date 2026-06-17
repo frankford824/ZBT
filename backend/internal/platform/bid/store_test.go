@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTenderStructuredResultFromCallbackExtractsNestedResult(t *testing.T) {
@@ -438,6 +439,77 @@ func TestChapterVersionModelMetadataCarriesSelfCheckCoverage(t *testing.T) {
 	generation.ModelMetadata["provider"] = "mutated"
 	if metadata["provider"] != "real-provider" {
 		t.Fatalf("expected metadata to be copied, got %#v", metadata["provider"])
+	}
+}
+
+func TestBuildGenerationCoverageSpecUsesEvaluatorContract(t *testing.T) {
+	score := 12.5
+	coverage := []any{
+		map[string]any{
+			"requirement_id": "evaluation-001",
+			"satisfied":      true,
+			"source_refs": []any{
+				map[string]any{"chunk_id": "chunk-1", "document_id": "doc-1"},
+			},
+		},
+	}
+	chapter := GenerationCoverageChapter{
+		ID:         "chapter-1",
+		BidPartID:  "part-1",
+		PartCode:   "tech",
+		PartTitle:  "技术标",
+		Title:      "实施方案",
+		Status:     "generated",
+		SourceRefs: []any{map[string]any{"chunk_id": "chunk-1", "document_id": "doc-1"}},
+		ModelMetadata: map[string]any{
+			"self_check": map[string]any{
+				"requirement_coverage": coverage,
+			},
+		},
+	}
+	chapter.RequirementCoverage = requirementCoverageFromModelMetadata(chapter.ModelMetadata)
+	generatedAt := time.Unix(0, 0).UTC()
+
+	spec := buildGenerationCoverageSpec(
+		Document{ID: "bid-1", Title: "桥梁检查服务"},
+		[]RequirementItem{
+			{
+				ID:               "requirement-db-1",
+				ExternalID:       "evaluation-001",
+				Module:           "evaluation",
+				Type:             "scoring",
+				Requirement:      "技术方案完整",
+				Priority:         "high",
+				Mandatory:        true,
+				Score:            &score,
+				ExpectedResponse: "章节需完整响应",
+				CoverageStatus:   "covered",
+				SourceRef:        map[string]any{"page_start": 3},
+				Metadata:         map[string]any{"source": "tender_parse"},
+			},
+		},
+		[]GenerationCoverageChapter{chapter},
+		[]GenerationCoverageKnowledgeChunk{{ChunkID: "chunk-1", DocumentID: "doc-1", Title: "知识片段"}},
+		generatedAt,
+	)
+
+	if spec.Name != "bid-generation-coverage-bid-1" || spec.BidTitle != "桥梁检查服务" {
+		t.Fatalf("unexpected spec identity: %#v", spec)
+	}
+	if len(spec.Requirements) != 1 || spec.Requirements[0].ID != "evaluation-001" {
+		t.Fatalf("expected evaluator requirement id to use external id, got %#v", spec.Requirements)
+	}
+	if spec.Requirements[0].DatabaseID != "requirement-db-1" {
+		t.Fatalf("expected database id to be retained, got %#v", spec.Requirements[0])
+	}
+	if len(spec.Chapters) != 1 || len(spec.Chapters[0].RequirementCoverage) != 1 {
+		t.Fatalf("expected chapter coverage to be exposed at top level, got %#v", spec.Chapters)
+	}
+	if !spec.RequireSourceRefs || spec.Thresholds["min_mandatory_coverage_ratio"] != 1 {
+		t.Fatalf("expected evaluator thresholds and source requirement, got %#v", spec)
+	}
+	if !spec.GeneratedAt.Equal(generatedAt) {
+		t.Fatalf("expected generated_at to be retained, got %v", spec.GeneratedAt)
 	}
 }
 

@@ -139,6 +139,7 @@ var routeSpecs = []routeSpec{
 	{"POST", "/generation-jobs/:jobId/resume", "bid", false},
 	{"POST", "/generation-jobs/:jobId/cancel", "bid", false},
 	{"GET", "/bids/:id/generation/stream", "bid", false},
+	{"GET", "/bids/:id/generation-coverage", "bid", false},
 	{"GET", "/bids/:id/chapters", "bid", false},
 	{"PATCH", "/chapters/:chapterId", "bid", false},
 	{"POST", "/chapters/:chapterId/accept", "bid", false},
@@ -671,6 +672,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/generation-jobs/:jobId/resume", rbac.Require("bid", rbac.LevelFull), s.resumeBidGenerationJob)
 	group.POST("/generation-jobs/:jobId/cancel", rbac.Require("bid", rbac.LevelFull), s.cancelBidGenerationJob)
 	group.GET("/bids/:id/generation/stream", rbac.Require("bid", rbac.LevelRead), s.streamBidGeneration)
+	group.GET("/bids/:id/generation-coverage", rbac.Require("bid", rbac.LevelRead), s.getBidGenerationCoverage)
 	group.GET("/bids/:id/chapters", rbac.Require("bid", rbac.LevelRead), s.listBidChapters)
 	group.PATCH("/chapters/:chapterId", rbac.Require("bid", rbac.LevelFull), s.updateChapterContent)
 	group.POST("/chapters/:chapterId/accept", rbac.Require("bid", rbac.LevelFull), s.acceptChapter)
@@ -816,6 +818,7 @@ func customRouteSet() map[string]bool {
 		"POST /generation-jobs/:jobId/resume":          true,
 		"POST /generation-jobs/:jobId/cancel":          true,
 		"GET /bids/:id/generation/stream":              true,
+		"GET /bids/:id/generation-coverage":            true,
 		"GET /bids/:id/chapters":                       true,
 		"PATCH /chapters/:chapterId":                   true,
 		"POST /chapters/:chapterId/accept":             true,
@@ -1857,6 +1860,11 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 			flusher.Flush()
 		}
 	}
+}
+
+func (s *server) getBidGenerationCoverage(c *gin.Context) {
+	result, err := s.bidStore.GenerationCoverageSpec(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, result, err)
 }
 
 func (s *server) updateChapterContent(c *gin.Context) {

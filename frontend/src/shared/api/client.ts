@@ -941,6 +941,59 @@ export type BidGenerationJobDetailDTO = {
   steps: BidGenerationStepDTO[]
 }
 
+export type BidGenerationCoverageSpecDTO = {
+  name: string
+  bid_document_id: string
+  bid_title: string
+  requirements: Array<{
+    id: string
+    database_id: string
+    external_id: string
+    module: string
+    type: string
+    requirement: string
+    priority: BidRequirementItemDTO['priority']
+    mandatory: boolean
+    score?: number
+    expected_response?: string
+    coverage_status: BidRequirementItemDTO['coverage_status']
+    source_ref?: Record<string, unknown>
+    needs_review: boolean
+    sort_order: number
+    metadata: Record<string, unknown>
+  }>
+  chapters: Array<{
+    id: string
+    bid_part_id: string
+    part_code: string
+    part_title: string
+    title: string
+    status: BidChapterDTO['status']
+    sort_order: number
+    source_refs: unknown[]
+    requirement_coverage?: unknown[]
+    model_metadata: Record<string, unknown>
+    needs_human_input: string[]
+    version_no: number
+    change_reason: string
+    updated_at: string
+  }>
+  knowledge_chunks: Array<{
+    chunk_id: string
+    document_id: string
+    title: string
+    section_path: string
+    page_start?: number
+    page_end?: number
+  }>
+  thresholds: {
+    min_mandatory_coverage_ratio: number
+    min_source_ref_resolution_ratio: number
+  }
+  require_source_refs: boolean
+  generated_at: string
+}
+
 export async function login(payload: {
   email: string
   password: string
@@ -1682,6 +1735,11 @@ export async function fetchBidGenerationJobs(bidId: string): Promise<BidGenerati
 
 export async function fetchBidGenerationJob(jobId: string): Promise<BidGenerationJobDetailDTO> {
   const { data } = await apiClient.get<BidGenerationJobDetailDTO>(`/generation-jobs/${jobId}`)
+  return data
+}
+
+export async function fetchBidGenerationCoverage(bidId: string): Promise<BidGenerationCoverageSpecDTO> {
+  const { data } = await apiClient.get<BidGenerationCoverageSpecDTO>(`/bids/${bidId}/generation-coverage`)
   return data
 }
 

@@ -607,6 +607,19 @@ func TestRouteInfosAsyncFlagsMatchTaskRoutes(t *testing.T) {
 	}
 }
 
+func TestRouteInfosExposeGenerationCoverageAsReadOnlyBidRoute(t *testing.T) {
+	route, ok := routeInfoByKey(http.MethodGet, "/bids/:id/generation-coverage")
+	if !ok {
+		t.Fatal("expected generation coverage route metadata to be present")
+	}
+	if route.Module != "bid" || route.Required != rbac.LevelRead {
+		t.Fatalf("expected generation coverage route to require bid read, got %+v", route)
+	}
+	if route.Async {
+		t.Fatal("expected generation coverage route to be synchronous read-only export")
+	}
+}
+
 func TestRouteInfosExposeAdditionalModuleRequirements(t *testing.T) {
 	route, ok := routeInfoByKey(http.MethodPost, "/projects/:id/archive-case")
 	if !ok {

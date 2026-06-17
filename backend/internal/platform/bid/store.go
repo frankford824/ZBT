@@ -164,6 +164,62 @@ type GenerationSnapshot struct {
 	GeneratedAt time.Time           `json:"generated_at"`
 }
 
+type GenerationCoverageSpec struct {
+	Name              string                             `json:"name"`
+	BidDocumentID     string                             `json:"bid_document_id"`
+	BidTitle          string                             `json:"bid_title"`
+	Requirements      []GenerationCoverageRequirement    `json:"requirements"`
+	Chapters          []GenerationCoverageChapter        `json:"chapters"`
+	KnowledgeChunks   []GenerationCoverageKnowledgeChunk `json:"knowledge_chunks"`
+	Thresholds        map[string]float64                 `json:"thresholds"`
+	RequireSourceRefs bool                               `json:"require_source_refs"`
+	GeneratedAt       time.Time                          `json:"generated_at"`
+}
+
+type GenerationCoverageRequirement struct {
+	ID               string         `json:"id"`
+	DatabaseID       string         `json:"database_id"`
+	ExternalID       string         `json:"external_id"`
+	Module           string         `json:"module"`
+	Type             string         `json:"type"`
+	Requirement      string         `json:"requirement"`
+	Priority         string         `json:"priority"`
+	Mandatory        bool           `json:"mandatory"`
+	Score            *float64       `json:"score,omitempty"`
+	ExpectedResponse string         `json:"expected_response,omitempty"`
+	CoverageStatus   string         `json:"coverage_status"`
+	SourceRef        map[string]any `json:"source_ref,omitempty"`
+	NeedsReview      bool           `json:"needs_review"`
+	SortOrder        int            `json:"sort_order"`
+	Metadata         map[string]any `json:"metadata"`
+}
+
+type GenerationCoverageChapter struct {
+	ID                  string         `json:"id"`
+	BidPartID           string         `json:"bid_part_id"`
+	PartCode            string         `json:"part_code"`
+	PartTitle           string         `json:"part_title"`
+	Title               string         `json:"title"`
+	Status              string         `json:"status"`
+	SortOrder           int            `json:"sort_order"`
+	SourceRefs          []any          `json:"source_refs"`
+	RequirementCoverage []any          `json:"requirement_coverage,omitempty"`
+	ModelMetadata       map[string]any `json:"model_metadata"`
+	NeedsHumanInput     []string       `json:"needs_human_input"`
+	VersionNo           int            `json:"version_no"`
+	ChangeReason        string         `json:"change_reason"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+}
+
+type GenerationCoverageKnowledgeChunk struct {
+	ChunkID     string `json:"chunk_id"`
+	DocumentID  string `json:"document_id"`
+	Title       string `json:"title"`
+	SectionPath string `json:"section_path"`
+	PageStart   *int   `json:"page_start,omitempty"`
+	PageEnd     *int   `json:"page_end,omitempty"`
+}
+
 type GenerationSummary struct {
 	TotalChapters      int `json:"total_chapters"`
 	GeneratingChapters int `json:"generating_chapters"`
@@ -1571,6 +1627,38 @@ func (s *Store) GenerationSnapshot(ctx context.Context, tenantID, bidID string) 
 		return GenerationSnapshot{}, ErrNotFound
 	}
 	return snapshot, err
+}
+
+func (s *Store) GenerationCoverageSpec(ctx context.Context, tenantID, bidID string) (GenerationCoverageSpec, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return GenerationCoverageSpec{}, ErrInvalidRequest
+	}
+	var spec GenerationCoverageSpec
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		document, err := bidForExport(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		requirements, err := requirementItemsForBid(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		chapters, err := generationCoverageChaptersForBid(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		chunks, err := generationCoverageKnowledgeChunksForBid(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		spec = buildGenerationCoverageSpec(document, requirements, chapters, chunks, time.Now().UTC())
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GenerationCoverageSpec{}, ErrNotFound
+	}
+	return spec, err
 }
 
 func (s *Store) GenerateBid(ctx context.Context, tenantID, userID, bidID string, req GenerateBidRequest) (GenerationJobDetail, error) {
@@ -3952,6 +4040,178 @@ func requirementItemsForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID stri
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func generationCoverageChaptersForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) ([]GenerationCoverageChapter, error) {
+	rows, err := tx.Query(ctx, `
+		select c.id::text, c.bid_part_id::text, p.code, p.title, c.title, c.status, c.sort_order,
+			coalesce(v.source_refs, c.source_refs), coalesce(v.model_metadata, '{}'::jsonb),
+			c.needs_human_input, coalesce(v.version_no, 0), coalesce(v.change_reason, ''),
+			greatest(c.updated_at, coalesce(v.updated_at, c.updated_at))
+		from bid_chapters c
+		join bid_parts p on p.tenant_id = c.tenant_id and p.id = c.bid_part_id
+		left join lateral (
+			select version_no, change_reason, model_metadata, source_refs, updated_at
+			from bid_chapter_versions
+			where tenant_id = c.tenant_id and chapter_id = c.id
+			order by version_no desc
+			limit 1
+		) v on true
+		where c.tenant_id = $1 and c.bid_document_id = $2
+		order by p.sort_order, c.sort_order, c.created_at
+	`, tenantID, bidID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	chapters := []GenerationCoverageChapter{}
+	for rows.Next() {
+		var chapter GenerationCoverageChapter
+		var sourceRefsRaw, modelMetadataRaw, needsHumanInputRaw []byte
+		if err := rows.Scan(
+			&chapter.ID, &chapter.BidPartID, &chapter.PartCode, &chapter.PartTitle,
+			&chapter.Title, &chapter.Status, &chapter.SortOrder, &sourceRefsRaw,
+			&modelMetadataRaw, &needsHumanInputRaw, &chapter.VersionNo, &chapter.ChangeReason,
+			&chapter.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		chapter.SourceRefs = []any{}
+		chapter.ModelMetadata = map[string]any{}
+		chapter.NeedsHumanInput = []string{}
+		_ = json.Unmarshal(sourceRefsRaw, &chapter.SourceRefs)
+		_ = json.Unmarshal(modelMetadataRaw, &chapter.ModelMetadata)
+		_ = json.Unmarshal(needsHumanInputRaw, &chapter.NeedsHumanInput)
+		chapter.RequirementCoverage = requirementCoverageFromModelMetadata(chapter.ModelMetadata)
+		chapters = append(chapters, chapter)
+	}
+	return chapters, rows.Err()
+}
+
+func generationCoverageKnowledgeChunksForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) ([]GenerationCoverageKnowledgeChunk, error) {
+	rows, err := tx.Query(ctx, `
+		select distinct
+			kc.id::text,
+			coalesce(kc.document_id::text, ''),
+			coalesce(nullif(kc.title, ''), nullif(kd.title, ''), nullif(kr.title, ''), '知识库引用'),
+			kc.section_path,
+			kc.page_start,
+			kc.page_end
+		from knowledge_references kr
+		join knowledge_chunks kc on kc.tenant_id = kr.tenant_id and kc.id = kr.chunk_id
+		left join knowledge_documents kd on kd.tenant_id = kc.tenant_id and kd.id = kc.document_id
+		where kr.tenant_id = $1
+			and kr.bid_document_id = $2
+			and kr.chunk_id is not null
+		order by 3, 1
+	`, tenantID, bidID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	chunks := []GenerationCoverageKnowledgeChunk{}
+	for rows.Next() {
+		var chunk GenerationCoverageKnowledgeChunk
+		var pageStart, pageEnd sql.NullInt64
+		if err := rows.Scan(
+			&chunk.ChunkID, &chunk.DocumentID, &chunk.Title, &chunk.SectionPath,
+			&pageStart, &pageEnd,
+		); err != nil {
+			return nil, err
+		}
+		if pageStart.Valid {
+			value := int(pageStart.Int64)
+			chunk.PageStart = &value
+		}
+		if pageEnd.Valid {
+			value := int(pageEnd.Int64)
+			chunk.PageEnd = &value
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, rows.Err()
+}
+
+func buildGenerationCoverageSpec(
+	document Document,
+	requirements []RequirementItem,
+	chapters []GenerationCoverageChapter,
+	chunks []GenerationCoverageKnowledgeChunk,
+	generatedAt time.Time,
+) GenerationCoverageSpec {
+	return GenerationCoverageSpec{
+		Name:            "bid-generation-coverage-" + document.ID,
+		BidDocumentID:   document.ID,
+		BidTitle:        document.Title,
+		Requirements:    generationCoverageRequirements(requirements),
+		Chapters:        chapters,
+		KnowledgeChunks: chunks,
+		Thresholds: map[string]float64{
+			"min_mandatory_coverage_ratio":    1,
+			"min_source_ref_resolution_ratio": 0.95,
+		},
+		RequireSourceRefs: true,
+		GeneratedAt:       generatedAt,
+	}
+}
+
+func generationCoverageRequirements(items []RequirementItem) []GenerationCoverageRequirement {
+	requirements := make([]GenerationCoverageRequirement, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ExternalID)
+		if id == "" {
+			id = item.ID
+		}
+		sourceRef := copyStringAnyMap(item.SourceRef)
+		if sourceRef == nil {
+			sourceRef = map[string]any{}
+		}
+		metadata := copyStringAnyMap(item.Metadata)
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		requirements = append(requirements, GenerationCoverageRequirement{
+			ID:               id,
+			DatabaseID:       item.ID,
+			ExternalID:       item.ExternalID,
+			Module:           item.Module,
+			Type:             item.Type,
+			Requirement:      item.Requirement,
+			Priority:         item.Priority,
+			Mandatory:        item.Mandatory,
+			Score:            item.Score,
+			ExpectedResponse: item.ExpectedResponse,
+			CoverageStatus:   item.CoverageStatus,
+			SourceRef:        sourceRef,
+			NeedsReview:      item.NeedsReview,
+			SortOrder:        item.SortOrder,
+			Metadata:         metadata,
+		})
+	}
+	return requirements
+}
+
+func requirementCoverageFromModelMetadata(metadata map[string]any) []any {
+	if coverage := anySlice(metadata["requirement_coverage"]); len(coverage) > 0 {
+		return coverage
+	}
+	selfCheck, _ := metadata["self_check"].(map[string]any)
+	return anySlice(selfCheck["requirement_coverage"])
+}
+
+func anySlice(value any) []any {
+	switch items := value.(type) {
+	case []any:
+		return append([]any{}, items...)
+	case []map[string]any:
+		out := make([]any, 0, len(items))
+		for _, item := range items {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func ensureMaterialSelection(

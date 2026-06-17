@@ -37,6 +37,7 @@
 - `backend/internal/platform/compliance/store.go` 已在创建检查、问题修复、忽略和人工确认 fail 后同步 `check` 阶段闸门；`pass` 自动通过，`warn/fail_candidate` 进入待复核，`fail` 阻断。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/pipeline-gates` 只读接口，前端 API client 已提供对应 DTO 和查询函数。
 - `ai-service/app/evaluation/generation_coverage_eval.py` 已提供离线生成覆盖评测：检查 mandatory requirement 覆盖率、已覆盖项是否带来源、`source_refs` 是否能解析到给定 `knowledge_chunks`。
+- `backend/internal/platform/bid/store.go` 已提供 `GET /bids/:id/generation-coverage` 运行态导出：从 `bid_requirement_items`、最新章节版本、章节 `source_refs` 与已解析 `knowledge_chunks` 组合出可直接交给离线评测器的 JSON。
 
 ## P0：6 模块招标解析
 
@@ -230,6 +231,7 @@
    - 检查每个 requirement_item 是否被章节覆盖。
    - 检查每个 source_ref 是否可解析到当前租户 knowledge chunk。
    - 当前已落地：`python -m app.evaluation.generation_coverage_eval --input <coverage.json>` 可对 `requirements`、`chapters[].requirement_coverage`、章节 `source_refs` 和 `knowledge_chunks` 做离线验收，输出 mandatory 覆盖率和 source_ref 解析率。
+   - 当前已落地：`GET /bids/:id/generation-coverage` 可从运行态标书导出 `<coverage.json>` 的完整输入契约。
 4. 验收门槛：
    - 关键字段电子文本准确率不低于 85%。
    - 强制性 requirement 不允许无章节覆盖。

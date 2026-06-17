@@ -32,6 +32,11 @@ cd ai-service
 生成覆盖与来源引用可使用独立离线评测入口：
 
 ```bash
+# 先从运行态后端导出真实标书生成覆盖样本
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:8080/api/bids/<bid_id>/generation-coverage \
+  > ../docs/sample_docs/golden/<生成覆盖样本>.json
+
 cd ai-service
 .venv/bin/python -m app.evaluation.generation_coverage_eval \
   --input ../docs/sample_docs/golden/<生成覆盖样本>.json
