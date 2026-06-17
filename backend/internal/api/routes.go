@@ -229,6 +229,7 @@ var routeAdditionalRequirements = map[string][]routeRequirement{
 }
 
 const maxCallbackTaskIDLength = 256
+const maxBearerTokenLength = 8 * 1024
 
 func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
@@ -2282,11 +2283,15 @@ func bearerToken(header string) string {
 	if header == "" {
 		return ""
 	}
-	prefix := "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	scheme, token, ok := strings.Cut(header, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return ""
 	}
-	return strings.TrimSpace(strings.TrimPrefix(header, prefix))
+	token = strings.TrimSpace(token)
+	if token == "" || len(token) > maxBearerTokenLength || strings.ContainsAny(token, " \t\r\n") {
+		return ""
+	}
+	return token
 }
 
 func respond(c *gin.Context, payload any, err error) {

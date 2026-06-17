@@ -127,6 +127,21 @@ func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
 	}
 }
 
+func TestBearerTokenNormalizesSchemeAndRejectsUnsafeValues(t *testing.T) {
+	if got := bearerToken("bearer abc.def.ghi"); got != "abc.def.ghi" {
+		t.Fatalf("expected lowercase bearer scheme to be accepted, got %q", got)
+	}
+	if got := bearerToken("Bearer abc def"); got != "" {
+		t.Fatalf("expected token with whitespace to be rejected, got %q", got)
+	}
+	if got := bearerToken("Basic abc.def.ghi"); got != "" {
+		t.Fatalf("expected unsupported auth scheme to be rejected, got %q", got)
+	}
+	if got := bearerToken("Bearer " + strings.Repeat("a", maxBearerTokenLength+1)); got != "" {
+		t.Fatalf("expected oversized bearer token to be rejected, got length %d", len(got))
+	}
+}
+
 func TestSessionRevokedRejectsTokensIssuedBeforeRevocation(t *testing.T) {
 	revokedAt := time.Now()
 	if !sessionRevoked(
