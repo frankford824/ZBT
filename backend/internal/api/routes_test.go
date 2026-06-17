@@ -374,6 +374,20 @@ func TestRouteInfosAsyncFlagsMatchTaskRoutes(t *testing.T) {
 	}
 }
 
+func TestRouteInfosExposeAdditionalModuleRequirements(t *testing.T) {
+	route, ok := routeInfoByKey(http.MethodPost, "/projects/:id/archive-case")
+	if !ok {
+		t.Fatal("expected archive-case route metadata to be present")
+	}
+	if len(route.AdditionalRequirements) != 1 {
+		t.Fatalf("expected archive-case to expose one additional requirement, got %d", len(route.AdditionalRequirements))
+	}
+	requirement := route.AdditionalRequirements[0]
+	if requirement.Module != "knowledge" || requirement.Required != rbac.LevelFull {
+		t.Fatalf("expected archive-case to require additional knowledge full permission, got %+v", requirement)
+	}
+}
+
 func routeInfoByKey(method, path string) (routeInfo, bool) {
 	for _, route := range routeInfos() {
 		if route.Method == method && route.Path == path {

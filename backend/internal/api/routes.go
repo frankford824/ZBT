@@ -41,12 +41,18 @@ type routeSpec struct {
 }
 
 type routeInfo struct {
-	Method        string     `json:"method"`
-	Path          string     `json:"path"`
-	Module        string     `json:"module"`
-	Required      rbac.Level `json:"required"`
-	Async         bool       `json:"async"`
-	DynamicModule bool       `json:"dynamic_module,omitempty"`
+	Method                 string             `json:"method"`
+	Path                   string             `json:"path"`
+	Module                 string             `json:"module"`
+	Required               rbac.Level         `json:"required"`
+	Async                  bool               `json:"async"`
+	DynamicModule          bool               `json:"dynamic_module,omitempty"`
+	AdditionalRequirements []routeRequirement `json:"additional_requirements,omitempty"`
+}
+
+type routeRequirement struct {
+	Module   string     `json:"module"`
+	Required rbac.Level `json:"required"`
 }
 
 type server struct {
@@ -211,6 +217,12 @@ var routeLevelOverrides = map[string]rbac.Level{
 	"DELETE /tenders/:id/favorite": rbac.LevelRead,
 	"POST /knowledge/search":       rbac.LevelRead,
 	"POST /notifications/read":     rbac.LevelRead,
+}
+
+var routeAdditionalRequirements = map[string][]routeRequirement{
+	"POST /projects/:id/archive-case": {
+		{Module: "knowledge", Required: rbac.LevelFull},
+	},
 }
 
 func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
@@ -2112,12 +2124,13 @@ func routeInfos() []routeInfo {
 	routes := make([]routeInfo, 0, len(routeSpecs))
 	for _, spec := range routeSpecs {
 		routes = append(routes, routeInfo{
-			Method:        spec.Method,
-			Path:          spec.Path,
-			Module:        spec.Module,
-			Required:      requiredLevel(spec),
-			Async:         spec.Async,
-			DynamicModule: isDynamicModuleRoute(spec),
+			Method:                 spec.Method,
+			Path:                   spec.Path,
+			Module:                 spec.Module,
+			Required:               requiredLevel(spec),
+			Async:                  spec.Async,
+			DynamicModule:          isDynamicModuleRoute(spec),
+			AdditionalRequirements: routeAdditionalRequirements[routeKey(spec)],
 		})
 	}
 	return routes

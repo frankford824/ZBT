@@ -198,6 +198,7 @@ export function ProjectDetailPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const canWrite = useCanAccess('project', 'full')
+  const canArchiveKnowledge = useCanAccess('knowledge', 'full')
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
   const project = useQuery({
@@ -286,7 +287,7 @@ export function ProjectDetailPage() {
         canWrite ? <Button key="milestone" onClick={() => setOpen(true)}>
           新增里程碑
         </Button> : null,
-        canWrite ? <Button key="archive-case" disabled={!canCreateCost} loading={archiveCaseMutation.isPending} onClick={() => archiveCaseMutation.mutate()}>
+        canWrite && canArchiveKnowledge ? <Button key="archive-case" disabled={!canCreateCost} loading={archiveCaseMutation.isPending} onClick={() => archiveCaseMutation.mutate()}>
           回流知识库
         </Button> : null,
         canWrite ? <Button key="cost" type="primary" disabled={!canCreateCost} loading={costMutation.isPending} onClick={() => costMutation.mutate()}>
