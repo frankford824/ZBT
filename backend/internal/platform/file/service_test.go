@@ -240,3 +240,31 @@ func TestValidateUploadSizeRejectsEmptyNegativeAndOversizedFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestConfirmedUploadSizeRequiresDeclaredSizeMatch(t *testing.T) {
+	size, err := confirmedUploadSize(1024, 1024)
+	if err != nil {
+		t.Fatalf("expected matching upload size to confirm: %v", err)
+	}
+	if size != 1024 {
+		t.Fatalf("unexpected confirmed size: %d", size)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		claimed  int64
+		observed int64
+		wantErr  error
+	}{
+		{name: "invalid claimed", claimed: 0, observed: 1024, wantErr: ErrInvalidRequest},
+		{name: "invalid observed", claimed: 1024, observed: maxUploadSizeBytes + 1, wantErr: ErrInvalidRequest},
+		{name: "smaller observed", claimed: 1024, observed: 512, wantErr: ErrInvalidObjectState},
+		{name: "larger observed", claimed: 1024, observed: 2048, wantErr: ErrInvalidObjectState},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := confirmedUploadSize(tc.claimed, tc.observed); err != tc.wantErr {
+				t.Fatalf("expected %v for claimed=%d observed=%d, got %v", tc.wantErr, tc.claimed, tc.observed, err)
+			}
+		})
+	}
+}

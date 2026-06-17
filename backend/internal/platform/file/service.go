@@ -275,11 +275,12 @@ func (s *Service) ConfirmUpload(ctx context.Context, tenantID, fileID string) (A
 	if err != nil {
 		return Asset{}, err
 	}
-	asset.ContentType = contentType
-	asset.SizeBytes = info.Size
-	if err := validateUploadSize(asset.SizeBytes); err != nil {
+	sizeBytes, err := confirmedUploadSize(asset.SizeBytes, info.Size)
+	if err != nil {
 		return Asset{}, err
 	}
+	asset.ContentType = contentType
+	asset.SizeBytes = sizeBytes
 
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		updated, err := scanAsset(tx.QueryRow(ctx, `
@@ -528,6 +529,19 @@ func validateUploadSize(sizeBytes int64) error {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func confirmedUploadSize(claimed, observed int64) (int64, error) {
+	if err := validateUploadSize(claimed); err != nil {
+		return 0, err
+	}
+	if err := validateUploadSize(observed); err != nil {
+		return 0, err
+	}
+	if observed != claimed {
+		return 0, ErrInvalidObjectState
+	}
+	return observed, nil
 }
 
 func AccessModuleForBizType(bizType string) (string, bool) {
