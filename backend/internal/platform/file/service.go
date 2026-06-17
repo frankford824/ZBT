@@ -434,9 +434,15 @@ func storageEndpoint(raw string, fallbackSecure bool) (string, bool, error) {
 	if raw == "" {
 		return "", false, ErrInvalidRequest
 	}
+	if hasControlChars(raw) || strings.ContainsAny(raw, `\ `) {
+		return "", false, ErrInvalidRequest
+	}
 	if strings.Contains(raw, "://") {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Host == "" {
+			return "", false, ErrInvalidRequest
+		}
+		if parsed.User != nil || strings.ContainsAny(parsed.Host, `\ `) || hasControlChars(parsed.Host) {
 			return "", false, ErrInvalidRequest
 		}
 		if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -451,7 +457,7 @@ func storageEndpoint(raw string, fallbackSecure bool) (string, bool, error) {
 			return "", false, ErrInvalidRequest
 		}
 	}
-	if strings.ContainsAny(raw, "/?#") {
+	if strings.ContainsAny(raw, "/?#@") {
 		return "", false, ErrInvalidRequest
 	}
 	return raw, fallbackSecure, nil

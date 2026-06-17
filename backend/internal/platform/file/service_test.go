@@ -209,8 +209,13 @@ func TestStorageEndpointRejectsPathsAndUnsupportedSchemes(t *testing.T) {
 	for _, raw := range []string{
 		"",
 		"ftp://example-account.r2.cloudflarestorage.com",
+		"https://access:secret@example-account.r2.cloudflarestorage.com",
 		"https://example-account.r2.cloudflarestorage.com/bucket",
 		"minio:9000/bucket",
+		"user:secret@minio:9000",
+		"minio\\9000",
+		"min io:9000",
+		"minio:9000\r\nX-Injected: yes",
 		"https://example-account.r2.cloudflarestorage.com?bucket=zbt",
 	} {
 		if _, _, err := storageEndpoint(raw, false); err != ErrInvalidRequest {
