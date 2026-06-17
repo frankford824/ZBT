@@ -272,6 +272,9 @@ def test_ocr_success_response_is_normalized(monkeypatch) -> None:
     assert ocr["pages"][0]["blocks"][0]["bbox"] == [1, 2, 30, 40]
     assert ocr["pages"][0]["tables"][0]["source"] == "ocr"
     assert ocr["pages"][0]["tables"][0]["confidence"] == 0.88
+    assert ocr["table_blocks"][0]["rows"] == [["项", "值"]]
+    assert result.metadata["table_block_count"] == 1
+    assert result.metadata["table_blocks"][0]["rows"] == [["项", "值"]]
     assert ocr["blocks"][0]["text"] == "首页识别文本"
 
 
@@ -392,6 +395,48 @@ def test_paddleocr_nested_response_normalizes_markdown_layout_and_tables(monkeyp
     assert ocr["layout_blocks"][0]["bbox"] == [10, 20, 200, 60]
     assert ocr["table_blocks"][0]["rows"] == [["项", "分值"], ["方案", "20"]]
     assert ocr["provider_metadata"] == {"request_id": "paddle-1"}
+
+
+def test_ocr_table_cells_become_rows_cell_bboxes_and_chunk_text(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
+    monkeypatch.setenv("PADDLEOCR_HTTP_ENDPOINT", "https://paddleocr.example.test/pp_structurev3")
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(
+            b"""
+            {
+              "data": {
+                "tables": [
+                  {
+                    "page": 1,
+                    "index": 1,
+                    "cells": [
+                      {"row": 1, "col": 1, "text": "\xe9\xa1\xb9", "bbox": [0, 0, 10, 10]},
+                      {"row": 1, "col": 2, "text": "\xe5\x88\x86\xe5\x80\xbc", "bbox": [10, 0, 30, 10]},
+                      {"row": 2, "col": 1, "text": "\xe6\x96\xb9\xe6\xa1\x88", "bbox": [0, 10, 10, 20]},
+                      {"row": 2, "col": 2, "text": "20", "bbox": [10, 10, 30, 20]}
+                    ],
+                    "confidence": 0.9
+                  }
+                ],
+                "metadata": {"request_id": "paddle-cells"}
+              }
+            }
+            """
+        ),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+    table = result.metadata["table_blocks"][0]
+
+    assert result.metadata["ocr_required"] is False
+    assert result.metadata["table_block_count"] == 1
+    assert "方案 | 20" in text
+    assert table["rows"] == [["项", "分值"], ["方案", "20"]]
+    assert table["cell_bbox_count"] == 4
+    assert table["cell_bboxes"][0] == [[0.0, 0.0, 10.0, 10.0], [10.0, 0.0, 30.0, 10.0]]
+    assert result.metadata["ocr"]["provider_metadata"] == {"request_id": "paddle-cells"}
 
 
 def test_paddleocr_provider_requires_configured_endpoint(monkeypatch) -> None:

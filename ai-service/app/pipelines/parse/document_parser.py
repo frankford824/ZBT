@@ -580,10 +580,19 @@ def _normalize_ocr_result(provider: str, result: dict[str, object]) -> dict[str,
     blocks = _normalize_ocr_blocks(_first_list(payload, ("blocks", "layout_blocks", "paragraphs")), pages)
     layout_blocks = _normalize_ocr_layout_blocks(_first_list(payload, ("layout_blocks", "layouts", "layout")), pages)
     raw_tables = _first_list(payload, ("tables", "table_blocks"))
-    tables = [_table_block("ocr", table) for table in raw_tables if isinstance(table, dict)]
+    tables = [
+        table
+        for table in (_normalize_ocr_table(table, None) for table in raw_tables if isinstance(table, dict))
+        if table is not None
+    ]
+    if not tables:
+        tables = _ocr_tables_from_pages(pages)
+    table_text = _ocr_table_text(tables)
+    if table_text and table_text not in text:
+        text = f"{text}\n\n{table_text}".strip()
     confidence = _ocr_confidence(payload, pages)
     return {
-        "status": "done" if text.strip() else "empty_result",
+        "status": "done" if text.strip() or tables else "empty_result",
         "provider": provider,
         "text": text,
         "markdown": markdown,
@@ -597,6 +606,160 @@ def _normalize_ocr_result(provider: str, result: dict[str, object]) -> dict[str,
         "provider_metadata": provider_metadata,
         "metadata": provider_metadata,
     }
+
+
+def _normalize_ocr_table(table: dict[str, object], page: object | None) -> dict[str, object] | None:
+    payload = dict(table)
+    if page is not None and not _metadata_int(payload.get("page") or payload.get("page_index"), 0):
+        payload["page"] = page
+    if "bbox" not in payload:
+        for key in ("table_bbox", "table_box", "position", "rect", "box"):
+            if _normalized_bbox(payload.get(key)):
+                payload["bbox"] = payload.get(key)
+                break
+    rows = _normalize_table_rows(payload.get("rows"))
+    if not rows:
+        rows = _ocr_rows_from_cells(payload.get("cells"), _ocr_table_column_count(payload))
+        if rows:
+            payload["rows"] = rows
+    if "cell_bboxes" not in payload:
+        cell_bboxes = _ocr_cell_bboxes_from_cells(payload.get("cells"), rows)
+        if cell_bboxes:
+            payload["cell_bboxes"] = cell_bboxes
+    block = _table_block("ocr", payload)
+    if block.get("rows") or block.get("md_table") or block.get("bbox"):
+        return block
+    return None
+
+
+def _ocr_table_column_count(table: dict[str, object]) -> int:
+    for key in ("column_count", "col_count", "columns"):
+        value = _metadata_int(table.get(key), 0)
+        if value > 0:
+            return value
+    return 0
+
+
+def _ocr_rows_from_cells(cells: object, column_count: int) -> list[list[str]]:
+    if not isinstance(cells, list):
+        return []
+    entries = _ocr_cell_entries(cells, column_count)
+    if not entries or not any(str(entry.get("text") or "").strip() for entry in entries):
+        return []
+    max_row = max(int(entry["row"]) for entry in entries)
+    max_col = max(int(entry["col"]) for entry in entries)
+    rows = [[""] * (max_col + 1) for _ in range(max_row + 1)]
+    for entry in entries:
+        rows[int(entry["row"])][int(entry["col"])] = str(entry.get("text") or "").strip()
+    return _normalize_table_rows(rows)
+
+
+def _ocr_cell_bboxes_from_cells(
+    cells: object,
+    rows: list[list[str]],
+) -> list[list[list[float] | None]]:
+    if not isinstance(cells, list) or not rows:
+        return []
+    column_count = max((len(row) for row in rows), default=0)
+    entries = _ocr_cell_entries(cells, column_count)
+    if not entries:
+        return []
+    cell_bboxes: list[list[list[float] | None]] = [[None for _ in row] for row in rows]
+    valid_count = 0
+    for entry in entries:
+        row_index = int(entry["row"])
+        column_index = int(entry["col"])
+        if row_index >= len(cell_bboxes) or column_index >= len(cell_bboxes[row_index]):
+            continue
+        bbox = entry.get("bbox")
+        if isinstance(bbox, list):
+            cell_bboxes[row_index][column_index] = bbox
+            valid_count += 1
+    return cell_bboxes if valid_count else []
+
+
+def _ocr_cell_entries(cells: list[object], column_count: int) -> list[dict[str, object]]:
+    raw_entries: list[dict[str, object]] = []
+    for ordinal, cell in enumerate(cells):
+        if not isinstance(cell, dict):
+            continue
+        row = _ocr_cell_index(cell, ("row", "row_index", "rowIndex", "start_row", "startRow"))
+        column = _ocr_cell_index(cell, ("col", "column", "col_index", "column_index", "colIndex", "columnIndex", "start_col", "startCol"))
+        if row is None or column is None:
+            if column_count <= 0:
+                continue
+            row = ordinal // column_count
+            column = ordinal % column_count
+        raw_entries.append(
+            {
+                "row": row,
+                "col": column,
+                "text": _ocr_cell_text(cell),
+                "bbox": _ocr_cell_bbox(cell),
+            }
+        )
+    if not raw_entries:
+        return []
+    min_row = min(int(entry["row"]) for entry in raw_entries)
+    min_col = min(int(entry["col"]) for entry in raw_entries)
+    row_offset = min_row if min_row > 0 else 0
+    col_offset = min_col if min_col > 0 else 0
+    entries: list[dict[str, object]] = []
+    for entry in raw_entries:
+        row = int(entry["row"]) - row_offset
+        col = int(entry["col"]) - col_offset
+        if row < 0 or col < 0:
+            continue
+        entries.append({**entry, "row": row, "col": col})
+    return entries
+
+
+def _ocr_cell_index(cell: dict[str, object], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if key not in cell:
+            continue
+        try:
+            return int(cell[key])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _ocr_cell_text(cell: dict[str, object]) -> str:
+    return _first_text(cell, ("text", "content", "value", "cell_text", "cellText"))
+
+
+def _ocr_cell_bbox(cell: dict[str, object]) -> list[float] | None:
+    for key in ("bbox", "box", "position", "rect"):
+        bbox = _normalized_bbox(cell.get(key))
+        if bbox:
+            return bbox
+    return None
+
+
+def _ocr_tables_from_pages(pages: list[dict[str, object]]) -> list[dict[str, object]]:
+    tables: list[dict[str, object]] = []
+    for page in pages:
+        raw_tables = page.get("tables")
+        if not isinstance(raw_tables, list):
+            continue
+        for table in raw_tables:
+            if isinstance(table, dict):
+                tables.append(table)
+    return tables
+
+
+def _ocr_table_text(tables: list[dict[str, object]]) -> str:
+    parts: list[str] = []
+    for table in tables:
+        md_table = str(table.get("md_table") or "").strip()
+        if md_table:
+            parts.append(md_table)
+            continue
+        rows = _normalize_table_rows(table.get("rows"))
+        if rows:
+            parts.append("\n".join(" | ".join(row) for row in rows))
+    return "\n\n".join(parts)
 
 
 def _unwrap_ocr_payload(result: dict[str, object]) -> dict[str, object]:
@@ -649,7 +812,11 @@ def _normalize_ocr_pages(raw_pages: object) -> list[dict[str, object]]:
             page["blocks"] = blocks[:100]
             page["block_count"] = len(blocks)
         raw_tables = _first_list(item, ("tables", "table_blocks"))
-        tables = [_table_block("ocr", {**table, "page": page["page"]}) for table in raw_tables if isinstance(table, dict)]
+        tables = [
+            table
+            for table in (_normalize_ocr_table(table, page["page"]) for table in raw_tables if isinstance(table, dict))
+            if table is not None
+        ]
         if tables:
             page["tables"] = tables[:30]
             page["table_count"] = len(tables)

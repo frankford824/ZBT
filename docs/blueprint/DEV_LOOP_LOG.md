@@ -2692,3 +2692,49 @@ git diff --check
 
 1. 本轮只固化 PyMuPDF 可直接提供的单元格 bbox；扫描件 OCR 的单元格 bbox 仍依赖 MinerU/PaddleOCR 等外部 Provider 样本继续验收。
 2. 合并单元格、跨页表格延续和复杂表头层级暂不推断，避免把不可靠坐标写成确定事实。
+
+## Loop-42 / OCR 页级表格提升与 cells 归一化 - 2026-06-17
+
+### 本轮目标
+
+1. 修补 OCR Provider 响应归一化缺口：Provider 只返回 `pages[].tables` 时，也要进入文档级 `table_blocks`。
+2. 支持 MinerU/PaddleOCR 常见的 `cells` 表格结构，将单元格文本还原为 `rows`，并保留可用 `cell_bboxes`。
+3. 只有表格、没有纯文本的 OCR 结果也要把 `md_table` 合并进 chunk 文本，避免扫描清单不可检索。
+
+### 代码交付
+
+1. `document_parser.py` 新增 `_normalize_ocr_table()`，统一处理 OCR 表格的页码、表级 bbox、`rows`、`cell_bboxes` 和 `md_table`。
+2. `document_parser.py` 新增 `_ocr_rows_from_cells()`、`_ocr_cell_bboxes_from_cells()` 和单元格坐标/文本提取辅助函数。
+3. `_normalize_ocr_result()` 在顶层 `tables/table_blocks` 为空时，从已归一化的 `pages[].tables` 提升文档级表格块。
+4. `_normalize_ocr_result()` 将 OCR 表格 `md_table` 合并进 `text`，并把表格型结果视为 `done`。
+5. `test_document_parser.py` 覆盖页级 OCR 表格提升、PaddleOCR `cells` 转 `rows/cell_bboxes`、表格文本进入 chunk。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 更新 OCR 表格归一化和扫描清单可检索要求。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py -q -s
+cd ai-service && .venv/bin/ruff check app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+cd ai-service && .venv/bin/python -m compileall -q app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 文档解析专项测试 45 条全部通过。
+2. Ruff 针对本轮 Python 文件检查通过。
+3. Python compileall 通过。
+4. AI 服务完整测试 216 条全部通过。
+5. 工程1 真实样本解析评测 103/103 通过。
+6. Go 后端全量测试通过。
+7. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮固化的是 OCR 响应归一化和表格可检索性；仍未接入真实外部 MinerU/PaddleOCR 服务跑端到端样本。
+2. `cells` 只按常见行列索引或顺序列数还原，不推断合并单元格语义和跨页表格延续。
