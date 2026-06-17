@@ -410,6 +410,22 @@ type aiTaskAccepted struct {
 	Route  map[string]any `json:"route"`
 }
 
+func normalizeAcceptedTask(accepted aiTaskAccepted) (aiTaskAccepted, error) {
+	accepted.TaskID = strings.TrimSpace(accepted.TaskID)
+	if accepted.TaskID == "" {
+		return aiTaskAccepted{}, ErrInvalidRequest
+	}
+	status := normalizeTaskStatus(accepted.Status)
+	if status == "" {
+		status = "queued"
+	}
+	accepted.Status = status
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	return accepted, nil
+}
+
 type chapterGenerateRequest struct {
 	TaskID                 string                  `json:"task_id,omitempty"`
 	TenantID               string                  `json:"tenant_id"`
@@ -2527,8 +2543,13 @@ func (s *Store) bindAcceptedTask(
 	payload any,
 	after func(context.Context, pgx.Tx) error,
 ) (Task, error) {
+	normalized, err := normalizeAcceptedTask(accepted)
+	if err != nil {
+		return Task{}, err
+	}
+	accepted = normalized
 	var task Task
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		payloadJSON, _ := json.Marshal(payload)
 		routeJSON, _ := json.Marshal(accepted.Route)
 		found, err := scanTask(tx.QueryRow(ctx, `
@@ -2809,16 +2830,7 @@ func (s *Store) submitDocumentExport(ctx context.Context, exportType string, pay
 	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
-	if accepted.TaskID == "" {
-		return aiTaskAccepted{}, ErrInvalidRequest
-	}
-	if accepted.Status == "" {
-		accepted.Status = "queued"
-	}
-	if accepted.Route == nil {
-		accepted.Route = map[string]any{}
-	}
-	return accepted, nil
+	return normalizeAcceptedTask(accepted)
 }
 
 func (s *Store) submitTenderParse(ctx context.Context, payload tenderParseRequest) (aiTaskAccepted, error) {
@@ -2845,16 +2857,7 @@ func (s *Store) submitTenderParse(ctx context.Context, payload tenderParseReques
 	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
-	if accepted.TaskID == "" {
-		return aiTaskAccepted{}, ErrInvalidRequest
-	}
-	if accepted.Status == "" {
-		accepted.Status = "queued"
-	}
-	if accepted.Route == nil {
-		accepted.Route = map[string]any{}
-	}
-	return accepted, nil
+	return normalizeAcceptedTask(accepted)
 }
 
 func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenerateRequest) (aiTaskAccepted, error) {
@@ -2881,16 +2884,7 @@ func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenera
 	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
-	if accepted.TaskID == "" {
-		return aiTaskAccepted{}, ErrInvalidRequest
-	}
-	if accepted.Status == "" {
-		accepted.Status = "queued"
-	}
-	if accepted.Route == nil {
-		accepted.Route = map[string]any{}
-	}
-	return accepted, nil
+	return normalizeAcceptedTask(accepted)
 }
 
 func (s *Store) submitChapterAction(ctx context.Context, payload chapterActionRequest) (aiTaskAccepted, error) {
@@ -2917,16 +2911,7 @@ func (s *Store) submitChapterAction(ctx context.Context, payload chapterActionRe
 	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
-	if accepted.TaskID == "" {
-		return aiTaskAccepted{}, ErrInvalidRequest
-	}
-	if accepted.Status == "" {
-		accepted.Status = "queued"
-	}
-	if accepted.Route == nil {
-		accepted.Route = map[string]any{}
-	}
-	return accepted, nil
+	return normalizeAcceptedTask(accepted)
 }
 
 func chapterByID(ctx context.Context, tx pgx.Tx, tenantID, chapterID string) (Chapter, error) {

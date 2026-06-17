@@ -94,6 +94,39 @@ func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	}
 }
 
+func TestNormalizeAcceptedTaskSanitizesProviderStatus(t *testing.T) {
+	accepted, err := normalizeAcceptedTask(aiTaskAccepted{
+		TaskID: " task-123 ",
+		Status: " RUNNING ",
+	})
+	if err != nil {
+		t.Fatalf("expected accepted task to normalize: %v", err)
+	}
+	if accepted.TaskID != "task-123" {
+		t.Fatalf("expected task id to be trimmed, got %q", accepted.TaskID)
+	}
+	if accepted.Status != "running" {
+		t.Fatalf("expected status to be normalized, got %q", accepted.Status)
+	}
+	if accepted.Route == nil {
+		t.Fatal("expected nil route to be replaced with an empty object")
+	}
+
+	accepted, err = normalizeAcceptedTask(aiTaskAccepted{TaskID: "task-456", Status: "unexpected"})
+	if err != nil {
+		t.Fatalf("expected invalid provider status to fall back: %v", err)
+	}
+	if accepted.Status != "queued" {
+		t.Fatalf("expected invalid provider status to fall back to queued, got %q", accepted.Status)
+	}
+}
+
+func TestNormalizeAcceptedTaskRejectsMissingTaskID(t *testing.T) {
+	if _, err := normalizeAcceptedTask(aiTaskAccepted{TaskID: "  ", Status: "queued"}); err != ErrInvalidRequest {
+		t.Fatalf("expected missing task id to be rejected, got %v", err)
+	}
+}
+
 func TestConfirmableParseResultStatusOnlyAllowsReadyResults(t *testing.T) {
 	for status, want := range map[string]bool{
 		"ready":      true,
