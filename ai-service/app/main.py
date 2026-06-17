@@ -557,7 +557,8 @@ def ensure_callback_url_allowed(callback_url: str) -> None:
     if parsed.fragment:
         raise RuntimeError("callback_url must not include a fragment")
     host = parsed.hostname.rstrip(".").lower()
-    if host not in callback_allowed_hosts():
+    allowed = callback_allowed_hosts()
+    if host not in allowed and _callback_host_port_key(parsed, host) not in allowed:
         raise RuntimeError(f"callback_url host is not allowed: {host}")
 
 
@@ -587,7 +588,22 @@ def _normalize_callback_allowed_host(value: str) -> str:
     host = parsed.hostname.rstrip(".").lower()
     if not host:
         raise RuntimeError("AI_CALLBACK_ALLOWED_HOSTS must contain hostnames or HTTP(S) origins")
-    return host
+    port = _parsed_port(parsed, "AI_CALLBACK_ALLOWED_HOSTS")
+    return f"{host}:{port}" if port is not None else host
+
+
+def _callback_host_port_key(parsed, host: str) -> str:
+    port = _parsed_port(parsed, "callback_url")
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return f"{host}:{port}"
+
+
+def _parsed_port(parsed, label: str) -> int | None:
+    try:
+        return parsed.port
+    except ValueError as exc:
+        raise RuntimeError(f"{label} contains an invalid port") from exc
 
 
 def verify_request_signature(

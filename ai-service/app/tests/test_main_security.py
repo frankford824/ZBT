@@ -148,8 +148,12 @@ def test_callback_url_defaults_allow_backend_and_local_hosts(monkeypatch) -> Non
 def test_callback_allowed_hosts_accepts_hosts_and_origins(monkeypatch) -> None:
     monkeypatch.setenv("AI_CALLBACK_ALLOWED_HOSTS", "backend:8080,https://Internal.Example:9443/")
 
-    assert callback_allowed_hosts() == {"backend", "internal.example"}
-    ensure_callback_url_allowed("https://internal.example/api/v1/ai/callbacks/tasks")
+    assert callback_allowed_hosts() == {"backend:8080", "internal.example:9443"}
+    ensure_callback_url_allowed("http://backend:8080/api/v1/ai/callbacks/tasks")
+    ensure_callback_url_allowed("https://internal.example:9443/api/v1/ai/callbacks/tasks")
+
+    with pytest.raises(RuntimeError, match="not allowed"):
+        ensure_callback_url_allowed("https://internal.example/api/v1/ai/callbacks/tasks")
 
 
 @pytest.mark.parametrize(
@@ -161,6 +165,7 @@ def test_callback_allowed_hosts_accepts_hosts_and_origins(monkeypatch) -> None:
         "https://backend/api",
         "backend?debug=1",
         "backend#fragment",
+        "backend:bad",
         "backend\nX-Injected: yes",
     ],
 )
