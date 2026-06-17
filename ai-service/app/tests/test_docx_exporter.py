@@ -373,6 +373,34 @@ cp "$input" "$outdir/source.pdf"
     assert "实施计划" in _docx_xml(output, "word/document.xml")
 
 
+def test_export_bid_pdf_hides_libreoffice_output_on_failure(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
+    fake_soffice = tmp_path / "fake-soffice.sh"
+    fake_soffice.write_text(
+        """#!/bin/sh
+echo "secret bid content from stdout"
+echo "secret tenant path from stderr" >&2
+exit 1
+""",
+        encoding="utf-8",
+    )
+    fake_soffice.chmod(0o755)
+    monkeypatch.setenv("LIBREOFFICE_PATH", str(fake_soffice))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        export_bid_pdf(
+            "智慧交通平台",
+            "技术标",
+            [ExportChapter(title="实施计划", plain_text="项目实施内容。")],
+            tmp_path / "bid.pdf",
+            layout=ExportLayoutOptions(validate_pdf=False),
+        )
+
+    message = str(exc_info.value)
+    assert message == "LibreOffice PDF conversion failed"
+    assert "secret" not in message
+
+
 def test_validate_pdf_output_checks_text_and_rendered_pixels(tmp_path) -> None:
     valid_pdf = tmp_path / "valid.pdf"
     pdf = fitz.open()

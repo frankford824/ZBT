@@ -177,26 +177,28 @@ def export_bid_pdf(
         docx_path = tmp_path / "source.docx"
         export_bid_docx(title, part_title, chapters, docx_path, layout=layout)
         soffice = _libreoffice_executable()
-        completed = subprocess.run(
-            [
-                soffice,
-                "--headless",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(tmp_path),
-                str(docx_path),
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=90,
-        )
+        try:
+            completed = subprocess.run(
+                [
+                    soffice,
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(tmp_path),
+                    str(docx_path),
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=90,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            raise RuntimeError("LibreOffice PDF conversion failed") from None
         pdf_path = docx_path.with_suffix(".pdf")
         if completed.returncode != 0 or not pdf_path.exists():
-            message = completed.stderr.strip() or completed.stdout.strip() or "LibreOffice PDF conversion failed"
-            raise RuntimeError(message)
+            raise RuntimeError("LibreOffice PDF conversion failed")
         if layout.validate_pdf:
             _validate_pdf_output(pdf_path)
         shutil.move(str(pdf_path), output_path)
