@@ -63,7 +63,12 @@ docker compose build backend frontend ai-service
 docker compose up -d backend frontend ai-service
 ```
 
-前端也可以单独部署到 Cloudflare Pages：构建命令使用 `cd frontend && pnpm install --frozen-lockfile && pnpm build`，输出目录使用 `frontend/dist`，并在 Pages 环境变量中设置 `VITE_API_BASE_URL` 指向 Go 后端的 `/api/v1`。`frontend/public/_redirects` 已提供前端路由刷新回退。
+前端也可以单独部署到 Cloudflare Pages：
+
+- Git 集成部署时，项目根目录选择 `frontend`，构建命令使用 `pnpm install --frozen-lockfile && pnpm build`，输出目录使用 `dist`。
+- 直接上传部署时，执行 `cd frontend && pnpm install --frozen-lockfile && pnpm build && pnpm dlx wrangler pages deploy`。`frontend/wrangler.jsonc` 已声明 Pages 输出目录。
+- 在 Pages 构建环境变量中设置 `VITE_API_BASE_URL` 指向 Go 后端的 `/api/v1`。
+- `frontend/public/_redirects` 提供前端路由刷新回退，`frontend/public/_headers` 提供安全响应头和静态资源长期缓存策略。
 
 本机 Python 环境如果没有安装项目依赖，`python3 -m pytest app/tests` 会失败；推荐使用已安装 dev extra 的容器执行：
 
@@ -133,6 +138,14 @@ API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整�
 - 浏览器上传需要在 R2 bucket 上允许业务域名的 `PUT` / `GET` / `HEAD` CORS。
 
 预签名 URL 必须使用 R2 的 S3 API 域名，不要把自定义公开域名或 bucket path 写进 `MINIO_ENDPOINT` / `MINIO_PUBLIC_ENDPOINT`。
+R2 CORS 示例见 `infra/cloudflare/r2-cors.example.json`，上线前把 `AllowedOrigins` 替换为真实业务域名后应用到 bucket：
+
+```bash
+aws s3api put-bucket-cors \
+  --bucket <bucket> \
+  --cors-configuration file://infra/cloudflare/r2-cors.example.json \
+  --endpoint-url https://<account_id>.r2.cloudflarestorage.com
+```
 
 知识库解析支持纯文本、PDF 文本层、PDF layout blocks、PDF 表格候选、docx 段落和表格、xlsx/xlsm 工作表文本、pptx/pptm 幻灯片文本。AI 服务从 MinIO 读取解析源文件时默认限制 128 MB，可通过 `AI_TASK_OBJECT_MAX_BYTES` 调整，最高 256 MB；扫描件可通过 `OCR_HTTP_ENDPOINT` 接入外部 OCR 服务，配置 `OCR_API_KEY` 时会以 Bearer header 传递，OCR 请求默认限制单文件 20 MB，可通过 `OCR_MAX_BYTES` 调整。解析结果默认最多生成 300 个知识片段，可通过 `KNOWLEDGE_PARSE_MAX_CHUNKS` 调整，超限时 metadata 会标记截断。未配置 OCR 时，空文本 PDF 会在解析 metadata 中标记 `ocr_required=true` 和 `provider_not_configured`，不会伪装为解析成功。复杂表格语义识别、版面还原和坐标级引用仍需继续增强。
 
