@@ -439,6 +439,42 @@ def test_ocr_table_cells_become_rows_cell_bboxes_and_chunk_text(monkeypatch) -> 
     assert result.metadata["ocr"]["provider_metadata"] == {"request_id": "paddle-cells"}
 
 
+def test_ocr_top_level_and_page_tables_are_merged_without_duplicates(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(
+            b"""
+            {
+              "text": "\xe8\xaf\x86\xe5\x88\xab\xe6\xad\xa3\xe6\x96\x87",
+              "tables": [
+                {"page": 1, "index": 1, "rows": [["\xe9\xa1\xb6\xe5\xb1\x82", "\xe8\xa1\xa8"]]}
+              ],
+              "pages": [
+                {
+                  "page": 1,
+                  "text": "\xe8\xaf\x86\xe5\x88\xab\xe6\xad\xa3\xe6\x96\x87",
+                  "tables": [
+                    {"index": 1, "rows": [["\xe9\xa1\xb6\xe5\xb1\x82", "\xe8\xa1\xa8"]]},
+                    {"index": 2, "rows": [["\xe9\xa1\xb5\xe7\xba\xa7", "\xe8\xa1\xa8"]]}
+                  ]
+                }
+              ]
+            }
+            """
+        ),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+    tables = result.metadata["table_blocks"]
+
+    assert result.metadata["table_block_count"] == 2
+    assert [table["rows"] for table in tables] == [[["顶层", "表"]], [["页级", "表"]]]
+    assert "顶层 | 表" in text
+    assert "页级 | 表" in text
+
+
 def test_paddleocr_provider_requires_configured_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
     monkeypatch.delenv("PADDLEOCR_HTTP_ENDPOINT", raising=False)

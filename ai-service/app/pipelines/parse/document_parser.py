@@ -585,8 +585,7 @@ def _normalize_ocr_result(provider: str, result: dict[str, object]) -> dict[str,
         for table in (_normalize_ocr_table(table, None) for table in raw_tables if isinstance(table, dict))
         if table is not None
     ]
-    if not tables:
-        tables = _ocr_tables_from_pages(pages)
+    tables = _dedupe_ocr_tables([*tables, *_ocr_tables_from_pages(pages)])
     table_text = _ocr_table_text(tables)
     if table_text and table_text not in text:
         text = f"{text}\n\n{table_text}".strip()
@@ -747,6 +746,37 @@ def _ocr_tables_from_pages(pages: list[dict[str, object]]) -> list[dict[str, obj
             if isinstance(table, dict):
                 tables.append(table)
     return tables
+
+
+def _dedupe_ocr_tables(tables: list[dict[str, object]]) -> list[dict[str, object]]:
+    deduped: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for table in tables:
+        key = _ocr_table_identity(table)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(table)
+    return deduped
+
+
+def _ocr_table_identity(table: dict[str, object]) -> str:
+    page = _metadata_int(table.get("page_start") or table.get("page"), 0)
+    index = _metadata_int(table.get("index"), 0)
+    rows = _normalize_table_rows(table.get("rows"))
+    md_table = str(table.get("md_table") or "").strip()
+    bbox = _normalized_bbox(table.get("bbox"))
+    return json.dumps(
+        {
+            "page": page,
+            "index": index,
+            "rows": rows,
+            "md_table": md_table,
+            "bbox": bbox,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
 def _ocr_table_text(tables: list[dict[str, object]]) -> str:

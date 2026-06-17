@@ -2738,3 +2738,47 @@ git diff --check
 
 1. 本轮固化的是 OCR 响应归一化和表格可检索性；仍未接入真实外部 MinerU/PaddleOCR 服务跑端到端样本。
 2. `cells` 只按常见行列索引或顺序列数还原，不推断合并单元格语义和跨页表格延续。
+
+## Loop-43 / OCR 顶层与页级表格合并去重 - 2026-06-17
+
+### 本轮目标
+
+1. 修补真实 OCR Provider 常见响应形态：顶层 `tables/table_blocks` 与 `pages[].tables` 同时存在时，不能只保留顶层表格。
+2. 保留页级新增表格，同时对顶层和页级重复表格做稳定去重。
+3. 继续保证 OCR 表格进入 chunk 文本，支撑后续 6 模块解析和 RAG 检索。
+
+### 代码交付
+
+1. `document_parser.py` 将顶层 OCR 表格和页级 OCR 表格统一合并为文档级 `table_blocks`。
+2. 新增 `_dedupe_ocr_tables()` 和 `_ocr_table_identity()`，按页码、表序号、行内容、`md_table` 与 bbox 生成稳定身份，避免重复表格污染后续解析。
+3. `test_document_parser.py` 新增“顶层表 + 页级表 + 重复表”样例，验证最终只保留两个有效表格并进入 chunk 文本。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录 OCR 顶层/页级表格合并去重要求。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py -q -s
+cd ai-service && .venv/bin/ruff check app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+cd ai-service && .venv/bin/python -m compileall -q app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 文档解析专项测试 46 条全部通过。
+2. Ruff 针对本轮 Python 文件检查通过。
+3. Python compileall 通过。
+4. AI 服务完整测试 217 条全部通过。
+5. 工程1 真实样本解析评测 103/103 通过。
+6. Go 后端全量测试通过。
+7. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮仍属于 OCR 响应归一化加固，没有连接真实外部 OCR 服务做端到端样本。
+2. 去重身份保守使用结构化内容和 bbox，不尝试语义合并相似表格。
