@@ -670,7 +670,7 @@ func (s *Store) submitCostAdvice(ctx context.Context, payload map[string]any) (a
 		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
 	var accepted aiTaskAccepted
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
 	if accepted.TaskID == "" {

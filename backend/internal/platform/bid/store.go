@@ -2827,7 +2827,7 @@ func (s *Store) submitDocumentExport(ctx context.Context, exportType string, pay
 		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
 	var accepted aiTaskAccepted
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
 	return normalizeAcceptedTask(accepted)
@@ -2854,7 +2854,7 @@ func (s *Store) submitTenderParse(ctx context.Context, payload tenderParseReques
 		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
 	var accepted aiTaskAccepted
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
 	return normalizeAcceptedTask(accepted)
@@ -2881,7 +2881,7 @@ func (s *Store) submitChapterGenerate(ctx context.Context, payload chapterGenera
 		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
 	var accepted aiTaskAccepted
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
 	return normalizeAcceptedTask(accepted)
@@ -2908,7 +2908,7 @@ func (s *Store) submitChapterAction(ctx context.Context, payload chapterActionRe
 		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
 	var accepted aiTaskAccepted
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
 	return normalizeAcceptedTask(accepted)

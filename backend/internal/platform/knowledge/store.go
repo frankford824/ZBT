@@ -1160,7 +1160,7 @@ func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]a
 		return aiTaskAccepted{}, fmt.Errorf("ai service returned %s", resp.Status)
 	}
 	var accepted aiTaskAccepted
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
 	if accepted.TaskID == "" {
@@ -1251,7 +1251,7 @@ func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string
 		return embeddingResponse{}, fmt.Errorf("ai service embedding returned %s", resp.Status)
 	}
 	var decoded embeddingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &decoded); err != nil {
 		return embeddingResponse{}, err
 	}
 	if len(decoded.Embeddings) != len(texts) {
@@ -1320,7 +1320,7 @@ func (s *Store) rerankKnowledgeResults(ctx context.Context, tenantID, userID, qu
 		return nil, fmt.Errorf("ai service rerank returned %s", resp.Status)
 	}
 	var decoded rerankResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := aihttp.DecodeJSON(resp.Body, &decoded); err != nil {
 		return nil, err
 	}
 	if s.aiLogger != nil {
