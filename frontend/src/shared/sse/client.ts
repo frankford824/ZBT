@@ -1,4 +1,4 @@
-import { refreshSession } from '../api/client'
+import { isStaleSessionRefreshError, refreshSession } from '../api/client'
 import { expireSessionAndRedirect, getStoredSession, shouldRefreshSession } from '../auth/session'
 
 export type SseHandler<T> = {
@@ -109,9 +109,11 @@ async function sseHeaders() {
   if (session && shouldRefreshSession(session)) {
     try {
       session = await refreshSession()
-    } catch {
-      expireSessionAndRedirect()
-      throw new Error('登录状态已过期，请重新登录')
+    } catch (error) {
+      if (!isStaleSessionRefreshError(error)) {
+        expireSessionAndRedirect()
+      }
+      throw new Error('登录状态已过期，请重新登录', { cause: error })
     }
   }
   if (session) {

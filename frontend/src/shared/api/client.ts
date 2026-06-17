@@ -16,14 +16,28 @@ const authRefreshClient = axios.create({
 
 let refreshInFlight: Promise<LoginSessionPayload> | null = null
 
+class StaleSessionRefreshError extends Error {
+  constructor() {
+    super('session refresh result is stale')
+    this.name = 'StaleSessionRefreshError'
+  }
+}
+
+export function isStaleSessionRefreshError(error: unknown) {
+  return error instanceof StaleSessionRefreshError
+}
+
 apiClient.interceptors.request.use(async (config) => {
   let session = getStoredSession()
   if (session && shouldRefreshSession(session) && !isAuthSessionRequest(config.url)) {
     try {
       session = await refreshStoredSession(session)
-    } catch {
-      expireSessionAndRedirect()
-      throw new Error('登录状态已过期，请重新登录')
+    } catch (error) {
+      if (!isStaleSessionRefreshError(error)) {
+        expireSessionAndRedirect()
+        throw new Error('登录状态已过期，请重新登录', { cause: error })
+      }
+      throw error
     }
   }
   if (session) {
@@ -48,8 +62,12 @@ apiClient.interceptors.response.use(
   },
 )
 
-function refreshStoredSession(session: LoginSessionPayload) {
+function refreshStoredSession(session: LoginSessionPayload | null = getStoredSession()) {
+  if (!session) {
+    return Promise.reject(new StaleSessionRefreshError())
+  }
   if (!refreshInFlight) {
+    const refreshingToken = session.access_token
     refreshInFlight = authRefreshClient
       .post<LoginSessionPayload>(
         '/auth/refresh',
@@ -61,7 +79,13 @@ function refreshStoredSession(session: LoginSessionPayload) {
           },
         },
       )
-      .then((response) => storeSession(response.data))
+      .then((response) => {
+        const currentSession = getStoredSession()
+        if (!currentSession || currentSession.access_token !== refreshingToken) {
+          throw new StaleSessionRefreshError()
+        }
+        return storeSession(response.data)
+      })
       .finally(() => {
         refreshInFlight = null
       })
@@ -903,8 +927,7 @@ export async function registerTenant(payload: {
 }
 
 export async function refreshSession(): Promise<LoginSessionPayload> {
-  const { data } = await apiClient.post<LoginSessionPayload>('/auth/refresh')
-  return storeSession(data)
+  return refreshStoredSession()
 }
 
 export async function logoutSession(): Promise<{ status: string }> {
