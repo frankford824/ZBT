@@ -93,19 +93,20 @@ ALLOW_MOCK_FALLBACK=true
 可选接入 Cloudflare AI Gateway 时，不需要改业务代码，直接使用内置的 `cloudflare_ai_gateway` Provider：
 
 ```bash
-CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/openai
-CLOUDFLARE_AI_GATEWAY_TOKEN=<gateway_access_token>
+CLOUDFLARE_ACCOUNT_ID=<account_id>
+CLOUDFLARE_API_TOKEN=<api_token_with_ai_gateway_permission>
+CLOUDFLARE_AI_GATEWAY_ID=<optional_gateway_id>
 AI_LLM_PROVIDER=cloudflare_ai_gateway
-AI_LLM_MODEL=gpt-4o-mini
+AI_LLM_MODEL=openai/gpt-4.1
 AI_EMBEDDING_PROVIDER=cloudflare_ai_gateway
-AI_EMBEDDING_MODEL=text-embedding-3-large
+AI_EMBEDDING_MODEL=@cf/baai/bge-large-en-v1.5
 AI_RERANK_PROVIDER=cloudflare_ai_gateway
-AI_RERANK_MODEL=gpt-4o-mini
+AI_RERANK_MODEL=openai/gpt-4.1
 USE_MOCK_PROVIDERS=false
 ALLOW_MOCK_FALLBACK=false
 ```
 
-`cloudflare_ai_gateway` 会自动发送 `cf-aig-authorization` 网关认证头。若 AI Gateway 使用 BYOK 或统一计费，可以不设置 `OPENAI_API_KEY`；若选择请求侧透传 provider key，则继续设置 `OPENAI_API_KEY`，服务会同时发送 provider `Authorization` 和 Cloudflare 网关认证头。需要传递网关 metadata、cache 等附加头时，可用 JSON 对象配置 `CLOUDFLARE_AI_GATEWAY_HEADERS`，例如 `{"cf-aig-metadata":"{\"tenant\":\"prod\"}"}`。
+`cloudflare_ai_gateway` 默认使用 Cloudflare 当前 REST API 基址 `https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1`，并发送 `Authorization: Bearer <CLOUDFLARE_API_TOKEN>`。需要指定某个 AI Gateway 时设置 `CLOUDFLARE_AI_GATEWAY_ID`，服务会发送 `cf-aig-gateway-id` 请求头；若部署环境必须使用自定义 OpenAI-compatible 基址，可设置 `CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL` 覆盖默认值。需要传递 metadata、cache 等附加头时，可用 JSON 对象配置 `CLOUDFLARE_AI_GATEWAY_HEADERS`，例如 `{"cf-aig-metadata":"{\"tenant\":\"prod\"}"}`。
 
 OpenAI-compatible Provider 成功响应默认最多读取 8 MB，可用 `OPENAI_COMPATIBLE_MAX_RESPONSE_BYTES` 调整；超限响应会被拒绝且不会把模型返回内容写入错误信息。
 

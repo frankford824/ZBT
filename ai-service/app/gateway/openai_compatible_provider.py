@@ -17,6 +17,7 @@ from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest,
 
 
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_CLOUDFLARE_ACCOUNT_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 DEFAULT_OPENAI_COMPATIBLE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 
 
@@ -277,6 +278,56 @@ class OpenAICompatibleProvider:
             "OPENAI_COMPATIBLE_MAX_RESPONSE_BYTES",
             DEFAULT_OPENAI_COMPATIBLE_RESPONSE_MAX_BYTES,
         )
+
+
+class CloudflareAIGatewayProvider(OpenAICompatibleProvider):
+    def __init__(self, name: str = "cloudflare_ai_gateway", target: OpenAICompatibleTarget | None = None) -> None:
+        super().__init__(
+            name,
+            base_url_env="CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
+            api_key_env="CLOUDFLARE_API_TOKEN",
+            api_key_required=True,
+            extra_headers_env="CLOUDFLARE_AI_GATEWAY_HEADERS",
+            target=target,
+        )
+
+    def bind(self, target: Any) -> "CloudflareAIGatewayProvider":
+        return CloudflareAIGatewayProvider(
+            self.name,
+            target=OpenAICompatibleTarget(
+                model=target.model,
+                dimensions=target.dimensions,
+                temperature=target.temperature,
+                timeout_s=target.timeout_s,
+            ),
+        )
+
+    def _api_key(self) -> str:
+        return (
+            os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+            or os.getenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "").strip()
+        )
+
+    def _base_url(self) -> str:
+        configured_base_url = os.getenv(self.base_url_env, "").strip()
+        if configured_base_url:
+            return _safe_base_url(configured_base_url, self.name, self.base_url_env)
+        account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        if not _CLOUDFLARE_ACCOUNT_ID_RE.fullmatch(account_id):
+            raise RuntimeError(
+                f"{self.name} requires CLOUDFLARE_ACCOUNT_ID or {self.base_url_env}"
+            )
+        return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+
+    def _headers(self) -> dict[str, str]:
+        headers = super()._headers()
+        gateway_id = os.getenv("CLOUDFLARE_AI_GATEWAY_ID", "").strip()
+        if gateway_id:
+            normalized_names = {key.lower() for key in headers}
+            if "cf-aig-gateway-id" in normalized_names:
+                raise RuntimeError(f"{self.name} gateway id header is configured more than once")
+            headers["cf-aig-gateway-id"] = _safe_header_value(gateway_id)
+        return headers
 
 
 def _read_limited_response(response: object, max_bytes: int) -> bytes:

@@ -10,13 +10,7 @@ providers:
     api_key_env: OPENAI_API_KEY
     default_base_url: https://api.openai.com/v1
   cloudflare_ai_gateway:
-    type: openai_compatible
-    base_url_env: CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL
-    api_key_env: OPENAI_API_KEY
-    api_key_required: false
-    auth_header_name: cf-aig-authorization
-    auth_header_env: CLOUDFLARE_AI_GATEWAY_TOKEN
-    extra_headers_env: CLOUDFLARE_AI_GATEWAY_HEADERS
+    type: cloudflare_ai_gateway
   dashscope:
     type: openai_compatible
     base_url_env: DASHSCOPE_BASE_URL

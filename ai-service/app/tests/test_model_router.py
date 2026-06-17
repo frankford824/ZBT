@@ -22,6 +22,9 @@ def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         "DEEPSEEK_BASE_URL",
         "DASHSCOPE_API_KEY",
         "DASHSCOPE_BASE_URL",
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_API_TOKEN",
+        "CLOUDFLARE_AI_GATEWAY_ID",
         "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
         "CLOUDFLARE_AI_GATEWAY_TOKEN",
         "CLOUDFLARE_AI_GATEWAY_HEADERS",
@@ -239,18 +242,15 @@ def test_cloudflare_ai_gateway_provider_can_use_gateway_token_without_provider_k
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("AI_LLM_PROVIDER", "cloudflare_ai_gateway")
-    monkeypatch.setenv("AI_LLM_MODEL", "gpt-4o-mini")
-    monkeypatch.setenv(
-        "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
-        "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
-    )
-    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "gateway-token")
+    monkeypatch.setenv("AI_LLM_MODEL", "@cf/meta/llama-3.1-8b-instruct")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "gateway-token")
 
     router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
     target = router.resolve("chapter_generate", tenant_id="tenant-demo")
 
     assert target.provider == "cloudflare_ai_gateway"
-    assert target.model == "gpt-4o-mini"
+    assert target.model == "@cf/meta/llama-3.1-8b-instruct"
     assert router.health_check()["cloudflare_ai_gateway"] is True
 
 

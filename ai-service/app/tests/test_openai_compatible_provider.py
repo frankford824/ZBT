@@ -5,7 +5,12 @@ import urllib.error
 
 import pytest
 
-from app.gateway.openai_compatible_provider import OpenAICompatibleProvider, OpenAICompatibleTarget, _json_from_text
+from app.gateway.openai_compatible_provider import (
+    CloudflareAIGatewayProvider,
+    OpenAICompatibleProvider,
+    OpenAICompatibleTarget,
+    _json_from_text,
+)
 
 
 def test_openai_rerank_accepts_numeric_string_indexes(monkeypatch) -> None:
@@ -51,6 +56,56 @@ def test_openai_provider_normalizes_valid_base_url(monkeypatch) -> None:
     monkeypatch.setenv("FAKE_OPENAI_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai/")
 
     assert provider._base_url() == "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+
+
+def test_cloudflare_ai_gateway_provider_builds_current_rest_base_url_and_headers(monkeypatch) -> None:
+    provider = CloudflareAIGatewayProvider()
+    monkeypatch.delenv("CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_ID", "production-gateway")
+
+    assert (
+        provider._base_url()
+        == "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/v1"
+    )
+    headers = provider._headers()
+
+    assert provider.health_check() is True
+    assert headers["Authorization"] == "Bearer cf-token"
+    assert headers["cf-aig-gateway-id"] == "production-gateway"
+
+
+def test_cloudflare_ai_gateway_provider_accepts_explicit_base_url_override(monkeypatch) -> None:
+    provider = CloudflareAIGatewayProvider()
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/compat/")
+    monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "legacy-token")
+
+    assert provider._base_url() == "https://gateway.ai.cloudflare.com/v1/acct/gateway/compat"
+    assert provider._headers()["Authorization"] == "Bearer legacy-token"
+
+
+def test_cloudflare_ai_gateway_provider_rejects_invalid_account_id(monkeypatch) -> None:
+    provider = CloudflareAIGatewayProvider()
+    monkeypatch.delenv("CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "bad/account")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
+
+    assert provider.health_check() is False
+    with pytest.raises(RuntimeError, match="requires CLOUDFLARE_ACCOUNT_ID"):
+        provider._base_url()
+
+
+def test_cloudflare_ai_gateway_provider_rejects_duplicate_gateway_id_header(monkeypatch) -> None:
+    provider = CloudflareAIGatewayProvider()
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_ID", "production-gateway")
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_HEADERS", '{"cf-aig-gateway-id":"other"}')
+
+    with pytest.raises(RuntimeError, match="gateway id header is configured more than once"):
+        provider._headers()
 
 
 @pytest.mark.parametrize(

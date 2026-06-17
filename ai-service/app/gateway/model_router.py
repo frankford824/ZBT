@@ -10,7 +10,7 @@ import yaml
 from pydantic import BaseModel, field_validator
 
 from app.gateway.mock_provider import MockProvider
-from app.gateway.openai_compatible_provider import OpenAICompatibleProvider
+from app.gateway.openai_compatible_provider import CloudflareAIGatewayProvider, OpenAICompatibleProvider
 
 
 class LocalPipelineProvider:
@@ -188,7 +188,7 @@ class ModelRouter:
     def provider_for_target(self, target: RouteTarget) -> object:
         return self._provider_for_target(target)
 
-    SUPPORTED_PROVIDER_TYPES = ("mock", "openai_compatible", "local")
+    SUPPORTED_PROVIDER_TYPES = ("mock", "openai_compatible", "cloudflare_ai_gateway", "local")
 
     def _build_providers(self, provider_config: dict[str, Any]) -> dict[str, object]:
         providers: dict[str, object] = {}
@@ -209,6 +209,8 @@ class ModelRouter:
                     auth_header_env=str(config.get("auth_header_env") or ""),
                     extra_headers_env=str(config.get("extra_headers_env") or ""),
                 )
+            elif provider_type == "cloudflare_ai_gateway":
+                providers[name] = CloudflareAIGatewayProvider(name)
             else:
                 supported = ", ".join(self.SUPPORTED_PROVIDER_TYPES)
                 raise ValueError(
