@@ -396,9 +396,12 @@ func TestAITaskAccessModuleMapsResourceTypes(t *testing.T) {
 		wantOK       bool
 	}{
 		{resourceType: "knowledge_document", taskType: "knowledge_process", want: "knowledge", wantOK: true},
+		{resourceType: "bid_document", taskType: "outline_generate", want: "bid", wantOK: true},
 		{resourceType: "bid_chapter", taskType: "chapter_generate", want: "bid", wantOK: true},
 		{resourceType: "bid_export", taskType: "document_export", want: "bid", wantOK: true},
 		{resourceType: "cost_project", taskType: "cost_advice", want: "cost", wantOK: true},
+		{resourceType: "bid_secret", taskType: "unknown", want: "", wantOK: false},
+		{resourceType: "knowledge_shadow", taskType: "unknown", want: "", wantOK: false},
 		{resourceType: "", taskType: "tender_parse", want: "bid", wantOK: true},
 		{resourceType: "", taskType: "unknown", want: "", wantOK: false},
 	}

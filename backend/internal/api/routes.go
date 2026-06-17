@@ -2081,14 +2081,14 @@ func requireAITaskAccess(c *gin.Context, resourceType, taskType string) bool {
 func aiTaskAccessModule(resourceType, taskType string) (string, bool) {
 	resourceType = strings.ToLower(strings.TrimSpace(resourceType))
 	taskType = strings.ToLower(strings.TrimSpace(taskType))
-	switch {
-	case strings.HasPrefix(resourceType, "knowledge"):
+	switch resourceType {
+	case "knowledge_document":
 		return "knowledge", true
-	case strings.HasPrefix(resourceType, "bid"):
+	case "bid_parse_result", "bid_document", "bid_chapter", "bid_export":
 		return "bid", true
-	case strings.HasPrefix(resourceType, "cost"):
+	case "cost_project":
 		return "cost", true
-	case strings.HasPrefix(resourceType, "compliance"):
+	case "compliance_check":
 		return "compliance", true
 	}
 	switch taskType {
