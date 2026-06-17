@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import math
 import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.gateway.mock_provider import MockProvider
 from app.gateway.openai_compatible_provider import OpenAICompatibleProvider
@@ -34,6 +35,46 @@ class RouteTarget(BaseModel):
     timeout_s: int | None = None
     dimensions: int | None = None
     fallback_from: str | None = None
+
+    @field_validator("provider", "model", mode="before")
+    @classmethod
+    def _non_empty_route_string(cls, value: object, info: Any) -> str:
+        text = "" if value is None else str(value).strip()
+        if not text:
+            raise ValueError(f"route {info.field_name} must be non-empty")
+        return text
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _valid_temperature(cls, value: object) -> float | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            raise ValueError("route temperature must be a number between 0 and 2")
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("route temperature must be a number between 0 and 2") from exc
+        if not math.isfinite(number) or number < 0 or number > 2:
+            raise ValueError("route temperature must be a number between 0 and 2")
+        return number
+
+    @field_validator("timeout_s", "dimensions", mode="before")
+    @classmethod
+    def _positive_int(cls, value: object, info: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            raise ValueError(f"route {info.field_name} must be a positive integer")
+        if isinstance(value, float) and not value.is_integer():
+            raise ValueError(f"route {info.field_name} must be a positive integer")
+        try:
+            number = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"route {info.field_name} must be a positive integer") from exc
+        if number <= 0:
+            raise ValueError(f"route {info.field_name} must be a positive integer")
+        return number
 
 
 class ModelRouter:

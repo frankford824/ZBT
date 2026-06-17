@@ -323,6 +323,35 @@ def test_router_rejects_unsupported_provider_type() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("model", "", "route model must be non-empty"),
+        ("temperature", -0.1, "route temperature"),
+        ("temperature", 2.1, "route temperature"),
+        ("temperature", True, "route temperature"),
+        ("timeout_s", 0, "route timeout_s"),
+        ("timeout_s", -1, "route timeout_s"),
+        ("timeout_s", 1.5, "route timeout_s"),
+        ("dimensions", 0, "route dimensions"),
+        ("dimensions", -1024, "route dimensions"),
+        ("dimensions", False, "route dimensions"),
+    ],
+)
+def test_router_rejects_invalid_route_target_values(field: str, value: object, message: str) -> None:
+    primary = {"provider": "mock", "model": "mock-model"}
+    primary[field] = value
+    router = ModelRouter(
+        {
+            "providers": {"mock": {"type": "mock"}},
+            "routes": {"chapter_generate": {"primary": primary}},
+        }
+    )
+
+    with pytest.raises(ValueError, match=message):
+        router.resolve("chapter_generate", tenant_id="tenant-demo")
+
+
 def test_router_does_not_silently_fallback_to_mock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     router = ModelRouter(

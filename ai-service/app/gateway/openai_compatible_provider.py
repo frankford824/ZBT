@@ -122,8 +122,9 @@ class OpenAICompatibleProvider:
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         payload: dict[str, object] = {"model": self._model(), "input": texts}
-        if self.target and self.target.dimensions:
-            payload["dimensions"] = self.target.dimensions
+        dimensions = self._target_dimensions()
+        if dimensions:
+            payload["dimensions"] = dimensions
         data = self._post_json("/embeddings", payload)
         embeddings = _embedding_vectors_from_response(data, len(texts), self.name)
         if len(embeddings) != len(texts):
@@ -131,8 +132,9 @@ class OpenAICompatibleProvider:
         return embeddings
 
     def get_dimensions(self) -> int:
-        if self.target and self.target.dimensions:
-            return self.target.dimensions
+        dimensions = self._target_dimensions()
+        if dimensions:
+            return dimensions
         return _env_positive_int(f"{self.name.upper()}_EMBEDDING_DIMENSIONS", 1024)
 
     def rerank(self, query: str, documents: list[str]) -> list[int]:
@@ -196,9 +198,14 @@ class OpenAICompatibleProvider:
         return 0.2
 
     def _timeout(self) -> int:
-        if self.target and self.target.timeout_s:
+        if self.target and self.target.timeout_s and self.target.timeout_s > 0:
             return self.target.timeout_s
         return _env_positive_int("OPENAI_COMPATIBLE_TIMEOUT_S", 120)
+
+    def _target_dimensions(self) -> int | None:
+        if self.target and self.target.dimensions and self.target.dimensions > 0:
+            return self.target.dimensions
+        return None
 
     def _api_key(self) -> str:
         return os.getenv(self.api_key_env, "").strip()

@@ -58,6 +58,28 @@ def test_openai_embedding_dimensions_require_positive_int(monkeypatch) -> None:
     assert provider.get_dimensions() == 1536
 
 
+def test_openai_provider_ignores_invalid_direct_target_positive_ints(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "fake",
+        base_url_env="FAKE_OPENAI_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        target=OpenAICompatibleTarget(model="embedding-model", dimensions=-3, timeout_s=-5),
+    )
+    captured_payloads = []
+    monkeypatch.setenv("FAKE_EMBEDDING_DIMENSIONS", "1536")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_TIMEOUT_S", "45")
+    monkeypatch.setattr(
+        provider,
+        "_post_json",
+        lambda _path, payload: captured_payloads.append(payload) or {"data": [{"embedding": [1]}]},
+    )
+
+    assert provider.get_dimensions() == 1536
+    assert provider._timeout() == 45
+    assert provider.embed_batch(["text"]) == [[1.0]]
+    assert "dimensions" not in captured_payloads[0]
+
+
 def test_openai_embed_batch_reorders_indexed_embeddings_and_normalizes_numbers(monkeypatch) -> None:
     provider = _embedding_provider()
     monkeypatch.setattr(
