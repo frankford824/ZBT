@@ -139,13 +139,13 @@ export function ProjectsPage() {
                 {projects.data
                   .filter((project) => project.status === status)
                   .map((project) => (
-                    <Card key={project.id} size="small" className="project-card">
-                      <Link to={`/projects/${project.id}`}>{project.name}</Link>
-                      <div>
+                    <div key={project.id} className="project-card">
+                      <Link className="project-card-title" to={`/projects/${project.id}`}>{project.name}</Link>
+                      <div className="project-card-meta">
                         <Tag color="blue">{project.owner_name || '未分配'}</Tag>
                         <Tag>{project.bid_count} 份标书</Tag>
                       </div>
-                    </Card>
+                    </div>
                   ))}
               </Space>
             </Card>
