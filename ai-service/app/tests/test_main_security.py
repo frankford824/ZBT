@@ -2,11 +2,14 @@ import asyncio
 import hashlib
 import hmac
 import json
+import time
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 from fastapi import BackgroundTasks
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.main import (
     DEFAULT_AI_HMAC_SECRET,
@@ -29,6 +32,7 @@ from app.main import (
     process_tender_parse,
     post_callback,
     production_mode,
+    require_backend_signature,
     safe_output_filename,
     tender_parse,
     validate_production_config,
@@ -75,6 +79,12 @@ def test_verify_request_signature_rejects_invalid_or_expired_signature() -> None
 
     assert not verify_request_signature(timestamp, "bad", body, "secret", now=1800000000)
     assert not verify_request_signature(timestamp, "bad", body, "secret", now=1800000400)
+
+
+def test_ai_service_middleware_keeps_only_public_paths_unsigned() -> None:
+    assert asyncio.run(middleware_status("GET", "/healthz")) == 209
+    assert asyncio.run(middleware_status("GET", "/not-found")) == 401
+    assert asyncio.run(middleware_status("GET", "/not-found", signed_headers(b""))) == 209
 
 
 def test_ai_service_hmac_secret_has_development_default(monkeypatch) -> None:
@@ -1155,3 +1165,47 @@ def _set_production_security_env(monkeypatch) -> None:
     monkeypatch.setenv("MINIO_ACCESS_KEY", "prod-minio-access-value")
     monkeypatch.setenv("MINIO_SECRET_KEY", "prod-minio-secret-value")
     monkeypatch.setenv("OPENAI_API_KEY", "prod-openai-key")
+
+
+def signed_headers(body: bytes) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    signature = hmac.new(
+        ai_service_hmac_secret().encode("utf-8"),
+        timestamp.encode("utf-8") + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-ZBT-Timestamp": timestamp,
+        "X-ZBT-Signature": signature,
+    }
+
+
+async def middleware_status(method: str, path: str, headers: dict[str, str] | None = None) -> int:
+    raw_headers = [
+        (key.lower().encode("latin-1"), value.encode("latin-1"))
+        for key, value in (headers or {}).items()
+    ]
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "raw_path": path.encode("utf-8"),
+            "query_string": b"",
+            "headers": raw_headers,
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 1234),
+        },
+        receive=receive,
+    )
+
+    async def call_next(_request: Request) -> JSONResponse:
+        return JSONResponse({"status": "passed"}, status_code=209)
+
+    response = await require_backend_signature(request, call_next)
+    return response.status_code

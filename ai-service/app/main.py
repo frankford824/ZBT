@@ -83,7 +83,7 @@ MINIO_READ_CHUNK_BYTES = 1024 * 1024
 
 @app.middleware("http")
 async def require_backend_signature(request: Request, call_next):
-    if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path in PUBLIC_PATHS:
+    if request.url.path in PUBLIC_PATHS:
         return await call_next(request)
     secret = ai_service_hmac_secret()
     if not secret:
