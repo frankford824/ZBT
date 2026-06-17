@@ -2,6 +2,7 @@ package aicall
 
 import (
 	"database/sql"
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -167,6 +168,35 @@ func TestRecordFromTaskParsesStringTokenAndCostFields(t *testing.T) {
 	}
 	if input.EstimatedCost != 0.0125 {
 		t.Fatalf("expected explicit string estimated cost, got %.6f", input.EstimatedCost)
+	}
+}
+
+func TestIntFromMapRejectsUnsafeTokenValues(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  int
+	}{
+		{name: "int", value: 12, want: 12},
+		{name: "int64", value: int64(13), want: 13},
+		{name: "integer float", value: float64(14), want: 14},
+		{name: "json number", value: json.Number("15"), want: 15},
+		{name: "string", value: "16", want: 16},
+		{name: "negative int", value: -1, want: 0},
+		{name: "negative int64", value: int64(-1), want: 0},
+		{name: "fractional float", value: 1.5, want: 0},
+		{name: "nan float", value: math.NaN(), want: 0},
+		{name: "inf float", value: math.Inf(1), want: 0},
+		{name: "unsafe float integer", value: float64(maxExactJSONInteger + 1), want: 0},
+		{name: "bad json number", value: json.Number("1.5"), want: 0},
+		{name: "negative json number", value: json.Number("-1"), want: 0},
+		{name: "bad string", value: "1.5", want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := intFromMap(map[string]any{"tokens": tc.value}, "tokens"); got != tc.want {
+				t.Fatalf("expected %v to parse as %d, got %d", tc.value, tc.want, got)
+			}
+		})
 	}
 }
 

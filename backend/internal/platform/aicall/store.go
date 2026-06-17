@@ -19,6 +19,8 @@ import (
 
 var ErrInvalidRequest = errors.New("invalid ai call log request")
 
+const maxExactJSONInteger = int64(1<<53 - 1)
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -523,23 +525,47 @@ func intFromMap(values map[string]any, key string) int {
 	}
 	switch typed := values[key].(type) {
 	case int:
+		if typed < 0 {
+			return 0
+		}
 		return typed
 	case int64:
+		if typed < 0 || typed > int64(maxInt()) {
+			return 0
+		}
 		return int(typed)
 	case float64:
+		if typed < 0 || math.IsNaN(typed) || math.IsInf(typed, 0) || math.Trunc(typed) != typed || typed > float64(maxFloatTokenInteger()) {
+			return 0
+		}
 		return int(typed)
 	case json.Number:
-		value, _ := typed.Int64()
+		value, err := typed.Int64()
+		if err != nil || value < 0 || value > int64(maxInt()) {
+			return 0
+		}
 		return int(value)
 	case string:
-		value, err := strconv.Atoi(strings.TrimSpace(typed))
-		if err == nil {
-			return value
+		value, err := strconv.ParseInt(strings.TrimSpace(typed), 10, 0)
+		if err == nil && value >= 0 {
+			return int(value)
 		}
 		return 0
 	default:
 		return 0
 	}
+}
+
+func maxInt() int {
+	return int(^uint(0) >> 1)
+}
+
+func maxFloatTokenInteger() int64 {
+	max := int64(maxInt())
+	if max > maxExactJSONInteger {
+		return maxExactJSONInteger
+	}
+	return max
 }
 
 func floatFromMap(values map[string]any, key string) float64 {
