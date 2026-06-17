@@ -116,6 +116,65 @@ def _evaluate_document(
             expected_text,
             _excerpt(source_text, expected_text),
         )
+    table_spec = spec.get("table_blocks")
+    if isinstance(table_spec, dict):
+        _evaluate_table_blocks(document_id, metadata, table_spec, checks)
+
+
+def _evaluate_table_blocks(
+    document_id: str,
+    metadata: dict[str, Any],
+    table_spec: dict[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    raw_blocks = metadata.get("table_blocks")
+    blocks = [block for block in raw_blocks if isinstance(block, dict)] if isinstance(raw_blocks, list) else []
+    if "required_sources" in table_spec:
+        sources = {str(block.get("source") or "") for block in blocks}
+        for source in _string_list(table_spec.get("required_sources")):
+            _add_check(
+                checks,
+                f"document.{document_id}.table_blocks.source.{source}",
+                source in sources,
+                "present",
+                sorted(sources),
+            )
+    if "min_total_rows" in table_spec:
+        expected = int(table_spec["min_total_rows"])
+        actual = sum(_table_row_count(block) for block in blocks)
+        _add_check(
+            checks,
+            f"document.{document_id}.table_blocks.total_rows",
+            actual >= expected,
+            f">={expected}",
+            actual,
+        )
+    if "min_blocks_with_rows" in table_spec:
+        expected = int(table_spec["min_blocks_with_rows"])
+        actual = sum(1 for block in blocks if _table_row_count(block) > 0)
+        _add_check(
+            checks,
+            f"document.{document_id}.table_blocks.with_rows",
+            actual >= expected,
+            f">={expected}",
+            actual,
+        )
+    table_text = json.dumps(blocks, ensure_ascii=False)
+    for index, expected_text in enumerate(_string_list(table_spec.get("must_contain")), start=1):
+        _add_check(
+            checks,
+            f"document.{document_id}.table_blocks.must_contain[{index}]",
+            expected_text in table_text,
+            expected_text,
+            _excerpt(table_text, expected_text),
+        )
+
+
+def _table_row_count(block: dict[str, Any]) -> int:
+    rows = block.get("rows")
+    if isinstance(rows, list):
+        return len(rows)
+    return _int_value(block.get("row_count"), 0)
 
 
 def _evaluate_tender_parse(

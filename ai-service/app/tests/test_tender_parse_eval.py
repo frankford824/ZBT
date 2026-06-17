@@ -70,6 +70,82 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
     assert result["failed_checks"] == 0
 
 
+def test_evaluate_golden_checks_table_block_structure(tmp_path) -> None:
+    from openpyxl import Workbook
+
+    sample = tmp_path / "sample.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "报价"
+    sheet.append(["项目号", "项目名称", "最高单价", "综合单价"])
+    sheet.append(["1", "中级养护技术员", "17800", "17700"])
+    workbook.save(sample)
+    workbook.close()
+    golden = tmp_path / "golden.json"
+    golden.write_text(
+        json.dumps(
+            {
+                "documents": [
+                    {
+                        "id": "boq",
+                        "path": "sample.xlsx",
+                        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "parser": "openpyxl",
+                        "min_table_blocks": 1,
+                        "table_blocks": {
+                            "required_sources": ["xlsx"],
+                            "min_total_rows": 2,
+                            "min_blocks_with_rows": 1,
+                            "must_contain": ["最高单价", "中级养护技术员"],
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_golden(golden, repo_root=tmp_path)
+
+    assert result["status"] == "passed"
+    assert result["failed_checks"] == 0
+
+
+def test_evaluate_golden_fails_when_table_block_contract_is_missing(tmp_path) -> None:
+    sample = tmp_path / "sample.txt"
+    sample.write_text("项目名称：智慧交通平台建设", encoding="utf-8")
+    golden = tmp_path / "golden.json"
+    golden.write_text(
+        json.dumps(
+            {
+                "documents": [
+                    {
+                        "id": "tender",
+                        "path": "sample.txt",
+                        "content_type": "text/plain",
+                        "table_blocks": {
+                            "required_sources": ["pdf"],
+                            "min_total_rows": 1,
+                            "must_contain": ["最高单价"],
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_golden(golden, repo_root=tmp_path)
+
+    assert result["status"] == "failed"
+    failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
+    assert "document.tender.table_blocks.source.pdf" in failed_names
+    assert "document.tender.table_blocks.total_rows" in failed_names
+    assert "document.tender.table_blocks.must_contain[1]" in failed_names
+
+
 def test_evaluate_golden_fails_when_required_field_is_missing(tmp_path) -> None:
     sample = tmp_path / "sample.txt"
     sample.write_text("项目名称：智慧交通平台建设", encoding="utf-8")

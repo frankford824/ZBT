@@ -2506,3 +2506,48 @@ git diff --check
 
 1. 本轮只提供导出 JSON，不在 Go 服务内直接执行 Python 评测器；CI 或验收脚本仍需显式调用 `generation_coverage_eval.py`。
 2. 导出 `knowledge_chunks` 只包含已通过 `knowledge_references.chunk_id` 解析的引用；AI 返回但未解析的 source_ref 会留在章节 `source_refs` 中，由离线评测器按未解析项判失败或进入复核。
+
+## Loop-38 / 样本表格块结构验收加固 - 2026-06-17
+
+### 本轮目标
+
+1. 加固 xparse 清单中的“复杂表格保留”验收，避免只用 `min_table_blocks` 数量判断。
+2. 对 `docs/ex/工程1` 的 PDF、DOCX、XLSX 样本增加表格来源、行结构和关键单元格检查。
+3. 保持评测器离线可运行，不引入外部 OCR 或数据库依赖。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/tender_parse_eval.py` 新增 `documents[].table_blocks` 评测配置。
+2. 支持 `required_sources`、`min_total_rows`、`min_blocks_with_rows` 和 `must_contain` 四类表格块检查。
+3. `test_tender_parse_eval.py` 新增 xlsx 表格块结构通过样例，以及纯文本样本缺少表格块的失败样例。
+4. `docs/sample_docs/golden/工程1.parse.json` 对采购 PDF、响应 DOCX、盖章投标 PDF、固化清单 XLSX 增加表格块结构断言。
+5. `AI_IMPLEMENTATION_CHECKLIST.md` 和 `SAMPLE_DOCS_EVALUATION.md` 更新样本评测从 63/63 提升到 87/87，并说明表格块结构验收。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd ai-service && .venv/bin/ruff check app/evaluation/tender_parse_eval.py app/tests/test_tender_parse_eval.py
+cd ai-service && .venv/bin/python -m compileall -q app/evaluation/tender_parse_eval.py app/tests/test_tender_parse_eval.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. `test_tender_parse_eval.py` 4 条测试全部通过。
+2. 工程1 真实样本解析评测 87/87 通过。
+3. Ruff 针对本轮 Python 文件检查通过。
+4. Python compileall 通过。
+5. AI 服务完整测试 213 条全部通过。
+6. Go 后端全量测试通过。
+7. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是离线验收门槛，不改变解析算法本身。
+2. 表格块仍以 `rows` 和来源 metadata 为主，尚未要求 PDF 单元格级 bbox 全覆盖；bbox 覆盖应跟 OCR/版面 Provider 样本一起继续推进。

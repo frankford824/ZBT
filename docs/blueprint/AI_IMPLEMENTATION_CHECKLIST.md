@@ -89,7 +89,8 @@
 6. 回归评测：
    - 使用 `docs/ex/工程1` 的 PDF、docx、xlsx 样本建立 golden JSON。
    - 新增脚本输出字段命中率：项目名、预算、截止日、资格要求、评分项、无效标条款、附件清单。
-   - 当前已落地：`docs/sample_docs/golden/工程1.parse.json` 和 `python -m app.evaluation.tender_parse_eval --golden ...`，当前样本 63/63 通过。
+   - 当前已落地：`docs/sample_docs/golden/工程1.parse.json` 和 `python -m app.evaluation.tender_parse_eval --golden ...`，当前样本 87/87 通过。
+   - 当前已落地：样本评测会检查 `table_blocks.required_sources`、`min_total_rows`、`min_blocks_with_rows` 和表格块关键单元格，防止 PDF/DOCX/XLSX 表格退化为普通文本。
    - P0 验收门槛：电子文本关键字段准确率不低于 85%；扫描/OCR 字段必须带置信度和人工复核标记。
 
 ## P0：OCR Provider 和版面证据

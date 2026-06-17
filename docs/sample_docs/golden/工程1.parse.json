@@ -10,6 +10,16 @@
       "min_chunks": 35,
       "min_pages": 80,
       "min_table_blocks": 30,
+      "table_blocks": {
+        "required_sources": ["pdf"],
+        "min_total_rows": 180,
+        "min_blocks_with_rows": 30,
+        "must_contain": [
+          "评审办法",
+          "最高限价",
+          "响应文件格式"
+        ]
+      },
       "ocr_required": false,
       "text_contains": [
         "桥梁检查劳务合作项目",
@@ -25,6 +35,16 @@
       "parser": "python-docx",
       "min_chunks": 50,
       "min_table_blocks": 25,
+      "table_blocks": {
+        "required_sources": ["docx"],
+        "min_total_rows": 200,
+        "min_blocks_with_rows": 25,
+        "must_contain": [
+          "中级养护技术员",
+          "最高单价",
+          "综合单价"
+        ]
+      },
       "text_contains": [
         "不参与围标串标承诺书",
         "响应函",
@@ -39,6 +59,16 @@
       "min_chunks": 45,
       "min_pages": 300,
       "min_table_blocks": 25,
+      "table_blocks": {
+        "required_sources": ["pdf"],
+        "min_total_rows": 180,
+        "min_blocks_with_rows": 25,
+        "must_contain": [
+          "中级养护技术员",
+          "最高单价",
+          "综合单价"
+        ]
+      },
       "ocr_required": false,
       "text_contains": [
         "保通建设工程有限公司",
@@ -53,6 +83,16 @@
       "parser": "openpyxl",
       "min_chunks": 1,
       "min_table_blocks": 1,
+      "table_blocks": {
+        "required_sources": ["xlsx"],
+        "min_total_rows": 8,
+        "min_blocks_with_rows": 1,
+        "must_contain": [
+          "中级养护技术员",
+          "最高单价",
+          "综合单价"
+        ]
+      },
       "text_contains": [
         "中级养护技术员",
         "最高单价",
