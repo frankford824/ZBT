@@ -351,7 +351,15 @@ def _extract_pdf_tables(
                     if any(values):
                         cleaned_rows.append(values)
                 if cleaned_rows:
-                    table_payload: dict[str, object] = {"page": page_index, "index": table_index, "rows": cleaned_rows}
+                    table_payload: dict[str, object] = {
+                        "page": page_index,
+                        "index": table_index,
+                        "rows": cleaned_rows,
+                        "extraction": "pymupdf",
+                    }
+                    bbox = _normalized_bbox(getattr(table, "bbox", None))
+                    if bbox:
+                        table_payload["bbox"] = bbox
                     if len(rows) > max_rows:
                         table_payload["truncated_after_row_limit"] = True
                         table_payload["row_limit"] = max_rows
@@ -416,13 +424,23 @@ def _table_block(source: str, table: dict[str, object]) -> dict[str, object]:
     if table.get("truncated_after_row_limit"):
         block["truncated_after_row_limit"] = True
         block["row_limit"] = _metadata_int(table.get("row_limit"), 0)
-    bbox = table.get("bbox")
-    if isinstance(bbox, list):
+    bbox = _normalized_bbox(table.get("bbox"))
+    if bbox:
         block["bbox"] = bbox
     confidence = _metadata_float(table.get("confidence"))
     if confidence is not None:
         block["confidence"] = confidence
     return block
+
+
+def _normalized_bbox(value: object) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        bbox = [round(float(item), 2) for item in value]
+    except (TypeError, ValueError):
+        return None
+    return bbox if _bbox_area(bbox) > 0 else None
 
 
 def _normalize_table_rows(rows: object) -> list[list[str]]:

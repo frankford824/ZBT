@@ -53,6 +53,34 @@ def test_table_block_md_table_preserves_empty_cells_and_escapes_pipes() -> None:
     assert block["md_table"] == "| 项目 |  | 备注 |\n| --- | --- | --- |\n| 设备 | 1200 | 含\\|税 |"
 
 
+def test_pdf_table_extraction_keeps_table_bbox() -> None:
+    class FakeTable:
+        bbox = (1.123, 2.0, 30.987, 40.0)
+
+        def extract(self) -> list[list[str]]:
+            return [["Item", "Amount"], ["Equipment", "1200"]]
+
+    class FakeFoundTables:
+        tables = [FakeTable()]
+
+    class FakeTablePage:
+        def find_tables(self) -> FakeFoundTables:
+            return FakeFoundTables()
+
+    tables, errors = _extract_pdf_tables(FakeTablePage(), 3, "")
+
+    assert errors == []
+    assert tables == [
+        {
+            "page": 3,
+            "index": 1,
+            "rows": [["Item", "Amount"], ["Equipment", "1200"]],
+            "extraction": "pymupdf",
+            "bbox": [1.12, 2.0, 30.99, 40.0],
+        }
+    ]
+
+
 def test_pdf_table_extraction_error_keeps_heuristic_tables_without_sensitive_details() -> None:
     class BrokenTablePage:
         def find_tables(self) -> object:

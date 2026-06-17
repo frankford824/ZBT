@@ -2598,3 +2598,50 @@ git diff --check
 
 1. `md_table` 目前由行数据生成或保留 Provider 原文，不额外推断合并单元格语义。
 2. 单元格级 bbox、跨页表格合并和复杂表头层级仍需跟版面/OCR Provider 样本继续推进。
+
+## Loop-40 / PDF 表格 bbox 版面证据验收 - 2026-06-17
+
+### 本轮目标
+
+1. 继续推进 OCR/版面证据清单，将 PDF 表格的 table-level bbox 从底层能力提升为解析产物。
+2. 让工程1真实样本能够约束 PDF 表格 bbox 数量，避免表格版面证据回退。
+3. 保持 DOCX/XLSX 等无页面坐标来源的表格不被强行要求 bbox。
+
+### 代码交付
+
+1. `document_parser.py` 在 PyMuPDF `page.find_tables()` 路径中读取 `table.bbox`，归一化为四元数并写入 `table_blocks[].bbox`。
+2. `_table_block()` 统一校验 bbox 有效性，过滤空面积或非法 bbox。
+3. `tender_parse_eval.py` 新增 `table_blocks.min_blocks_with_bbox` 检查。
+4. `test_document_parser.py` 新增 fake PyMuPDF table 测试，确认 bbox 保留和四舍五入。
+5. `test_tender_parse_eval.py` 新增 bbox 缺失失败检查。
+6. `docs/sample_docs/golden/工程1.parse.json` 对采购 PDF 和盖章投标 PDF 增加 `min_blocks_with_bbox`。
+7. `AI_IMPLEMENTATION_CHECKLIST.md` 与 `SAMPLE_DOCS_EVALUATION.md` 更新当前样本验收为 101/101。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd ai-service && .venv/bin/ruff check app/pipelines/parse/document_parser.py app/evaluation/tender_parse_eval.py app/tests/test_document_parser.py app/tests/test_tender_parse_eval.py
+cd ai-service && .venv/bin/python -m compileall -q app/pipelines/parse/document_parser.py app/evaluation/tender_parse_eval.py app/tests/test_document_parser.py app/tests/test_tender_parse_eval.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 文档解析与招标解析评测专项测试 48 条全部通过。
+2. 工程1 真实样本解析评测 101/101 通过。
+3. Ruff 针对本轮 Python 文件检查通过。
+4. Python compileall 通过。
+5. AI 服务完整测试 215 条全部通过。
+6. Go 后端全量测试通过。
+7. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮落地 table-level bbox；单元格级 bbox 尚未实现。
+2. 启发式 PDF 表格没有可靠版面区域，不强行生成 bbox。
