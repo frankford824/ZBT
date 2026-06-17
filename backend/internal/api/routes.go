@@ -2124,7 +2124,16 @@ func routeInfos() []routeInfo {
 }
 
 func isDynamicModuleRoute(spec routeSpec) bool {
-	return spec.Method == http.MethodGet && spec.Path == "/ai-tasks/:taskId"
+	switch spec.Path {
+	case "/ai-tasks/:taskId",
+		"/files/presign-upload",
+		"/files/:id/confirm",
+		"/files/:id/download-url",
+		"/files/:id/preview-url":
+		return true
+	default:
+		return false
+	}
 }
 
 func routeKey(spec routeSpec) string {

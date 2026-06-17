@@ -317,16 +317,42 @@ func TestAITaskAccessModuleMapsResourceTypes(t *testing.T) {
 }
 
 func TestRouteInfosMarksAITaskRouteDynamic(t *testing.T) {
-	routes := routeInfos()
-	for _, route := range routes {
-		if route.Method == http.MethodGet && route.Path == "/ai-tasks/:taskId" {
-			if !route.DynamicModule {
-				t.Fatal("expected AI task route metadata to mark dynamic module authorization")
-			}
-			return
+	route, ok := routeInfoByKey(http.MethodGet, "/ai-tasks/:taskId")
+	if !ok {
+		t.Fatal("expected AI task route metadata to be present")
+	}
+	if !route.DynamicModule {
+		t.Fatal("expected AI task route metadata to mark dynamic module authorization")
+	}
+}
+
+func TestRouteInfosMarksFileRoutesDynamic(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/files/presign-upload"},
+		{method: http.MethodPost, path: "/files/:id/confirm"},
+		{method: http.MethodGet, path: "/files/:id/download-url"},
+		{method: http.MethodGet, path: "/files/:id/preview-url"},
+	} {
+		route, ok := routeInfoByKey(tc.method, tc.path)
+		if !ok {
+			t.Fatalf("expected file route metadata to be present for %s %s", tc.method, tc.path)
+		}
+		if !route.DynamicModule {
+			t.Fatalf("expected file route metadata to mark dynamic module authorization for %s %s", tc.method, tc.path)
 		}
 	}
-	t.Fatal("expected AI task route metadata to be present")
+}
+
+func routeInfoByKey(method, path string) (routeInfo, bool) {
+	for _, route := range routeInfos() {
+		if route.Method == method && route.Path == path {
+			return route, true
+		}
+	}
+	return routeInfo{}, false
 }
 
 func TestRequireAITaskAccessUsesResourceModule(t *testing.T) {
