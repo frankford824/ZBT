@@ -31,6 +31,7 @@
 - `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements` 只读接口。
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”筛选。
+- 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。
 - `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 103 项检查。
 - `backend/internal/db/migrations/00032_bid_pipeline_gates.sql` 已新增 `bid_pipeline_gates` RLS 表。
 - `backend/internal/platform/bid/store.go` 已在上传、解析、解析回调、人工确认、大纲生成、整标生成和导出路径维护阶段闸门；`GenerateOutline` 会检查 `interpret=passed`，`GenerateBid` 会检查 `plan=passed`，`CreateExport` 会检查 `generate=passed` 和 `check=passed`。旧的已确认解析、大纲、已完成章节内容和已完成合规检查会按真实业务状态自动补齐闸门。
@@ -142,13 +143,13 @@
    - 短期：存入 `tender_parse_results.structured_result.requirement_items`。
    - 中期：新增 `bid_requirement_items` 表，支持章节覆盖状态、人工确认、合规检查引用。
    - 独立表字段对齐 AutoRFP 的 `Question -> Answer -> Source` 思路：`external_id` 对应 `referenceId`，`requirement` 对应问题文本，`source_ref` 对应来源详情，`coverage_status` 对应回答覆盖状态。
-   - 当前已落地：短期 JSON 存储路径、独立 `bid_requirement_items` 表、解析回调同步、人工确认同步、只读查询接口和前端筛选。
+   - 当前已落地：短期 JSON 存储路径、独立 `bid_requirement_items` 表、解析回调同步、人工确认同步、生成覆盖回写、只读查询接口和前端筛选。
 
 3. 生成输入：
    - 大纲生成按 requirement_items 生成章节覆盖计划。
    - 章节生成 prompt 必须传入本章负责覆盖的 requirement_items。
    - 输出 `self_check` 必须逐条返回 `requirement_id`、`satisfied`、`evidence`、`source_refs`。
-   - 当前已落地：Go 从当前解析结果按章节标题提取 `requirement_refs`，单章重新生成、章节 AI 动作和整标逐章生成都会传给 Python；OpenAI-compatible Provider 提示词要求 `self_check.requirement_coverage`，模型未返回时补需复核覆盖矩阵；Go 回调会把 `self_check` 和 `requirement_coverage` 写入章节版本元数据，前端编辑器显示响应覆盖。
+   - 当前已落地：Go 从当前解析结果按章节标题提取 `requirement_refs`，单章重新生成、章节 AI 动作和整标逐章生成都会传给 Python；OpenAI-compatible Provider 提示词要求 `self_check.requirement_coverage`，模型未返回时补需复核覆盖矩阵；Go 回调会把 `self_check` 和 `requirement_coverage` 写入章节版本元数据，并同步回写要求项覆盖状态，前端编辑器和“响应要点”显示响应覆盖。
 
 4. 来源引用：
    - 模型输出事实性段落必须带 `{{ref:chunk_id}}` 或结构化 `source_refs`。

@@ -2784,6 +2784,9 @@ func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID 
 	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, changeReason, chapterVersionModelMetadata(generation), generation.TokenUsage); err != nil {
 		return err
 	}
+	if err := syncRequirementCoverageStatuses(ctx, tx, tenantID, updated.BidDocumentID, updated.ID, generation.SelfCheck); err != nil {
+		return err
+	}
 	return replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID)
 }
 
@@ -4197,6 +4200,117 @@ func requirementCoverageFromModelMetadata(metadata map[string]any) []any {
 	}
 	selfCheck, _ := metadata["self_check"].(map[string]any)
 	return anySlice(selfCheck["requirement_coverage"])
+}
+
+func syncRequirementCoverageStatuses(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	chapterID string,
+	selfCheck map[string]any,
+) error {
+	coverageItems := anySlice(selfCheck["requirement_coverage"])
+	for _, raw := range coverageItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		requirementID := requirementCoverageID(item)
+		if requirementID == "" {
+			continue
+		}
+		status, needsReview, ok := requirementCoverageStatus(item)
+		if !ok {
+			continue
+		}
+		coverageMetadata := map[string]any{
+			"requirement_id": requirementID,
+			"chapter_id":     chapterID,
+			"status":         status,
+			"needs_review":   needsReview,
+		}
+		if evidence := strings.TrimSpace(asString(item["evidence"])); evidence != "" {
+			coverageMetadata["evidence"] = evidence
+		}
+		if sourceRefs := anySlice(item["source_refs"]); len(sourceRefs) > 0 {
+			coverageMetadata["source_refs"] = sourceRefs
+		} else if sourceRef, ok := item["source_ref"].(map[string]any); ok && len(sourceRef) > 0 {
+			coverageMetadata["source_refs"] = []any{sourceRef}
+		}
+		metadataJSON, _ := json.Marshal(coverageMetadata)
+		if _, err := tx.Exec(ctx, `
+			update bid_requirement_items
+			set coverage_status = $4,
+				needs_review = $5,
+				metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object('latest_coverage', $6::jsonb),
+				updated_at = now()
+			where tenant_id = $1
+				and bid_document_id = $2
+				and (external_id = $3 or id::text = $3)
+		`, tenantID, bidID, requirementID, status, needsReview, metadataJSON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requirementCoverageID(item map[string]any) string {
+	for _, key := range []string{"requirement_id", "requirementId", "id", "external_id", "reference_id", "referenceId"} {
+		if value := strings.TrimSpace(asString(item[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func requirementCoverageStatus(item map[string]any) (string, bool, bool) {
+	needsReview := asBool(item["needs_review"])
+	status := normalizeRequirementCoverageStatus(asString(item["status"]))
+	if status == "" {
+		status = normalizeRequirementCoverageStatus(asString(item["coverage_status"]))
+	}
+	if needsReview {
+		return "needs_review", true, true
+	}
+	if status != "" {
+		if status == "covered" {
+			return "covered", false, true
+		}
+		if status == "needs_review" {
+			return "needs_review", true, true
+		}
+		return status, false, true
+	}
+	switch strings.ToLower(strings.TrimSpace(asString(item["status"]))) {
+	case "fail", "failed", "not_covered", "unsatisfied":
+		return "needs_review", true, true
+	}
+	if satisfied, ok := boolValue(item["satisfied"]); ok {
+		if satisfied {
+			return "covered", false, true
+		}
+		return "needs_review", true, true
+	}
+	return "", false, false
+}
+
+func boolValue(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes":
+			return true, true
+		case "false", "0", "no":
+			return false, true
+		default:
+			return false, false
+		}
+	default:
+		return false, false
+	}
 }
 
 func anySlice(value any) []any {

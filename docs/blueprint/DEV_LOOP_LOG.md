@@ -2782,3 +2782,46 @@ git diff --check
 
 1. 本轮仍属于 OCR 响应归一化加固，没有连接真实外部 OCR 服务做端到端样本。
 2. 去重身份保守使用结构化内容和 bbox，不尝试语义合并相似表格。
+
+## Loop-44 / requirement_coverage 回写响应矩阵 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式 `Requirement -> Coverage -> Source` 运行态闭环。
+2. 章节生成、整标逐章生成和章节 AI 自检返回 `self_check.requirement_coverage` 后，要求表不能只在离线导出中看到覆盖结果。
+3. 保持招标原文来源和响应侧来源语义分离，避免覆盖解析阶段的 `source_ref`。
+
+### 代码交付
+
+1. `applyChapterGeneration()` 在同一事务内调用 `syncRequirementCoverageStatuses()`。
+2. 新增 `syncRequirementCoverageStatuses()`，按 `requirement_id/id/external_id/reference_id/referenceId` 匹配 `bid_requirement_items.external_id` 或数据库 id。
+3. 覆盖状态映射：`covered/satisfied/pass` 且不需复核写入 `covered`；`needs_review`、`satisfied=false`、`failed/not_covered/unsatisfied` 写入 `needs_review`。
+4. 响应侧证据写入 `bid_requirement_items.metadata.latest_coverage`，包含 `requirement_id`、`chapter_id`、`status`、`needs_review`、`evidence` 和 `source_refs`；不覆盖招标解析阶段的 `source_ref`。
+5. `store_test.go` 新增覆盖状态映射和 AutoRFP reference 字段兼容测试。
+6. `AI_IMPLEMENTATION_CHECKLIST.md`、`AI_PIPELINE.md`、`API_SPEC.md` 更新运行态回写说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w backend/internal/platform/bid/store.go backend/internal/platform/bid/store_test.go
+cd backend && go test ./internal/platform/bid
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+git diff --check
+```
+
+结果：
+
+1. Go bid 包测试通过。
+2. Go 后端全量测试通过。
+3. AI 服务完整测试 217 条全部通过。
+4. 工程1 真实样本解析评测 103/103 通过。
+5. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮回写要求项覆盖状态，但不新增人工编辑覆盖状态接口；人工确认/调整仍沿用后续产品流程。
+2. 一个要求可能被多章覆盖时，当前以最新生成回调为准写入 `metadata.latest_coverage`；完整历史仍保留在各章节版本 `model_metadata.requirement_coverage` 中。

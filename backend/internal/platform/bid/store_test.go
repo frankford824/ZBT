@@ -442,6 +442,69 @@ func TestChapterVersionModelMetadataCarriesSelfCheckCoverage(t *testing.T) {
 	}
 }
 
+func TestRequirementCoverageStatusMapsModelResults(t *testing.T) {
+	for name, tc := range map[string]struct {
+		item        map[string]any
+		wantStatus  string
+		wantReview  bool
+		wantUpdated bool
+	}{
+		"covered status": {
+			item:        map[string]any{"status": "covered"},
+			wantStatus:  "covered",
+			wantUpdated: true,
+		},
+		"satisfied bool": {
+			item:        map[string]any{"satisfied": true},
+			wantStatus:  "covered",
+			wantUpdated: true,
+		},
+		"needs review wins": {
+			item:        map[string]any{"status": "covered", "needs_review": true},
+			wantStatus:  "needs_review",
+			wantReview:  true,
+			wantUpdated: true,
+		},
+		"unsatisfied becomes review": {
+			item:        map[string]any{"satisfied": false},
+			wantStatus:  "needs_review",
+			wantReview:  true,
+			wantUpdated: true,
+		},
+		"failed status becomes review": {
+			item:        map[string]any{"status": "not_covered"},
+			wantStatus:  "needs_review",
+			wantReview:  true,
+			wantUpdated: true,
+		},
+		"unknown is ignored": {
+			item: map[string]any{"evidence": "模型未给状态"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			status, needsReview, updated := requirementCoverageStatus(tc.item)
+			if status != tc.wantStatus || needsReview != tc.wantReview || updated != tc.wantUpdated {
+				t.Fatalf("unexpected mapping: status=%q needsReview=%v updated=%v", status, needsReview, updated)
+			}
+		})
+	}
+}
+
+func TestRequirementCoverageIDAcceptsAutoRFPReferenceFields(t *testing.T) {
+	for _, item := range []map[string]any{
+		{"requirement_id": "evaluation-001"},
+		{"requirementId": "evaluation-001"},
+		{"external_id": "evaluation-001"},
+		{"reference_id": "evaluation-001"},
+		{"referenceId": "evaluation-001"},
+		{"id": "evaluation-001"},
+	} {
+		if got := requirementCoverageID(item); got != "evaluation-001" {
+			t.Fatalf("expected coverage id, got %q from %#v", got, item)
+		}
+	}
+}
+
 func TestBuildGenerationCoverageSpecUsesEvaluatorContract(t *testing.T) {
 	score := 12.5
 	coverage := []any{
