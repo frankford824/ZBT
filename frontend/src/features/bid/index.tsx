@@ -1334,7 +1334,11 @@ export function BidEditorPage() {
   const [regenerateTaskId, setRegenerateTaskId] = useState('')
   const regenerateTaskNoticeRef = useRef('')
   const [generationSnapshot, setGenerationSnapshot] = useState<BidGenerationSnapshotDTO | null>(null)
-  const [generationStreamStatus, setGenerationStreamStatus] = useState<'connecting' | 'open' | 'error'>('connecting')
+  const [generationStreamState, setGenerationStreamState] = useState<{
+    bidId: string
+    status: GenerationStreamStatus
+  }>({ bidId: '', status: 'connecting' })
+  const generationStreamStatus = generationStreamState.bidId === bidId ? generationStreamState.status : 'connecting'
   const [diffOpen, setDiffOpen] = useState(false)
   const partParam = searchParams.get('part') ?? ''
   const chapterParam = searchParams.get('chapter') ?? ''
@@ -1422,7 +1426,7 @@ export function BidEditorPage() {
   useEffect(() => {
     if (!bidId) return
     return openSse<BidGenerationSnapshotDTO>(`/bids/${bidId}/generation/stream`, {
-      onOpen: () => setGenerationStreamStatus('open'),
+      onOpen: () => setGenerationStreamState({ bidId, status: 'open' }),
       onMessage: (snapshot, event) => {
         if (event !== 'generation') return
         setGenerationSnapshot(snapshot)
@@ -1431,9 +1435,12 @@ export function BidEditorPage() {
           void queryClient.invalidateQueries({ queryKey: ['chapter-versions', currentChapter.id] })
         }
       },
-      onError: () => setGenerationStreamStatus('error'),
+      onError: (error) => {
+        setGenerationStreamState({ bidId, status: 'error' })
+        message.error(error.message)
+      },
     })
-  }, [bidId, queryClient, currentChapter?.id])
+  }, [bidId, queryClient, currentChapter?.id, message])
 
   const invalidateChapterState = async () => {
     await Promise.all([
@@ -1775,7 +1782,9 @@ const changeReasonLabels: Record<string, string> = {
   accepted: '采纳定稿',
 }
 
-const streamStatusLabels: Record<'connecting' | 'open' | 'error', string> = {
+type GenerationStreamStatus = 'connecting' | 'open' | 'error'
+
+const streamStatusLabels: Record<GenerationStreamStatus, string> = {
   connecting: '同步中…',
   open: '同步正常',
   error: '同步中断，刷新页面可恢复',

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { clearStoredSession, getStoredSession, storeSession } from '../../shared/auth/session'
+import { clearStoredSession, getStoredSession, storeSession, subscribeStoredSession } from '../../shared/auth/session'
 
 export type ModulePermission = 'none' | 'read' | 'full'
 
@@ -76,22 +76,17 @@ function toSessionState(payload: LoginSessionPayload): Partial<SessionState> {
 }
 
 const storedSession = readStoredSession()
+const emptySessionState = {
+  isAuthenticated: false,
+  token: null,
+  user: { id: '', email: '', name: '', role: '' },
+  tenant: { id: '', name: '' },
+  permissions: {},
+}
 
 export const useSessionStore = create<SessionState>((set) => ({
   collapsed: localStorage.getItem('zbt.sidebar.collapsed') === 'true',
-  isAuthenticated: false,
-  token: null,
-  user: {
-    id: '',
-    email: '',
-    name: '',
-    role: '',
-  },
-  tenant: {
-    id: '',
-    name: '',
-  },
-  permissions: {},
+  ...emptySessionState,
   ...storedSession,
   toggleCollapsed: () =>
     set((state) => {
@@ -112,12 +107,10 @@ export const useSessionStore = create<SessionState>((set) => ({
   },
   logout: () => {
     clearStoredSession()
-    set({
-      isAuthenticated: false,
-      token: null,
-      user: { id: '', email: '', name: '', role: '' },
-      tenant: { id: '', name: '' },
-      permissions: {},
-    })
+    set(emptySessionState)
   },
 }))
+
+subscribeStoredSession((payload) => {
+  useSessionStore.setState(payload ? toSessionState(payload) : emptySessionState)
+})

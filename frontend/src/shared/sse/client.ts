@@ -16,6 +16,7 @@ export function openSse<T>(path: string, handler: SseHandler<T>) {
 }
 
 async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSignal) {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
   try {
     const response = await fetch(sseUrl(path), {
       headers: await sseHeaders(),
@@ -29,7 +30,7 @@ async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSig
       throw new Error('实时更新暂时不可用，请稍后重试')
     }
     handler.onOpen?.()
-    const reader = response.body.getReader()
+    reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
     while (!signal.aborted) {
@@ -41,6 +42,10 @@ async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSig
       for (const part of parts) {
         const parsed = parseSse(part)
         if (!parsed) continue
+        if (parsed.event === 'error') {
+          handler.onError?.(ssePayloadError(parsed.data))
+          return
+        }
         handler.onMessage(JSON.parse(parsed.data) as T, parsed.event)
       }
     }
@@ -48,12 +53,29 @@ async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSig
     if (!signal.aborted) {
       handler.onError?.(toUserFacingSseError(error))
     }
+  } finally {
+    reader?.releaseLock()
   }
 }
 
 function toUserFacingSseError(error: unknown) {
   if (error instanceof Error && /[\u4e00-\u9fff]/.test(error.message)) {
     return error
+  }
+  return new Error('实时更新暂时不可用，请稍后重试')
+}
+
+function ssePayloadError(data: string) {
+  try {
+    const parsed = JSON.parse(data) as { error?: unknown; message?: unknown }
+    if (typeof parsed.message === 'string' && /[\u4e00-\u9fff]/.test(parsed.message)) {
+      return new Error(parsed.message)
+    }
+    if (typeof parsed.error === 'string' && /[\u4e00-\u9fff]/.test(parsed.error)) {
+      return new Error(parsed.error)
+    }
+  } catch {
+    return new Error('实时更新暂时不可用，请稍后重试')
   }
   return new Error('实时更新暂时不可用，请稍后重试')
 }

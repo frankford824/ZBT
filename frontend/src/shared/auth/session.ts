@@ -4,6 +4,7 @@ export const sessionStorageKey = 'zbt.session'
 export const sessionRefreshLeewayMs = 2 * 60 * 1000
 
 let loginRedirectInFlight = false
+const sessionListeners = new Set<(payload: LoginSessionPayload | null) => void>()
 
 export function getStoredSession() {
   const raw = localStorage.getItem(sessionStorageKey)
@@ -11,7 +12,7 @@ export function getStoredSession() {
   try {
     const parsed = JSON.parse(raw) as Partial<LoginSessionPayload>
     if (!isUsableSessionPayload(parsed) || isSessionExpired(parsed)) {
-      localStorage.removeItem(sessionStorageKey)
+      removeStoredSession()
       return null
     }
     const normalized = normalizeSession(parsed)
@@ -20,7 +21,7 @@ export function getStoredSession() {
     }
     return normalized
   } catch {
-    localStorage.removeItem(sessionStorageKey)
+    removeStoredSession()
     return null
   }
 }
@@ -28,11 +29,20 @@ export function getStoredSession() {
 export function storeSession(payload: LoginSessionPayload) {
   const normalized = normalizeSession(payload)
   localStorage.setItem(sessionStorageKey, JSON.stringify(normalized))
+  notifySessionListeners(normalized)
   return normalized
 }
 
 export function clearStoredSession() {
-  localStorage.removeItem(sessionStorageKey)
+  removeStoredSession()
+}
+
+export function subscribeStoredSession(listener: (payload: LoginSessionPayload | null) => void) {
+  sessionListeners.add(listener)
+  ensureStorageListener()
+  return () => {
+    sessionListeners.delete(listener)
+  }
 }
 
 export function expireSessionAndRedirect() {
@@ -129,6 +139,29 @@ function containsUnsafePathCharacter(path: string) {
     if (code <= 31 || code === 127 || path[index] === '\\') return true
   }
   return false
+}
+
+function removeStoredSession() {
+  localStorage.removeItem(sessionStorageKey)
+  notifySessionListeners(null)
+}
+
+function notifySessionListeners(payload: LoginSessionPayload | null) {
+  for (const listener of sessionListeners) {
+    listener(payload)
+  }
+}
+
+let storageListenerReady = false
+
+function ensureStorageListener() {
+  if (storageListenerReady || typeof window === 'undefined') return
+  window.addEventListener('storage', (event) => {
+    if (event.key === sessionStorageKey) {
+      notifySessionListeners(getStoredSession())
+    }
+  })
+  storageListenerReady = true
 }
 
 function isUsableSessionPayload(value: Partial<LoginSessionPayload>): value is LoginSessionPayload {
