@@ -71,6 +71,7 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
             ocr_result = _try_http_ocr(payload, content)
             if ocr_result["status"] == "done":
                 text = str(ocr_result.get("text") or "")
+                _merge_ocr_parse_metadata(metadata, ocr_result)
                 ocr_result = {key: value for key, value in ocr_result.items() if key != "text"}
             metadata["ocr"] = ocr_result
             metadata["ocr_required"] = not bool(text.strip())
@@ -97,6 +98,8 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
     elif content_type.startswith("image/") or suffix in IMAGE_SUFFIXES:
         ocr_result = _try_http_ocr(payload, content)
         text = str(ocr_result.get("text") or "") if ocr_result["status"] == "done" else ""
+        if ocr_result["status"] == "done":
+            _merge_ocr_parse_metadata(metadata, ocr_result)
         metadata["ocr"] = {key: value for key, value in ocr_result.items() if key != "text"}
         metadata["ocr_required"] = not bool(text.strip())
         page_count = None
@@ -125,6 +128,18 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
         chunks=chunks,
         metadata=metadata,
     )
+
+
+def _merge_ocr_parse_metadata(metadata: dict[str, object], ocr_result: dict[str, object]) -> None:
+    table_blocks = ocr_result.get("table_blocks")
+    if isinstance(table_blocks, list) and table_blocks:
+        metadata["table_blocks"] = table_blocks[:50]
+        metadata["table_block_count"] = len(table_blocks)
+        metadata["table_count"] = len(table_blocks)
+    layout_blocks = ocr_result.get("layout_blocks")
+    if isinstance(layout_blocks, list) and layout_blocks:
+        metadata["layout_blocks"] = layout_blocks[:200]
+        metadata["layout_block_count"] = len(layout_blocks)
 
 
 def _parse_text(content: bytes) -> str:
@@ -203,8 +218,13 @@ def _pdf_ocr_required(text: str, page_ocr_results: list[dict[str, object]]) -> b
 
 
 def _try_pdf_page_ocr(payload: KnowledgeProcessRequest, page: fitz.Page, page_index: int) -> dict[str, object]:
-    if not os.getenv("OCR_HTTP_ENDPOINT", "").strip():
-        return {"status": "provider_not_configured", "provider": _ocr_provider_name()}
+    config = _ocr_provider_config()
+    if not config.endpoint:
+        return {
+            "status": "provider_not_configured",
+            "provider": config.provider,
+            "endpoint_env": config.endpoint_env,
+        }
     try:
         pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
         page_image = pixmap.tobytes("png")
@@ -400,33 +420,61 @@ def _metadata_float(value: object) -> float | None:
 
 
 def _normalize_ocr_result(provider: str, result: dict[str, object]) -> dict[str, object]:
-    provider_metadata = result.get("provider_metadata")
+    payload = _unwrap_ocr_payload(result)
+    provider_metadata = payload.get("provider_metadata")
     if not isinstance(provider_metadata, dict):
-        provider_metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    pages = _normalize_ocr_pages(result.get("pages"))
-    text = str(result.get("text") or "").strip()
+        provider_metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    pages = _normalize_ocr_pages(_first_list(payload, ("pages", "page_results", "page_info", "results")))
+    markdown = _first_text(payload, ("markdown", "md", "md_content", "content"))
+    text = _first_text(payload, ("text", "plain_text", "full_text"))
+    if not text:
+        text = markdown
     if not text and pages:
         text = "\n\n".join(str(page.get("text") or "") for page in pages).strip()
-    blocks = _normalize_ocr_blocks(result.get("blocks"), pages)
-    raw_tables = result.get("tables")
-    tables = [
-        _table_block("ocr", table)
-        for table in raw_tables
-        if isinstance(table, dict)
-    ] if isinstance(raw_tables, list) else []
-    confidence = _ocr_confidence(result, pages)
+    blocks = _normalize_ocr_blocks(_first_list(payload, ("blocks", "layout_blocks", "paragraphs")), pages)
+    layout_blocks = _normalize_ocr_layout_blocks(_first_list(payload, ("layout_blocks", "layouts", "layout")), pages)
+    raw_tables = _first_list(payload, ("tables", "table_blocks"))
+    tables = [_table_block("ocr", table) for table in raw_tables if isinstance(table, dict)]
+    confidence = _ocr_confidence(payload, pages)
     return {
         "status": "done" if text.strip() else "empty_result",
         "provider": provider,
         "text": text,
+        "markdown": markdown,
         "pages": pages,
         "blocks": blocks,
+        "layout_blocks": layout_blocks,
+        "layout_block_count": len(layout_blocks),
         "tables": tables,
         "table_blocks": tables,
         "confidence": confidence,
         "provider_metadata": provider_metadata,
         "metadata": provider_metadata,
     }
+
+
+def _unwrap_ocr_payload(result: dict[str, object]) -> dict[str, object]:
+    for key in ("data", "result", "output"):
+        nested = result.get(key)
+        if isinstance(nested, dict):
+            return {**result, **nested}
+    return result
+
+
+def _first_list(payload: dict[str, object], keys: tuple[str, ...]) -> list[object]:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _first_text(payload: dict[str, object], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _normalize_ocr_pages(raw_pages: object) -> list[dict[str, object]]:
@@ -436,12 +484,15 @@ def _normalize_ocr_pages(raw_pages: object) -> list[dict[str, object]]:
     for index, item in enumerate(raw_pages, start=1):
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "")
+        text = _first_text(item, ("text", "plain_text", "markdown", "md", "content"))
         page: dict[str, object] = {
             "page": _metadata_int(item.get("page") or item.get("page_index"), index),
             "text": text[:2000],
             "text_char_count": len(text),
         }
+        markdown = _first_text(item, ("markdown", "md", "md_content"))
+        if markdown:
+            page["markdown"] = markdown[:4000]
         if len(text) > 2000:
             page["text_truncated"] = True
         confidence = _metadata_float(item.get("confidence"))
@@ -451,16 +502,11 @@ def _normalize_ocr_pages(raw_pages: object) -> list[dict[str, object]]:
         if blocks:
             page["blocks"] = blocks[:100]
             page["block_count"] = len(blocks)
-        raw_tables = item.get("tables")
-        if isinstance(raw_tables, list):
-            tables = [
-                _table_block("ocr", {**table, "page": page["page"]})
-                for table in raw_tables
-                if isinstance(table, dict)
-            ]
-            if tables:
-                page["tables"] = tables[:30]
-                page["table_count"] = len(tables)
+        raw_tables = _first_list(item, ("tables", "table_blocks"))
+        tables = [_table_block("ocr", {**table, "page": page["page"]}) for table in raw_tables if isinstance(table, dict)]
+        if tables:
+            page["tables"] = tables[:30]
+            page["table_count"] = len(tables)
         pages.append(page)
     return pages
 
@@ -502,6 +548,48 @@ def _normalize_ocr_blocks(raw_blocks: object, pages: list[dict[str, object]]) ->
                     }
                 )
     return blocks
+
+
+def _normalize_ocr_layout_blocks(raw_layout: object, pages: list[dict[str, object]]) -> list[dict[str, object]]:
+    blocks: list[dict[str, object]] = []
+    if isinstance(raw_layout, list):
+        for item in raw_layout[:500]:
+            if not isinstance(item, dict):
+                continue
+            block = _normalize_layout_block(item)
+            if block:
+                blocks.append(block)
+    if not blocks:
+        for page in pages:
+            for item in page.get("blocks", []):
+                if isinstance(item, dict):
+                    block = _normalize_layout_block({**item, "page": page.get("page")})
+                    if block:
+                        blocks.append(block)
+    return blocks
+
+
+def _normalize_layout_block(item: dict[str, object]) -> dict[str, object] | None:
+    text = str(item.get("text") or "").strip()
+    bbox = item.get("bbox")
+    block_type = str(item.get("type") or item.get("category") or item.get("label") or "").strip()
+    if not text and not isinstance(bbox, list) and not block_type:
+        return None
+    block: dict[str, object] = {
+        "text": text[:1000],
+        "text_char_count": len(text),
+    }
+    page = _metadata_int(item.get("page") or item.get("page_index"), 0)
+    if page:
+        block["page"] = page
+    if block_type:
+        block["type"] = block_type
+    if isinstance(bbox, list):
+        block["bbox"] = bbox
+    confidence = _metadata_float(item.get("confidence") or item.get("score"))
+    if confidence is not None:
+        block["confidence"] = confidence
+    return block
 
 
 def _ocr_confidence(result: dict[str, object], pages: list[dict[str, object]]) -> float | None:

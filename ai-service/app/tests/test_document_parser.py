@@ -252,6 +252,89 @@ def test_mineru_ocr_provider_uses_specific_endpoint_key_and_mode(monkeypatch) ->
     }
 
 
+def test_mixed_pdf_page_ocr_uses_mineru_endpoint_without_generic_endpoint(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_urlopen(req, timeout):
+        calls.append({"url": req.full_url, "timeout": timeout, "body": json.loads(req.data.decode("utf-8"))})
+        return _FakeHTTPResponse(b'{"data":{"text":"MinerU page OCR text","confidence":0.93}}')
+
+    monkeypatch.setenv("OCR_PROVIDER", "mineru")
+    monkeypatch.setenv("MINERU_HTTP_ENDPOINT", "https://mineru.example.test/file_parse")
+    monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+    pdf = fitz.open()
+    first = pdf.new_page()
+    first.insert_text((72, 72), "selectable first page")
+    pdf.new_page()
+    content = pdf.tobytes()
+    pdf.close()
+
+    result = parse_document(_request("mixed.pdf"), content)
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert calls
+    assert calls[0]["url"] == "https://mineru.example.test/file_parse"
+    assert calls[0]["body"]["provider"] == "mineru"
+    assert result.metadata["ocr_required"] is False
+    assert result.metadata["ocr_page_count"] == 1
+    assert result.metadata["ocr_pages"][0]["provider"] == "mineru"
+    assert result.metadata["ocr_pages"][0]["provider_profile"]["endpoint_env"] == "MINERU_HTTP_ENDPOINT"
+    assert "MinerU page OCR text" in text
+
+
+def test_paddleocr_nested_response_normalizes_markdown_layout_and_tables(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
+    monkeypatch.setenv("PADDLEOCR_HTTP_ENDPOINT", "https://paddleocr.example.test/pp_structurev3")
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(
+            b"""
+            {
+              "data": {
+                "markdown": "# \xe6\xa0\x87\xe4\xb9\xa6\xe8\xaf\x86\xe5\x88\xab\\n\xe8\xaf\x84\xe5\x88\x86\xe8\xa1\xa8",
+                "layout_blocks": [
+                  {
+                    "page": 1,
+                    "type": "title",
+                    "text": "\xe6\xa0\x87\xe4\xb9\xa6\xe8\xaf\x86\xe5\x88\xab",
+                    "bbox": [10, 20, 200, 60],
+                    "confidence": 0.97
+                  }
+                ],
+                "tables": [
+                  {
+                    "page": 1,
+                    "index": 1,
+                    "rows": [["\xe9\xa1\xb9", "\xe5\x88\x86\xe5\x80\xbc"], ["\xe6\x96\xb9\xe6\xa1\x88", "20"]],
+                    "confidence": 0.9
+                  }
+                ],
+                "metadata": {"request_id": "paddle-1"}
+              }
+            }
+            """
+        ),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+    ocr = result.metadata["ocr"]
+
+    assert result.metadata["ocr_required"] is False
+    assert result.metadata["layout_block_count"] == 1
+    assert result.metadata["table_block_count"] == 1
+    assert result.metadata["table_count"] == 1
+    assert "标书识别" in text
+    assert ocr["provider"] == "paddleocr"
+    assert ocr["markdown"].startswith("# 标书识别")
+    assert ocr["layout_block_count"] == 1
+    assert ocr["layout_blocks"][0]["type"] == "title"
+    assert ocr["layout_blocks"][0]["bbox"] == [10, 20, 200, 60]
+    assert ocr["table_blocks"][0]["rows"] == [["项", "分值"], ["方案", "20"]]
+    assert ocr["provider_metadata"] == {"request_id": "paddle-1"}
+
+
 def test_paddleocr_provider_requires_configured_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
     monkeypatch.delenv("PADDLEOCR_HTTP_ENDPOINT", raising=False)
