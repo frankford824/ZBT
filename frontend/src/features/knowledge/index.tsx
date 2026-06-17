@@ -962,7 +962,7 @@ export function FilePreviewPage() {
 
   return (
     <PageFrame
-      module="知识库"
+      module={fileModuleLabel(preview.data?.file.biz_type)}
       title={preview.data?.file.filename ?? '文件预览'}
       subtitle="文档预览"
       tags={['在线预览']}
@@ -982,6 +982,20 @@ export function FilePreviewPage() {
       ) : null}
     </PageFrame>
   )
+}
+
+function fileModuleLabel(bizType?: string) {
+  switch (bizType) {
+    case 'bid_tender':
+    case 'bid_export':
+      return '标书管理'
+    case 'knowledge':
+    case 'knowledge_case':
+    case 'generated':
+      return '知识库'
+    default:
+      return '文件'
+  }
 }
 
 const docTypeLabels: Record<string, string> = {

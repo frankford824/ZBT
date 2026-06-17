@@ -104,8 +104,8 @@ export function AppRouter() {
               <Route path="/knowledge/docs" element={page(<KnowledgeDocsPage />)} />
               <Route path="/knowledge/templates" element={page(<KnowledgeTemplatesPage />)} />
               <Route path="/knowledge/tags" element={page(<KnowledgeTagsPage />)} />
-              <Route path="/files/:fileId/preview" element={page(<FilePreviewPage />)} />
             </Route>
+            <Route path="/files/:fileId/preview" element={page(<FilePreviewPage />)} />
             <Route element={<RequirePermission module="team" />}>
               <Route path="/team" element={page(<TeamPage />)} />
             </Route>
