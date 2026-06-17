@@ -16,6 +16,11 @@ from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest,
 
 
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+DEFAULT_OPENAI_COMPATIBLE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+
+
+class OpenAICompatibleResponseTooLargeError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -255,12 +260,27 @@ class OpenAICompatibleProvider:
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
-                parsed = json.loads(response.read().decode("utf-8"))
+                parsed = json.loads(_read_limited_response(response, self._max_response_bytes()).decode("utf-8"))
                 if not isinstance(parsed, dict):
                     raise RuntimeError(f"{self.name} {path} returned non-object JSON")
                 return parsed
+        except OpenAICompatibleResponseTooLargeError as exc:
+            raise RuntimeError(f"{self.name} {path} response is too large") from exc
         except urllib.error.HTTPError as exc:
             raise RuntimeError(f"{self.name} {path} returned HTTP {exc.code}") from exc
+
+    def _max_response_bytes(self) -> int:
+        return _env_positive_int(
+            "OPENAI_COMPATIBLE_MAX_RESPONSE_BYTES",
+            DEFAULT_OPENAI_COMPATIBLE_RESPONSE_MAX_BYTES,
+        )
+
+
+def _read_limited_response(response: object, max_bytes: int) -> bytes:
+    content = response.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise OpenAICompatibleResponseTooLargeError
+    return content
 
 
 def _choice_text(data: dict[str, Any]) -> str:

@@ -107,6 +107,8 @@ ALLOW_MOCK_FALLBACK=false
 
 `cloudflare_ai_gateway` 会自动发送 `cf-aig-authorization` 网关认证头。若 AI Gateway 使用 BYOK 或统一计费，可以不设置 `OPENAI_API_KEY`；若选择请求侧透传 provider key，则继续设置 `OPENAI_API_KEY`，服务会同时发送 provider `Authorization` 和 Cloudflare 网关认证头。需要传递网关 metadata、cache 等附加头时，可用 JSON 对象配置 `CLOUDFLARE_AI_GATEWAY_HEADERS`，例如 `{"cf-aig-metadata":"{\"tenant\":\"prod\"}"}`。
 
+OpenAI-compatible Provider 成功响应默认最多读取 8 MB，可用 `OPENAI_COMPATIBLE_MAX_RESPONSE_BYTES` 调整；超限响应会被拒绝且不会把模型返回内容写入错误信息。
+
 AI 调用成本通过后端环境变量 `AI_MODEL_PRICING_JSON` 配置，例如：
 
 ```bash

@@ -161,7 +161,8 @@ def test_openai_post_json_rejects_non_object_success_response(monkeypatch) -> No
         def __exit__(self, *_args) -> None:
             return None
 
-        def read(self) -> bytes:
+        def read(self, size: int = -1) -> bytes:
+            _ = size
             return b'["tenant secret response fragment"]'
 
     monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
@@ -172,6 +173,39 @@ def test_openai_post_json_rejects_non_object_success_response(monkeypatch) -> No
     message = str(exc_info.value)
     assert message == "fake /chat/completions returned non-object JSON"
     assert "tenant secret" not in message
+
+
+def test_openai_post_json_rejects_oversized_success_response(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "fake",
+        base_url_env="FAKE_OPENAI_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+    )
+    monkeypatch.setenv("FAKE_OPENAI_BASE_URL", "https://example.test/v1")
+    monkeypatch.setenv("FAKE_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_MAX_RESPONSE_BYTES", "4")
+
+    class FakeResponse:
+        def __init__(self) -> None:
+            self._body = io.BytesIO(b'{"tenant_secret":"response fragment"}')
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            return self._body.read(size)
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    with pytest.raises(RuntimeError) as exc_info:
+        provider._post_json("/chat/completions", {"model": "fake", "messages": []})
+
+    message = str(exc_info.value)
+    assert message == "fake /chat/completions response is too large"
+    assert "tenant_secret" not in message
 
 
 def test_openai_provider_supports_authenticated_gateway_without_provider_key(monkeypatch) -> None:
