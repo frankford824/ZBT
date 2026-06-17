@@ -22,6 +22,7 @@ from app.main import (
     knowledge_embeddings,
     knowledge_process,
     knowledge_rerank,
+    normalize_minio_endpoint,
     process_document_export,
     process_knowledge_document,
     process_tender_parse,
@@ -1083,6 +1084,42 @@ def test_validate_production_config_allows_explicit_production_config(monkeypatc
     )
 
     validate_production_config()
+
+
+def test_normalize_minio_endpoint_supports_cloudflare_r2_https_url() -> None:
+    endpoint, secure = normalize_minio_endpoint(
+        " https://example-account.r2.cloudflarestorage.com/ ",
+        fallback_secure=False,
+    )
+
+    assert endpoint == "example-account.r2.cloudflarestorage.com"
+    assert secure is True
+
+
+def test_normalize_minio_endpoint_supports_http_url() -> None:
+    endpoint, secure = normalize_minio_endpoint("http://127.0.0.1:9000", fallback_secure=True)
+
+    assert endpoint == "127.0.0.1:9000"
+    assert secure is False
+
+
+def test_normalize_minio_endpoint_uses_fallback_for_host_only_endpoint() -> None:
+    endpoint, secure = normalize_minio_endpoint("minio:9000", fallback_secure=True)
+
+    assert endpoint == "minio:9000"
+    assert secure is True
+
+
+def test_normalize_minio_endpoint_rejects_paths_and_unsupported_schemes() -> None:
+    for raw in (
+        "",
+        "ftp://example-account.r2.cloudflarestorage.com",
+        "https://example-account.r2.cloudflarestorage.com/bucket",
+        "minio:9000/bucket",
+        "https://example-account.r2.cloudflarestorage.com?bucket=zbt",
+    ):
+        with pytest.raises(RuntimeError, match="MINIO_ENDPOINT"):
+            normalize_minio_endpoint(raw, fallback_secure=False)
 
 
 def _set_production_security_env(monkeypatch) -> None:

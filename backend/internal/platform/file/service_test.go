@@ -174,6 +174,50 @@ func TestConfirmedContentTypeRejectsUnsafeObservedValue(t *testing.T) {
 	}
 }
 
+func TestStorageEndpointSupportsCloudflareR2HTTPSURL(t *testing.T) {
+	endpoint, secure, err := storageEndpoint(" https://example-account.r2.cloudflarestorage.com/ ", false)
+	if err != nil {
+		t.Fatalf("expected R2 endpoint URL to normalize: %v", err)
+	}
+	if endpoint != "example-account.r2.cloudflarestorage.com" || !secure {
+		t.Fatalf("unexpected normalized endpoint=%q secure=%v", endpoint, secure)
+	}
+}
+
+func TestStorageEndpointSupportsHTTPURL(t *testing.T) {
+	endpoint, secure, err := storageEndpoint("http://127.0.0.1:9000", true)
+	if err != nil {
+		t.Fatalf("expected HTTP endpoint URL to normalize: %v", err)
+	}
+	if endpoint != "127.0.0.1:9000" || secure {
+		t.Fatalf("unexpected normalized endpoint=%q secure=%v", endpoint, secure)
+	}
+}
+
+func TestStorageEndpointUsesFallbackSecureForHostOnlyEndpoint(t *testing.T) {
+	endpoint, secure, err := storageEndpoint("minio:9000", true)
+	if err != nil {
+		t.Fatalf("expected host endpoint to normalize: %v", err)
+	}
+	if endpoint != "minio:9000" || !secure {
+		t.Fatalf("unexpected normalized endpoint=%q secure=%v", endpoint, secure)
+	}
+}
+
+func TestStorageEndpointRejectsPathsAndUnsupportedSchemes(t *testing.T) {
+	for _, raw := range []string{
+		"",
+		"ftp://example-account.r2.cloudflarestorage.com",
+		"https://example-account.r2.cloudflarestorage.com/bucket",
+		"minio:9000/bucket",
+		"https://example-account.r2.cloudflarestorage.com?bucket=zbt",
+	} {
+		if _, _, err := storageEndpoint(raw, false); err != ErrInvalidRequest {
+			t.Fatalf("expected %q to be rejected, got %v", raw, err)
+		}
+	}
+}
+
 func TestValidateUploadSizeRejectsEmptyNegativeAndOversizedFiles(t *testing.T) {
 	for _, size := range []int64{-1, 0, maxUploadSizeBytes + 1} {
 		if err := validateUploadSize(size); err != ErrInvalidRequest {

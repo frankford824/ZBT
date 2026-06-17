@@ -107,12 +107,40 @@ async def require_backend_signature(request: Request, call_next):
 
 
 def minio_client() -> Minio:
-    return Minio(
+    endpoint, secure = normalize_minio_endpoint(
         os.getenv("MINIO_ENDPOINT", "minio:9000"),
+        env_bool("MINIO_USE_SSL"),
+    )
+    return Minio(
+        endpoint,
         access_key=os.getenv("MINIO_ACCESS_KEY", "zbt_minio"),
         secret_key=os.getenv("MINIO_SECRET_KEY", "zbt_minio_secret"),
-        secure=os.getenv("MINIO_USE_SSL", "").lower() in {"1", "true", "yes"},
+        secure=secure,
     )
+
+
+def normalize_minio_endpoint(raw: str, fallback_secure: bool) -> tuple[str, bool]:
+    endpoint = raw.strip()
+    if not endpoint:
+        raise RuntimeError("MINIO_ENDPOINT is required")
+    if "://" in endpoint:
+        parsed = urlparse(endpoint)
+        if not parsed.netloc:
+            raise RuntimeError("MINIO_ENDPOINT must include a host")
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise RuntimeError("MINIO_ENDPOINT must not include a path, query, or fragment")
+        if parsed.scheme == "http":
+            return parsed.netloc, False
+        if parsed.scheme == "https":
+            return parsed.netloc, True
+        raise RuntimeError("MINIO_ENDPOINT must use http or https")
+    if any(char in endpoint for char in "/?#"):
+        raise RuntimeError("MINIO_ENDPOINT must not include a path, query, or fragment")
+    return endpoint, fallback_secure
+
+
+def env_bool(key: str) -> bool:
+    return os.getenv(key, "").strip().lower() in {"1", "true", "yes"}
 
 
 @app.get("/healthz", response_model=HealthResponse)

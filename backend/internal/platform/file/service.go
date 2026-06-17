@@ -412,14 +412,43 @@ func (s *Service) withTenant(ctx context.Context, tenantID string, fn func(pgx.T
 }
 
 func newClient(endpoint string, cfg config.Config) (*minio.Client, error) {
-	if endpoint == "" || cfg.MinIOAccessKey == "" || cfg.MinIOSecretKey == "" {
+	endpoint, secure, err := storageEndpoint(endpoint, cfg.MinIOUseSSL)
+	if err != nil || cfg.MinIOAccessKey == "" || cfg.MinIOSecretKey == "" {
 		return nil, ErrInvalidRequest
 	}
 	return minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.MinIOAccessKey, cfg.MinIOSecretKey, ""),
-		Secure: cfg.MinIOUseSSL,
+		Secure: secure,
 		Region: cfg.MinIORegion,
 	})
+}
+
+func storageEndpoint(raw string, fallbackSecure bool) (string, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false, ErrInvalidRequest
+	}
+	if strings.Contains(raw, "://") {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Host == "" {
+			return "", false, ErrInvalidRequest
+		}
+		if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", false, ErrInvalidRequest
+		}
+		switch parsed.Scheme {
+		case "http":
+			return parsed.Host, false, nil
+		case "https":
+			return parsed.Host, true, nil
+		default:
+			return "", false, ErrInvalidRequest
+		}
+	}
+	if strings.ContainsAny(raw, "/?#") {
+		return "", false, ErrInvalidRequest
+	}
+	return raw, fallbackSecure, nil
 }
 
 func sanitizeFilename(filename string) string {
