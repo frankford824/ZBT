@@ -7,7 +7,7 @@ let loginRedirectInFlight = false
 const sessionListeners = new Set<(payload: LoginSessionPayload | null) => void>()
 
 export function getStoredSession() {
-  const raw = localStorage.getItem(sessionStorageKey)
+  const raw = safeGetStorageItem(sessionStorageKey)
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as Partial<LoginSessionPayload>
@@ -17,7 +17,7 @@ export function getStoredSession() {
     }
     const normalized = normalizeSession(parsed)
     if (normalized.expires_at !== parsed.expires_at) {
-      localStorage.setItem(sessionStorageKey, JSON.stringify(normalized))
+      safeSetStorageItem(sessionStorageKey, JSON.stringify(normalized))
     }
     return normalized
   } catch {
@@ -28,7 +28,7 @@ export function getStoredSession() {
 
 export function storeSession(payload: LoginSessionPayload) {
   const normalized = normalizeSession(payload)
-  localStorage.setItem(sessionStorageKey, JSON.stringify(normalized))
+  safeSetStorageItem(sessionStorageKey, JSON.stringify(normalized))
   notifySessionListeners(normalized)
   return normalized
 }
@@ -142,7 +142,7 @@ function containsUnsafePathCharacter(path: string) {
 }
 
 function removeStoredSession() {
-  localStorage.removeItem(sessionStorageKey)
+  safeRemoveStorageItem(sessionStorageKey)
   notifySessionListeners(null)
 }
 
@@ -196,4 +196,32 @@ function isNonEmptyString(value: unknown): value is string {
 function isPermissionRecord(value: unknown): value is LoginSessionPayload['session']['permissions'] {
   if (!isObject(value)) return false
   return Object.values(value).every((level) => level === 'none' || level === 'read' || level === 'full')
+}
+
+export function safeGetStorageItem(key: string) {
+  try {
+    return browserStorage()?.getItem(key) ?? null
+  } catch {
+    return null
+  }
+}
+
+export function safeSetStorageItem(key: string, value: string) {
+  try {
+    browserStorage()?.setItem(key, value)
+  } catch {
+    // Storage can be unavailable in privacy modes, previews, or non-browser runtimes.
+  }
+}
+
+export function safeRemoveStorageItem(key: string) {
+  try {
+    browserStorage()?.removeItem(key)
+  } catch {
+    // Ignore unavailable storage; in-memory session state is cleared by callers.
+  }
+}
+
+function browserStorage() {
+  return typeof window === 'undefined' ? null : window.localStorage
 }

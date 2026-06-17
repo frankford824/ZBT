@@ -1,5 +1,12 @@
 import { create } from 'zustand'
-import { clearStoredSession, getStoredSession, storeSession, subscribeStoredSession } from '../../shared/auth/session'
+import {
+  clearStoredSession,
+  getStoredSession,
+  safeGetStorageItem,
+  safeSetStorageItem,
+  storeSession,
+  subscribeStoredSession,
+} from '../../shared/auth/session'
 
 export type ModulePermission = 'none' | 'read' | 'full'
 
@@ -85,13 +92,13 @@ const emptySessionState = {
 }
 
 export const useSessionStore = create<SessionState>((set) => ({
-  collapsed: localStorage.getItem('zbt.sidebar.collapsed') === 'true',
+  collapsed: safeGetStorageItem('zbt.sidebar.collapsed') === 'true',
   ...emptySessionState,
   ...storedSession,
   toggleCollapsed: () =>
     set((state) => {
       const next = !state.collapsed
-      localStorage.setItem('zbt.sidebar.collapsed', String(next))
+      safeSetStorageItem('zbt.sidebar.collapsed', String(next))
       return { collapsed: next }
     }),
   setSession: (payload) => {
