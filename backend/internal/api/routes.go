@@ -1,18 +1,21 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1786,6 +1789,29 @@ func (s *server) exportBidRequirements(c *gin.Context) {
 		respond(c, nil, err)
 		return
 	}
+	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "csv")))
+	if format == "xlsx" {
+		history, err := s.bidStore.ListRequirementCoverageEventsForBid(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), 5000)
+		if err != nil {
+			respond(c, nil, err)
+			return
+		}
+		body, err := bidRequirementMatrixXLSX(items, history)
+		if err != nil {
+			respondInternal(c)
+			return
+		}
+		filename := "响应矩阵-覆盖历史-" + time.Now().Format("20060102-150405") + ".xlsx"
+		c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+		c.Header("Content-Disposition", `attachment; filename="requirements.xlsx"; filename*=UTF-8''`+url.PathEscape(filename))
+		c.Header("Cache-Control", "no-store")
+		c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", body)
+		return
+	}
+	if format != "csv" {
+		respondBadRequest(c)
+		return
+	}
 	body, err := bidRequirementMatrixCSV(items)
 	if err != nil {
 		respondInternal(c)
@@ -1828,28 +1854,33 @@ func bidRequirementMatrixCSV(items []bid.RequirementItem) ([]byte, error) {
 	var buffer bytes.Buffer
 	buffer.Write([]byte{0xEF, 0xBB, 0xBF})
 	writer := csv.NewWriter(&buffer)
-	if err := writer.Write([]string{
-		"序号",
-		"来源分组",
-		"要求",
-		"是否必须响应",
-		"优先级",
-		"分值",
-		"覆盖状态",
-		"复核状态",
-		"期望响应",
-		"响应证据",
-		"响应来源数量",
-		"响应来源",
-		"招标原文来源",
-		"更新时间",
-	}); err != nil {
-		return nil, err
+	rows := bidRequirementMatrixRows(items)
+	for _, row := range rows {
+		if err := writer.Write(row); err != nil {
+			return nil, err
+		}
 	}
+	writer.Flush()
+	return buffer.Bytes(), writer.Error()
+}
+
+func bidRequirementMatrixXLSX(items []bid.RequirementItem, history []bid.RequirementCoverageEvent) ([]byte, error) {
+	sheets := []xlsxSheet{
+		{Name: "响应矩阵", Rows: bidRequirementMatrixRows(items)},
+		{Name: "覆盖历史", Rows: bidRequirementHistoryRows(items, history)},
+	}
+	return buildSimpleXLSX(sheets)
+}
+
+func bidRequirementMatrixRows(items []bid.RequirementItem) [][]string {
+	rows := [][]string{{
+		"序号", "来源分组", "要求", "是否必须响应", "优先级", "分值", "覆盖状态", "复核状态",
+		"期望响应", "响应证据", "响应来源数量", "响应来源", "招标原文来源", "更新时间",
+	}}
 	for index, item := range items {
 		latestCoverage := mapFromCSVAny(mapFromCSVAny(item.Metadata)["latest_coverage"])
 		coverageSourceRefs := sourceRefsFromCSVRecord(latestCoverage)
-		if err := writer.Write([]string{
+		rows = append(rows, []string{
 			strconv.Itoa(index + 1),
 			csvModuleLabel(item.Module),
 			compactCSVCell(item.Requirement),
@@ -1864,12 +1895,158 @@ func bidRequirementMatrixCSV(items []bid.RequirementItem) ([]byte, error) {
 			compactCSVCell(csvSourceRefsSummary(coverageSourceRefs)),
 			compactCSVCell(csvSourceRefSummary(item.SourceRef)),
 			item.UpdatedAt.Format("2006-01-02 15:04:05"),
-		}); err != nil {
+		})
+	}
+	return rows
+}
+
+func bidRequirementHistoryRows(items []bid.RequirementItem, history []bid.RequirementCoverageEvent) [][]string {
+	requirementByID := map[string]bid.RequirementItem{}
+	for _, item := range items {
+		requirementByID[item.ID] = item
+	}
+	rows := [][]string{{
+		"序号", "来源分组", "要求", "历史来源", "覆盖状态", "复核状态", "响应证据", "响应来源数量", "响应来源", "记录时间",
+	}}
+	for index, event := range history {
+		item := requirementByID[event.RequirementItemID]
+		sourceRefs := event.SourceRefs
+		rows = append(rows, []string{
+			strconv.Itoa(index + 1),
+			csvModuleLabel(item.Module),
+			compactCSVCell(firstNonEmptyString(item.Requirement, event.RequirementExternalID)),
+			csvCoverageEventSourceLabel(event.Source),
+			csvCoverageLabel(event.CoverageStatus),
+			csvReviewLabel(event.NeedsReview),
+			compactCSVCell(event.Evidence),
+			strconv.Itoa(len(sourceRefs)),
+			compactCSVCell(csvSourceRefsSummary(sourceRefs)),
+			event.CreatedAt.Format("2006-01-02 15:04:05"),
+		})
+	}
+	return rows
+}
+
+type xlsxSheet struct {
+	Name string
+	Rows [][]string
+}
+
+func buildSimpleXLSX(sheets []xlsxSheet) ([]byte, error) {
+	var buffer bytes.Buffer
+	archive := zip.NewWriter(&buffer)
+	files := map[string]string{
+		"[Content_Types].xml":        contentTypesXML(len(sheets)),
+		"_rels/.rels":                packageRelsXML(),
+		"xl/workbook.xml":            workbookXML(sheets),
+		"xl/_rels/workbook.xml.rels": workbookRelsXML(len(sheets)),
+	}
+	for index, sheet := range sheets {
+		files[fmt.Sprintf("xl/worksheets/sheet%d.xml", index+1)] = worksheetXML(sheet.Rows)
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		writer, err := archive.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := writer.Write([]byte(files[name])); err != nil {
 			return nil, err
 		}
 	}
-	writer.Flush()
-	return buffer.Bytes(), writer.Error()
+	if err := archive.Close(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func contentTypesXML(sheetCount int) string {
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	builder.WriteString(`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`)
+	builder.WriteString(`<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`)
+	builder.WriteString(`<Default Extension="xml" ContentType="application/xml"/>`)
+	builder.WriteString(`<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>`)
+	for index := 1; index <= sheetCount; index++ {
+		builder.WriteString(fmt.Sprintf(`<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`, index))
+	}
+	builder.WriteString(`</Types>`)
+	return builder.String()
+}
+
+func packageRelsXML() string {
+	return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`
+}
+
+func workbookXML(sheets []xlsxSheet) string {
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	builder.WriteString(`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>`)
+	for index, sheet := range sheets {
+		builder.WriteString(fmt.Sprintf(`<sheet name="%s" sheetId="%d" r:id="rId%d"/>`, xmlEscapeAttr(sheet.Name), index+1, index+1))
+	}
+	builder.WriteString(`</sheets></workbook>`)
+	return builder.String()
+}
+
+func workbookRelsXML(sheetCount int) string {
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	builder.WriteString(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`)
+	for index := 1; index <= sheetCount; index++ {
+		builder.WriteString(fmt.Sprintf(`<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>`, index, index))
+	}
+	builder.WriteString(`</Relationships>`)
+	return builder.String()
+}
+
+func worksheetXML(rows [][]string) string {
+	var builder strings.Builder
+	builder.WriteString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	builder.WriteString(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>`)
+	for rowIndex, row := range rows {
+		builder.WriteString(fmt.Sprintf(`<row r="%d">`, rowIndex+1))
+		for colIndex, value := range row {
+			cellRef := xlsxColumnName(colIndex+1) + strconv.Itoa(rowIndex+1)
+			builder.WriteString(fmt.Sprintf(`<c r="%s" t="inlineStr"><is><t>%s</t></is></c>`, cellRef, xmlEscapeText(value)))
+		}
+		builder.WriteString(`</row>`)
+	}
+	builder.WriteString(`</sheetData></worksheet>`)
+	return builder.String()
+}
+
+func xmlEscapeText(value string) string {
+	var buffer bytes.Buffer
+	_ = xml.EscapeText(&buffer, []byte(value))
+	return buffer.String()
+}
+
+func xmlEscapeAttr(value string) string {
+	return strings.ReplaceAll(xmlEscapeText(value), `"`, "&quot;")
+}
+
+func xlsxColumnName(index int) string {
+	name := ""
+	for index > 0 {
+		index--
+		name = string(rune('A'+index%26)) + name
+		index /= 26
+	}
+	return name
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func sourceRefsFromCSVRecord(record map[string]any) []any {
@@ -2053,6 +2230,17 @@ func csvCoverageLabel(value string) string {
 		return "待复核"
 	default:
 		return "未确认"
+	}
+}
+
+func csvCoverageEventSourceLabel(value string) string {
+	switch value {
+	case "model":
+		return "自动生成"
+	case "manual":
+		return "人工调整"
+	default:
+		return "系统记录"
 	}
 }
 

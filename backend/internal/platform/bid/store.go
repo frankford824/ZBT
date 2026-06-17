@@ -1255,6 +1255,53 @@ func (s *Store) ListRequirementCoverageEvents(ctx context.Context, tenantID, bid
 	return result, err
 }
 
+func (s *Store) ListRequirementCoverageEventsForBid(ctx context.Context, tenantID, bidID string, limit int) ([]RequirementCoverageEvent, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	if limit <= 0 || limit > 5000 {
+		limit = 1000
+	}
+	var result []RequirementCoverageEvent
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `
+			select id::text, bid_document_id::text, requirement_item_id::text, requirement_external_id,
+				chapter_id::text, actor_user_id::text, source, coverage_status, needs_review,
+				evidence, source_refs, metadata, created_at
+			from bid_requirement_coverage_events
+			where tenant_id = $1
+				and bid_document_id = $2
+			order by created_at desc, id desc
+			limit $3
+		`, tenantID, bidID, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		events := []RequirementCoverageEvent{}
+		for rows.Next() {
+			event, err := scanRequirementCoverageEvent(rows)
+			if err != nil {
+				return err
+			}
+			events = append(events, event)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		result = events
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return result, err
+}
+
 func (s *Store) ListPipelineGates(ctx context.Context, tenantID, bidID string) ([]PipelineGate, error) {
 	bidID = strings.TrimSpace(bidID)
 	if _, err := uuid.Parse(bidID); err != nil {

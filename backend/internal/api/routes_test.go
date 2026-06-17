@@ -1,9 +1,11 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -746,6 +748,94 @@ func TestBidRequirementMatrixCSVIncludesCoverageEvidenceAndSources(t *testing.T)
 	if row[13] != "2026-06-17 09:30:00" {
 		t.Fatalf("expected formatted update time, got %q", row[13])
 	}
+}
+
+func TestBidRequirementMatrixXLSXIncludesCoverageHistorySheet(t *testing.T) {
+	updatedAt := time.Date(2026, 6, 17, 9, 30, 0, 0, time.UTC)
+	body, err := bidRequirementMatrixXLSX([]bid.RequirementItem{
+		{
+			ID:               "req-1",
+			ExternalID:       "evaluation-001",
+			Module:           "evaluation",
+			Requirement:      "技术方案需覆盖评分点",
+			Priority:         "high",
+			Mandatory:        true,
+			ExpectedResponse: "在技术方案章节逐条响应",
+			CoverageStatus:   "covered",
+			Metadata: map[string]any{
+				"latest_coverage": map[string]any{
+					"evidence": "最新响应证据",
+					"source_refs": []any{
+						map[string]any{"title": "技术方案.docx", "page": 3, "source_text": "响应章节"},
+					},
+				},
+			},
+			UpdatedAt: updatedAt,
+		},
+	}, []bid.RequirementCoverageEvent{
+		{
+			RequirementItemID:     "req-1",
+			RequirementExternalID: "evaluation-001",
+			Source:                "model",
+			CoverageStatus:        "covered",
+			Evidence:              "自动生成证据",
+			SourceRefs: []any{
+				map[string]any{"title": "技术方案.docx", "page": 3, "source_text": "响应章节"},
+			},
+			CreatedAt: updatedAt.Add(time.Minute),
+		},
+		{
+			RequirementItemID:     "req-1",
+			RequirementExternalID: "evaluation-001",
+			Source:                "manual",
+			CoverageStatus:        "needs_review",
+			NeedsReview:           true,
+			Evidence:              "人工复核证据",
+			CreatedAt:             updatedAt.Add(2 * time.Minute),
+		},
+	})
+	if err != nil {
+		t.Fatalf("build requirement xlsx: %v", err)
+	}
+	workbook := readZipFile(t, body, "xl/workbook.xml")
+	if !strings.Contains(workbook, `name="响应矩阵"`) || !strings.Contains(workbook, `name="覆盖历史"`) {
+		t.Fatalf("expected workbook to include both sheets, got %s", workbook)
+	}
+	matrixSheet := readZipFile(t, body, "xl/worksheets/sheet1.xml")
+	if !strings.Contains(matrixSheet, "最新响应证据") || !strings.Contains(matrixSheet, "技术方案.docx") {
+		t.Fatalf("expected matrix sheet to include latest coverage, got %s", matrixSheet)
+	}
+	historySheet := readZipFile(t, body, "xl/worksheets/sheet2.xml")
+	for _, expected := range []string{"历史来源", "自动生成", "人工调整", "人工复核证据", "待复核"} {
+		if !strings.Contains(historySheet, expected) {
+			t.Fatalf("expected history sheet to include %q, got %s", expected, historySheet)
+		}
+	}
+}
+
+func readZipFile(t *testing.T, body []byte, name string) string {
+	t.Helper()
+	reader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("open xlsx zip: %v", err)
+	}
+	for _, file := range reader.File {
+		if file.Name != name {
+			continue
+		}
+		handle, err := file.Open()
+		if err != nil {
+			t.Fatalf("open zip file %s: %v", name, err)
+		}
+		defer handle.Close()
+		content, err := io.ReadAll(handle)
+		if err != nil {
+			t.Fatalf("read zip file %s: %v", name, err)
+		}
+		return string(content)
+	}
+	t.Fatalf("zip file %s not found", name)
+	return ""
 }
 
 func TestRouteInfosExposeAdditionalModuleRequirements(t *testing.T) {

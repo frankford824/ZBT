@@ -1688,11 +1688,21 @@ export async function fetchBidRequirements(bidId: string): Promise<BidRequiremen
   return data.items
 }
 
-export async function exportBidRequirements(bidId: string): Promise<{ blob: Blob; filename: string }> {
-  const response = await apiClient.get<Blob>(`/bids/${bidId}/requirements/export`, { responseType: 'blob' })
+export type BidRequirementExportFormat = 'csv' | 'xlsx'
+
+export async function exportBidRequirements(
+  bidId: string,
+  format: BidRequirementExportFormat = 'csv',
+): Promise<{ blob: Blob; filename: string }> {
+  const response = await apiClient.get<Blob>(`/bids/${bidId}/requirements/export`, {
+    params: format === 'xlsx' ? { format: 'xlsx' } : undefined,
+    responseType: 'blob',
+  })
   return {
     blob: response.data,
-    filename: filenameFromContentDisposition(response.headers['content-disposition']) || `响应矩阵-${bidId}.csv`,
+    filename:
+      filenameFromContentDisposition(response.headers['content-disposition']) ||
+      `响应矩阵-${bidId}.${format === 'xlsx' ? 'xlsx' : 'csv'}`,
   }
 }
 

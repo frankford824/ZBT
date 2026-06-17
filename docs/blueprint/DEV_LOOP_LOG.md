@@ -3077,3 +3077,45 @@ git diff --check
 1. 本轮只完成后端 P0 网关，不提供前端配置页、业务页调用入口和审计页展示。
 2. 本轮只支持 `streamable_http`；stdio 工具、本地命令执行和 SSE 长连接暂不开放。
 3. 本轮只做通用 JSON-RPC MCP 调用，不内置 handaas 等 Provider 的字段模板和生产凭证验证。
+
+## Loop-51 / 响应矩阵覆盖历史 xlsx 导出 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 AutoRFP 响应矩阵从 CSV 快照到“当前覆盖 + 覆盖历史”可交付工作簿的缺口。
+2. xlsx 导出必须保持业务字段，不暴露 provider、model、token、schema 等技术口径。
+3. 继续沿用现有只读导出权限，不引入异步 AI 导出任务。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `ListRequirementCoverageEventsForBid()`，按标书读取最近覆盖历史事件，用于批量导出。
+2. `backend/internal/api/routes.go` 扩展 `GET /bids/:id/requirements/export`：默认仍返回 UTF-8 CSV；`?format=xlsx` 返回标准 Office Open XML 工作簿，包含“响应矩阵”和“覆盖历史”两个工作表。
+3. xlsx 工作簿由 Go 标准库生成 zip + worksheet XML，不新增后端依赖；矩阵 sheet 复用 CSV 字段，历史 sheet 包含历史来源、覆盖状态、复核状态、响应证据、响应来源和记录时间。
+4. `backend/internal/api/routes_test.go` 新增 xlsx zip 内容测试，检查 workbook 双 sheet、矩阵证据和覆盖历史内容。
+5. `frontend/src/shared/api/client.ts` 为响应矩阵导出增加 `csv/xlsx` 格式参数。
+6. `frontend/src/features/bid/index.tsx` 在“响应要点”工具栏新增“导出历史”按钮，下载含历史工作表的 xlsx。
+7. `API_SPEC.md`、`AI_PIPELINE.md`、`AI_IMPLEMENTATION_CHECKLIST.md` 同步更新。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w backend/internal/platform/bid/store.go backend/internal/api/routes.go backend/internal/api/routes_test.go
+cd backend && go test ./internal/platform/bid ./internal/api
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. Go bid/API 专项测试通过。
+2. xlsx 导出单元测试通过，生成的工作簿包含“响应矩阵”和“覆盖历史”两个工作表。
+3. 前端 TypeScript 构建和 Vite 打包通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮补齐带历史的 xlsx 导出，不提供跨要求批量审阅、批量修改和筛选 UI。
+2. xlsx 使用标准库生成基础工作簿，未加样式、冻结窗格、筛选器和列宽优化。
+3. 真实外部 MinerU/PaddleOCR 服务端到端样本验证仍需要可用 endpoint/key。

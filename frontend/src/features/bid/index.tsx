@@ -98,6 +98,7 @@ import {
   type BidGenerationJobDTO,
   type BidGenerationSnapshotDTO,
   type BidRequirementCoverageEventDTO,
+  type BidRequirementExportFormat,
   type BidRequirementItemDTO,
   type BidTemplateDTO,
 } from '../../shared/api/client'
@@ -756,7 +757,7 @@ export function BidWizardPage() {
     onError: (error) => message.error(getApiErrorMessage(error, '获取下载链接失败')),
   })
   const requirementExportMutation = useMutation({
-    mutationFn: () => exportBidRequirements(bidId),
+    mutationFn: (format: BidRequirementExportFormat) => exportBidRequirements(bidId, format),
     onSuccess: ({ blob, filename }) => {
       saveBlobFile(blob, filename)
       message.success('响应矩阵已导出')
@@ -1003,11 +1004,20 @@ export function BidWizardPage() {
                             <Button
                               size="small"
                               icon={<DownloadOutlined />}
-                              loading={requirementExportMutation.isPending}
+                              loading={requirementExportMutation.isPending && requirementExportMutation.variables === 'csv'}
                               disabled={!syncedRequirementRows.length}
-                              onClick={() => requirementExportMutation.mutate()}
+                              onClick={() => requirementExportMutation.mutate('csv')}
                             >
                               导出矩阵
+                            </Button>
+                            <Button
+                              size="small"
+                              icon={<DownloadOutlined />}
+                              loading={requirementExportMutation.isPending && requirementExportMutation.variables === 'xlsx'}
+                              disabled={!syncedRequirementRows.length}
+                              onClick={() => requirementExportMutation.mutate('xlsx')}
+                            >
+                              导出历史
                             </Button>
                           </Space>
                           <Table
