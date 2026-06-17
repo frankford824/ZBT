@@ -421,26 +421,30 @@ export function BidTemplatesPage() {
         <Row gutter={[16, 16]}>
           {templates.data?.map((template) => (
             <Col xs={24} md={12} xl={6} key={template.id}>
-                <Card
-                  title={template.name}
-                  actions={[
-                    canWrite ? <Button
-                      key="use"
-                      type="link"
-                    loading={mutation.isPending && mutation.variables?.templateId === template.id}
-                    onClick={() =>
-                      mutation.mutate({
-                        templateId: template.id,
-                        title: `${template.name}生成标书`,
-                      })
-                    }
-                    >
-                      使用模板
-                    </Button> : null,
-                    canWrite ? <Link key="blank" to="/bids/new">
-                      新建空白
-                    </Link> : null,
-                  ]}
+              <Card
+                title={template.name}
+                actions={
+                  canWrite
+                    ? [
+                        <Button
+                          key="use"
+                          type="link"
+                          loading={mutation.isPending && mutation.variables?.templateId === template.id}
+                          onClick={() =>
+                            mutation.mutate({
+                              templateId: template.id,
+                              title: `${template.name}生成标书`,
+                            })
+                          }
+                        >
+                          使用模板
+                        </Button>,
+                        <Link key="blank" to="/bids/new">
+                          新建空白
+                        </Link>,
+                      ]
+                    : undefined
+                }
               >
                 <Space orientation="vertical" size={8}>
                   <Space wrap>

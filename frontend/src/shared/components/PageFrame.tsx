@@ -1,5 +1,5 @@
 import { Flex, Space, Typography } from 'antd'
-import type { PropsWithChildren, ReactNode } from 'react'
+import { Children, type PropsWithChildren, type ReactNode } from 'react'
 import { ForbiddenBlock } from './StateBlocks'
 
 type PageFrameProps = PropsWithChildren<{
@@ -24,6 +24,8 @@ export function PageFrame({
   bare = false,
   children,
 }: PageFrameProps) {
+  const actionItems = Children.toArray(actions).filter(Boolean)
+
   return (
     <Space orientation="vertical" size={16} className="page-stack" data-page-tags={tags.join(' ')}>
       <Flex justify="space-between" gap={16} align="flex-end" wrap>
@@ -36,7 +38,7 @@ export function PageFrame({
             <Typography.Paragraph className="page-subtitle">{subtitle}</Typography.Paragraph>
           ) : null}
         </div>
-        {actions ? <Space wrap>{actions}</Space> : null}
+        {actionItems.length ? <Space wrap>{actionItems}</Space> : null}
       </Flex>
       {!permission ? (
         <ForbiddenBlock />
