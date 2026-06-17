@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -535,6 +536,71 @@ func TestManualRequirementCoverageMetadataRejectsInvalidStatus(t *testing.T) {
 		CoverageStatus: "done_enough",
 	}); err != ErrInvalidRequest {
 		t.Fatalf("expected invalid manual coverage status to be rejected, got %v", err)
+	}
+}
+
+func TestBatchRequirementCoverageMetadataDeduplicatesAndPreservesEvidence(t *testing.T) {
+	ids, status, needsReview, metadata, err := batchRequirementCoverageMetadata("user-1", BatchUpdateRequirementCoverageRequest{
+		RequirementIDs: []string{" evaluation-001 ", "evaluation-002", "evaluation-001", ""},
+		CoverageStatus: "covered",
+		Evidence:       "已逐项补充响应依据",
+		SourceRefs: []any{
+			map[string]any{"title": "响应章节", "page": 8},
+		},
+	})
+	if err != nil {
+		t.Fatalf("batch coverage metadata: %v", err)
+	}
+	if status != "covered" || needsReview {
+		t.Fatalf("unexpected normalized status: status=%q needsReview=%v", status, needsReview)
+	}
+	if len(ids) != 2 || ids[0] != "evaluation-001" || ids[1] != "evaluation-002" {
+		t.Fatalf("expected deduplicated requirement ids, got %#v", ids)
+	}
+	if metadata["action"] != "batch_review" || metadata["batch"] != true || metadata["requirement_count"] != 2 {
+		t.Fatalf("expected batch metadata, got %#v", metadata)
+	}
+	if _, exists := metadata["requirement_id"]; exists {
+		t.Fatalf("expected batch metadata to defer requirement id to each item, got %#v", metadata["requirement_id"])
+	}
+	if metadata["evidence"] != "已逐项补充响应依据" {
+		t.Fatalf("expected evidence to be preserved, got %#v", metadata["evidence"])
+	}
+}
+
+func TestBatchRequirementCoverageMetadataRejectsEmptyOrOversizedBatch(t *testing.T) {
+	for name, req := range map[string]BatchUpdateRequirementCoverageRequest{
+		"empty": {
+			RequirementIDs: []string{" ", ""},
+			CoverageStatus: "covered",
+		},
+		"oversized": {
+			RequirementIDs: func() []string {
+				ids := make([]string, requirementCoverageBatchLimit+1)
+				for index := range ids {
+					ids[index] = fmt.Sprintf("evaluation-%03d", index)
+				}
+				return ids
+			}(),
+			CoverageStatus: "covered",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, _, err := batchRequirementCoverageMetadata("user-1", req); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid batch to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRequirementCoverageMetadataForItemAddsRequirementID(t *testing.T) {
+	base := map[string]any{"action": "batch_review", "batch": true}
+	metadata := requirementCoverageMetadataForItem(base, "evaluation-001")
+	if metadata["requirement_id"] != "evaluation-001" {
+		t.Fatalf("expected item requirement id, got %#v", metadata)
+	}
+	if _, exists := base["requirement_id"]; exists {
+		t.Fatalf("expected base metadata to remain unchanged, got %#v", base)
 	}
 }
 

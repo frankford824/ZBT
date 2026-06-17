@@ -42,6 +42,7 @@ const (
 	maxExportAttachmentCount            = 50
 	maxExportInlineAttachmentBytes      = 20 * 1024 * 1024
 	maxExportInlineAttachmentTotalBytes = 50 * 1024 * 1024
+	requirementCoverageBatchLimit       = 100
 	maxExactJSONInteger                 = int64(1<<53 - 1)
 )
 
@@ -424,6 +425,13 @@ type UpdateRequirementCoverageRequest struct {
 	CoverageStatus string `json:"coverage_status"`
 	Evidence       string `json:"evidence"`
 	SourceRefs     []any  `json:"source_refs"`
+}
+
+type BatchUpdateRequirementCoverageRequest struct {
+	RequirementIDs []string `json:"requirement_ids"`
+	CoverageStatus string   `json:"coverage_status"`
+	Evidence       string   `json:"evidence"`
+	SourceRefs     []any    `json:"source_refs"`
 }
 
 type PipelineGate struct {
@@ -1159,32 +1167,13 @@ func (s *Store) UpdateRequirementCoverage(ctx context.Context, tenantID, userID,
 	if err != nil {
 		return RequirementItem{}, err
 	}
-	metadataJSON, _ := json.Marshal(coverageMetadata)
 	var result RequirementItem
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
 			return err
 		}
-		item, err := scanRequirementItem(tx.QueryRow(ctx, `
-			update bid_requirement_items
-			set coverage_status = $4,
-				needs_review = $5,
-				metadata = coalesce(metadata, '{}'::jsonb)
-					|| jsonb_build_object('latest_coverage', coalesce(metadata->'latest_coverage', '{}'::jsonb) || $6::jsonb)
-					|| jsonb_build_object('manual_coverage', $6::jsonb),
-				updated_at = now()
-			where tenant_id = $1
-				and bid_document_id = $2
-				and (id::text = $3 or external_id = $3)
-			returning id::text, bid_document_id::text, parse_result_id::text, external_id,
-				module, requirement_type, requirement, priority, mandatory, score,
-				expected_response, coverage_status, source_ref, needs_review, sort_order,
-				metadata, created_at, updated_at
-		`, tenantID, bidID, requirementID, status, needsReview, metadataJSON))
+		item, err := updateRequirementCoverageItem(ctx, tx, tenantID, bidID, requirementID, userID, status, needsReview, coverageMetadata)
 		if err != nil {
-			return err
-		}
-		if err := insertRequirementCoverageEvent(ctx, tx, tenantID, bidID, item.ID, item.ExternalID, "", userID, "manual", status, needsReview, coverageMetadata); err != nil {
 			return err
 		}
 		result = item
@@ -1194,6 +1183,73 @@ func (s *Store) UpdateRequirementCoverage(ctx context.Context, tenantID, userID,
 		return RequirementItem{}, ErrNotFound
 	}
 	return result, err
+}
+
+func (s *Store) BatchUpdateRequirementCoverage(ctx context.Context, tenantID, userID, bidID string, req BatchUpdateRequirementCoverageRequest) ([]RequirementItem, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	requirementIDs, status, needsReview, coverageMetadata, err := batchRequirementCoverageMetadata(userID, req)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]RequirementItem, 0, len(requirementIDs))
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		for _, requirementID := range requirementIDs {
+			itemMetadata := requirementCoverageMetadataForItem(coverageMetadata, requirementID)
+			item, err := updateRequirementCoverageItem(ctx, tx, tenantID, bidID, requirementID, userID, status, needsReview, itemMetadata)
+			if err != nil {
+				return err
+			}
+			result = append(result, item)
+		}
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return result, err
+}
+
+func updateRequirementCoverageItem(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	requirementID string,
+	userID string,
+	status string,
+	needsReview bool,
+	coverageMetadata map[string]any,
+) (RequirementItem, error) {
+	metadataJSON, _ := json.Marshal(coverageMetadata)
+	item, err := scanRequirementItem(tx.QueryRow(ctx, `
+		update bid_requirement_items
+		set coverage_status = $4,
+			needs_review = $5,
+			metadata = coalesce(metadata, '{}'::jsonb)
+				|| jsonb_build_object('latest_coverage', coalesce(metadata->'latest_coverage', '{}'::jsonb) || $6::jsonb)
+				|| jsonb_build_object('manual_coverage', $6::jsonb),
+			updated_at = now()
+		where tenant_id = $1
+			and bid_document_id = $2
+			and (id::text = $3 or external_id = $3)
+		returning id::text, bid_document_id::text, parse_result_id::text, external_id,
+			module, requirement_type, requirement, priority, mandatory, score,
+			expected_response, coverage_status, source_ref, needs_review, sort_order,
+			metadata, created_at, updated_at
+	`, tenantID, bidID, requirementID, status, needsReview, metadataJSON))
+	if err != nil {
+		return RequirementItem{}, err
+	}
+	if err := insertRequirementCoverageEvent(ctx, tx, tenantID, bidID, item.ID, item.ExternalID, "", userID, "manual", status, needsReview, coverageMetadata); err != nil {
+		return RequirementItem{}, err
+	}
+	return item, nil
 }
 
 func (s *Store) ListRequirementCoverageEvents(ctx context.Context, tenantID, bidID, requirementID string) ([]RequirementCoverageEvent, error) {
@@ -4504,6 +4560,47 @@ func manualRequirementCoverageMetadata(requirementID, userID string, req UpdateR
 		metadata["source_refs"] = req.SourceRefs
 	}
 	return status, needsReview, metadata, nil
+}
+
+func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementCoverageRequest) ([]string, string, bool, map[string]any, error) {
+	requirementIDs := make([]string, 0, len(req.RequirementIDs))
+	seen := make(map[string]struct{}, len(req.RequirementIDs))
+	for _, value := range req.RequirementIDs {
+		requirementID := strings.TrimSpace(value)
+		if requirementID == "" {
+			continue
+		}
+		if _, ok := seen[requirementID]; ok {
+			continue
+		}
+		seen[requirementID] = struct{}{}
+		requirementIDs = append(requirementIDs, requirementID)
+	}
+	if len(requirementIDs) == 0 || len(requirementIDs) > requirementCoverageBatchLimit {
+		return nil, "", false, nil, ErrInvalidRequest
+	}
+	status, needsReview, metadata, err := manualRequirementCoverageMetadata("", userID, UpdateRequirementCoverageRequest{
+		CoverageStatus: req.CoverageStatus,
+		Evidence:       req.Evidence,
+		SourceRefs:     req.SourceRefs,
+	})
+	if err != nil {
+		return nil, "", false, nil, err
+	}
+	delete(metadata, "requirement_id")
+	metadata["action"] = "batch_review"
+	metadata["batch"] = true
+	metadata["requirement_count"] = len(requirementIDs)
+	return requirementIDs, status, needsReview, metadata, nil
+}
+
+func requirementCoverageMetadataForItem(base map[string]any, requirementID string) map[string]any {
+	metadata := copyStringAnyMap(base)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["requirement_id"] = requirementID
+	return metadata
 }
 
 func insertRequirementCoverageEvent(

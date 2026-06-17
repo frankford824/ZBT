@@ -3157,3 +3157,45 @@ cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval --provider
 
 1. 本轮新增真实 endpoint 验收入口，但当前环境没有 MinerU/PaddleOCR endpoint/key，因此不能宣称真实 Provider 已通过端到端样本。
 2. CLI 默认验证第一页 OCR；多页扫描件、复杂表格、多 Provider 对比评分仍需后续扩展。
+
+## Loop-53 / 响应矩阵批量审阅 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式响应矩阵的批量人工审阅入口，避免只能逐条点选覆盖状态。
+2. 批量操作必须写入同一套 `latest_coverage`、`manual_coverage` 和覆盖历史，不绕开审计链路。
+3. 前端入口只展示业务动作，不暴露 provider、model、schema、token 等技术口径。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `BatchUpdateRequirementCoverage()`，支持最多 100 条要求项批量标记覆盖状态；请求会去重、清理空 ID，任一要求项不存在时整批失败。
+2. 单条和批量覆盖更新共用 `updateRequirementCoverageItem()`，统一更新 `bid_requirement_items.coverage_status`、`needs_review`、`metadata.latest_coverage`、`metadata.manual_coverage` 并追加 `bid_requirement_coverage_events`。
+3. `backend/internal/api/routes.go` 新增 `PATCH /bids/:id/requirements`，按 bid full 权限执行同步批量审阅，并纳入 routeSpecs 和自定义路由白名单。
+4. `frontend/src/shared/api/client.ts` 新增 `batchUpdateBidRequirementCoverage()`。
+5. `frontend/src/features/bid/index.tsx` 的“响应要点”表新增多选列、选中数量提示和“批量标记”控件；批量执行期间锁定单条/批量状态控件，避免重复提交。
+6. `frontend/src/index.css` 增加批量标记控件固定宽度，减少工具栏换行错位。
+7. `API_SPEC.md`、`AI_PIPELINE.md`、`AI_IMPLEMENTATION_CHECKLIST.md` 同步更新当前能力和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w backend/internal/platform/bid/store.go backend/internal/platform/bid/store_test.go backend/internal/api/routes.go backend/internal/api/routes_test.go
+cd backend && go test ./internal/platform/bid ./internal/api
+pnpm --dir frontend build
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. Go bid/API 专项测试通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. Go 后端全量测试通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮完成批量覆盖状态审阅，不做批量证据选区、批量来源引用编辑和跨条件高级筛选。
+2. 批量上限暂定为 100 条，后续如需整标级全选审阅，应改为服务端条件批处理并返回任务进度。

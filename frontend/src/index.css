@@ -1102,6 +1102,10 @@ a {
   width: 104px;
 }
 
+.requirement-batch-status-select {
+  width: 118px;
+}
+
 .requirement-evidence-text {
   display: block;
   min-width: 0;

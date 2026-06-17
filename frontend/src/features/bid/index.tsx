@@ -51,6 +51,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { z } from 'zod'
 import {
   acceptChapter,
+  batchUpdateBidRequirementCoverage,
   chapterAiAction,
   confirmBidParseResult,
   confirmFileUpload,
@@ -497,6 +498,7 @@ export function BidWizardPage() {
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
   const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>('all')
+  const [selectedRequirementKeys, setSelectedRequirementKeys] = useState<string[]>([])
   const [historyRequirement, setHistoryRequirement] = useState<ParseRequirementRow | null>(null)
   const bid = useQuery({
     queryKey: ['bid', bidId],
@@ -780,10 +782,32 @@ export function BidWizardPage() {
     },
     onError: (error) => message.error(getApiErrorMessage(error, '更新响应状态失败')),
   })
+  const requirementBatchCoverageMutation = useMutation({
+    mutationFn: (payload: {
+      requirementIds: string[]
+      coverageStatus: BidRequirementItemDTO['coverage_status']
+      evidence?: string
+    }) =>
+      batchUpdateBidRequirementCoverage(bidId, {
+        requirement_ids: payload.requirementIds,
+        coverage_status: payload.coverageStatus,
+        evidence: payload.evidence,
+      }),
+    onSuccess: async (items) => {
+      message.success(`已更新 ${items.length} 项响应状态`)
+      setSelectedRequirementKeys([])
+      await queryClient.invalidateQueries({ queryKey: ['bid-requirements', bidId] })
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '批量更新响应状态失败')),
+  })
   const requirementHistoryMutation = useMutation({
     mutationFn: (requirementId: string) => fetchBidRequirementCoverageHistory(bidId, requirementId),
     onError: (error) => message.error(getApiErrorMessage(error, '获取响应历史失败')),
   })
+  const updateBatchRequirementStatus = (coverageStatus: BidRequirementItemDTO['coverage_status']) => {
+    if (!selectedRequirementKeys.length || requirementBatchCoverageMutation.isPending) return
+    requirementBatchCoverageMutation.mutate({ requirementIds: [...selectedRequirementKeys], coverageStatus })
+  }
   const updateRequirementStatus = (row: ParseRequirementRow, coverageStatus: BidRequirementItemDTO['coverage_status']) => {
     if (!row.canUpdate) return
     requirementCoverageMutation.mutate({ requirementId: row.id, coverageStatus })
@@ -836,6 +860,7 @@ export function BidWizardPage() {
     ? syncedRequirementRows
     : structuredRequirementRows(parseResult.data?.structured_result)
   const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter)
+  const isRequirementUpdating = requirementCoverageMutation.isPending || requirementBatchCoverageMutation.isPending
   const parseFailureMessage =
     parseResult.data?.status === 'failed'
       ? parseResult.data.error_message?.trim() || '文件解读失败，请重新上传或重新解读'
@@ -1001,6 +1026,23 @@ export function BidWizardPage() {
                                 { label: '已覆盖', value: 'covered' },
                               ]}
                             />
+                            {canWrite ? (
+                              <>
+                                <Select
+                                  size="small"
+                                  className="requirement-batch-status-select"
+                                  value={undefined}
+                                  placeholder="批量标记"
+                                  disabled={!selectedRequirementKeys.length || isRequirementUpdating}
+                                  loading={requirementBatchCoverageMutation.isPending}
+                                  onChange={updateBatchRequirementStatus}
+                                  options={requirementCoverageOptions}
+                                />
+                                {selectedRequirementKeys.length ? (
+                                  <Typography.Text type="secondary">已选 {selectedRequirementKeys.length} 项</Typography.Text>
+                                ) : null}
+                              </>
+                            ) : null}
                             <Button
                               size="small"
                               icon={<DownloadOutlined />}
@@ -1024,6 +1066,18 @@ export function BidWizardPage() {
                             size="small"
                             pagination={{ pageSize: 6, size: 'small' }}
                             rowKey="id"
+                            rowSelection={
+                              canWrite
+                                ? {
+                                    columnWidth: 42,
+                                    selectedRowKeys: selectedRequirementKeys,
+                                    onChange: (keys) => setSelectedRequirementKeys(keys.map(String)),
+                                    getCheckboxProps: (row: ParseRequirementRow) => ({
+                                      disabled: !row.canUpdate || isRequirementUpdating,
+                                    }),
+                                  }
+                                : undefined
+                            }
                             dataSource={visibleRequirementRows}
                             columns={[
                               { title: '来源分组', dataIndex: 'module', width: 120 },
@@ -1041,7 +1095,7 @@ export function BidWizardPage() {
                                       size="small"
                                       className="requirement-status-select"
                                       value={row.coverageStatus}
-                                      disabled={requirementCoverageMutation.isPending}
+                                      disabled={isRequirementUpdating}
                                       onChange={(value) => updateRequirementStatus(row, value)}
                                       options={requirementCoverageOptions}
                                     />
@@ -1053,7 +1107,7 @@ export function BidWizardPage() {
                                 title: '响应证据',
                                 width: 260,
                                 render: (_, row) =>
-                                  requirementEvidenceCell(row, canWrite, requirementCoverageMutation.isPending, openRequirementEvidenceModal),
+                                  requirementEvidenceCell(row, canWrite, isRequirementUpdating, openRequirementEvidenceModal),
                               },
                               {
                                 title: '属性',

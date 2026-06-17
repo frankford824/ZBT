@@ -1722,6 +1722,22 @@ export async function updateBidRequirementCoverage(
   return data
 }
 
+export async function batchUpdateBidRequirementCoverage(
+  bidId: string,
+  payload: {
+    requirement_ids: string[]
+    coverage_status: BidRequirementItemDTO['coverage_status']
+    evidence?: string
+    source_refs?: unknown[]
+  },
+): Promise<BidRequirementItemDTO[]> {
+  const { data } = await apiClient.patch<{ items: BidRequirementItemDTO[] }>(
+    `/bids/${encodeURIComponent(bidId)}/requirements`,
+    payload,
+  )
+  return data.items
+}
+
 export async function fetchBidRequirementCoverageHistory(
   bidId: string,
   requirementId: string,

@@ -651,6 +651,19 @@ func TestRouteInfosExposeRequirementCoverageHistoryAsReadOnlyBidRoute(t *testing
 	}
 }
 
+func TestRouteInfosExposeRequirementCoverageBatchUpdateAsBidWriteRoute(t *testing.T) {
+	route, ok := routeInfoByKey(http.MethodPatch, "/bids/:id/requirements")
+	if !ok {
+		t.Fatal("expected requirement coverage batch update route metadata to be present")
+	}
+	if route.Module != "bid" || route.Required != rbac.LevelFull {
+		t.Fatalf("expected requirement coverage batch update route to require bid full, got %+v", route)
+	}
+	if route.Async {
+		t.Fatal("expected requirement coverage batch update route to be synchronous")
+	}
+}
+
 func TestRouteInfosExposeRequirementCoverageUpdateAsBidWriteRoute(t *testing.T) {
 	route, ok := routeInfoByKey(http.MethodPatch, "/bids/:id/requirements/:requirementId")
 	if !ok {

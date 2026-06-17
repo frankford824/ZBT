@@ -136,6 +136,7 @@ var routeSpecs = []routeSpec{
 	{"GET", "/bids/:id/parse-result", "bid", false},
 	{"PUT", "/bids/:id/parse-result", "bid", false},
 	{"GET", "/bids/:id/requirements", "bid", false},
+	{"PATCH", "/bids/:id/requirements", "bid", false},
 	{"GET", "/bids/:id/requirements/export", "bid", false},
 	{"GET", "/bids/:id/requirements/:requirementId/history", "bid", false},
 	{"PATCH", "/bids/:id/requirements/:requirementId", "bid", false},
@@ -676,6 +677,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelRead), s.getBidParseResult)
 	group.PUT("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelFull), s.confirmBidParseResult)
 	group.GET("/bids/:id/requirements", rbac.Require("bid", rbac.LevelRead), s.listBidRequirements)
+	group.PATCH("/bids/:id/requirements", rbac.Require("bid", rbac.LevelFull), s.batchUpdateBidRequirementCoverage)
 	group.GET("/bids/:id/requirements/export", rbac.Require("bid", rbac.LevelRead), s.exportBidRequirements)
 	group.GET("/bids/:id/requirements/:requirementId/history", rbac.Require("bid", rbac.LevelRead), s.listBidRequirementCoverageHistory)
 	group.PATCH("/bids/:id/requirements/:requirementId", rbac.Require("bid", rbac.LevelFull), s.updateBidRequirementCoverage)
@@ -829,6 +831,7 @@ func customRouteSet() map[string]bool {
 		"GET /bids/:id/parse-result":                        true,
 		"PUT /bids/:id/parse-result":                        true,
 		"GET /bids/:id/requirements":                        true,
+		"PATCH /bids/:id/requirements":                      true,
 		"GET /bids/:id/requirements/export":                 true,
 		"GET /bids/:id/requirements/:requirementId/history": true,
 		"PATCH /bids/:id/requirements/:requirementId":       true,
@@ -1830,6 +1833,21 @@ func (s *server) listBidRequirementCoverageHistory(c *gin.Context) {
 		tenant.FromContext(c.Request.Context()),
 		c.Param("id"),
 		c.Param("requirementId"),
+	)
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) batchUpdateBidRequirementCoverage(c *gin.Context) {
+	var req bid.BatchUpdateRequirementCoverageRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	result, err := s.bidStore.BatchUpdateRequirementCoverage(
+		c.Request.Context(),
+		tenant.FromContext(c.Request.Context()),
+		c.GetString("user_id"),
+		c.Param("id"),
+		req,
 	)
 	respond(c, gin.H{"items": result}, err)
 }
