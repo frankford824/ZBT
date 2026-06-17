@@ -15,6 +15,9 @@ from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
 from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest, ChapterGenerateResponse
 
 
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
 @dataclass(frozen=True)
 class OpenAICompatibleTarget:
     model: str
@@ -69,6 +72,8 @@ class OpenAICompatibleProvider:
         if not os.getenv(self.base_url_env, self.default_base_url).strip():
             return False
         if self.api_key_required and not self._api_key():
+            return False
+        if self.auth_header_name and not self.auth_header_env:
             return False
         if self.auth_header_env and not os.getenv(self.auth_header_env, "").strip():
             return False
@@ -213,12 +218,17 @@ class OpenAICompatibleProvider:
             raise RuntimeError(f"{self.name} is not configured: missing {self.api_key_env}")
 
         if self.auth_header_name:
+            auth_header_name = _safe_header_name(self.auth_header_name, self.name, "auth header")
+            reserved_names = {key.lower(): key for key in headers}
+            if auth_header_name.lower() in reserved_names:
+                reserved_name = reserved_names[auth_header_name.lower()]
+                raise RuntimeError(f"{self.name} auth header must not override {reserved_name}")
             if not self.auth_header_env:
                 raise RuntimeError(f"{self.name} auth header is missing an environment variable")
             token = os.getenv(self.auth_header_env, "").strip()
             if not token:
                 raise RuntimeError(f"{self.name} is not configured: missing {self.auth_header_env}")
-            headers[self.auth_header_name] = _bearer_header(token)
+            headers[auth_header_name] = _bearer_header(token)
 
         extra_headers = _extra_headers_from_env(self.extra_headers_env, self.name)
         reserved_names = {key.lower() for key in headers}
@@ -337,14 +347,28 @@ def _extra_headers_from_env(env_name: str, provider_name: str) -> dict[str, str]
         raise RuntimeError(f"{provider_name} extra headers env {env_name} must be a JSON object")
 
     headers: dict[str, str] = {}
+    seen_names: set[str] = set()
     for key, value in parsed.items():
-        header_name = str(key).strip()
-        if not header_name or any(char in header_name for char in "\r\n:"):
-            raise RuntimeError(f"{provider_name} extra headers env {env_name} contains an invalid header name")
+        header_name = _safe_header_name(
+            str(key),
+            provider_name,
+            f"extra headers env {env_name}",
+        )
+        normalized_name = header_name.lower()
+        if normalized_name in seen_names:
+            raise RuntimeError(f"{provider_name} extra headers env {env_name} contains duplicate header {header_name}")
+        seen_names.add(normalized_name)
         if not isinstance(value, str):
             raise RuntimeError(f"{provider_name} extra headers env {env_name} values must be strings")
         headers[header_name] = _safe_header_value(value)
     return headers
+
+
+def _safe_header_name(value: str, provider_name: str, label: str) -> str:
+    name = value.strip()
+    if not _HEADER_NAME_RE.fullmatch(name):
+        raise RuntimeError(f"{provider_name} {label} contains an invalid header name")
+    return name
 
 
 def _safe_header_value(value: str) -> str:

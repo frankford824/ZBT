@@ -208,6 +208,68 @@ def test_openai_provider_rejects_extra_headers_that_override_auth(monkeypatch) -
         provider._headers()
 
 
+def test_openai_provider_rejects_gateway_auth_header_that_overrides_provider_auth(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        auth_header_name="authorization",
+        auth_header_env="FAKE_CF_GATEWAY_TOKEN",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
+
+    with pytest.raises(RuntimeError, match="auth header must not override Authorization"):
+        provider._headers()
+
+
+def test_openai_provider_rejects_invalid_gateway_auth_header_name(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        api_key_required=False,
+        auth_header_name="bad header",
+        auth_header_env="FAKE_CF_GATEWAY_TOKEN",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
+
+    with pytest.raises(RuntimeError, match="auth header contains an invalid header name"):
+        provider._headers()
+
+
+def test_openai_provider_health_check_rejects_auth_header_without_env(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        auth_header_name="cf-aig-authorization",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
+
+    assert provider.health_check() is False
+    with pytest.raises(RuntimeError, match="auth header is missing an environment variable"):
+        provider._headers()
+
+
+def test_openai_provider_rejects_duplicate_extra_headers_case_insensitively(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        api_key_required=False,
+        extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"cf-aig-metadata":"a","CF-AIG-METADATA":"b"}')
+
+    with pytest.raises(RuntimeError, match="duplicate header"):
+        provider._headers()
+
+
 def test_json_from_text_accepts_fenced_or_explained_json() -> None:
     assert _json_from_text('{"indexes":[1,0]}') == {"indexes": [1, 0]}
     assert _json_from_text('```json\n{"indexes":[2,0]}\n```') == {"indexes": [2, 0]}
