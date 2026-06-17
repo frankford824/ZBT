@@ -94,6 +94,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { fileOpenErrorMessage, openFileUrl } from '../../shared/files/openFileUrl'
 import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../../shared/files/uploadLimits'
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
@@ -725,7 +726,10 @@ export function BidWizardPage() {
         message.info('导出文件仍在生成')
         return
       }
-      window.open(detail.download.url, '_blank', 'noopener,noreferrer')
+      const openError = fileOpenErrorMessage(openFileUrl(detail.download.url))
+      if (openError) {
+        message.error(openError)
+      }
     },
     onError: (error) => message.error(getApiErrorMessage(error, '获取下载链接失败')),
   })

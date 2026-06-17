@@ -45,6 +45,7 @@ import {
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
+import { fileOpenErrorMessage, openFileUrl } from '../../shared/files/openFileUrl'
 import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../../shared/files/uploadLimits'
 import { formatDateOnly, formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
@@ -270,7 +271,10 @@ export function KnowledgeDocsPage() {
   const openFile = async (fileId: string, mode: 'download' | 'preview') => {
     try {
       const result = await fetchFileURL(fileId, mode)
-      window.open(result.url, '_blank', 'noopener,noreferrer')
+      const openError = fileOpenErrorMessage(openFileUrl(result.url))
+      if (openError) {
+        message.error(openError)
+      }
     } catch (error) {
       message.error(getApiErrorMessage(error, mode === 'download' ? '获取下载链接失败' : '获取预览链接失败'))
     }
@@ -954,7 +958,10 @@ export function FilePreviewPage() {
     }
     try {
       const result = await fetchFileURL(fileId, 'download')
-      window.open(result.url, '_blank', 'noopener,noreferrer')
+      const openError = fileOpenErrorMessage(openFileUrl(result.url))
+      if (openError) {
+        message.error(openError)
+      }
     } catch (error) {
       message.error(getApiErrorMessage(error, '获取下载链接失败'))
     }
