@@ -46,6 +46,30 @@ func TestLoginRejectsInvalidInputBeforeDB(t *testing.T) {
 	}
 }
 
+func TestSessionByUserRoleRejectsInvalidClaimsBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	validTenantID := "00000000-0000-4000-8000-000000000001"
+	validUserID := "00000000-0000-4000-8000-000000000002"
+	validRoleID := "00000000-0000-4000-8000-000000000003"
+	for _, req := range []struct {
+		tenantID string
+		userID   string
+		roleID   string
+	}{
+		{tenantID: "", userID: validUserID, roleID: validRoleID},
+		{tenantID: "not-a-uuid", userID: validUserID, roleID: validRoleID},
+		{tenantID: validTenantID, userID: "", roleID: validRoleID},
+		{tenantID: validTenantID, userID: "not-a-uuid", roleID: validRoleID},
+		{tenantID: validTenantID, userID: validUserID, roleID: ""},
+		{tenantID: validTenantID, userID: validUserID, roleID: "not-a-uuid"},
+	} {
+		_, err := store.SessionByUserRole(context.Background(), req.tenantID, req.userID, req.roleID)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for session lookup=%+v, got %v", req, err)
+		}
+	}
+}
+
 func TestCreateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
 	store := NewStore(nil)
 	for _, req := range []struct {

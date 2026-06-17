@@ -210,6 +210,21 @@ func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Se
 }
 
 func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID string) (Session, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	userID = strings.TrimSpace(userID)
+	roleID = strings.TrimSpace(roleID)
+	if tenantID == "" || userID == "" || roleID == "" {
+		return Session{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(tenantID); err != nil {
+		return Session{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(userID); err != nil {
+		return Session{}, ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(roleID); err != nil {
+		return Session{}, ErrInvalidRequest
+	}
 	var session Session
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var memberID string

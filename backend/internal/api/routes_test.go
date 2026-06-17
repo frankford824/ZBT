@@ -142,6 +142,17 @@ func TestBearerTokenNormalizesSchemeAndRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
+func TestInvalidSessionLookupTreatsInvalidClaimsAsUnauthorized(t *testing.T) {
+	for _, err := range []error{saas.ErrNotFound, saas.ErrInvalidRequest} {
+		if !invalidSessionLookup(err) {
+			t.Fatalf("expected %v to be treated as an invalid session lookup", err)
+		}
+	}
+	if invalidSessionLookup(platformfile.ErrObjectNotUploaded) {
+		t.Fatal("expected unrelated errors to remain internal")
+	}
+}
+
 func TestSessionRevokedRejectsTokensIssuedBeforeRevocation(t *testing.T) {
 	revokedAt := time.Now()
 	if !sessionRevoked(

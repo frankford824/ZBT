@@ -409,7 +409,7 @@ func (s *server) refresh(c *gin.Context) {
 		return
 	}
 	session, err := s.store.SessionByUserRole(c.Request.Context(), claims.TenantID, claims.UserID, claims.RoleID)
-	if errors.Is(err, saas.ErrNotFound) {
+	if invalidSessionLookup(err) {
 		respondUnauthorized(c)
 		return
 	}
@@ -499,7 +499,7 @@ func (s *server) authenticate() gin.HandlerFunc {
 			return
 		}
 		session, err := s.store.SessionByUserRole(c.Request.Context(), claims.TenantID, claims.UserID, claims.RoleID)
-		if errors.Is(err, saas.ErrNotFound) {
+		if invalidSessionLookup(err) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, apiError("unauthorized", "登录状态已过期，请重新登录"))
 			return
 		}
@@ -540,6 +540,10 @@ func tokenIssuedAt(claims auth.Claims) (time.Time, bool) {
 		return time.Unix(claims.IssuedAt, 0), true
 	}
 	return time.Time{}, false
+}
+
+func invalidSessionLookup(err error) bool {
+	return errors.Is(err, saas.ErrNotFound) || errors.Is(err, saas.ErrInvalidRequest)
 }
 
 func (s *server) currentUser(c *gin.Context) {
