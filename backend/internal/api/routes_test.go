@@ -299,16 +299,18 @@ func TestAITaskAccessModuleMapsResourceTypes(t *testing.T) {
 		resourceType string
 		taskType     string
 		want         string
+		wantOK       bool
 	}{
-		{resourceType: "knowledge_document", taskType: "knowledge_process", want: "knowledge"},
-		{resourceType: "bid_chapter", taskType: "chapter_generate", want: "bid"},
-		{resourceType: "bid_export", taskType: "document_export", want: "bid"},
-		{resourceType: "cost_project", taskType: "cost_advice", want: "cost"},
-		{resourceType: "", taskType: "tender_parse", want: "bid"},
-		{resourceType: "", taskType: "unknown", want: "dashboard"},
+		{resourceType: "knowledge_document", taskType: "knowledge_process", want: "knowledge", wantOK: true},
+		{resourceType: "bid_chapter", taskType: "chapter_generate", want: "bid", wantOK: true},
+		{resourceType: "bid_export", taskType: "document_export", want: "bid", wantOK: true},
+		{resourceType: "cost_project", taskType: "cost_advice", want: "cost", wantOK: true},
+		{resourceType: "", taskType: "tender_parse", want: "bid", wantOK: true},
+		{resourceType: "", taskType: "unknown", want: "", wantOK: false},
 	}
 	for _, tc := range cases {
-		if got := aiTaskAccessModule(tc.resourceType, tc.taskType); got != tc.want {
+		got, ok := aiTaskAccessModule(tc.resourceType, tc.taskType)
+		if got != tc.want || ok != tc.wantOK {
 			t.Fatalf("expected %q/%q to map to %q, got %q", tc.resourceType, tc.taskType, tc.want, got)
 		}
 	}
@@ -357,5 +359,21 @@ func TestRequireAITaskAccessDeniesMissingResourcePermission(t *testing.T) {
 	}
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for denied task access, got %d", recorder.Code)
+	}
+}
+
+func TestRequireAITaskAccessDeniesUnknownTaskType(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set(rbac.ContextPermissionsKey, map[string]rbac.Level{
+		"dashboard": rbac.LevelFull,
+	})
+
+	if requireAITaskAccess(context, "", "future_task") {
+		t.Fatal("expected unknown task polling to be denied even with dashboard permission")
+	}
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for unknown task access, got %d", recorder.Code)
 	}
 }

@@ -1975,7 +1975,11 @@ func (s *server) getAITask(c *gin.Context) {
 }
 
 func requireAITaskAccess(c *gin.Context, resourceType, taskType string) bool {
-	module := aiTaskAccessModule(resourceType, taskType)
+	module, ok := aiTaskAccessModule(resourceType, taskType)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": "permission_denied", "error": "当前账号没有此操作权限", "module": "unknown"})
+		return false
+	}
 	if rbac.Allows(rbac.PermissionsFromContext(c)[module], rbac.LevelRead) {
 		return true
 	}
@@ -1983,30 +1987,30 @@ func requireAITaskAccess(c *gin.Context, resourceType, taskType string) bool {
 	return false
 }
 
-func aiTaskAccessModule(resourceType, taskType string) string {
+func aiTaskAccessModule(resourceType, taskType string) (string, bool) {
 	resourceType = strings.ToLower(strings.TrimSpace(resourceType))
 	taskType = strings.ToLower(strings.TrimSpace(taskType))
 	switch {
 	case strings.HasPrefix(resourceType, "knowledge"):
-		return "knowledge"
+		return "knowledge", true
 	case strings.HasPrefix(resourceType, "bid"):
-		return "bid"
+		return "bid", true
 	case strings.HasPrefix(resourceType, "cost"):
-		return "cost"
+		return "cost", true
 	case strings.HasPrefix(resourceType, "compliance"):
-		return "compliance"
+		return "compliance", true
 	}
 	switch taskType {
 	case "knowledge_process", "knowledge_embedding", "knowledge_rerank":
-		return "knowledge"
+		return "knowledge", true
 	case "tender_parse", "outline_generate", "chapter_generate", "chapter_ai_action", "document_export":
-		return "bid"
+		return "bid", true
 	case "cost_advice":
-		return "cost"
+		return "cost", true
 	case "compliance_check":
-		return "compliance"
+		return "compliance", true
 	default:
-		return "dashboard"
+		return "", false
 	}
 }
 
