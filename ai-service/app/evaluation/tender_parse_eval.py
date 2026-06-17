@@ -169,6 +169,16 @@ def _evaluate_table_blocks(
             f">={expected}",
             actual,
         )
+    if "min_cells_with_bbox" in table_spec:
+        expected = int(table_spec["min_cells_with_bbox"])
+        actual = sum(_cell_bbox_count(block) for block in blocks)
+        _add_check(
+            checks,
+            f"document.{document_id}.table_blocks.cells_with_bbox",
+            actual >= expected,
+            f">={expected}",
+            actual,
+        )
     if table_spec.get("require_md_table") is True:
         blocks_with_rows = [block for block in blocks if _table_row_count(block) > 0]
         missing = [
@@ -218,6 +228,18 @@ def _valid_bbox(value: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return x1 > x0 and y1 > y0
+
+
+def _cell_bbox_count(block: dict[str, Any]) -> int:
+    cell_bboxes = block.get("cell_bboxes")
+    if not isinstance(cell_bboxes, list):
+        return 0
+    total = 0
+    for row in cell_bboxes:
+        if not isinstance(row, list):
+            continue
+        total += sum(1 for cell in row if _valid_bbox(cell))
+    return total
 
 
 def _evaluate_tender_parse(

@@ -346,10 +346,14 @@ def _extract_pdf_tables(
             for table_index, table in enumerate(found.tables, start=1):
                 rows = table.extract()
                 cleaned_rows: list[list[str]] = []
-                for row in rows[:max_rows]:
+                cleaned_cell_bboxes: list[list[list[float] | None]] = []
+                cell_bboxes = _pdf_table_cell_bboxes(table, rows, max_rows)
+                for row_index, row in enumerate(rows[:max_rows]):
                     values = [str(cell or "").strip() for cell in row]
                     if any(values):
                         cleaned_rows.append(values)
+                        if row_index < len(cell_bboxes):
+                            cleaned_cell_bboxes.append(cell_bboxes[row_index])
                 if cleaned_rows:
                     table_payload: dict[str, object] = {
                         "page": page_index,
@@ -360,6 +364,8 @@ def _extract_pdf_tables(
                     bbox = _normalized_bbox(getattr(table, "bbox", None))
                     if bbox:
                         table_payload["bbox"] = bbox
+                    if any(_valid_bbox(cell) for row in cleaned_cell_bboxes for cell in row):
+                        table_payload["cell_bboxes"] = cleaned_cell_bboxes
                     if len(rows) > max_rows:
                         table_payload["truncated_after_row_limit"] = True
                         table_payload["row_limit"] = max_rows
@@ -391,6 +397,31 @@ def _extract_pdf_tables(
             table_payload["row_limit"] = max_rows
         tables.append(table_payload)
     return tables, errors
+
+
+def _pdf_table_cell_bboxes(
+    table: object,
+    rows: list[object],
+    max_rows: int,
+) -> list[list[list[float] | None]]:
+    cells = getattr(table, "cells", None)
+    if not isinstance(cells, list):
+        return []
+    column_count = _metadata_int(getattr(table, "col_count", 0), 0)
+    if column_count <= 0:
+        return []
+    cell_rows: list[list[list[float] | None]] = []
+    for row_index, row in enumerate(rows[:max_rows]):
+        if not isinstance(row, list):
+            cell_rows.append([])
+            continue
+        row_cells: list[list[float] | None] = []
+        for column_index in range(len(row)):
+            cell_index = row_index * column_count + column_index
+            cell = cells[cell_index] if cell_index < len(cells) else None
+            row_cells.append(_normalized_bbox(cell))
+        cell_rows.append(row_cells)
+    return cell_rows
 
 
 def _table_block(source: str, table: dict[str, object]) -> dict[str, object]:
@@ -427,6 +458,10 @@ def _table_block(source: str, table: dict[str, object]) -> dict[str, object]:
     bbox = _normalized_bbox(table.get("bbox"))
     if bbox:
         block["bbox"] = bbox
+    cell_bboxes = _normalized_cell_bboxes(table.get("cell_bboxes"))
+    if cell_bboxes:
+        block["cell_bboxes"] = cell_bboxes
+        block["cell_bbox_count"] = sum(1 for row in cell_bboxes for cell in row if cell)
     confidence = _metadata_float(table.get("confidence"))
     if confidence is not None:
         block["confidence"] = confidence
@@ -441,6 +476,28 @@ def _normalized_bbox(value: object) -> list[float] | None:
     except (TypeError, ValueError):
         return None
     return bbox if _bbox_area(bbox) > 0 else None
+
+
+def _valid_bbox(value: object) -> bool:
+    return _normalized_bbox(value) is not None
+
+
+def _normalized_cell_bboxes(value: object) -> list[list[list[float] | None]]:
+    if not isinstance(value, list):
+        return []
+    rows: list[list[list[float] | None]] = []
+    valid_count = 0
+    for row in value:
+        if not isinstance(row, list):
+            continue
+        cells: list[list[float] | None] = []
+        for cell in row:
+            bbox = _normalized_bbox(cell)
+            if bbox:
+                valid_count += 1
+            cells.append(bbox)
+        rows.append(cells)
+    return rows if valid_count else []
 
 
 def _normalize_table_rows(rows: object) -> list[list[str]]:

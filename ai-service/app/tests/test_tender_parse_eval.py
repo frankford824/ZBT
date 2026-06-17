@@ -97,6 +97,7 @@ def test_evaluate_golden_checks_table_block_structure(tmp_path) -> None:
                             "min_total_rows": 2,
                             "min_blocks_with_rows": 1,
                             "min_blocks_with_bbox": 0,
+                            "min_cells_with_bbox": 0,
                             "require_md_table": True,
                             "must_contain": ["最高单价", "中级养护技术员"],
                             "md_table_must_contain": ["| 项目号 | 项目名称 | 最高单价 | 综合单价 |"],
@@ -131,6 +132,7 @@ def test_evaluate_golden_fails_when_table_block_contract_is_missing(tmp_path) ->
                             "required_sources": ["pdf"],
                             "min_total_rows": 1,
                             "min_blocks_with_bbox": 1,
+                            "min_cells_with_bbox": 1,
                             "require_md_table": True,
                             "must_contain": ["最高单价"],
                             "md_table_must_contain": ["| 最高单价 |"],
@@ -150,6 +152,7 @@ def test_evaluate_golden_fails_when_table_block_contract_is_missing(tmp_path) ->
     assert "document.tender.table_blocks.source.pdf" in failed_names
     assert "document.tender.table_blocks.total_rows" in failed_names
     assert "document.tender.table_blocks.with_bbox" in failed_names
+    assert "document.tender.table_blocks.cells_with_bbox" in failed_names
     assert "document.tender.table_blocks.md_table_present" in failed_names
     assert "document.tender.table_blocks.must_contain[1]" in failed_names
     assert "document.tender.table_blocks.md_table_must_contain[1]" in failed_names

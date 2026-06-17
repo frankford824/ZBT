@@ -24,14 +24,14 @@
 - `ai-service/app/main.py` 已按 6 个模块逐一调用 `tender_parse` 路由，每个模块独立走 provider 候选和 fallback；单模块失败时保留基础解析并标记待确认。
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
-- `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析。
+- `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox` 和可用的 `cell_bboxes`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析。
 - `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”和“响应要点”视图，不展示模型、token、schema 等技术口径。
 - `backend/internal/db/migrations/00031_bid_requirement_items.sql` 已新增 `bid_requirement_items` 独立表，按租户启用 RLS，承接 AutoRFP 式 referenceId/source attribution 思路。
 - `backend/internal/platform/bid/store.go` 已在解析回调和人工确认两条路径同步 `requirement_items`，并提供 `ListRequirementItems`。
 - `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements` 只读接口。
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”筛选。
-- `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 63 项检查。
+- `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 103 项检查。
 - `backend/internal/db/migrations/00032_bid_pipeline_gates.sql` 已新增 `bid_pipeline_gates` RLS 表。
 - `backend/internal/platform/bid/store.go` 已在上传、解析、解析回调、人工确认、大纲生成、整标生成和导出路径维护阶段闸门；`GenerateOutline` 会检查 `interpret=passed`，`GenerateBid` 会检查 `plan=passed`，`CreateExport` 会检查 `generate=passed` 和 `check=passed`。旧的已确认解析、大纲、已完成章节内容和已完成合规检查会按真实业务状态自动补齐闸门。
 - `backend/internal/platform/compliance/store.go` 已在创建检查、问题修复、忽略和人工确认 fail 后同步 `check` 阶段闸门；`pass` 自动通过，`warn/fail_candidate` 进入待复核，`fail` 阻断。
@@ -89,8 +89,8 @@
 6. 回归评测：
    - 使用 `docs/ex/工程1` 的 PDF、docx、xlsx 样本建立 golden JSON。
    - 新增脚本输出字段命中率：项目名、预算、截止日、资格要求、评分项、无效标条款、附件清单。
-   - 当前已落地：`docs/sample_docs/golden/工程1.parse.json` 和 `python -m app.evaluation.tender_parse_eval --golden ...`，当前样本 101/101 通过。
-   - 当前已落地：样本评测会检查 `table_blocks.required_sources`、`min_total_rows`、`min_blocks_with_rows`、`min_blocks_with_bbox`、`require_md_table`、`md_table_must_contain` 和表格块关键单元格，防止 PDF/DOCX/XLSX 表格退化为普通文本。
+   - 当前已落地：`docs/sample_docs/golden/工程1.parse.json` 和 `python -m app.evaluation.tender_parse_eval --golden ...`，当前样本 103/103 通过。
+   - 当前已落地：样本评测会检查 `table_blocks.required_sources`、`min_total_rows`、`min_blocks_with_rows`、`min_blocks_with_bbox`、`min_cells_with_bbox`、`require_md_table`、`md_table_must_contain` 和表格块关键单元格，防止 PDF/DOCX/XLSX 表格退化为普通文本或丢失 PDF 单元格级版面证据。
    - P0 验收门槛：电子文本关键字段准确率不低于 85%；扫描/OCR 字段必须带置信度和人工复核标记。
 
 ## P0：OCR Provider 和版面证据
@@ -119,7 +119,7 @@
 4. 表格策略：
    - PDF 表格、xlsx 工作表、docx 表格统一转成 `table_blocks`。
    - 评分表和工程量清单不拆成普通段落；作为完整表格块进入模块抽取和 RAG。
-   - 表格块保留表头、页码、行列坐标、截断标记。
+   - 表格块保留表头、页码、表级 bbox、可用的单元格 bbox 和截断标记。
 
 5. 验收：
    - `docs/ex/工程1/采购文件桥梁检查.pdf` 能输出 page/block/table metadata。

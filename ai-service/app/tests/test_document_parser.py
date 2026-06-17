@@ -45,17 +45,30 @@ def test_table_block_md_table_preserves_empty_cells_and_escapes_pipes() -> None:
         {
             "index": 2,
             "rows": [["项目", "", "备注"], ["设备", "1200", "含|税"]],
+            "cell_bboxes": [
+                [[0, 0, 10, 10], [10, 0, 10, 10], [10, 0, 30, 10]],
+                [[0, 10, 10, 20], [10, 10, 20, 20], [20, 10, 30, 20]],
+            ],
         },
     )
 
     assert block["column_count"] == 3
     assert block["rows"] == [["项目", "", "备注"], ["设备", "1200", "含|税"]]
     assert block["md_table"] == "| 项目 |  | 备注 |\n| --- | --- | --- |\n| 设备 | 1200 | 含\\|税 |"
+    assert block["cell_bbox_count"] == 5
+    assert block["cell_bboxes"][0] == [[0.0, 0.0, 10.0, 10.0], None, [10.0, 0.0, 30.0, 10.0]]
 
 
 def test_pdf_table_extraction_keeps_table_bbox() -> None:
     class FakeTable:
         bbox = (1.123, 2.0, 30.987, 40.0)
+        col_count = 2
+        cells = [
+            (1.0, 2.0, 10.0, 8.0),
+            (10.0, 2.0, 30.0, 8.0),
+            (1.0, 8.0, 10.0, 20.0),
+            (10.0, 8.0, 30.0, 20.0),
+        ]
 
         def extract(self) -> list[list[str]]:
             return [["Item", "Amount"], ["Equipment", "1200"]]
@@ -77,6 +90,10 @@ def test_pdf_table_extraction_keeps_table_bbox() -> None:
             "rows": [["Item", "Amount"], ["Equipment", "1200"]],
             "extraction": "pymupdf",
             "bbox": [1.12, 2.0, 30.99, 40.0],
+            "cell_bboxes": [
+                [[1.0, 2.0, 10.0, 8.0], [10.0, 2.0, 30.0, 8.0]],
+                [[1.0, 8.0, 10.0, 20.0], [10.0, 8.0, 30.0, 20.0]],
+            ],
         }
     ]
 

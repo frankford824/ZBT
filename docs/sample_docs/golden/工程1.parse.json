@@ -15,6 +15,7 @@
         "min_total_rows": 180,
         "min_blocks_with_rows": 30,
         "min_blocks_with_bbox": 20,
+        "min_cells_with_bbox": 500,
         "require_md_table": true,
         "must_contain": [
           "评审办法",
@@ -75,6 +76,7 @@
         "min_total_rows": 180,
         "min_blocks_with_rows": 25,
         "min_blocks_with_bbox": 30,
+        "min_cells_with_bbox": 1200,
         "require_md_table": true,
         "must_contain": [
           "中级养护技术员",
