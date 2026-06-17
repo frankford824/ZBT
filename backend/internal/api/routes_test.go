@@ -346,6 +346,34 @@ func TestRouteInfosMarksFileRoutesDynamic(t *testing.T) {
 	}
 }
 
+func TestRouteInfosAsyncFlagsMatchTaskRoutes(t *testing.T) {
+	expected := map[string]bool{
+		"POST /bids/:id/upload-tender-file":     true,
+		"POST /bids/:id/parse-tender":           true,
+		"POST /bids/:id/outline/generate":       true,
+		"POST /bids/:id/generate":               true,
+		"POST /chapters/:chapterId/regenerate":  true,
+		"POST /chapters/:chapterId/ai-action":   true,
+		"POST /bids/:id/exports":                true,
+		"POST /knowledge/documents/:id/process": true,
+		"POST /compliance/checks":               true,
+		"POST /compliance/issues/:id/autofix":   true,
+		"POST /compliance/checks/:id/report":    true,
+		"POST /cost-projects/:id/ai-advice":     true,
+		"POST /cost-projects/:id/report":        true,
+	}
+
+	for _, route := range routeInfos() {
+		key := route.Method + " " + route.Path
+		if route.Async && !expected[key] {
+			t.Fatalf("route %s is marked async but is not a task-style endpoint", key)
+		}
+		if expected[key] && !route.Async {
+			t.Fatalf("route %s should be marked async", key)
+		}
+	}
+}
+
 func routeInfoByKey(method, path string) (routeInfo, bool) {
 	for _, route := range routeInfos() {
 		if route.Method == method && route.Path == path {
