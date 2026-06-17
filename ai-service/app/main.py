@@ -570,10 +570,24 @@ def callback_allowed_hosts() -> set[str]:
         value = item.strip()
         if not value:
             continue
-        parsed = urlparse(value if "://" in value else f"//{value}", scheme="http")
-        host = parsed.hostname or value
-        hosts.add(host.rstrip(".").lower())
+        hosts.add(_normalize_callback_allowed_host(value))
     return hosts
+
+
+def _normalize_callback_allowed_host(value: str) -> str:
+    if value != value.strip() or _contains_url_config_unsafe_character(value):
+        raise RuntimeError("AI_CALLBACK_ALLOWED_HOSTS contains invalid characters")
+    parsed = urlparse(value if "://" in value else f"//{value}", scheme="http")
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise RuntimeError("AI_CALLBACK_ALLOWED_HOSTS must contain hostnames or HTTP(S) origins")
+    if parsed.username is not None or parsed.password is not None:
+        raise RuntimeError("AI_CALLBACK_ALLOWED_HOSTS must not include credentials")
+    if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
+        raise RuntimeError("AI_CALLBACK_ALLOWED_HOSTS must not include paths, queries, or fragments")
+    host = parsed.hostname.rstrip(".").lower()
+    if not host:
+        raise RuntimeError("AI_CALLBACK_ALLOWED_HOSTS must contain hostnames or HTTP(S) origins")
+    return host
 
 
 def verify_request_signature(

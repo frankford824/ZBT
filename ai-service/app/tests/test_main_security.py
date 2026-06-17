@@ -145,6 +145,32 @@ def test_callback_url_defaults_allow_backend_and_local_hosts(monkeypatch) -> Non
     ensure_callback_url_allowed("http://127.0.0.1:8080/api/v1/ai/callbacks/tasks")
 
 
+def test_callback_allowed_hosts_accepts_hosts_and_origins(monkeypatch) -> None:
+    monkeypatch.setenv("AI_CALLBACK_ALLOWED_HOSTS", "backend:8080,https://Internal.Example:9443/")
+
+    assert callback_allowed_hosts() == {"backend", "internal.example"}
+    ensure_callback_url_allowed("https://internal.example/api/v1/ai/callbacks/tasks")
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "token@backend",
+        "http://token@backend",
+        "backend/api",
+        "https://backend/api",
+        "backend?debug=1",
+        "backend#fragment",
+        "backend\nX-Injected: yes",
+    ],
+)
+def test_callback_allowed_hosts_rejects_ambiguous_entries(monkeypatch, configured) -> None:
+    monkeypatch.setenv("AI_CALLBACK_ALLOWED_HOSTS", configured)
+
+    with pytest.raises(RuntimeError, match="AI_CALLBACK_ALLOWED_HOSTS"):
+        callback_allowed_hosts()
+
+
 def test_callback_url_rejects_non_http_or_unlisted_hosts(monkeypatch) -> None:
     monkeypatch.setenv("AI_CALLBACK_ALLOWED_HOSTS", "backend,internal.example")
 
