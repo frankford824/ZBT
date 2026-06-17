@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
+	"github.com/frankford824/ZBT/backend/internal/db/migrations"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 )
 
 func main() {
@@ -14,9 +14,12 @@ func main() {
 		log.Fatal("usage: migrate <up|down|status>")
 	}
 
-	databaseURL := os.Getenv("DATABASE_URL")
+	databaseURL := os.Getenv("MIGRATION_DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+		databaseURL = os.Getenv("DATABASE_URL")
+	}
+	if databaseURL == "" {
+		log.Fatal("MIGRATION_DATABASE_URL or DATABASE_URL is required")
 	}
 
 	db, err := sql.Open("pgx", databaseURL)
@@ -25,10 +28,7 @@ func main() {
 	}
 	defer db.Close()
 
-	if err := goose.SetDialect("postgres"); err != nil {
-		log.Fatal(err)
-	}
-	if err := goose.Run(os.Args[1], db, "internal/db/migrations"); err != nil {
+	if err := migrations.Run(db, os.Args[1]); err != nil {
 		log.Fatal(err)
 	}
 }
