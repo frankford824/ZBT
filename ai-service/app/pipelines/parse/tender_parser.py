@@ -53,6 +53,63 @@ MODULE_CONTEXT_KEYWORDS: dict[TenderParseModule, tuple[str, ...]] = {
     "annex": ("附件", "格式", "投标函", "报价表", "承诺函", "清单", "响应文件格式"),
 }
 
+MODULE_CHECKLIST_VERSION = "xparse-six-module-v1"
+MODULE_CHECKLISTS: dict[TenderParseModule, dict[str, object]] = {
+    "basic": {
+        "required_fields": ("project_name", "purchaser", "project_code", "budget", "deadline", "opening_time"),
+        "requirement_types": (),
+        "source_policy": "每个关键事实必须对应招标文件连续原文、页码或 chunk。",
+        "acceptance_checks": ("项目名称可定位", "截止/开标时间不凭空生成", "预算和编号缺失时进入人工复核"),
+    },
+    "qualification": {
+        "required_fields": ("qualification_requirements",),
+        "requirement_types": ("qualification", "certificate", "performance", "personnel", "credit", "deposit"),
+        "source_policy": "每条资格要求必须保留原文摘录和 citation_id。",
+        "acceptance_checks": ("强制资格项 mandatory=true", "证书/业绩/人员要求拆成独立 requirement_items"),
+    },
+    "evaluation": {
+        "required_fields": ("scoring_points",),
+        "requirement_types": ("scoring", "technical", "business", "price", "service", "delivery"),
+        "source_policy": "评分项必须保留分值、原文摘录和引用位置。",
+        "acceptance_checks": ("分值能解析则写入 score", "高分评分项 priority=high", "表格评分不得重排原文"),
+    },
+    "submission": {
+        "required_fields": ("submission_requirements",),
+        "requirement_types": ("submission", "signature", "seal", "copies", "deadline", "electronic_bid"),
+        "source_policy": "递交、签章、密封、份数要求必须带来源引用。",
+        "acceptance_checks": ("签章/密封/份数要求拆项", "电子标要求保留原文", "缺来源时 needs_review=true"),
+    },
+    "invalid_risk": {
+        "required_fields": ("invalid_clause_risks",),
+        "requirement_types": ("invalid_risk", "rejection", "material_deviation", "validity", "signature"),
+        "source_policy": "否决/废标条款只能从原文抽取，不允许推断扩写。",
+        "acceptance_checks": ("默认 mandatory=true", "高风险条款 priority=high", "缺页码或原文时必须人工复核"),
+    },
+    "annex": {
+        "required_fields": ("annex_items",),
+        "requirement_types": ("annex", "form", "quote_sheet", "commitment", "bill_of_quantities"),
+        "source_policy": "附件和响应格式应带文件名、页码/块号和原文摘录。",
+        "acceptance_checks": ("报价表/投标函/承诺函独立成项", "工程量清单保持表格块引用"),
+    },
+}
+
+
+def module_parse_manifest() -> dict[str, object]:
+    return {
+        "version": MODULE_CHECKLIST_VERSION,
+        "modules": {
+            module: {
+                **MODULE_CHECKLISTS[module],
+                "title": MODULE_TITLES[module],
+                "required_fields": list(MODULE_CHECKLISTS[module]["required_fields"]),
+                "requirement_types": list(MODULE_CHECKLISTS[module]["requirement_types"]),
+                "acceptance_checks": list(MODULE_CHECKLISTS[module]["acceptance_checks"]),
+                "keywords": list(MODULE_CONTEXT_KEYWORDS[module]),
+            }
+            for module in MODULE_ORDER
+        },
+    }
+
 
 def build_tender_structured_result(
     payload: TenderParseRequest,
@@ -64,7 +121,7 @@ def build_tender_structured_result(
     has_business_part = any(marker in text for marker in ("商务标", "商务响应", "报价文件", "报价说明"))
     bid_type = "separated" if has_tech_part and has_business_part else "combined"
     outline_parts = _tender_outline_parts(text, bid_type)
-    source_records = _source_records(parsed)
+    source_records = _source_records(parsed, payload)
     qualification_requirements, qualification_evidence = _keyword_values_with_evidence(
         source_records,
         "qualification_requirements",
@@ -137,6 +194,8 @@ def build_tender_structured_result(
         "requirement_count": len(requirement_items),
         "low_confidence_count": int(quality_gates["interpret"]["low_confidence_count"]),
         "missing_source_count": int(quality_gates["interpret"]["missing_source_count"]),
+        "module_checklist_version": MODULE_CHECKLIST_VERSION,
+        "module_checklist": module_parse_manifest(),
     }
     structured = TenderParseStructuredResult(
         project_name=project_name,
@@ -237,7 +296,10 @@ def build_tender_parse_prompt(
                         "value": "any",
                         "confidence": "0.0-1.0",
                         "source_text": "short original excerpt",
+                        "citation_id": "stable source citation id",
+                        "reference_id": "AutoRFP-style source reference id",
                         "page_start": "number or null",
+                        "chunk_id": "source chunk id or null",
                         "needs_review": "boolean",
                     }
                 ],
@@ -258,6 +320,7 @@ def build_tender_parse_prompt(
                 "Use source facts first and keep uncertain values conservative.",
                 "Do not invent dates, certificates, prices, or names that are not in the source.",
                 "Keep source evidence and requirement items if the source supports them.",
+                "Every source_ref must carry citation_id/reference_id when the source is traceable.",
                 "Keep chapter titles concise and business-facing.",
             ],
         },
@@ -278,6 +341,8 @@ def build_tender_module_prompt(
             "task": "Improve one tender parse module using only source-backed facts.",
             "module": module,
             "module_title": MODULE_TITLES[module],
+            "module_checklist": MODULE_CHECKLISTS[module],
+            "module_checklist_version": MODULE_CHECKLIST_VERSION,
             "bid_title": payload.bid_title,
             "filename": payload.filename,
             "deterministic_module": module_result,
@@ -293,8 +358,11 @@ def build_tender_module_prompt(
                         "value": "any",
                         "confidence": "0.0-1.0",
                         "source_text": "short original excerpt",
+                        "citation_id": "stable source citation id",
+                        "reference_id": "AutoRFP-style source reference id",
                         "page_start": "number or null",
                         "page_end": "number or null",
+                        "chunk_id": "source chunk id or null",
                         "needs_review": "boolean",
                     }
                 ],
@@ -319,6 +387,8 @@ def build_tender_module_prompt(
                 "Only improve the requested module.",
                 "Do not invent dates, certificates, prices, page numbers, names, or scores.",
                 "Every changed field or requirement must include source_text or needs_review=true.",
+                "Every traceable changed field or requirement must keep citation_id/reference_id.",
+                "Follow the module_checklist required_fields and requirement_types.",
                 "Keep business wording concise and suitable for human review.",
             ],
         },
@@ -533,17 +603,39 @@ def _normalize_model_evidence(module: TenderParseModule, raw: object) -> list[di
         if not field:
             continue
         source_text = str(item.get("source_text") or "").strip()[:240]
+        chunk_id = str(item.get("chunk_id") or "").strip() or None
+        page_start = _int_or_none(item.get("page_start"))
+        page_end = _int_or_none(item.get("page_end"))
+        citation_id = (
+            str(item.get("citation_id") or item.get("reference_id") or item.get("referenceId") or "").strip()
+            or None
+        )
+        reference_id = (
+            str(item.get("reference_id") or item.get("referenceId") or citation_id or "").strip()
+            or None
+        )
+        document_id = str(item.get("document_id") or item.get("source_document_id") or "").strip() or None
+        file_id = str(item.get("file_id") or "").strip() or None
+        filename = str(item.get("filename") or "").strip() or None
+        traceable = bool(source_text and (citation_id or reference_id or chunk_id or page_start or document_id or file_id))
         evidence.append(
             {
                 "field": field,
                 "value": item.get("value"),
                 "confidence": _confidence(item.get("confidence"), 0.62 if source_text else 0.45),
                 "source_text": source_text,
-                "page_start": _int_or_none(item.get("page_start")),
-                "page_end": _int_or_none(item.get("page_end")),
+                "citation_id": citation_id,
+                "reference_id": reference_id,
+                "source_kind": str(item.get("source_kind") or "tender_document").strip() or "tender_document",
+                "document_id": document_id,
+                "file_id": file_id,
+                "filename": filename,
+                "page_start": page_start,
+                "page_end": page_end,
                 "bbox": item.get("bbox") if isinstance(item.get("bbox"), list) else None,
-                "chunk_id": str(item.get("chunk_id") or "") or None,
-                "needs_review": bool(item.get("needs_review")) or not source_text,
+                "chunk_id": chunk_id,
+                "traceable": traceable,
+                "needs_review": bool(item.get("needs_review")) or not source_text or not traceable,
             }
         )
     return evidence
@@ -718,10 +810,17 @@ def _model_override_evidence(field: str, value: object) -> dict[str, object]:
         "value": value,
         "confidence": 0.56,
         "source_text": "",
+        "citation_id": None,
+        "reference_id": None,
+        "source_kind": "model_override",
+        "document_id": None,
+        "file_id": None,
+        "filename": None,
         "page_start": None,
         "page_end": None,
         "bbox": None,
         "chunk_id": None,
+        "traceable": False,
         "needs_review": True,
     }
 
@@ -786,10 +885,16 @@ def _refresh_structured_indexes(merged: dict[str, object]) -> None:
     if not isinstance(interpret, dict):
         interpret = {}
     ocr_required = bool(interpret.get("ocr_required"))
+    missing_modules = [module for module in MODULE_ORDER if module not in modules]
     interpret.update(
         {
-            "status": "needs_review" if low_confidence_count or missing_source_count or ocr_required else "pass",
+            "status": "needs_review"
+            if low_confidence_count or missing_source_count or ocr_required or missing_modules
+            else "pass",
             "module_count": module_count,
+            "required_modules": list(MODULE_ORDER),
+            "missing_modules": missing_modules,
+            "module_checklist_version": MODULE_CHECKLIST_VERSION,
             "requirement_count": len(requirement_items),
             "low_confidence_count": low_confidence_count,
             "missing_source_count": missing_source_count,
@@ -803,9 +908,10 @@ def _refresh_structured_indexes(merged: dict[str, object]) -> None:
         parse_metadata["requirement_count"] = len(requirement_items)
         parse_metadata["low_confidence_count"] = low_confidence_count
         parse_metadata["missing_source_count"] = missing_source_count
+        parse_metadata["module_checklist_version"] = MODULE_CHECKLIST_VERSION
 
 
-def _source_records(parsed: KnowledgeProcessResult) -> list[dict[str, object]]:
+def _source_records(parsed: KnowledgeProcessResult, payload: TenderParseRequest) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     for chunk_index, chunk in enumerate(parsed.chunks, start=1):
         chunk_id = str(
@@ -813,6 +919,8 @@ def _source_records(parsed: KnowledgeProcessResult) -> list[dict[str, object]]:
             or chunk.metadata.get("id")
             or f"parse-chunk-{chunk_index:04d}"
         )
+        page_start = chunk.page_start
+        page_end = chunk.page_end
         for raw_line in chunk.content.splitlines():
             value = re.sub(r"\s+", " ", raw_line).strip(" :：\t")
             if len(value) < 2:
@@ -820,9 +928,15 @@ def _source_records(parsed: KnowledgeProcessResult) -> list[dict[str, object]]:
             records.append(
                 {
                     "text": value,
-                    "page_start": chunk.page_start,
-                    "page_end": chunk.page_end,
+                    "page_start": page_start,
+                    "page_end": page_end,
                     "chunk_id": chunk_id,
+                    "citation_id": _citation_id(payload.file_id, chunk_id, page_start, len(records) + 1),
+                    "reference_id": _citation_id(payload.file_id, chunk_id, page_start, len(records) + 1),
+                    "source_kind": "tender_document",
+                    "document_id": payload.bid_id or payload.file_id,
+                    "file_id": payload.file_id,
+                    "filename": payload.filename,
                 }
             )
     return records
@@ -1009,12 +1123,16 @@ def _quality_gates(
 ) -> dict[str, object]:
     low_confidence_count = sum(1 for item in field_evidence if item.confidence < 0.65 or item.needs_review)
     missing_source_count = sum(1 for item in field_evidence if not item.source_text)
+    missing_modules = [module for module in MODULE_ORDER if module not in modules]
     ocr_required = bool(parsed.metadata.get("ocr_required"))
-    status = "needs_review" if low_confidence_count or missing_source_count or ocr_required else "pass"
+    status = "needs_review" if low_confidence_count or missing_source_count or ocr_required or missing_modules else "pass"
     return {
         "interpret": {
             "status": status,
             "module_count": len(modules),
+            "required_modules": list(MODULE_ORDER),
+            "missing_modules": missing_modules,
+            "module_checklist_version": MODULE_CHECKLIST_VERSION,
             "requirement_count": len(requirement_items),
             "low_confidence_count": low_confidence_count,
             "missing_source_count": missing_source_count,
@@ -1050,9 +1168,16 @@ def _keyword_values_with_evidence(
                 value=clipped,
                 confidence=0.78,
                 source_text=clipped,
+                citation_id=str(record.get("citation_id") or "") or None,
+                reference_id=str(record.get("reference_id") or record.get("citation_id") or "") or None,
+                source_kind=str(record.get("source_kind") or "tender_document"),
+                document_id=str(record.get("document_id") or "") or None,
+                file_id=str(record.get("file_id") or "") or None,
+                filename=str(record.get("filename") or "") or None,
                 page_start=_record_int(record, "page_start"),
                 page_end=_record_int(record, "page_end"),
                 chunk_id=str(record.get("chunk_id") or ""),
+                traceable=True,
                 needs_review=False,
             )
         )
@@ -1067,6 +1192,8 @@ def _keyword_values_with_evidence(
             value=value,
             confidence=0.35,
             source_text="",
+            source_kind="fallback",
+            traceable=False,
             needs_review=True,
         )
         for value in fallback_values
@@ -1096,9 +1223,16 @@ def _value_evidence(
             value=value,
             confidence=0.82 if value_text else 0.45,
             source_text=source_text,
+            citation_id=str(matched_record.get("citation_id") or "") or None,
+            reference_id=str(matched_record.get("reference_id") or matched_record.get("citation_id") or "") or None,
+            source_kind=str(matched_record.get("source_kind") or "tender_document"),
+            document_id=str(matched_record.get("document_id") or "") or None,
+            file_id=str(matched_record.get("file_id") or "") or None,
+            filename=str(matched_record.get("filename") or "") or None,
             page_start=_record_int(matched_record, "page_start"),
             page_end=_record_int(matched_record, "page_end"),
             chunk_id=str(matched_record.get("chunk_id") or ""),
+            traceable=bool(source_text),
             needs_review=not bool(value_text),
         )
     return TenderParseFieldEvidence(
@@ -1106,8 +1240,21 @@ def _value_evidence(
         value=value,
         confidence=0.55 if value_text else 0.25,
         source_text="",
+        source_kind="fallback",
+        traceable=False,
         needs_review=True,
     )
+
+
+def _citation_id(file_id: str, chunk_id: str, page_start: int | None, ordinal: int) -> str:
+    page = page_start if page_start is not None else 0
+    return f"tender:{_safe_ref_part(file_id)}:{_safe_ref_part(chunk_id)}:p{page}:l{ordinal}"
+
+
+def _safe_ref_part(value: object) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^a-zA-Z0-9_.-]+", "-", text)
+    return text.strip("-") or "unknown"
 
 
 def _record_int(record: dict[str, object], key: str) -> int | None:

@@ -861,8 +861,18 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
     assert result["field_evidence"]
     assert result["requirement_items"]
     assert result["quality_gates"]["interpret"]["module_count"] == 6
+    assert result["quality_gates"]["interpret"]["module_checklist_version"] == "xparse-six-module-v1"
+    assert result["quality_gates"]["interpret"]["missing_modules"] == []
     assert result["parse_metadata"]["module_count"] == 6
     assert result["parse_metadata"]["requirement_count"] == len(result["requirement_items"])
+    assert result["parse_metadata"]["module_checklist"]["modules"]["evaluation"]["requirement_types"]
+    qualification_source = result["modules"]["qualification"]["requirement_items"][0]["source_ref"]
+    assert qualification_source["citation_id"].startswith("tender:file-demo:parse-chunk-0001")
+    assert qualification_source["reference_id"] == qualification_source["citation_id"]
+    assert qualification_source["source_kind"] == "tender_document"
+    assert qualification_source["file_id"] == "file-demo"
+    assert qualification_source["filename"] == "demo.pdf"
+    assert qualification_source["traceable"] is True
 
 
 def test_build_tender_structured_result_joins_cover_project_title_without_bid_title() -> None:
@@ -979,6 +989,11 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
                                 "value": "模型识别资质要求",
                                 "confidence": 0.72,
                                 "source_text": "资格要求：具备桥梁检测资质",
+                                "citation_id": "tender:file-demo:parse-chunk-0001:p0:l3",
+                                "reference_id": "tender:file-demo:parse-chunk-0001:p0:l3",
+                                "file_id": "file-demo",
+                                "filename": "采购文件.txt",
+                                "chunk_id": "parse-chunk-0001",
                             },
                         }
                     ],

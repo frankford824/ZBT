@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from itertools import zip_longest
 from io import BytesIO
 from pathlib import Path
@@ -27,10 +28,22 @@ LEGACY_OFFICE_TARGETS = {
     ".ppt": ".pptx",
 }
 DEFAULT_OCR_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+SUPPORTED_OCR_PROVIDERS = {"http_ocr", "http", "mineru", "paddleocr"}
 
 
 class OCRResponseTooLargeError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class OCRProviderConfig:
+    provider: str
+    endpoint: str
+    endpoint_env: str
+    api_key: str
+    api_key_env: str
+    timeout_s: int
+    mode: str
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -511,19 +524,23 @@ def _ocr_confidence(result: dict[str, object], pages: list[dict[str, object]]) -
 
 
 def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str, object]:
-    endpoint = os.getenv("OCR_HTTP_ENDPOINT", "").strip()
-    provider = _ocr_provider_name()
-    if not endpoint:
-        return {"status": "provider_not_configured", "provider": provider}
+    config = _ocr_provider_config()
+    if not config.endpoint:
+        return {
+            "status": "provider_not_configured",
+            "provider": config.provider,
+            "endpoint_env": config.endpoint_env,
+            "supported_providers": sorted(SUPPORTED_OCR_PROVIDERS),
+        }
     try:
-        endpoint = _safe_ocr_endpoint(endpoint)
+        endpoint = _safe_ocr_endpoint(config.endpoint)
     except RuntimeError:
-        return {"status": "failed", "provider": provider, "error": "ocr endpoint invalid"}
+        return {"status": "failed", "provider": config.provider, "error": "ocr endpoint invalid"}
     max_bytes = _env_int("OCR_MAX_BYTES", 20 * 1024 * 1024)
     if len(content) > max_bytes:
         return {
             "status": "skipped_too_large",
-            "provider": provider,
+            "provider": config.provider,
             "size_bytes": len(content),
             "max_bytes": max_bytes,
         }
@@ -531,18 +548,19 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         {
             "filename": payload.filename,
             "content_type": payload.content_type,
-            "provider": provider,
+            "provider": config.provider,
+            "mode": config.mode,
+            "options": _ocr_provider_options(config),
             "content_base64": base64.b64encode(content).decode("ascii"),
         },
         ensure_ascii=False,
     ).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    api_key = os.getenv("OCR_API_KEY", "").strip()
-    if api_key:
+    if config.api_key:
         try:
-            headers["Authorization"] = f"Bearer {_safe_ocr_header_value(api_key)}"
+            headers["Authorization"] = f"Bearer {_safe_ocr_header_value(config.api_key)}"
         except RuntimeError:
-            return {"status": "failed", "provider": provider, "error": "ocr api key invalid"}
+            return {"status": "failed", "provider": config.provider, "error": "ocr api key invalid"}
     req = request.Request(
         endpoint,
         data=body,
@@ -550,7 +568,7 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         headers=headers,
     )
     try:
-        with request.urlopen(req, timeout=_env_int("OCR_HTTP_TIMEOUT_S", 120)) as response:
+        with request.urlopen(req, timeout=config.timeout_s) as response:
             max_response_bytes = _env_int(
                 "OCR_MAX_RESPONSE_BYTES",
                 DEFAULT_OCR_RESPONSE_MAX_BYTES,
@@ -560,25 +578,27 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         if not isinstance(result, dict):
             return {
                 "status": "failed",
-                "provider": provider,
+                "provider": config.provider,
                 "error": "ocr response invalid",
             }
-        return _normalize_ocr_result(provider, result)
+        normalized = _normalize_ocr_result(config.provider, result)
+        normalized["provider_profile"] = _ocr_provider_profile(config)
+        return normalized
     except error.HTTPError as exc:
         return {
             "status": "failed",
-            "provider": provider,
+            "provider": config.provider,
             "error": "ocr request failed",
             "http_status": exc.code,
         }
     except OCRResponseTooLargeError:
         return {
             "status": "failed",
-            "provider": provider,
+            "provider": config.provider,
             "error": "ocr response too large",
         }
     except Exception:
-        return {"status": "failed", "provider": provider, "error": "ocr request failed"}
+        return {"status": "failed", "provider": config.provider, "error": "ocr request failed"}
 
 
 def _safe_ocr_endpoint(value: str) -> str:
@@ -618,7 +638,82 @@ def _read_limited_response(response: object, max_bytes: int) -> bytes:
 
 
 def _ocr_provider_name() -> str:
-    return os.getenv("OCR_PROVIDER", "http_ocr").strip() or "http_ocr"
+    provider = os.getenv("OCR_PROVIDER", "http_ocr").strip().lower() or "http_ocr"
+    return provider if provider in SUPPORTED_OCR_PROVIDERS else "http_ocr"
+
+
+def _ocr_provider_config() -> OCRProviderConfig:
+    provider = _ocr_provider_name()
+    endpoint_env = _ocr_endpoint_env(provider)
+    api_key_env = _ocr_api_key_env(provider)
+    return OCRProviderConfig(
+        provider=provider,
+        endpoint=os.getenv(endpoint_env, "").strip() or os.getenv("OCR_HTTP_ENDPOINT", "").strip(),
+        endpoint_env=endpoint_env,
+        api_key=os.getenv(api_key_env, "").strip() or os.getenv("OCR_API_KEY", "").strip(),
+        api_key_env=api_key_env,
+        timeout_s=_env_int(_ocr_timeout_env(provider), _env_int("OCR_HTTP_TIMEOUT_S", 120)),
+        mode=_ocr_mode(provider),
+    )
+
+
+def _ocr_endpoint_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_HTTP_ENDPOINT"
+    if provider == "paddleocr":
+        return "PADDLEOCR_HTTP_ENDPOINT"
+    return "OCR_HTTP_ENDPOINT"
+
+
+def _ocr_api_key_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_API_KEY"
+    if provider == "paddleocr":
+        return "PADDLEOCR_API_KEY"
+    return "OCR_API_KEY"
+
+
+def _ocr_timeout_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_HTTP_TIMEOUT_S"
+    if provider == "paddleocr":
+        return "PADDLEOCR_HTTP_TIMEOUT_S"
+    return "OCR_HTTP_TIMEOUT_S"
+
+
+def _ocr_mode(provider: str) -> str:
+    if provider == "mineru":
+        return os.getenv("MINERU_PARSE_MODE", "auto").strip() or "auto"
+    if provider == "paddleocr":
+        return os.getenv("PADDLEOCR_PIPELINE", "pp_structurev3").strip() or "pp_structurev3"
+    return os.getenv("OCR_PARSE_MODE", "http_json").strip() or "http_json"
+
+
+def _ocr_provider_options(config: OCRProviderConfig) -> dict[str, object]:
+    options: dict[str, object] = {
+        "return_pages": True,
+        "return_blocks": True,
+        "return_tables": True,
+        "return_layout": True,
+    }
+    if config.provider == "mineru":
+        options["return_markdown"] = True
+        options["parse_mode"] = config.mode
+    elif config.provider == "paddleocr":
+        options["pipeline"] = config.mode
+        options["return_confidence"] = True
+        options["return_bbox"] = True
+    return options
+
+
+def _ocr_provider_profile(config: OCRProviderConfig) -> dict[str, object]:
+    return {
+        "provider": config.provider,
+        "endpoint_env": config.endpoint_env,
+        "api_key_env": config.api_key_env,
+        "mode": config.mode,
+        "timeout_s": config.timeout_s,
+    }
 
 
 def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:

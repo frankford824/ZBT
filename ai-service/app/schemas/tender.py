@@ -32,10 +32,17 @@ class TenderParseFieldEvidence(BaseModel):
     value: object | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     source_text: str = ""
+    citation_id: str | None = None
+    reference_id: str | None = None
+    source_kind: str = "tender_document"
+    document_id: str | None = None
+    file_id: str | None = None
+    filename: str | None = None
     page_start: int | None = None
     page_end: int | None = None
     bbox: list[float] | None = None
     chunk_id: str | None = None
+    traceable: bool = False
     needs_review: bool = False
 
 

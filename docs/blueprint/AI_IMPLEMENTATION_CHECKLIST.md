@@ -24,10 +24,11 @@
 - `ai-service/app/main.py` 已按 6 个模块逐一调用 `tender_parse` 路由，每个模块独立走 provider 候选和 fallback；单模块失败时保留基础解析并标记待确认。
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
-- `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`。
+- `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。
 - `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”和“响应要点”视图，不展示模型、token、schema 等技术口径。
 - `backend/internal/db/migrations/00031_bid_requirement_items.sql` 已新增 `bid_requirement_items` 独立表，按租户启用 RLS，承接 AutoRFP 式 referenceId/source attribution 思路。
 - `backend/internal/platform/bid/store.go` 已在解析回调和人工确认两条路径同步 `requirement_items`，并提供 `ListRequirementItems`。
+- `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements` 只读接口。
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”筛选。
 - `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 63 项检查。
@@ -102,6 +103,7 @@
 2. OCR Provider 实现：
    - 保留 `OCR_HTTP_ENDPOINT` 通用 Provider。
    - 增加 MinerU/OpenAPI 兼容 Provider 配置：endpoint、token、timeout、poll_interval、max_attempts。
+   - 当前配置入口：通用 HTTP 使用 `OCR_HTTP_ENDPOINT` / `OCR_API_KEY`；MinerU 使用 `OCR_PROVIDER=mineru`、`MINERU_HTTP_ENDPOINT`、`MINERU_API_KEY`、`MINERU_PARSE_MODE`；PaddleOCR 使用 `OCR_PROVIDER=paddleocr`、`PADDLEOCR_HTTP_ENDPOINT`、`PADDLEOCR_API_KEY`、`PADDLEOCR_PIPELINE`。
    - Provider 不可用时不伪装成功，必须返回 `provider_not_configured` 或 `failed`。
    - OCR 任务必须支持异步轮询；轮询结果归一到 `pages`、`blocks`、`tables`、`markdown`、`layout_blocks`。
    - OCR Provider 只作为可替换插件，不进入主业务 schema 的厂商字段。
@@ -130,7 +132,7 @@
 1. 新增问题/要求模型：
    - 从 `evaluation`、`qualification`、`submission`、`invalid_risk` 模块抽取 `requirement_items`。
    - 字段包括：`id`、`type`、`requirement`、`priority`、`mandatory`、`score`、`source_ref`、`expected_response`、`status`。
-   - 当前已落地：`TenderRequirementItem` 和 6 模块解析结果会统一汇总到 `structured_result.requirement_items`。
+   - 当前已落地：`TenderRequirementItem` 和 6 模块解析结果会统一汇总到 `structured_result.requirement_items`，每条 `source_ref` 对齐 AutoRFP 的 reference/source 思路并保存可追溯引用。
 
 2. 数据落库：
    - 短期：存入 `tender_parse_results.structured_result.requirement_items`。

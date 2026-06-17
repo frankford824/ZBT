@@ -1,5 +1,6 @@
-from io import BytesIO
+import json
 import urllib.error
+from io import BytesIO
 
 import fitz
 import pytest
@@ -213,6 +214,55 @@ def test_ocr_success_response_is_normalized(monkeypatch) -> None:
     assert ocr["pages"][0]["tables"][0]["source"] == "ocr"
     assert ocr["pages"][0]["tables"][0]["confidence"] == 0.88
     assert ocr["blocks"][0]["text"] == "首页识别文本"
+
+
+def test_mineru_ocr_provider_uses_specific_endpoint_key_and_mode(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["authorization"] = req.get_header("Authorization")
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeHTTPResponse(b'{"text":"MinerU parsed text","metadata":{"request_id":"mineru-1"}}')
+
+    monkeypatch.setenv("OCR_PROVIDER", "mineru")
+    monkeypatch.setenv("MINERU_HTTP_ENDPOINT", "https://mineru.example.test/file_parse")
+    monkeypatch.setenv("MINERU_API_KEY", "mineru-token")
+    monkeypatch.setenv("MINERU_PARSE_MODE", "vlm")
+    monkeypatch.setenv("MINERU_HTTP_TIMEOUT_S", "45")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    ocr = result.metadata["ocr"]
+
+    assert captured["url"] == "https://mineru.example.test/file_parse"
+    assert captured["timeout"] == 45
+    assert captured["authorization"] == "Bearer mineru-token"
+    assert captured["body"]["provider"] == "mineru"
+    assert captured["body"]["mode"] == "vlm"
+    assert captured["body"]["options"]["return_markdown"] is True
+    assert ocr["provider"] == "mineru"
+    assert ocr["provider_profile"] == {
+        "provider": "mineru",
+        "endpoint_env": "MINERU_HTTP_ENDPOINT",
+        "api_key_env": "MINERU_API_KEY",
+        "mode": "vlm",
+        "timeout_s": 45,
+    }
+
+
+def test_paddleocr_provider_requires_configured_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
+    monkeypatch.delenv("PADDLEOCR_HTTP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr_required"] is True
+    assert result.metadata["ocr"]["status"] == "provider_not_configured"
+    assert result.metadata["ocr"]["provider"] == "paddleocr"
+    assert result.metadata["ocr"]["endpoint_env"] == "PADDLEOCR_HTTP_ENDPOINT"
 
 
 def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> None:
