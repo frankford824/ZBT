@@ -8,6 +8,7 @@ export type SseHandler<T> = {
 }
 
 const sseApiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const maxSseEventBytes = 1024 * 1024
 
 export function openSse<T>(path: string, handler: SseHandler<T>) {
   const controller = new AbortController()
@@ -37,9 +38,15 @@ async function readSse<T>(path: string, handler: SseHandler<T>, signal: AbortSig
       const { value, done } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
+      if (buffer.length > maxSseEventBytes) {
+        throw new Error('SSE event exceeds maximum size')
+      }
       const parts = buffer.split(/\n\n|\r\n\r\n/)
       buffer = parts.pop() ?? ''
       for (const part of parts) {
+        if (part.length > maxSseEventBytes) {
+          throw new Error('SSE event exceeds maximum size')
+        }
         const parsed = parseSse(part)
         if (!parsed) continue
         if (parsed.event === 'error') {
