@@ -97,12 +97,12 @@ function verdictColor(result: string) {
 
 function severityTag(severity: ComplianceSeverity) {
   const color = severity === 'fail' ? 'red' : severity === 'fail_candidate' ? 'orange' : severity === 'warn' ? 'gold' : 'green'
-  return <Tag color={color}>{severityLabels[severity] || severity}</Tag>
+  return <Tag color={color}>{severityLabels[severity] || '状态未知'}</Tag>
 }
 
 function statusTag(status: string) {
   const color = status === 'done' || status === 'fixed' ? 'green' : status === 'failed' || status === 'confirmed_fail' ? 'red' : 'blue'
-  return <Tag color={color}>{statusLabels[status] || status}</Tag>
+  return <Tag color={color}>{statusLabels[status] || '状态未知'}</Tag>
 }
 
 function formatTime(value?: string | null) {
@@ -575,7 +575,7 @@ export function ComplianceDetailPage() {
         </div>
         <div className="report-verdict">
           <p className="report-verdict-title" style={{ color: scoreColor }}>
-            {verdictText[resultStatus] || severityLabels[resultStatus] || resultStatus}
+            {verdictText[resultStatus] || severityLabels[resultStatus] || '需要复核'}
           </p>
           <div className="report-meta">
             <span>检查状态 {statusTag(check.data.status)}</span>

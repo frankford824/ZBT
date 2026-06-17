@@ -1011,7 +1011,7 @@ export function BidWizardPage() {
                               <Space>
                                 <span>{chapter.title}</span>
                                 <Tag color={chapterStatusColor(chapter.status)}>
-                                  {chapterStatusLabels[chapter.status] || chapter.status}
+                                  {chapterStatusText(chapter.status)}
                                 </Tag>
                               </Space>
                             ),
@@ -1155,7 +1155,7 @@ export function BidWizardPage() {
 }
 
 function bidTypeLabel(value: BidDocumentDTO['bid_type']) {
-  return { combined: '综合标书', separated: '分离标书', custom: '自定义组合' }[value] ?? value
+  return { combined: '综合标书', separated: '分离标书', custom: '自定义组合' }[value] ?? '自定义组合'
 }
 
 function bidStatusLabel(value: string) {
@@ -1172,7 +1172,7 @@ function bidStatusLabel(value: string) {
 }
 
 function partCodeLabel(value: string) {
-  return { combined_body: '综合标书', tech: '技术标', business: '商务标', all: '全套文件' }[value] ?? value
+  return { combined_body: '综合标书', tech: '技术标', business: '商务标', all: '全套文件' }[value] ?? '其他文件'
 }
 
 function exportTypeLabel(row: BidExportDTO, partCode: string) {
@@ -1560,7 +1560,7 @@ export function BidEditorPage() {
                   <button
                     type="button"
                     className={`outline-item${chapter.id === currentChapter?.id ? ' active' : ''}`}
-                    title={chapterStatusLabels[chapter.status] || chapter.status}
+                    title={chapterStatusText(chapter.status)}
                     onClick={() =>
                       setSearchParams({ ...(partParam ? { part: partParam } : {}), chapter: chapter.id })
                     }
@@ -1584,7 +1584,7 @@ export function BidEditorPage() {
               </Typography.Title>
               {currentChapter ? (
                 <Tag color={chapterStatusColor(currentChapter.status)}>
-                  {chapterStatusLabels[currentChapter.status] || currentChapter.status}
+                  {chapterStatusText(currentChapter.status)}
                 </Tag>
               ) : null}
               {currentChapter ? (
@@ -1618,13 +1618,13 @@ export function BidEditorPage() {
                   title: '原因',
                   dataIndex: 'change_reason',
                   ellipsis: true,
-                  render: (value: string) => changeReasonLabels[value] || value,
+                  render: (value: string) => changeReasonLabels[value] || '内容更新',
                 },
                 {
                   title: '状态',
                   dataIndex: 'status',
                   width: 100,
-                  render: (value) => <Tag>{chapterStatusLabels[value] || value}</Tag>,
+                  render: (value) => <Tag>{chapterStatusText(value)}</Tag>,
                 },
                 {
                   title: '时间',
@@ -1739,7 +1739,7 @@ export function BidEditorPage() {
               <div className="diff-pane-head">
                 当前版本
                 <Tag color="blue">
-                  {chapterStatusLabels[diffQuery.data.current.status] || diffQuery.data.current.status}
+                  {chapterStatusText(diffQuery.data.current.status)}
                 </Tag>
               </div>
               <pre className="diff-pane-body">{diffQuery.data.current.plain_text || '（无正文）'}</pre>
@@ -1773,6 +1773,11 @@ const chapterStatusLabels: Record<string, string> = {
   generated: '已生成',
   edited: '已编辑',
   accepted: '已采纳',
+  needs_fix: '需完善',
+}
+
+function chapterStatusText(status: string) {
+  return chapterStatusLabels[status] || '状态未知'
 }
 
 const changeReasonLabels: Record<string, string> = {
@@ -1795,6 +1800,7 @@ function chapterStatusColor(status: BidChapterDTO['status']) {
   if (status === 'edited') return 'orange'
   if (status === 'generated') return 'blue'
   if (status === 'generating') return 'purple'
+  if (status === 'needs_fix') return 'red'
   return 'default'
 }
 

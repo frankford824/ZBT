@@ -46,7 +46,7 @@ const statusLabels: Record<ProjectDTO['status'], string> = {
   closed: '已结果',
 }
 function projectStatusLabel(status: ProjectDTO['status'] | string) {
-  return statusLabels[status as ProjectDTO['status']] ?? status
+  return statusLabels[status as ProjectDTO['status']] ?? '状态未知'
 }
 const resultLabels: Record<string, string> = {
   won: '中标',
@@ -325,7 +325,7 @@ export function ProjectDetailPage() {
             <Timeline
               items={activities.data?.map((activity) => ({
                 color: 'gray',
-                children: `${dateText(activity.created_at)} · ${activity.actor_name || '系统'} · ${activityActionLabels[activity.action] ?? activity.action}`,
+                children: `${dateText(activity.created_at)} · ${activity.actor_name || '系统'} · ${activityActionLabels[activity.action] ?? '系统更新'}`,
               }))}
             />
           </Card>

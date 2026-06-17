@@ -74,7 +74,7 @@ function statusTag(status: string) {
     invited: '已邀请',
     disabled: '已禁用',
   }
-  return <Tag color={color}>{label[status] || status}</Tag>
+  return <Tag color={color}>{label[status] || '状态未知'}</Tag>
 }
 
 const taskTypeLabels: Record<string, string> = {

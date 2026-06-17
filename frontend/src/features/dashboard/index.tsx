@@ -192,7 +192,7 @@ export function DashboardPage() {
                       title={<Link to={`/projects/${item.id}`}>{item.name}</Link>}
                       description={
                         <Space size={[6, 6]} wrap className="recent-project-meta">
-                          <Tag>{statusLabels[item.status] || item.status}</Tag>
+                          <Tag>{statusLabels[item.status] || '状态未知'}</Tag>
                           <span>负责人 {item.owner_name || '-'}</span>
                           <span>下一节点 {formatDate(item.due_date)}</span>
                         </Space>
@@ -219,7 +219,7 @@ export function DashboardPage() {
                     title: '阶段',
                     dataIndex: 'status',
                     width: 110,
-                    render: (value) => <Tag>{statusLabels[value] || value}</Tag>,
+                    render: (value) => <Tag>{statusLabels[value] || '状态未知'}</Tag>,
                   },
                   { title: '负责人', dataIndex: 'owner_name', width: 96, render: (value) => value || '-' },
                   {

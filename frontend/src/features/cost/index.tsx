@@ -45,6 +45,10 @@ const statusLabels: Record<string, string> = {
   actual: '已发生',
 }
 
+function costStatusText(status: string) {
+  return statusLabels[status] || '状态未知'
+}
+
 const costTypeOptions = [
   { value: 'labor', label: '人力' },
   { value: 'material', label: '材料' },
@@ -112,7 +116,7 @@ export function CostsPage() {
               },
             },
             { title: '成本项', dataIndex: 'item_count', align: 'right', width: 90 },
-            { title: '状态', dataIndex: 'status', width: 90, render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
+            { title: '状态', dataIndex: 'status', width: 90, render: (value) => <Tag>{costStatusText(value)}</Tag> },
           ]}
         />
       )}
@@ -330,7 +334,7 @@ export function CostDetailPage() {
                     render: (value) => <span className="data-mono">{wan(value)}</span>,
                   },
                   { title: '供应商', dataIndex: 'vendor', width: 160, render: (value) => value || '-' },
-                  { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag>{statusLabels[value] || value}</Tag> },
+                  { title: '状态', dataIndex: 'status', width: 100, render: (value) => <Tag>{costStatusText(value)}</Tag> },
                 ]}
               />
             )}

@@ -421,7 +421,7 @@ export function KnowledgeDocsPage() {
                 {
                   title: '类型',
                   dataIndex: 'doc_type',
-                  render: (value: string) => docTypeLabels[value] ?? value,
+                  render: (value: string) => docTypeLabels[value] ?? '其他',
                 },
                 {
                   title: '状态',
