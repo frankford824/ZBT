@@ -10,7 +10,7 @@ from itertools import zip_longest
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from urllib import error, request
+from urllib import error, parse, request
 
 import fitz
 from openpyxl import load_workbook
@@ -286,6 +286,10 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
     provider = _ocr_provider_name()
     if not endpoint:
         return {"status": "provider_not_configured", "provider": provider}
+    try:
+        endpoint = _safe_ocr_endpoint(endpoint)
+    except RuntimeError:
+        return {"status": "failed", "provider": provider, "error": "ocr endpoint invalid"}
     max_bytes = _env_int("OCR_MAX_BYTES", 20 * 1024 * 1024)
     if len(content) > max_bytes:
         return {
@@ -306,7 +310,10 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
     headers = {"Content-Type": "application/json"}
     api_key = os.getenv("OCR_API_KEY", "").strip()
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        try:
+            headers["Authorization"] = f"Bearer {_safe_ocr_header_value(api_key)}"
+        except RuntimeError:
+            return {"status": "failed", "provider": provider, "error": "ocr api key invalid"}
     req = request.Request(
         endpoint,
         data=body,
@@ -349,6 +356,35 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
         }
     except Exception:
         return {"status": "failed", "provider": provider, "error": "ocr request failed"}
+
+
+def _safe_ocr_endpoint(value: str) -> str:
+    if _contains_unsafe_url_character(value):
+        raise RuntimeError("OCR_HTTP_ENDPOINT is invalid")
+    parsed = parse.urlparse(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("OCR_HTTP_ENDPOINT must be an absolute HTTP(S) URL")
+    return parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path or "/", "", "", ""))
+
+
+def _contains_unsafe_url_character(value: str) -> bool:
+    return "\\" in value or any(ord(char) <= 0x20 or ord(char) == 0x7F for char in value)
+
+
+def _safe_ocr_header_value(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned or any(char in cleaned for char in "\r\n"):
+        raise RuntimeError("OCR header value is invalid")
+    return cleaned
 
 
 def _read_limited_response(response: object, max_bytes: int) -> bytes:

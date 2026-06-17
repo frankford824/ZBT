@@ -175,6 +175,51 @@ def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> N
     assert "secret OCR" not in str(result.metadata["ocr"])
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "file:///etc/passwd",
+        "https://token@ocr.example.test/parse",
+        "https://ocr.example.test/parse?debug=1",
+        "https://ocr.example.test/parse#fragment",
+        "https://ocr.example.test\\parse",
+        "https://ocr.example.test/parse\nX-Injected: yes",
+        "ocr.example.test/parse",
+    ],
+)
+def test_ocr_rejects_invalid_endpoint_without_external_request(monkeypatch, endpoint) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", endpoint)
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("invalid OCR endpoint must not be requested")
+
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fail_if_called)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr_required"] is True
+    assert result.metadata["ocr"]["status"] == "failed"
+    assert result.metadata["ocr"]["error"] == "ocr endpoint invalid"
+    assert "token@" not in str(result.metadata["ocr"])
+
+
+def test_ocr_rejects_invalid_api_key_without_external_request(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setenv("OCR_API_KEY", "secret\r\nX-Injected: yes")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("invalid OCR API key must not be requested")
+
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fail_if_called)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr_required"] is True
+    assert result.metadata["ocr"]["status"] == "failed"
+    assert result.metadata["ocr"]["error"] == "ocr api key invalid"
+    assert "secret" not in str(result.metadata["ocr"])
+
+
 def test_ocr_skips_oversized_content_without_external_request(monkeypatch) -> None:
     monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
     monkeypatch.setenv("OCR_MAX_BYTES", "4")
