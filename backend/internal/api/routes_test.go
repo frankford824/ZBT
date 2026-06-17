@@ -195,6 +195,24 @@ func TestRouteSpecsAreAllHandledByRealRoutes(t *testing.T) {
 	}
 }
 
+func TestRouteMetadataUsesSupportedRBACModules(t *testing.T) {
+	for _, spec := range routeSpecs {
+		if !rbac.ValidModule(spec.Module) {
+			t.Fatalf("route %s %s uses unsupported RBAC module %q", spec.Method, spec.Path, spec.Module)
+		}
+		for _, requirement := range routeAdditionalRequirements[routeKey(spec)] {
+			if !rbac.ValidModule(requirement.Module) {
+				t.Fatalf(
+					"route %s %s uses unsupported additional RBAC module %q",
+					spec.Method,
+					spec.Path,
+					requirement.Module,
+				)
+			}
+		}
+	}
+}
+
 func TestBindOptionalJSONAllowsUnknownLengthEmptyBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
