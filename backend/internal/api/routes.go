@@ -328,6 +328,7 @@ func decodeJSONBody(c *gin.Context, target any, optional bool) bool {
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		respondBodyReadError(c, err)
 		return false

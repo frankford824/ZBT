@@ -268,6 +268,28 @@ func TestBindJSONRejectsTrailingContent(t *testing.T) {
 	}
 }
 
+func TestBindJSONRejectsUnknownFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/payload", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name" binding:"required"`
+		}
+		if !bindJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/payload", strings.NewReader(`{"name":"demo","typo":"ignored"}`))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected unknown field to be rejected, got %d", recorder.Code)
+	}
+}
+
 func TestBindJSONStillRunsBindingValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -309,6 +331,28 @@ func TestBindOptionalJSONRejectsTrailingContent(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected optional trailing body to be rejected, got %d", recorder.Code)
+	}
+}
+
+func TestBindOptionalJSONRejectsUnknownFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/optional", func(c *gin.Context) {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if !bindOptionalJSON(c, &req) {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"name": req.Name})
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/optional", strings.NewReader(`{"name":"demo","extra":true}`))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected optional unknown field to be rejected, got %d", recorder.Code)
 	}
 }
 
