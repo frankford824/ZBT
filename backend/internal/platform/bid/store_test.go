@@ -143,6 +143,290 @@ func TestConfirmableParseResultStatusOnlyAllowsReadyResults(t *testing.T) {
 	}
 }
 
+func TestRequirementRefsFromStructuredResultMatchesChapterTitle(t *testing.T) {
+	structured := map[string]any{
+		"requirement_items": []any{
+			map[string]any{
+				"id":          "qualification-001",
+				"module":      "qualification",
+				"type":        "qualification",
+				"requirement": "提供企业资质证书和项目负责人证书",
+				"priority":    "high",
+				"mandatory":   true,
+				"source_ref": map[string]any{
+					"source_text": "供应商须提供资质证书",
+					"page_start":  float64(12),
+				},
+			},
+			map[string]any{
+				"id":          "evaluation-001",
+				"module":      "evaluation",
+				"type":        "scoring",
+				"requirement": "技术方案完整性评分 20 分",
+				"priority":    "high",
+				"score":       float64(20),
+			},
+			map[string]any{
+				"id":          "annex-001",
+				"module":      "annex",
+				"type":        "annex",
+				"requirement": "按附件格式提交报价表",
+				"priority":    "medium",
+			},
+		},
+	}
+
+	qualificationRefs := requirementRefsFromStructuredResult(structured, "二、资格证明文件", 2)
+	if len(qualificationRefs) == 0 || qualificationRefs[0].ID != "qualification-001" {
+		t.Fatalf("expected qualification requirement first, got %#v", qualificationRefs)
+	}
+	if qualificationRefs[0].SourceText != "供应商须提供资质证书" {
+		t.Fatalf("expected source evidence to be carried, got %#v", qualificationRefs[0])
+	}
+	if qualificationRefs[0].PageStart == nil || *qualificationRefs[0].PageStart != 12 {
+		t.Fatalf("expected page start to be normalized, got %#v", qualificationRefs[0].PageStart)
+	}
+
+	evaluationRefs := requirementRefsFromStructuredResult(structured, "二、总体技术方案", 2)
+	if len(evaluationRefs) == 0 || evaluationRefs[0].ID != "evaluation-001" {
+		t.Fatalf("expected evaluation requirement first, got %#v", evaluationRefs)
+	}
+}
+
+func TestRequirementRefsFromStructuredResultFallsBackForLegacyParseResult(t *testing.T) {
+	structured := map[string]any{
+		"qualification_requirements": []any{"营业执照和授权书齐备"},
+		"scoring_points":             []any{"服务方案完整性"},
+		"invalid_clause_risks":       []any{"签章缺失将导致无效投标"},
+	}
+
+	refs := requirementRefsFromStructuredResult(structured, "三、商务偏离表", 2)
+	if len(refs) == 0 {
+		t.Fatal("expected legacy fields to synthesize requirement refs")
+	}
+	if refs[0].Module != "invalid_risk" {
+		t.Fatalf("expected invalid risk requirement first, got %#v", refs)
+	}
+	if !refs[0].NeedsReview {
+		t.Fatalf("expected legacy synthesized requirement to need review, got %#v", refs[0])
+	}
+}
+
+func TestRequirementRefsFromStructuredResultFallsBackToHighPriorityWhenNoTitleMatch(t *testing.T) {
+	structured := map[string]any{
+		"requirement_items": []any{
+			map[string]any{
+				"id":          "annex-001",
+				"module":      "annex",
+				"type":        "annex",
+				"requirement": "提交报价表格式",
+				"priority":    "low",
+			},
+			map[string]any{
+				"id":          "qualification-001",
+				"module":      "qualification",
+				"type":        "qualification",
+				"requirement": "提供营业执照",
+				"priority":    "high",
+				"mandatory":   true,
+			},
+		},
+	}
+
+	refs := requirementRefsFromStructuredResult(structured, "一、项目概述", 1)
+	if len(refs) != 1 || refs[0].ID != "qualification-001" {
+		t.Fatalf("expected high priority fallback, got %#v", refs)
+	}
+}
+
+func TestTenderRequirementTextsKeepsCoverageInstruction(t *testing.T) {
+	texts := tenderRequirementTexts([]tenderRequirementRef{
+		{
+			Module:           "qualification",
+			Requirement:      "提供企业资质证书",
+			ExpectedResponse: "附证书编号和有效期",
+		},
+	})
+
+	if len(texts) != 3 {
+		t.Fatalf("expected requirement plus two guardrails, got %#v", texts)
+	}
+	if !strings.Contains(texts[0], "资格要求：提供企业资质证书") || !strings.Contains(texts[0], "响应要点：附证书编号和有效期") {
+		t.Fatalf("expected labeled requirement text, got %#v", texts)
+	}
+	if !strings.Contains(texts[2], "逐条完成自检") {
+		t.Fatalf("expected self-check guardrail, got %#v", texts)
+	}
+}
+
+func TestRequirementItemsFromStructuredResultPreservesSourceAndStatus(t *testing.T) {
+	structured := map[string]any{
+		"requirement_items": []any{
+			map[string]any{
+				"id":                "evaluation-001",
+				"module":            "evaluation",
+				"type":              "scoring",
+				"requirement":       "技术方案需响应评分细则",
+				"priority":          "HIGH",
+				"mandatory":         true,
+				"score":             12.5,
+				"expected_response": "逐项说明响应内容",
+				"status":            "partial",
+				"needs_review":      true,
+				"source_ref": map[string]any{
+					"document_id":  "doc-1",
+					"chunk_id":     "chunk-9",
+					"source_text":  "评分标准：技术方案需响应评分细则",
+					"page_start":   8,
+					"page_end":     9,
+					"custom_field": "kept",
+				},
+			},
+		},
+	}
+
+	items := requirementItemsFromStructuredResult(structured)
+	if len(items) != 1 {
+		t.Fatalf("expected one item, got %#v", items)
+	}
+	item := items[0]
+	if item.ExternalID != "evaluation-001" || item.Priority != "high" || item.CoverageStatus != "needs_review" {
+		t.Fatalf("unexpected normalized item: %#v", item)
+	}
+	if !item.Mandatory || !item.NeedsReview || item.Score == nil || *item.Score != 12.5 {
+		t.Fatalf("expected item flags and score to be retained, got %#v", item)
+	}
+	if item.SourceRef["chunk_id"] != "chunk-9" || item.SourceRef["custom_field"] != "kept" {
+		t.Fatalf("expected source ref to be preserved, got %#v", item.SourceRef)
+	}
+}
+
+func TestRequirementItemsFromStructuredResultFallsBackFromLegacyFields(t *testing.T) {
+	structured := map[string]any{
+		"qualification_requirements": []any{"提供营业执照", "提供营业执照"},
+		"invalid_clause_risks":       []any{"未盖章将被否决"},
+	}
+
+	items := requirementItemsFromStructuredResult(structured)
+	if len(items) != 3 {
+		t.Fatalf("expected fallback requirement items, got %#v", items)
+	}
+	if items[0].Module != "qualification" || !items[0].Mandatory || items[0].Priority != "high" {
+		t.Fatalf("expected qualification fallback first, got %#v", items[0])
+	}
+	if items[2].Module != "invalid_risk" || !items[2].Mandatory || items[2].Priority != "high" {
+		t.Fatalf("expected invalid risk fallback, got %#v", items[2])
+	}
+}
+
+func TestNormalizePipelineGateFields(t *testing.T) {
+	if got := normalizePipelineStage(" INTERPRET "); got != "interpret" {
+		t.Fatalf("expected stage to normalize, got %q", got)
+	}
+	if got := normalizePipelineStage("unknown"); got != "" {
+		t.Fatalf("expected unknown stage to be rejected, got %q", got)
+	}
+	if got := normalizePipelineGateStatus(" NEEDS_REVIEW "); got != "needs_review" {
+		t.Fatalf("expected status to normalize, got %q", got)
+	}
+	if got := normalizePipelineGateStatus("done"); got != "" {
+		t.Fatalf("expected unsupported status to be rejected, got %q", got)
+	}
+}
+
+func TestPipelineGateStatusForTask(t *testing.T) {
+	for status, want := range map[string]string{
+		"queued":    "pending",
+		"running":   "pending",
+		"done":      "passed",
+		"failed":    "blocked",
+		"cancelled": "blocked",
+		"paused":    "pending",
+		"unknown":   "",
+	} {
+		if got := pipelineGateStatusForTask(status); got != want {
+			t.Fatalf("expected task status %q to map to %q, got %q", status, want, got)
+		}
+	}
+}
+
+func TestPipelineGateStatusForGenerationJobBlocksPartialCancellation(t *testing.T) {
+	if got := pipelineGateStatusForGenerationJob("done", 3, 2, 0, 1); got != "blocked" {
+		t.Fatalf("expected partially cancelled job to block gate, got %q", got)
+	}
+	if got := pipelineGateStatusForGenerationJob("done", 3, 3, 0, 0); got != "passed" {
+		t.Fatalf("expected fully done job to pass gate, got %q", got)
+	}
+	if got := pipelineGateStatusForGenerationJob("running", 3, 1, 0, 0); got != "pending" {
+		t.Fatalf("expected running job to keep gate pending, got %q", got)
+	}
+}
+
+func TestParseGateMetadataCarriesQualityAndCounts(t *testing.T) {
+	metadata := parseGateMetadata("parse-demo", map[string]any{
+		"quality_gates": map[string]any{
+			"interpret": map[string]any{"status": "pass"},
+		},
+		"parse_metadata": map[string]any{
+			"module_count": 6,
+		},
+		"requirement_items": []any{
+			map[string]any{"id": "qualification-001"},
+			map[string]any{"id": "evaluation-001"},
+		},
+	})
+
+	if metadata["parse_result_id"] != "parse-demo" {
+		t.Fatalf("expected parse result id, got %#v", metadata)
+	}
+	if metadata["requirement_count"] != 2 {
+		t.Fatalf("expected requirement count, got %#v", metadata["requirement_count"])
+	}
+	if _, ok := metadata["quality_gates"].(map[string]any); !ok {
+		t.Fatalf("expected quality gates metadata, got %#v", metadata)
+	}
+	if _, ok := metadata["parse_metadata"].(map[string]any); !ok {
+		t.Fatalf("expected parse metadata, got %#v", metadata)
+	}
+}
+
+func TestChapterVersionModelMetadataCarriesSelfCheckCoverage(t *testing.T) {
+	generation := chapterGenerateResponse{
+		TraceID:       "trace-demo",
+		ModelMetadata: map[string]any{"provider": "real-provider"},
+		SelfCheck: map[string]any{
+			"status": "needs_review",
+			"requirement_coverage": []any{
+				map[string]any{
+					"requirement_id": "evaluation-001",
+					"satisfied":      false,
+				},
+			},
+		},
+	}
+
+	metadata := chapterVersionModelMetadata(generation)
+
+	if metadata["provider"] != "real-provider" || metadata["trace_id"] != "trace-demo" {
+		t.Fatalf("expected model metadata and trace id to be retained, got %#v", metadata)
+	}
+	selfCheck, ok := metadata["self_check"].(map[string]any)
+	if !ok || selfCheck["status"] != "needs_review" {
+		t.Fatalf("expected self check to be stored, got %#v", metadata["self_check"])
+	}
+	if metadata["requirement_coverage_count"] != 1 {
+		t.Fatalf("expected requirement coverage count, got %#v", metadata)
+	}
+	coverage, ok := metadata["requirement_coverage"].([]any)
+	if !ok || len(coverage) != 1 {
+		t.Fatalf("expected requirement coverage rows, got %#v", metadata["requirement_coverage"])
+	}
+	generation.ModelMetadata["provider"] = "mutated"
+	if metadata["provider"] != "real-provider" {
+		t.Fatalf("expected metadata to be copied, got %#v", metadata["provider"])
+	}
+}
+
 func TestChapterTaskSideEffectsAllowedBlocksCancelledGenerationWork(t *testing.T) {
 	for name, tc := range map[string]struct {
 		jobStatus  string

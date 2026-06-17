@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -325,6 +327,40 @@ type ParseResult struct {
 	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
+type RequirementItem struct {
+	ID               string         `json:"id"`
+	BidDocumentID    string         `json:"bid_document_id"`
+	ParseResultID    *string        `json:"parse_result_id"`
+	ExternalID       string         `json:"external_id"`
+	Module           string         `json:"module"`
+	Type             string         `json:"type"`
+	Requirement      string         `json:"requirement"`
+	Priority         string         `json:"priority"`
+	Mandatory        bool           `json:"mandatory"`
+	Score            *float64       `json:"score"`
+	ExpectedResponse string         `json:"expected_response"`
+	CoverageStatus   string         `json:"coverage_status"`
+	SourceRef        map[string]any `json:"source_ref"`
+	NeedsReview      bool           `json:"needs_review"`
+	SortOrder        int            `json:"sort_order"`
+	Metadata         map[string]any `json:"metadata"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
+type PipelineGate struct {
+	ID            string         `json:"id"`
+	BidDocumentID string         `json:"bid_document_id"`
+	Stage         string         `json:"stage"`
+	Status        string         `json:"status"`
+	ReviewedBy    *string        `json:"reviewed_by"`
+	ReviewedAt    *time.Time     `json:"reviewed_at"`
+	Reason        string         `json:"reason"`
+	Metadata      map[string]any `json:"metadata"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
 type UploadTenderFileRequest struct {
 	FileID string `json:"file_id"`
 }
@@ -434,10 +470,28 @@ type chapterGenerateRequest struct {
 	ChapterID              string                  `json:"chapter_id"`
 	ChapterTitle           string                  `json:"chapter_title"`
 	TenderRequirements     []string                `json:"tender_requirements"`
+	RequirementRefs        []tenderRequirementRef  `json:"requirement_refs"`
 	SelectedKnowledgeRefs  []string                `json:"selected_knowledge_refs"`
 	RetrievedKnowledgeRefs []retrievedKnowledgeRef `json:"retrieved_knowledge_refs"`
 	CallbackURL            string                  `json:"callback_url,omitempty"`
 	ModelHint              *string                 `json:"model_hint,omitempty"`
+}
+
+type tenderRequirementRef struct {
+	ID               string         `json:"id"`
+	Module           string         `json:"module"`
+	Type             string         `json:"type"`
+	Requirement      string         `json:"requirement"`
+	Priority         string         `json:"priority"`
+	Mandatory        bool           `json:"mandatory"`
+	Score            *float64       `json:"score,omitempty"`
+	ExpectedResponse string         `json:"expected_response,omitempty"`
+	Status           string         `json:"status,omitempty"`
+	SourceRef        map[string]any `json:"source_ref,omitempty"`
+	SourceText       string         `json:"source_text,omitempty"`
+	PageStart        *int           `json:"page_start,omitempty"`
+	PageEnd          *int           `json:"page_end,omitempty"`
+	NeedsReview      bool           `json:"needs_review,omitempty"`
 }
 
 type tenderParseRequest struct {
@@ -831,6 +885,15 @@ func (s *Store) UploadTenderFile(ctx context.Context, tenantID, userID, bidID st
 		if err != nil {
 			return err
 		}
+		if err := syncBidRequirementItems(ctx, tx, tenantID, bidID, parseResult.ID, parseResult.StructuredResult); err != nil {
+			return err
+		}
+		if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "interpret", "pending", "", "已上传新的招标文件，等待解读确认。", map[string]any{
+			"parse_result_id": parseResult.ID,
+			"file_asset_id":   fileID,
+		}); err != nil {
+			return err
+		}
 		result = UploadTenderFileResponse{File: attached, ParseResult: parseResult}
 		return nil
 	})
@@ -882,6 +945,15 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 		structured := defaultTenderStructuredResult(document, file)
 		parseResult, err := upsertParseResult(ctx, tx, tenantID, bidID, file.FileAssetID, "queued", structured, "")
 		if err != nil {
+			return err
+		}
+		if err := syncBidRequirementItems(ctx, tx, tenantID, bidID, parseResult.ID, structured); err != nil {
+			return err
+		}
+		if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "interpret", "pending", "", "招标文件正在解读，完成后需要人工确认。", map[string]any{
+			"parse_result_id": parseResult.ID,
+			"file_asset_id":   file.FileAssetID,
+		}); err != nil {
 			return err
 		}
 		externalTaskID := "task-tender-parse-" + uuid.NewString()
@@ -973,6 +1045,52 @@ func (s *Store) GetParseResult(ctx context.Context, tenantID, bidID string) (Par
 	return result, err
 }
 
+func (s *Store) ListRequirementItems(ctx context.Context, tenantID, bidID string) ([]RequirementItem, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	var result []RequirementItem
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		items, err := requirementItemsForBid(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		result = items
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) ListPipelineGates(ctx context.Context, tenantID, bidID string) ([]PipelineGate, error) {
+	bidID = strings.TrimSpace(bidID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	var result []PipelineGate
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		gates, err := pipelineGatesForBid(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		result = gates
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return result, err
+}
+
 func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID string, req ConfirmParseResultRequest) (ParseResult, error) {
 	bidID = strings.TrimSpace(bidID)
 	if _, err := uuid.Parse(bidID); err != nil {
@@ -1016,6 +1134,12 @@ func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID 
 		if err := ensureMaterialSelection(ctx, tx, tenantID, bidID, userID, defaultMaterialRefs(structured), ""); err != nil {
 			return err
 		}
+		if err := syncBidRequirementItems(ctx, tx, tenantID, bidID, confirmed.ID, structured); err != nil {
+			return err
+		}
+		if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "interpret", "passed", userID, "招标解读已人工确认。", parseGateMetadata(confirmed.ID, structured)); err != nil {
+			return err
+		}
 		result = confirmed
 		return nil
 	})
@@ -1043,8 +1167,18 @@ func (s *Store) GenerateOutline(ctx context.Context, tenantID, userID, bidID str
 		if err != nil {
 			return err
 		}
+		if err := requirePipelineGatePassed(ctx, tx, tenantID, bidID, "interpret"); err != nil {
+			return err
+		}
 		specs := outlineSpecsFromStructuredResult(document, parseResult.StructuredResult)
 		if err := applyOutlineSpecs(ctx, tx, tenantID, bidID, specs); err != nil {
+			return err
+		}
+		if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "plan", "passed", userID, "响应大纲已生成。", map[string]any{
+			"parse_result_id": parseResult.ID,
+			"parts_count":     len(specs),
+			"chapters_count":  outlineChapterCount(specs),
+		}); err != nil {
 			return err
 		}
 		resultPayload := map[string]any{
@@ -1475,6 +1609,9 @@ func (s *Store) GenerateBid(ctx context.Context, tenantID, userID, bidID string,
 		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
 			return err
 		}
+		if err := requirePipelineGatePassed(ctx, tx, tenantID, bidID, "plan"); err != nil {
+			return err
+		}
 		chapters, err := chaptersForGeneration(ctx, tx, tenantID, bidID, partCode, chapterFilter)
 		if err != nil {
 			return err
@@ -1504,7 +1641,11 @@ func (s *Store) GenerateBid(ctx context.Context, tenantID, userID, bidID string,
 				return err
 			}
 		}
-		return nil
+		return upsertPipelineGate(ctx, tx, tenantID, bidID, "generate", "pending", userID, "标书内容正在生成。", map[string]any{
+			"generation_job_id": jobID,
+			"scope":             scope,
+			"chapter_count":     len(chapters),
+		})
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GenerationJobDetail{}, ErrNotFound
@@ -1787,6 +1928,10 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 		if err != nil {
 			return err
 		}
+		requirementRefs, err := requirementRefsForChapter(ctx, tx, tenantID, chapter)
+		if err != nil {
+			return err
+		}
 		selectedRefs := make([]string, 0, len(knowledgeRefs))
 		for _, ref := range knowledgeRefs {
 			selectedRefs = append(selectedRefs, ref.ChunkID)
@@ -1798,7 +1943,8 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 			BidPartID:              chapter.BidPartID,
 			ChapterID:              chapter.ID,
 			ChapterTitle:           chapter.Title,
-			TenderRequirements:     []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
+			TenderRequirements:     tenderRequirementTexts(requirementRefs),
+			RequirementRefs:        requirementRefs,
 			SelectedKnowledgeRefs:  selectedRefs,
 			RetrievedKnowledgeRefs: knowledgeRefs,
 			CallbackURL:            s.cfg.AICallbackURL,
@@ -1869,6 +2015,10 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 		if err != nil {
 			return err
 		}
+		requirementRefs, err := requirementRefsForChapter(ctx, tx, tenantID, chapter)
+		if err != nil {
+			return err
+		}
 		selectedRefs := make([]string, 0, len(knowledgeRefs))
 		for _, ref := range knowledgeRefs {
 			selectedRefs = append(selectedRefs, ref.ChunkID)
@@ -1881,7 +2031,8 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 				BidPartID:              chapter.BidPartID,
 				ChapterID:              chapter.ID,
 				ChapterTitle:           chapter.Title,
-				TenderRequirements:     []string{"所有事实性内容必须保留引用", "缺少来源的企业资质、人员、证书、金额和日期必须标记人工确认"},
+				TenderRequirements:     tenderRequirementTexts(requirementRefs),
+				RequirementRefs:        requirementRefs,
 				SelectedKnowledgeRefs:  selectedRefs,
 				RetrievedKnowledgeRefs: knowledgeRefs,
 				CallbackURL:            s.cfg.AICallbackURL,
@@ -2074,6 +2225,9 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 		if err != nil {
 			return err
 		}
+		if err := requirePipelineGatePassed(ctx, tx, tenantID, bidID, "generate"); err != nil {
+			return err
+		}
 		if err := ensureExportAttachmentObjectKeysReady(ctx, tx, tenantID, req.Attachments, req.BOQFiles); err != nil {
 			return err
 		}
@@ -2187,7 +2341,7 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 			return err
 		}
 		task = createdTask
-		return nil
+		return upsertPipelineGate(ctx, tx, tenantID, bidID, "format", "pending", userID, "投标文件正在导出。", exportGateMetadata(exportID, exportType, nil))
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CreateExportResponse{}, ErrNotFound
@@ -2274,6 +2428,12 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				if err := ensureMaterialSelection(ctx, tx, payload.TenantID, bidID, "", defaultMaterialRefs(structured), ""); err != nil {
 					return err
 				}
+				if err := syncBidRequirementItems(ctx, tx, payload.TenantID, bidID, task.ResourceID, structured); err != nil {
+					return err
+				}
+				if err := upsertPipelineGate(ctx, tx, payload.TenantID, bidID, "interpret", "needs_review", "", "招标解读完成，等待人工确认。", parseGateMetadata(task.ResourceID, structured)); err != nil {
+					return err
+				}
 				if _, err := tx.Exec(ctx, `
 					update bid_documents
 					set status = 'editing', updated_at = now()
@@ -2291,6 +2451,16 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				`, payload.TenantID, task.ResourceID, payload.ErrorMessage); err != nil {
 					return err
 				}
+				bidID, err := bidIDForParseResult(ctx, tx, payload.TenantID, task.ResourceID)
+				if err != nil {
+					return err
+				}
+				if err := upsertPipelineGate(ctx, tx, payload.TenantID, bidID, "interpret", "blocked", "", "招标解读失败，请重新上传或重新解读。", map[string]any{
+					"parse_result_id": task.ResourceID,
+					"error_message":   payload.ErrorMessage,
+				}); err != nil {
+					return err
+				}
 			case "queued", "running":
 				parseStatus := "queued"
 				if status == "running" {
@@ -2304,17 +2474,27 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				`, payload.TenantID, task.ResourceID, parseStatus); err != nil {
 					return err
 				}
-			}
-		case "bid_export":
-			if status == "done" {
-				var exportType string
-				if err := tx.QueryRow(ctx, `
-					select export_type
-					from bid_exports
-					where tenant_id = $1 and id = $2
-				`, payload.TenantID, task.ResourceID).Scan(&exportType); err != nil {
+				bidID, err := bidIDForParseResult(ctx, tx, payload.TenantID, task.ResourceID)
+				if err != nil {
 					return err
 				}
+				if err := upsertPipelineGate(ctx, tx, payload.TenantID, bidID, "interpret", "pending", "", "招标文件正在解读，完成后需要人工确认。", map[string]any{
+					"parse_result_id": task.ResourceID,
+					"task_status":     status,
+				}); err != nil {
+					return err
+				}
+			}
+		case "bid_export":
+			var bidID, exportType string
+			if err := tx.QueryRow(ctx, `
+				select bid_document_id::text, export_type
+				from bid_exports
+				where tenant_id = $1 and id = $2
+			`, payload.TenantID, task.ResourceID).Scan(&bidID, &exportType); err != nil {
+				return err
+			}
+			if status == "done" {
 				sizeBytes, contentType, err := exportCallbackFileResult(exportType, payload.Result)
 				if err != nil {
 					return err
@@ -2354,6 +2534,11 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				where tenant_id = $1 and id = $2
 			`, payload.TenantID, task.ResourceID, status, resultJSON, payload.ErrorMessage); err != nil {
 				return err
+			}
+			if gateStatus := pipelineGateStatusForTask(status); gateStatus != "" {
+				if err := upsertPipelineGate(ctx, tx, payload.TenantID, bidID, "format", gateStatus, "", pipelineGateReason("format", gateStatus), exportGateMetadata(task.ResourceID, exportType, payload.Result)); err != nil {
+					return err
+				}
 			}
 		case "bid_chapter":
 			applyChapterSideEffects, err := shouldApplyChapterTaskSideEffects(ctx, tx, payload.TenantID, task.ID)
@@ -2505,10 +2690,33 @@ func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID 
 	if changeReason == "" {
 		changeReason = "ai_regenerate"
 	}
-	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, changeReason, generation.ModelMetadata, generation.TokenUsage); err != nil {
+	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, changeReason, chapterVersionModelMetadata(generation), generation.TokenUsage); err != nil {
 		return err
 	}
 	return replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID)
+}
+
+func chapterVersionModelMetadata(generation chapterGenerateResponse) map[string]any {
+	metadata := map[string]any{}
+	for key, value := range generation.ModelMetadata {
+		metadata[key] = value
+	}
+	if generation.TraceID != "" {
+		metadata["trace_id"] = generation.TraceID
+	}
+	if len(generation.SelfCheck) == 0 {
+		return metadata
+	}
+	selfCheck := map[string]any{}
+	for key, value := range generation.SelfCheck {
+		selfCheck[key] = value
+	}
+	metadata["self_check"] = selfCheck
+	if coverage, ok := selfCheck["requirement_coverage"].([]any); ok {
+		metadata["requirement_coverage"] = coverage
+		metadata["requirement_coverage_count"] = len(coverage)
+	}
+	return metadata
 }
 
 func (s *Store) markChapterGenerateFailed(ctx context.Context, tenantID, chapterID, taskID, message string) error {
@@ -2634,6 +2842,10 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 		if err != nil {
 			return err
 		}
+		requirementRefs, err := requirementRefsForChapter(ctx, tx, tenantID, chapter)
+		if err != nil {
+			return err
+		}
 		selectedRefs := make([]string, 0, len(knowledgeRefs))
 		for _, ref := range knowledgeRefs {
 			selectedRefs = append(selectedRefs, ref.ChunkID)
@@ -2645,7 +2857,8 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 			BidPartID:              chapter.BidPartID,
 			ChapterID:              chapter.ID,
 			ChapterTitle:           chapter.Title,
-			TenderRequirements:     []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"},
+			TenderRequirements:     tenderRequirementTexts(requirementRefs),
+			RequirementRefs:        requirementRefs,
 			SelectedKnowledgeRefs:  selectedRefs,
 			RetrievedKnowledgeRefs: knowledgeRefs,
 			CallbackURL:            s.cfg.AICallbackURL,
@@ -2665,10 +2878,11 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 			return err
 		}
 		metadataJSON, _ := json.Marshal(map[string]any{
-			"job_id":           jobID,
-			"bid_document_id":  bidID,
-			"chapter_title":    chapter.Title,
-			"knowledge_ref_ct": len(knowledgeRefs),
+			"job_id":             jobID,
+			"bid_document_id":    bidID,
+			"chapter_title":      chapter.Title,
+			"knowledge_ref_ct":   len(knowledgeRefs),
+			"requirement_ref_ct": len(requirementRefs),
 		})
 		if _, err := tx.Exec(ctx, `
 			update bid_generation_steps
@@ -2760,6 +2974,14 @@ func (s *Store) markGenerationStepFailed(ctx context.Context, tenantID, jobID, s
 
 func (s *Store) markExportFailed(ctx context.Context, tenantID, exportID, taskID, message string) error {
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var bidID, exportType string
+		if err := tx.QueryRow(ctx, `
+			select bid_document_id::text, export_type
+			from bid_exports
+			where tenant_id = $1 and id = $2
+		`, tenantID, exportID).Scan(&bidID, &exportType); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			update ai_tasks
 			set status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
@@ -2782,7 +3004,12 @@ func (s *Store) markExportFailed(ctx context.Context, tenantID, exportID, taskID
 			set status = 'failed', error_message = $3, completed_at = now(), updated_at = now()
 			where tenant_id = $1 and id = $2
 		`, tenantID, exportID, message)
-		return err
+		if err != nil {
+			return err
+		}
+		return upsertPipelineGate(ctx, tx, tenantID, bidID, "format", "blocked", "", pipelineGateReason("format", "blocked"), exportGateMetadata(exportID, exportType, map[string]any{
+			"error_message": message,
+		}))
 	})
 }
 
@@ -3166,10 +3393,11 @@ func refreshGenerationJob(ctx context.Context, tx pgx.Tx, tenantID, jobID string
 }
 
 func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenantID, jobID string) (bool, error) {
-	var currentStatus string
+	var currentStatus, bidID string
 	var total, done, failed, cancelled, running, queued, promptTokens, completionTokens int
 	summarySQL := fmt.Sprintf(`
 		select
+			j.bid_document_id::text,
 			j.status,
 			count(s.id)::int,
 			count(*) filter (where s.status = 'done')::int,
@@ -3183,9 +3411,9 @@ func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenan
 		left join bid_generation_steps s on s.tenant_id = j.tenant_id and s.job_id = j.id
 		left join ai_tasks t on t.tenant_id = s.tenant_id and t.id = s.ai_task_id
 		where j.tenant_id = $1 and j.id = $2
-		group by j.id, j.status
+		group by j.id, j.bid_document_id, j.status
 	`, tokenUsageSumSQL("input_tokens"), tokenUsageSumSQL("output_tokens"))
-	if err := tx.QueryRow(ctx, summarySQL, tenantID, jobID).Scan(&currentStatus, &total, &done, &failed, &cancelled, &running, &queued, &promptTokens, &completionTokens); err != nil {
+	if err := tx.QueryRow(ctx, summarySQL, tenantID, jobID).Scan(&bidID, &currentStatus, &total, &done, &failed, &cancelled, &running, &queued, &promptTokens, &completionTokens); err != nil {
 		return false, err
 	}
 	progress := 0
@@ -3223,6 +3451,12 @@ func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenan
 		where tenant_id = $1 and id = $2
 	`, completedAtExpr), tenantID, jobID, nextStatus, progress, done, failed, promptTokens, completionTokens); err != nil {
 		return false, err
+	}
+	if gateStatus := pipelineGateStatusForGenerationJob(nextStatus, total, done, failed, cancelled); gateStatus != "" {
+		metadata := generationGateMetadata(jobID, total, done, failed, cancelled, progress, promptTokens, completionTokens)
+		if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "generate", gateStatus, "", pipelineGateReason("generate", gateStatus), metadata); err != nil {
+			return false, err
+		}
 	}
 	shouldDispatch := currentStatus != "paused" && currentStatus != "cancelled" && failed == 0 && running == 0 && queued > 0
 	return shouldDispatch, nil
@@ -3274,6 +3508,260 @@ func parseResultForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) (
 		from bid_parse_results
 		where tenant_id = $1 and bid_document_id = $2
 	`, tenantID, bidID))
+}
+
+func bidIDForParseResult(ctx context.Context, tx pgx.Tx, tenantID, parseResultID string) (string, error) {
+	var bidID string
+	err := tx.QueryRow(ctx, `
+		select bid_document_id::text
+		from bid_parse_results
+		where tenant_id = $1 and id = $2
+	`, tenantID, parseResultID).Scan(&bidID)
+	return bidID, err
+}
+
+func pipelineGatesForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) ([]PipelineGate, error) {
+	rows, err := tx.Query(ctx, `
+		select id::text, bid_document_id::text, stage, status, reviewed_by::text,
+			reviewed_at, reason, metadata, created_at, updated_at
+		from bid_pipeline_gates
+		where tenant_id = $1 and bid_document_id = $2
+		order by case stage
+			when 'interpret' then 10
+			when 'plan' then 20
+			when 'generate' then 30
+			when 'check' then 40
+			when 'format' then 50
+			else 99
+		end, created_at
+	`, tenantID, bidID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	gates := []PipelineGate{}
+	for rows.Next() {
+		gate, err := scanPipelineGate(rows)
+		if err != nil {
+			return nil, err
+		}
+		gates = append(gates, gate)
+	}
+	return gates, rows.Err()
+}
+
+func upsertPipelineGate(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	stage string,
+	status string,
+	userID string,
+	reason string,
+	metadata map[string]any,
+) error {
+	stage = normalizePipelineStage(stage)
+	status = normalizePipelineGateStatus(status)
+	if stage == "" || status == "" {
+		return ErrInvalidRequest
+	}
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataJSON, _ := json.Marshal(metadata)
+	_, err := tx.Exec(ctx, `
+		insert into bid_pipeline_gates (
+			tenant_id, bid_document_id, stage, status, reviewed_by,
+			reviewed_at, reason, metadata
+		)
+		values (
+			$1, $2, $3, $4,
+			case when $5 = '' or $4 not in ('passed', 'blocked') then null else $5::uuid end,
+			case when $4 in ('passed', 'blocked') then now() else null end,
+			$6, $7
+		)
+		on conflict (tenant_id, bid_document_id, stage) do update
+		set status = excluded.status,
+			reviewed_by = excluded.reviewed_by,
+			reviewed_at = excluded.reviewed_at,
+			reason = excluded.reason,
+			metadata = excluded.metadata,
+			updated_at = now()
+	`, tenantID, bidID, stage, status, strings.TrimSpace(userID), strings.TrimSpace(reason), metadataJSON)
+	return err
+}
+
+func requirePipelineGatePassed(ctx context.Context, tx pgx.Tx, tenantID, bidID, stage string) error {
+	stage = normalizePipelineStage(stage)
+	if stage == "" {
+		return ErrInvalidRequest
+	}
+	var status string
+	err := tx.QueryRow(ctx, `
+		select status
+		from bid_pipeline_gates
+		where tenant_id = $1 and bid_document_id = $2 and stage = $3
+	`, tenantID, bidID, stage).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		switch stage {
+		case "interpret":
+			return backfillInterpretGate(ctx, tx, tenantID, bidID)
+		case "plan":
+			return backfillPlanGate(ctx, tx, tenantID, bidID)
+		case "generate":
+			return backfillGenerateGate(ctx, tx, tenantID, bidID)
+		default:
+			return ErrInvalidRequest
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if normalizePipelineGateStatus(status) != "passed" {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func backfillInterpretGate(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error {
+	parseResult, parseErr := parseResultForBid(ctx, tx, tenantID, bidID)
+	if parseErr != nil {
+		if errors.Is(parseErr, pgx.ErrNoRows) {
+			return ErrInvalidRequest
+		}
+		return parseErr
+	}
+	if strings.EqualFold(parseResult.Status, "confirmed") {
+		return upsertPipelineGate(ctx, tx, tenantID, bidID, "interpret", "passed", "", "历史确认结果自动补齐阶段闸门。", parseGateMetadata(parseResult.ID, parseResult.StructuredResult))
+	}
+	return ErrInvalidRequest
+}
+
+func backfillPlanGate(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error {
+	var partCount, chapterCount int
+	if err := tx.QueryRow(ctx, `
+		select count(distinct p.id)::int, count(c.id)::int
+		from bid_parts p
+		left join bid_chapters c on c.tenant_id = p.tenant_id and c.bid_part_id = p.id
+		where p.tenant_id = $1 and p.bid_document_id = $2
+	`, tenantID, bidID).Scan(&partCount, &chapterCount); err != nil {
+		return err
+	}
+	if partCount == 0 || chapterCount == 0 {
+		return ErrInvalidRequest
+	}
+	return upsertPipelineGate(ctx, tx, tenantID, bidID, "plan", "passed", "", "历史目录大纲自动补齐阶段闸门。", map[string]any{
+		"part_count":    partCount,
+		"chapter_count": chapterCount,
+	})
+}
+
+func backfillGenerateGate(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error {
+	var total, ready int
+	if err := tx.QueryRow(ctx, `
+		select count(*)::int,
+			count(*) filter (where status in ('generated', 'accepted', 'edited'))::int
+		from bid_chapters
+		where tenant_id = $1 and bid_document_id = $2
+	`, tenantID, bidID).Scan(&total, &ready); err != nil {
+		return err
+	}
+	if total == 0 || ready != total {
+		return ErrInvalidRequest
+	}
+	return upsertPipelineGate(ctx, tx, tenantID, bidID, "generate", "passed", "", "历史章节内容自动补齐阶段闸门。", map[string]any{
+		"chapter_count": total,
+		"ready_count":   ready,
+	})
+}
+
+func parseGateMetadata(parseResultID string, structured map[string]any) map[string]any {
+	metadata := map[string]any{"parse_result_id": parseResultID}
+	if qualityGates, ok := structured["quality_gates"].(map[string]any); ok {
+		metadata["quality_gates"] = qualityGates
+	}
+	if parseMetadata, ok := structured["parse_metadata"].(map[string]any); ok {
+		metadata["parse_metadata"] = parseMetadata
+	}
+	if requirements, ok := structured["requirement_items"].([]any); ok {
+		metadata["requirement_count"] = len(requirements)
+	}
+	return metadata
+}
+
+func generationGateMetadata(jobID string, total, done, failed, cancelled, progress, promptTokens, completionTokens int) map[string]any {
+	return map[string]any{
+		"generation_job_id": jobID,
+		"total_steps":       total,
+		"done_steps":        done,
+		"failed_steps":      failed,
+		"cancelled_steps":   cancelled,
+		"progress":          progress,
+		"prompt_tokens":     promptTokens,
+		"completion_tokens": completionTokens,
+	}
+}
+
+func exportGateMetadata(exportID, exportType string, result map[string]any) map[string]any {
+	metadata := map[string]any{
+		"export_id":   exportID,
+		"export_type": exportType,
+	}
+	if result == nil {
+		return metadata
+	}
+	for _, key := range []string{"filename", "content_type", "size_bytes", "trace_id", "error_message"} {
+		if value, ok := result[key]; ok {
+			metadata[key] = value
+		}
+	}
+	return metadata
+}
+
+func pipelineGateStatusForTask(status string) string {
+	switch normalizeTaskStatus(status) {
+	case "queued", "running":
+		return "pending"
+	case "done":
+		return "passed"
+	case "failed", "cancelled":
+		return "blocked"
+	default:
+		if strings.EqualFold(strings.TrimSpace(status), "paused") {
+			return "pending"
+		}
+		return ""
+	}
+}
+
+func pipelineGateStatusForGenerationJob(status string, total, done, failed, cancelled int) string {
+	if failed > 0 || cancelled > 0 {
+		return "blocked"
+	}
+	if total > 0 && done == total {
+		return "passed"
+	}
+	return pipelineGateStatusForTask(status)
+}
+
+func pipelineGateReason(stage, status string) string {
+	switch normalizePipelineStage(stage) + ":" + normalizePipelineGateStatus(status) {
+	case "generate:pending":
+		return "标书内容正在生成。"
+	case "generate:passed":
+		return "标书内容已生成完成。"
+	case "generate:blocked":
+		return "标书内容生成失败，请处理失败章节后重试。"
+	case "format:pending":
+		return "投标文件正在导出。"
+	case "format:passed":
+		return "投标文件已导出完成。"
+	case "format:blocked":
+		return "投标文件导出失败，请调整后重新导出。"
+	default:
+		return ""
+	}
 }
 
 func upsertParseResult(
@@ -3348,6 +3836,31 @@ func materialSelectionForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID str
 	`, tenantID, bidID))
 }
 
+func requirementItemsForBid(ctx context.Context, tx pgx.Tx, tenantID, bidID string) ([]RequirementItem, error) {
+	rows, err := tx.Query(ctx, `
+		select id::text, bid_document_id::text, parse_result_id::text, external_id,
+			module, requirement_type, requirement, priority, mandatory, score::float8,
+			expected_response, coverage_status, source_ref, needs_review, sort_order,
+			metadata, created_at, updated_at
+		from bid_requirement_items
+		where tenant_id = $1 and bid_document_id = $2
+		order by sort_order, created_at, id
+	`, tenantID, bidID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RequirementItem{}
+	for rows.Next() {
+		item, err := scanRequirementItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func ensureMaterialSelection(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -3371,6 +3884,169 @@ func ensureMaterialSelection(
 			updated_at = now()
 	`, tenantID, bidID, body, strings.TrimSpace(notes), userID)
 	return err
+}
+
+func syncBidRequirementItems(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	parseResultID string,
+	structured map[string]any,
+) error {
+	items := requirementItemsFromStructuredResult(structured)
+	if len(items) == 0 {
+		_, err := tx.Exec(ctx, `
+			delete from bid_requirement_items
+			where tenant_id = $1 and bid_document_id = $2
+		`, tenantID, bidID)
+		return err
+	}
+	externalIDs := make([]string, 0, len(items))
+	for index, item := range items {
+		externalIDs = append(externalIDs, item.ExternalID)
+		sourceRaw, _ := json.Marshal(item.SourceRef)
+		metadataRaw, _ := json.Marshal(item.Metadata)
+		var scoreValue any
+		if item.Score != nil {
+			scoreValue = *item.Score
+		}
+		if _, err := tx.Exec(ctx, `
+			insert into bid_requirement_items (
+				tenant_id, bid_document_id, parse_result_id, external_id, module,
+				requirement_type, requirement, priority, mandatory, score,
+				expected_response, coverage_status, source_ref, needs_review,
+				sort_order, metadata
+			)
+			values (
+				$1, $2, nullif($3, '')::uuid, $4, $5,
+				$6, $7, $8, $9, $10,
+				$11, $12, $13, $14, $15, $16
+			)
+			on conflict (tenant_id, bid_document_id, external_id) do update
+			set parse_result_id = excluded.parse_result_id,
+				module = excluded.module,
+				requirement_type = excluded.requirement_type,
+				requirement = excluded.requirement,
+				priority = excluded.priority,
+				mandatory = excluded.mandatory,
+				score = excluded.score,
+				expected_response = excluded.expected_response,
+				coverage_status = excluded.coverage_status,
+				source_ref = excluded.source_ref,
+				needs_review = excluded.needs_review,
+				sort_order = excluded.sort_order,
+				metadata = excluded.metadata,
+				updated_at = now()
+		`, tenantID, bidID, parseResultID, item.ExternalID, item.Module,
+			item.Type, item.Requirement, item.Priority, item.Mandatory, scoreValue,
+			item.ExpectedResponse, item.CoverageStatus, sourceRaw, item.NeedsReview,
+			index+1, metadataRaw); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(ctx, `
+		delete from bid_requirement_items
+		where tenant_id = $1
+			and bid_document_id = $2
+			and not (external_id = any($3::text[]))
+	`, tenantID, bidID, externalIDs)
+	return err
+}
+
+func requirementItemsFromStructuredResult(structured map[string]any) []RequirementItem {
+	refs := tenderRequirementRefsFromAny(structured["requirement_items"])
+	if len(refs) == 0 {
+		refs = fallbackRequirementRefsFromStructuredResult(structured)
+	}
+	items := make([]RequirementItem, 0, len(refs))
+	seen := map[string]struct{}{}
+	for index, ref := range refs {
+		requirement := strings.TrimSpace(ref.Requirement)
+		if requirement == "" {
+			continue
+		}
+		externalID := strings.TrimSpace(ref.ID)
+		if externalID == "" {
+			externalID = fmt.Sprintf("%s-%03d", moduleOrDefault(ref.Module), index+1)
+		}
+		if _, exists := seen[externalID]; exists {
+			continue
+		}
+		seen[externalID] = struct{}{}
+		coverageStatus := normalizeRequirementCoverageStatus(ref.Status)
+		if coverageStatus == "" {
+			coverageStatus = "unmapped"
+		}
+		items = append(items, RequirementItem{
+			ExternalID:       externalID,
+			Module:           moduleOrDefault(ref.Module),
+			Type:             strings.TrimSpace(ref.Type),
+			Requirement:      requirement,
+			Priority:         normalizeRequirementPriority(ref.Priority),
+			Mandatory:        ref.Mandatory,
+			Score:            ref.Score,
+			ExpectedResponse: strings.TrimSpace(ref.ExpectedResponse),
+			CoverageStatus:   coverageStatus,
+			SourceRef:        requirementSourceRef(ref),
+			NeedsReview:      ref.NeedsReview,
+			SortOrder:        index + 1,
+			Metadata: map[string]any{
+				"source": "tender_parse",
+			},
+		})
+	}
+	return items
+}
+
+func requirementSourceRef(ref tenderRequirementRef) map[string]any {
+	source := copyStringAnyMap(ref.SourceRef)
+	if source == nil {
+		source = map[string]any{}
+	}
+	if ref.SourceText != "" {
+		source["source_text"] = ref.SourceText
+	}
+	if ref.PageStart != nil {
+		source["page_start"] = *ref.PageStart
+	}
+	if ref.PageEnd != nil {
+		source["page_end"] = *ref.PageEnd
+	}
+	return source
+}
+
+func normalizeRequirementPriority(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high", "medium", "low":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "medium"
+	}
+}
+
+func normalizeRequirementCoverageStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "unmapped", "planned", "covered", "needs_review":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "done", "satisfied", "passed":
+		return "covered"
+	case "partial", "review", "needs_check":
+		return "needs_review"
+	default:
+		return ""
+	}
+}
+
+func copyStringAnyMap(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		out[key] = item
+	}
+	return out
 }
 
 func defaultTenderStructuredResult(document Document, file TenderFile) map[string]any {
@@ -3606,6 +4282,361 @@ func defaultMaterialRefs(structured map[string]any) []any {
 		}
 	}
 	return []any{}
+}
+
+func requirementRefsForChapter(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter) ([]tenderRequirementRef, error) {
+	parseResult, err := parseResultForBid(ctx, tx, tenantID, chapter.BidDocumentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return requirementRefsFromStructuredResult(parseResult.StructuredResult, chapter.Title, 8), nil
+}
+
+func tenderRequirementTexts(refs []tenderRequirementRef) []string {
+	if len(refs) == 0 {
+		return []string{"响应招标文件要求", "保留事实性内容引用", "无来源内容标记人工确认"}
+	}
+	requirements := make([]string, 0, len(refs)+2)
+	for _, ref := range refs {
+		text := strings.TrimSpace(ref.Requirement)
+		if text == "" {
+			continue
+		}
+		label := tenderRequirementModuleLabel(ref.Module)
+		if ref.ExpectedResponse != "" {
+			text = text + "；响应要点：" + ref.ExpectedResponse
+		}
+		if label != "" {
+			text = label + "：" + text
+		}
+		requirements = append(requirements, text)
+	}
+	requirements = append(requirements, "事实性企业资质、人员、证书、金额和日期必须保留来源或标记人工确认")
+	requirements = append(requirements, "生成后按需求项逐条完成自检并返回覆盖证据")
+	return requirements
+}
+
+func requirementRefsFromStructuredResult(structured map[string]any, chapterTitle string, limit int) []tenderRequirementRef {
+	if limit <= 0 {
+		limit = 8
+	}
+	refs := tenderRequirementRefsFromAny(structured["requirement_items"])
+	if len(refs) == 0 {
+		refs = fallbackRequirementRefsFromStructuredResult(structured)
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	type rankedRequirementRef struct {
+		ref   tenderRequirementRef
+		score int
+		index int
+	}
+	ranked := make([]rankedRequirementRef, 0, len(refs))
+	for index, ref := range refs {
+		ranked = append(ranked, rankedRequirementRef{
+			ref:   ref,
+			score: chapterRequirementScore(chapterTitle, ref),
+			index: index,
+		})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score == ranked[j].score {
+			return ranked[i].index < ranked[j].index
+		}
+		return ranked[i].score > ranked[j].score
+	})
+	selected := make([]tenderRequirementRef, 0, min(limit, len(ranked)))
+	for _, item := range ranked {
+		if item.score <= 0 {
+			continue
+		}
+		selected = append(selected, item.ref)
+		if len(selected) >= limit {
+			break
+		}
+	}
+	if len(selected) > 0 {
+		return selected
+	}
+	for _, item := range ranked {
+		if item.ref.Mandatory || item.ref.Priority == "high" {
+			selected = append(selected, item.ref)
+			if len(selected) >= limit {
+				return selected
+			}
+		}
+	}
+	if len(selected) > 0 {
+		return selected
+	}
+	for _, item := range ranked {
+		selected = append(selected, item.ref)
+		if len(selected) >= limit {
+			break
+		}
+	}
+	return selected
+}
+
+func tenderRequirementRefsFromAny(value any) []tenderRequirementRef {
+	rawItems, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	refs := make([]tenderRequirementRef, 0, len(rawItems))
+	seen := map[string]struct{}{}
+	for index, raw := range rawItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		ref := tenderRequirementRefFromMap(item, index+1)
+		if ref.Requirement == "" {
+			continue
+		}
+		key := ref.ID
+		if key == "" {
+			key = ref.Module + ":" + ref.Requirement
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func tenderRequirementRefFromMap(item map[string]any, index int) tenderRequirementRef {
+	module := strings.TrimSpace(asString(item["module"]))
+	requirementType := strings.TrimSpace(asString(item["type"]))
+	requirement := strings.TrimSpace(asString(item["requirement"]))
+	if requirement == "" {
+		requirement = strings.TrimSpace(asString(item["title"]))
+	}
+	priority := strings.ToLower(strings.TrimSpace(asString(item["priority"])))
+	if priority != "high" && priority != "medium" && priority != "low" {
+		priority = "medium"
+	}
+	sourceRef := sourceRefMapFromAny(item["source_ref"])
+	sourceText, pageStart, pageEnd := tenderRequirementSource(sourceRef)
+	id := strings.TrimSpace(asString(item["id"]))
+	if id == "" {
+		id = fmt.Sprintf("%s-%03d", moduleOrDefault(module), index)
+	}
+	return tenderRequirementRef{
+		ID:               id,
+		Module:           moduleOrDefault(module),
+		Type:             requirementType,
+		Requirement:      requirement,
+		Priority:         priority,
+		Mandatory:        asBool(item["mandatory"]),
+		Score:            asFloatPtr(item["score"]),
+		ExpectedResponse: strings.TrimSpace(asString(item["expected_response"])),
+		Status:           strings.TrimSpace(asString(item["status"])),
+		SourceRef:        sourceRef,
+		SourceText:       sourceText,
+		PageStart:        pageStart,
+		PageEnd:          pageEnd,
+		NeedsReview:      asBool(item["needs_review"]),
+	}
+}
+
+func tenderRequirementSource(value any) (string, *int, *int) {
+	source, ok := value.(map[string]any)
+	if !ok {
+		return "", nil, nil
+	}
+	return strings.TrimSpace(asString(source["source_text"])), asIntPtr(source["page_start"]), asIntPtr(source["page_end"])
+}
+
+func sourceRefMapFromAny(value any) map[string]any {
+	source, ok := value.(map[string]any)
+	if !ok || len(source) == 0 {
+		return nil
+	}
+	return copyStringAnyMap(source)
+}
+
+func fallbackRequirementRefsFromStructuredResult(structured map[string]any) []tenderRequirementRef {
+	refs := []tenderRequirementRef{}
+	refs = append(refs, fallbackRequirementRefs("qualification", "qualification", true, "high", structured["qualification_requirements"])...)
+	refs = append(refs, fallbackRequirementRefs("evaluation", "scoring", false, "high", structured["scoring_points"])...)
+	refs = append(refs, fallbackRequirementRefs("invalid_risk", "invalid_risk", true, "high", structured["invalid_clause_risks"])...)
+	return refs
+}
+
+func fallbackRequirementRefs(module, requirementType string, mandatory bool, priority string, value any) []tenderRequirementRef {
+	values := stringListFromAny(value)
+	refs := make([]tenderRequirementRef, 0, len(values))
+	for index, requirement := range values {
+		refs = append(refs, tenderRequirementRef{
+			ID:          fmt.Sprintf("%s-%03d", module, index+1),
+			Module:      module,
+			Type:        requirementType,
+			Requirement: requirement,
+			Priority:    priority,
+			Mandatory:   mandatory,
+			Status:      "unmapped",
+			NeedsReview: true,
+		})
+	}
+	return refs
+}
+
+func stringListFromAny(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(asString(item))
+			if text != "" {
+				result = append(result, text)
+			}
+		}
+		return result
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text := strings.TrimSpace(item)
+			if text != "" {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		text := strings.TrimSpace(asString(value))
+		if text == "" {
+			return nil
+		}
+		return []string{text}
+	}
+}
+
+func chapterRequirementScore(chapterTitle string, ref tenderRequirementRef) int {
+	title := strings.ToLower(strings.TrimSpace(chapterTitle))
+	score := 0
+	if titleContainsAny(title, moduleChapterKeywords(ref.Module)) {
+		score += 8
+	}
+	if titleContainsAny(title, requirementTypeKeywords(ref.Type)) {
+		score += 5
+	}
+	if requirementOverlapsTitle(title, ref.Requirement) {
+		score += 3
+	}
+	if ref.Module == "invalid_risk" && titleContainsAny(title, []string{"偏离", "风险", "响应", "商务", "投标函"}) {
+		score += 4
+	}
+	if score == 0 {
+		return 0
+	}
+	if ref.Mandatory {
+		score += 2
+	}
+	switch ref.Priority {
+	case "high":
+		score += 2
+	case "medium":
+		score++
+	}
+	return score
+}
+
+func requirementOverlapsTitle(title string, requirement string) bool {
+	if title == "" || requirement == "" {
+		return false
+	}
+	for _, token := range requirementMatchTokens(requirement) {
+		if strings.Contains(title, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func requirementMatchTokens(value string) []string {
+	candidates := []string{"资格", "资质", "业绩", "证书", "人员", "项目负责人", "评分", "分值", "技术", "方案", "服务", "报价", "投标函", "签章", "密封", "附件", "格式", "清单", "承诺函"}
+	tokens := []string{}
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			tokens = append(tokens, strings.ToLower(candidate))
+		}
+	}
+	return tokens
+}
+
+func titleContainsAny(title string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if strings.Contains(title, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
+}
+
+func moduleChapterKeywords(module string) []string {
+	switch module {
+	case "qualification":
+		return []string{"资格", "资质", "证明", "证书", "商务"}
+	case "evaluation":
+		return []string{"技术", "方案", "实施", "服务", "评分", "项目理解"}
+	case "submission":
+		return []string{"递交", "提交", "投标函", "签章", "密封", "商务", "响应"}
+	case "invalid_risk":
+		return []string{"废标", "无效", "否决", "偏离", "风险", "商务", "响应"}
+	case "annex":
+		return []string{"附件", "格式", "清单", "承诺函", "报价"}
+	default:
+		return []string{"项目", "概述", "理解"}
+	}
+}
+
+func requirementTypeKeywords(requirementType string) []string {
+	switch strings.ToLower(strings.TrimSpace(requirementType)) {
+	case "qualification":
+		return []string{"资格", "资质", "证明", "证书"}
+	case "scoring":
+		return []string{"评分", "技术", "方案", "服务"}
+	case "submission":
+		return []string{"递交", "提交", "签章", "密封", "投标函"}
+	case "invalid_risk":
+		return []string{"废标", "无效", "否决", "偏离", "风险"}
+	case "annex":
+		return []string{"附件", "格式", "清单", "承诺函"}
+	default:
+		return nil
+	}
+}
+
+func tenderRequirementModuleLabel(module string) string {
+	switch module {
+	case "qualification":
+		return "资格要求"
+	case "evaluation":
+		return "评审要点"
+	case "submission":
+		return "递交要求"
+	case "invalid_risk":
+		return "风险条款"
+	case "annex":
+		return "附件格式"
+	default:
+		return "招标要求"
+	}
+}
+
+func moduleOrDefault(module string) string {
+	switch strings.TrimSpace(module) {
+	case "basic", "qualification", "evaluation", "submission", "invalid_risk", "annex":
+		return strings.TrimSpace(module)
+	default:
+		return "qualification"
+	}
 }
 
 func exportChapters(chapters []Chapter) []exportChapterPayload {
@@ -4039,6 +5070,52 @@ func scanParseResult(row scanner) (ParseResult, error) {
 	return result, err
 }
 
+func scanRequirementItem(row scanner) (RequirementItem, error) {
+	var item RequirementItem
+	var parseResultID sql.NullString
+	var score sql.NullFloat64
+	var sourceRaw, metadataRaw []byte
+	err := row.Scan(
+		&item.ID, &item.BidDocumentID, &parseResultID, &item.ExternalID,
+		&item.Module, &item.Type, &item.Requirement, &item.Priority,
+		&item.Mandatory, &score, &item.ExpectedResponse, &item.CoverageStatus,
+		&sourceRaw, &item.NeedsReview, &item.SortOrder, &metadataRaw,
+		&item.CreatedAt, &item.UpdatedAt,
+	)
+	if parseResultID.Valid {
+		item.ParseResultID = &parseResultID.String
+	}
+	if score.Valid {
+		item.Score = &score.Float64
+	}
+	item.SourceRef = map[string]any{}
+	_ = json.Unmarshal(sourceRaw, &item.SourceRef)
+	item.Metadata = map[string]any{}
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	return item, err
+}
+
+func scanPipelineGate(row scanner) (PipelineGate, error) {
+	var gate PipelineGate
+	var reviewedBy sql.NullString
+	var reviewedAt sql.NullTime
+	var metadataRaw []byte
+	err := row.Scan(
+		&gate.ID, &gate.BidDocumentID, &gate.Stage, &gate.Status,
+		&reviewedBy, &reviewedAt, &gate.Reason, &metadataRaw,
+		&gate.CreatedAt, &gate.UpdatedAt,
+	)
+	if reviewedBy.Valid {
+		gate.ReviewedBy = &reviewedBy.String
+	}
+	if reviewedAt.Valid {
+		gate.ReviewedAt = &reviewedAt.Time
+	}
+	gate.Metadata = map[string]any{}
+	_ = json.Unmarshal(metadataRaw, &gate.Metadata)
+	return gate, err
+}
+
 func scanMaterialSelection(row scanner) (MaterialSelection, error) {
 	var selection MaterialSelection
 	var selectedRaw []byte
@@ -4133,6 +5210,77 @@ func asInt(value any) int {
 	}
 }
 
+func asBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func asFloatPtr(value any) *float64 {
+	var parsed float64
+	switch typed := value.(type) {
+	case float64:
+		parsed = typed
+	case float32:
+		parsed = float64(typed)
+	case int:
+		parsed = float64(typed)
+	case int32:
+		parsed = float64(typed)
+	case int64:
+		parsed = float64(typed)
+	case json.Number:
+		value, err := typed.Float64()
+		if err != nil {
+			return nil
+		}
+		parsed = value
+	case string:
+		value, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return nil
+		}
+		parsed = value
+	default:
+		return nil
+	}
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil
+	}
+	return &parsed
+}
+
+func asIntPtr(value any) *int {
+	if value == nil {
+		return nil
+	}
+	parsed := asInt(value)
+	if parsed == 0 {
+		switch typed := value.(type) {
+		case int, int32, int64, float64, json.Number:
+			result := 0
+			return &result
+		case string:
+			if strings.TrimSpace(typed) == "0" {
+				result := 0
+				return &result
+			}
+		}
+		return nil
+	}
+	return &parsed
+}
+
 func sourceRefsAsAny(refs []sourceRef) []any {
 	result := make([]any, 0, len(refs))
 	for _, ref := range refs {
@@ -4195,6 +5343,24 @@ func normalizeBidType(value string) (string, error) {
 func normalizeDocumentStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "draft", "generating", "editing", "in_review", "approved", "submitted", "archived":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizePipelineStage(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "interpret", "plan", "generate", "check", "format":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizePipelineGateStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "pending", "needs_review", "passed", "blocked":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""

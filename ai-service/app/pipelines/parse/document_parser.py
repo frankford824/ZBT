@@ -131,15 +131,18 @@ def _parse_pdf(payload: KnowledgeProcessRequest, content: bytes) -> tuple[str, i
         page_texts: list[str] = []
         layout_blocks: list[dict[str, object]] = []
         tables: list[dict[str, object]] = []
+        page_quality: list[dict[str, object]] = []
         table_errors: list[dict[str, object]] = []
         for page_index in range(1, parsed_page_count + 1):
             page = doc[page_index - 1]
             page_text = page.get_text("text").strip()
+            raw_layout = page.get_text("dict")
             page_texts.append(page_text)
-            layout_blocks.extend(_extract_pdf_layout_blocks(page, page_index))
+            layout_blocks.extend(_extract_pdf_layout_blocks(raw_layout, page_index))
             page_tables, page_table_errors = _extract_pdf_tables(page, page_index, page_text)
             tables.extend(page_tables)
             table_errors.extend(page_table_errors)
+            page_quality.append(_pdf_page_quality(page, raw_layout, page_text, page_tables, page_index))
         pages: list[str] = []
         page_ocr_results: list[dict[str, object]] = []
         has_text_layer = any(text.strip() for text in page_texts)
@@ -162,6 +165,10 @@ def _parse_pdf(payload: KnowledgeProcessRequest, content: bytes) -> tuple[str, i
             "layout_block_count": len(layout_blocks),
             "tables": tables[:50],
             "table_count": len(tables),
+            "table_blocks": [_table_block("pdf", table) for table in tables[:50]],
+            "table_block_count": len(tables),
+            "page_quality": page_quality[:200],
+            "page_quality_count": len(page_quality),
             "table_extraction_errors": table_errors[:20],
             "table_extraction_error_count": len(table_errors),
             "ocr_pages": page_ocr_results[:50],
@@ -204,8 +211,7 @@ def _try_pdf_page_ocr(payload: KnowledgeProcessRequest, page: fitz.Page, page_in
     return _try_http_ocr(page_payload, page_image)
 
 
-def _extract_pdf_layout_blocks(page: fitz.Page, page_index: int) -> list[dict[str, object]]:
-    raw = page.get_text("dict")
+def _extract_pdf_layout_blocks(raw: dict[str, object], page_index: int) -> list[dict[str, object]]:
     blocks: list[dict[str, object]] = []
     for block in raw.get("blocks", []):
         if block.get("type") != 0:
@@ -226,6 +232,55 @@ def _extract_pdf_layout_blocks(page: fitz.Page, page_index: int) -> list[dict[st
             }
         )
     return blocks
+
+
+def _pdf_page_quality(
+    page: fitz.Page,
+    raw: dict[str, object],
+    page_text: str,
+    tables: list[dict[str, object]],
+    page_index: int,
+) -> dict[str, object]:
+    page_area = max(float(page.rect.width * page.rect.height), 1.0)
+    text_area = 0.0
+    image_area = 0.0
+    image_block_count = 0
+    text_block_count = 0
+    for block in raw.get("blocks", []):
+        bbox = block.get("bbox")
+        area = _bbox_area(bbox)
+        if block.get("type") == 0:
+            text_block_count += 1
+            text_area += area
+        elif block.get("type") == 1:
+            image_block_count += 1
+            image_area += area
+    text_char_count = len(page_text.strip())
+    text_density = round(text_char_count / page_area * 1000, 4)
+    text_coverage = round(min(text_area / page_area, 1.0), 4)
+    image_area_ratio = round(min(image_area / page_area, 1.0), 4)
+    needs_ocr = text_char_count < 20
+    return {
+        "page": page_index,
+        "text_char_count": text_char_count,
+        "text_block_count": text_block_count,
+        "text_density": text_density,
+        "text_coverage": text_coverage,
+        "image_block_count": image_block_count,
+        "image_area_ratio": image_area_ratio,
+        "table_candidate_count": len(tables),
+        "needs_ocr": needs_ocr,
+    }
+
+
+def _bbox_area(value: object) -> float:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return 0.0
+    try:
+        x0, y0, x1, y1 = (float(item) for item in value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(x1 - x0, 0.0) * max(y1 - y0, 0.0)
 
 
 def _extract_pdf_tables(
@@ -281,6 +336,180 @@ def _extract_pdf_tables(
     return tables, errors
 
 
+def _table_block(source: str, table: dict[str, object]) -> dict[str, object]:
+    rows = table.get("rows")
+    normalized_rows = rows if isinstance(rows, list) else []
+    block: dict[str, object] = {
+        "source": source,
+        "index": _metadata_int(table.get("index"), 1),
+        "rows": normalized_rows,
+        "row_count": len(normalized_rows),
+    }
+    page = _metadata_int(table.get("page"), 0)
+    if page:
+        block["page_start"] = page
+        block["page_end"] = page
+    sheet = str(table.get("sheet") or "").strip()
+    if sheet:
+        block["sheet"] = sheet
+    slide = _metadata_int(table.get("slide"), 0)
+    if slide:
+        block["slide"] = slide
+    extraction = str(table.get("extraction") or "").strip()
+    if extraction:
+        block["extraction"] = extraction
+    if table.get("truncated_after_row_limit"):
+        block["truncated_after_row_limit"] = True
+        block["row_limit"] = _metadata_int(table.get("row_limit"), 0)
+    bbox = table.get("bbox")
+    if isinstance(bbox, list):
+        block["bbox"] = bbox
+    confidence = _metadata_float(table.get("confidence"))
+    if confidence is not None:
+        block["confidence"] = confidence
+    return block
+
+
+def _metadata_int(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _metadata_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_ocr_result(provider: str, result: dict[str, object]) -> dict[str, object]:
+    provider_metadata = result.get("provider_metadata")
+    if not isinstance(provider_metadata, dict):
+        provider_metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    pages = _normalize_ocr_pages(result.get("pages"))
+    text = str(result.get("text") or "").strip()
+    if not text and pages:
+        text = "\n\n".join(str(page.get("text") or "") for page in pages).strip()
+    blocks = _normalize_ocr_blocks(result.get("blocks"), pages)
+    raw_tables = result.get("tables")
+    tables = [
+        _table_block("ocr", table)
+        for table in raw_tables
+        if isinstance(table, dict)
+    ] if isinstance(raw_tables, list) else []
+    confidence = _ocr_confidence(result, pages)
+    return {
+        "status": "done" if text.strip() else "empty_result",
+        "provider": provider,
+        "text": text,
+        "pages": pages,
+        "blocks": blocks,
+        "tables": tables,
+        "table_blocks": tables,
+        "confidence": confidence,
+        "provider_metadata": provider_metadata,
+        "metadata": provider_metadata,
+    }
+
+
+def _normalize_ocr_pages(raw_pages: object) -> list[dict[str, object]]:
+    if not isinstance(raw_pages, list):
+        return []
+    pages: list[dict[str, object]] = []
+    for index, item in enumerate(raw_pages, start=1):
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "")
+        page: dict[str, object] = {
+            "page": _metadata_int(item.get("page") or item.get("page_index"), index),
+            "text": text[:2000],
+            "text_char_count": len(text),
+        }
+        if len(text) > 2000:
+            page["text_truncated"] = True
+        confidence = _metadata_float(item.get("confidence"))
+        if confidence is not None:
+            page["confidence"] = confidence
+        blocks = _normalize_ocr_blocks(item.get("blocks"), [])
+        if blocks:
+            page["blocks"] = blocks[:100]
+            page["block_count"] = len(blocks)
+        raw_tables = item.get("tables")
+        if isinstance(raw_tables, list):
+            tables = [
+                _table_block("ocr", {**table, "page": page["page"]})
+                for table in raw_tables
+                if isinstance(table, dict)
+            ]
+            if tables:
+                page["tables"] = tables[:30]
+                page["table_count"] = len(tables)
+        pages.append(page)
+    return pages
+
+
+def _normalize_ocr_blocks(raw_blocks: object, pages: list[dict[str, object]]) -> list[dict[str, object]]:
+    blocks: list[dict[str, object]] = []
+    if isinstance(raw_blocks, list):
+        for item in raw_blocks[:500]:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            block: dict[str, object] = {
+                "text": text[:1000],
+                "text_char_count": len(text),
+            }
+            page = _metadata_int(item.get("page") or item.get("page_index"), 0)
+            if page:
+                block["page"] = page
+            bbox = item.get("bbox")
+            if isinstance(bbox, list):
+                block["bbox"] = bbox
+            block_type = str(item.get("type") or "").strip()
+            if block_type:
+                block["type"] = block_type
+            confidence = _metadata_float(item.get("confidence"))
+            if confidence is not None:
+                block["confidence"] = confidence
+            blocks.append(block)
+    if not blocks:
+        for page in pages:
+            text = str(page.get("text") or "").strip()
+            if text:
+                blocks.append(
+                    {
+                        "page": page.get("page"),
+                        "type": "text",
+                        "text": text[:1000],
+                        "text_char_count": int(page.get("text_char_count") or len(text)),
+                    }
+                )
+    return blocks
+
+
+def _ocr_confidence(result: dict[str, object], pages: list[dict[str, object]]) -> float | None:
+    confidence = _metadata_float(result.get("confidence"))
+    if confidence is not None:
+        return confidence
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        confidence = _metadata_float(metadata.get("confidence"))
+        if confidence is not None:
+            return confidence
+    page_confidences = [
+        value
+        for value in (_metadata_float(page.get("confidence")) for page in pages)
+        if value is not None
+    ]
+    if not page_confidences:
+        return None
+    return round(sum(page_confidences) / len(page_confidences), 4)
+
+
 def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str, object]:
     endpoint = os.getenv("OCR_HTTP_ENDPOINT", "").strip()
     provider = _ocr_provider_name()
@@ -334,13 +563,7 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
                 "provider": provider,
                 "error": "ocr response invalid",
             }
-        text = str(result.get("text") or "")
-        return {
-            "status": "done" if text.strip() else "empty_result",
-            "provider": provider,
-            "text": text,
-            "metadata": result.get("metadata", {}),
-        }
+        return _normalize_ocr_result(provider, result)
     except error.HTTPError as exc:
         return {
             "status": "failed",
@@ -409,17 +632,32 @@ def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:
         if text:
             paragraphs.append(text)
     table_rows: list[str] = []
+    table_blocks: list[dict[str, object]] = []
     table_count = len(document.tables)
     parsed_table_rows = 0
     total_table_rows = sum(len(table.rows) for table in document.tables)
     for table_index, table in enumerate(document.tables, start=1):
+        current_rows: list[list[str]] = []
+        table_truncated = False
         for row_index, row in enumerate(table.rows, start=1):
             if parsed_table_rows >= table_row_limit:
+                table_truncated = True
                 break
             parsed_table_rows += 1
             values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
             if values:
+                current_rows.append(values)
                 table_rows.append(f"[Table {table_index} Row {row_index}] " + " | ".join(values))
+        if current_rows:
+            table_payload: dict[str, object] = {
+                "index": table_index,
+                "rows": current_rows,
+                "extraction": "python-docx",
+            }
+            if table_truncated:
+                table_payload["truncated_after_row_limit"] = True
+                table_payload["row_limit"] = table_row_limit
+            table_blocks.append(_table_block("docx", table_payload))
         if parsed_table_rows >= table_row_limit:
             break
     return "\n\n".join([*paragraphs, *table_rows]), {
@@ -430,6 +668,9 @@ def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:
         "docx_table_row_count": total_table_rows,
         "docx_parsed_table_row_count": parsed_table_rows,
         "docx_table_row_limit": table_row_limit,
+        "table_blocks": table_blocks,
+        "table_block_count": len(table_blocks),
+        "table_count": len(table_blocks),
         "truncated_after_parse_limit": paragraph_count > paragraph_limit or total_table_rows > table_row_limit,
     }
 
@@ -444,6 +685,7 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
     truncated = False
     parsed_sheets = 0
     parsed_rows = 0
+    table_blocks: list[dict[str, object]] = []
     try:
         formula_workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
         sheet_count = len(workbook.worksheets)
@@ -453,6 +695,7 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
             formula_sheet = formula_sheets.get(sheet.title)
             parsed_sheets += 1
             lines.append(f"[Sheet] {sheet.title}")
+            sheet_rows: list[list[str]] = []
             data_rows = sheet.iter_rows(max_row=max_rows, max_col=max_columns, values_only=True)
             formula_rows = (
                 formula_sheet.iter_rows(max_row=max_rows, max_col=max_columns, values_only=True)
@@ -467,14 +710,29 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
                 values = [value for value in values if value]
                 if values:
                     lines.append(" | ".join(values))
+                    sheet_rows.append(values)
                     parsed_rows += 1
             formula_max_row = (formula_sheet.max_row or 0) if formula_sheet else 0
             formula_max_column = (formula_sheet.max_column or 0) if formula_sheet else 0
-            if (
+            sheet_truncated = (
                 max(sheet.max_row or 0, formula_max_row) > max_rows
                 or max(sheet.max_column or 0, formula_max_column) > max_columns
+            )
+            if (
+                sheet_truncated
             ):
                 truncated = True
+            if sheet_rows:
+                table_payload: dict[str, object] = {
+                    "index": parsed_sheets,
+                    "sheet": sheet.title,
+                    "rows": sheet_rows,
+                    "extraction": "openpyxl",
+                }
+                if sheet_truncated:
+                    table_payload["truncated_after_row_limit"] = True
+                    table_payload["row_limit"] = max_rows
+                table_blocks.append(_table_block("xlsx", table_payload))
         if sheet_count > max_sheets:
             truncated = True
     finally:
@@ -488,6 +746,9 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
         "xlsx_sheet_limit": max_sheets,
         "xlsx_row_limit_per_sheet": max_rows,
         "xlsx_column_limit": max_columns,
+        "table_blocks": table_blocks,
+        "table_block_count": len(table_blocks),
+        "table_count": len(table_blocks),
         "truncated_after_parse_limit": truncated,
     }
 
@@ -500,32 +761,53 @@ def _parse_pptx(content: bytes) -> tuple[str, dict[str, object]]:
     slide_count = len(presentation.slides)
     parsed_slides = 0
     parsed_table_rows = 0
+    table_blocks: list[dict[str, object]] = []
     truncated = slide_count > max_slides
     for slide_index, slide in enumerate(presentation.slides, start=1):
         if parsed_slides >= max_slides:
             break
         parsed_slides += 1
         lines.append(f"[Slide {slide_index}]")
+        table_index = 0
         for shape in slide.shapes:
             if getattr(shape, "has_text_frame", False) and shape.text_frame:
                 text = shape.text_frame.text.strip()
                 if text:
                     lines.append(text)
             if getattr(shape, "has_table", False):
+                table_index += 1
+                table_rows: list[list[str]] = []
+                table_truncated = False
                 for row in shape.table.rows:
                     if parsed_table_rows >= max_table_rows:
                         truncated = True
+                        table_truncated = True
                         break
                     parsed_table_rows += 1
                     values = [cell.text.strip().replace("\n", " ") for cell in row.cells if cell.text.strip()]
                     if values:
+                        table_rows.append(values)
                         lines.append(" | ".join(values))
+                if table_rows:
+                    table_payload: dict[str, object] = {
+                        "index": table_index,
+                        "slide": slide_index,
+                        "rows": table_rows,
+                        "extraction": "python-pptx",
+                    }
+                    if table_truncated:
+                        table_payload["truncated_after_row_limit"] = True
+                        table_payload["row_limit"] = max_table_rows
+                    table_blocks.append(_table_block("pptx", table_payload))
     return "\n".join(lines), {
         "pptx_slide_count": slide_count,
         "pptx_parsed_slide_count": parsed_slides,
         "pptx_slide_limit": max_slides,
         "pptx_parsed_table_row_count": parsed_table_rows,
         "pptx_table_row_limit": max_table_rows,
+        "table_blocks": table_blocks,
+        "table_block_count": len(table_blocks),
+        "table_count": len(table_blocks),
         "truncated_after_parse_limit": truncated,
     }
 

@@ -27,13 +27,13 @@ routes:
       model: gpt-4o-mini
       temperature: 0.1
       output: json
-      schema: TenderParseResult
+      schema: TenderParseModuleResult
     fallback:
       - provider: mock
         model: fallback-json-model
         temperature: 0.1
         output: json
-        schema: TenderParseResult
+        schema: TenderParseModuleResult
         timeout_s: 180
   outline_generate:
     primary:

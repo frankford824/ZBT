@@ -1035,6 +1035,61 @@ a {
   color: var(--warning);
 }
 
+.requirement-coverage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.requirement-coverage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.requirement-coverage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.requirement-coverage-list li {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface-soft);
+}
+
+.requirement-coverage-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.requirement-coverage-line span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.requirement-coverage-list p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- 版本对比 ---------- */
 
 .diff-grid {

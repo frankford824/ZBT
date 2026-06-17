@@ -65,6 +65,7 @@ import {
   fetchBidMaterialSelection,
   fetchBidParseResult,
   fetchBidParts,
+  fetchBidRequirements,
   fetchBidTemplates,
   fetchBids,
   fetchChapterDiff,
@@ -86,10 +87,12 @@ import {
   useBidTemplate,
   type AITaskDTO,
   type BidChapterDTO,
+  type BidChapterVersionDTO,
   type BidDocumentDTO,
   type BidExportDTO,
   type BidGenerationJobDTO,
   type BidGenerationSnapshotDTO,
+  type BidRequirementItemDTO,
   type BidTemplateDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
@@ -121,6 +124,8 @@ type DraftState<T> = {
   sourceKey: string
   value: T
 }
+
+type RequirementFilter = 'all' | 'mandatory' | 'review' | 'covered'
 
 export function BidNewPage() {
   const navigate = useNavigate()
@@ -484,6 +489,7 @@ export function BidWizardPage() {
   const [materialDraftState, setMaterialDraftState] = useState<
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
+  const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>('all')
   const bid = useQuery({
     queryKey: ['bid', bidId],
     queryFn: () => fetchBid(bidId),
@@ -507,6 +513,13 @@ export function BidWizardPage() {
       const status = query.state.data?.status
       return status === 'queued' || status === 'processing' ? 2000 : false
     },
+  })
+  const bidRequirements = useQuery({
+    queryKey: ['bid-requirements', bidId],
+    queryFn: () => fetchBidRequirements(bidId),
+    enabled: Boolean(bidId),
+    refetchInterval: () =>
+      parseResult.data?.status === 'queued' || parseResult.data?.status === 'processing' ? 2000 : false,
   })
   const materialSelection = useQuery({
     queryKey: ['bid-material-selection', bidId],
@@ -621,6 +634,7 @@ export function BidWizardPage() {
       message.success('已开始解读招标文件')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-requirements', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
       ])
     },
@@ -634,6 +648,7 @@ export function BidWizardPage() {
       message.success('解析结果已确认')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
+        queryClient.invalidateQueries({ queryKey: ['bid-requirements', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
       ])
     },
@@ -736,6 +751,12 @@ export function BidWizardPage() {
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
+  const parseModuleRows = structuredModuleRows(parseResult.data?.structured_result)
+  const syncedRequirementRows = requirementRowsFromItems(bidRequirements.data ?? [])
+  const parseRequirementRows = syncedRequirementRows.length
+    ? syncedRequirementRows
+    : structuredRequirementRows(parseResult.data?.structured_result)
+  const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter)
   const parseFailureMessage =
     parseResult.data?.status === 'failed'
       ? parseResult.data.error_message?.trim() || '文件解读失败，请重新上传或重新解读'
@@ -857,6 +878,84 @@ export function BidWizardPage() {
                   { title: '文件信息', dataIndex: 'value' },
                 ]}
               />
+              {parseModuleRows.length || parseRequirementRows.length ? (
+                <Tabs
+                  size="small"
+                  items={[
+                    {
+                      key: 'groups',
+                      label: '信息分组',
+                      children: (
+                        <Table
+                          size="small"
+                          pagination={false}
+                          rowKey="key"
+                          dataSource={parseModuleRows}
+                          columns={[
+                            { title: '分组', dataIndex: 'title', width: 120 },
+                            {
+                              title: '状态',
+                              dataIndex: 'status',
+                              width: 110,
+                              render: (_, row) => parseReviewTag(row.needsReview),
+                            },
+                            { title: '提取内容', dataIndex: 'summary', ellipsis: true },
+                            { title: '响应要点', dataIndex: 'requirementCount', width: 110 },
+                          ]}
+                        />
+                      ),
+                    },
+                    {
+                      key: 'requirements',
+                      label: '响应要点',
+                      children: (
+                        <Space orientation="vertical" size={12} className="full-width">
+                          <Segmented
+                            size="small"
+                            value={requirementFilter}
+                            onChange={(value) => setRequirementFilter(value as RequirementFilter)}
+                            options={[
+                              { label: '全部', value: 'all' },
+                              { label: '必须', value: 'mandatory' },
+                              { label: '待确认', value: 'review' },
+                              { label: '已覆盖', value: 'covered' },
+                            ]}
+                          />
+                          <Table
+                            size="small"
+                            pagination={{ pageSize: 6, size: 'small' }}
+                            rowKey="id"
+                            dataSource={visibleRequirementRows}
+                            columns={[
+                              { title: '来源分组', dataIndex: 'module', width: 120 },
+                              {
+                                title: '要求',
+                                dataIndex: 'requirement',
+                                ellipsis: true,
+                              },
+                              {
+                                title: '状态',
+                                width: 100,
+                                render: (_, row) => requirementCoverageTag(row.coverageStatus),
+                              },
+                              {
+                                title: '属性',
+                                width: 120,
+                                render: (_, row) => (
+                                  <Space size={4} wrap>
+                                    {row.mandatory ? <Tag color="red">必须响应</Tag> : <Tag>建议覆盖</Tag>}
+                                    {row.needsReview ? <Tag color="gold">待确认</Tag> : null}
+                                  </Space>
+                                ),
+                              },
+                            ]}
+                          />
+                        </Space>
+                      ),
+                    },
+                  ]}
+                />
+              ) : null}
             </Space>
           ) : null}
           {current === 2 ? (
@@ -1295,6 +1394,114 @@ function structuredResultRows(result: Record<string, unknown> | undefined) {
   return rows.filter((row) => row.value)
 }
 
+function structuredModuleRows(result: Record<string, unknown> | undefined) {
+  const modules = objectRecord(result?.modules)
+  if (!modules) return []
+  return ['basic', 'qualification', 'evaluation', 'submission', 'invalid_risk', 'annex']
+    .map((key) => {
+      const module = objectRecord(modules[key])
+      if (!module) return null
+      const fields = objectRecord(module.fields)
+      const evidence = arrayValue(module.evidence)
+      const requirementItems = arrayValue(module.requirement_items)
+      const summary = fields
+        ? Object.values(fields)
+            .map((value) => formatStructuredValue(value))
+            .filter(Boolean)
+            .slice(0, 5)
+            .join('、')
+        : ''
+      return {
+        key,
+        title: String(module.title || parseModuleLabel(key)),
+        status: String(module.status || ''),
+        summary,
+        requirementCount: requirementItems.length,
+        needsReview:
+          module.status === 'needs_review' ||
+          evidence.some((item) => Boolean(objectRecord(item)?.needs_review)) ||
+          requirementItems.some((item) => Boolean(objectRecord(item)?.needs_review)),
+      }
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+}
+
+function structuredRequirementRows(result: Record<string, unknown> | undefined) {
+  return arrayValue(result?.requirement_items)
+    .map((item, index) => {
+      const record = objectRecord(item)
+      if (!record) return null
+      return {
+        id: String(record.id || `requirement-${index}`),
+        module: parseModuleLabel(String(record.module || '')),
+        requirement: formatStructuredValue(record.requirement),
+        mandatory: Boolean(record.mandatory),
+        needsReview: Boolean(record.needs_review || record.status === 'needs_review'),
+        coverageStatus: requirementCoverageStatusValue(record.status),
+      }
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row?.requirement))
+}
+
+function requirementRowsFromItems(items: BidRequirementItemDTO[]) {
+  return items
+    .map((item) => ({
+      id: item.id || item.external_id,
+      module: parseModuleLabel(item.module),
+      requirement: item.requirement,
+      mandatory: item.mandatory,
+      needsReview: item.needs_review || item.coverage_status === 'needs_review',
+      coverageStatus: item.coverage_status,
+    }))
+    .filter((row) => Boolean(row.requirement.trim()))
+}
+
+type ParseRequirementRow = ReturnType<typeof structuredRequirementRows>[number]
+
+function filterRequirementRows(rows: ParseRequirementRow[], filter: RequirementFilter) {
+  switch (filter) {
+    case 'mandatory':
+      return rows.filter((row) => row.mandatory)
+    case 'review':
+      return rows.filter((row) => row.needsReview || row.coverageStatus === 'needs_review')
+    case 'covered':
+      return rows.filter((row) => row.coverageStatus === 'covered')
+    default:
+      return rows
+  }
+}
+
+function requirementCoverageStatusValue(value: unknown): BidRequirementItemDTO['coverage_status'] {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'planned' || text === 'covered' || text === 'needs_review') return text
+  if (text === 'done' || text === 'satisfied' || text === 'passed') return 'covered'
+  if (text === 'partial' || text === 'review' || text === 'needs_check') return 'needs_review'
+  return 'unmapped'
+}
+
+function requirementCoverageTag(value: BidRequirementItemDTO['coverage_status']) {
+  if (value === 'covered') return <Tag color="green">已覆盖</Tag>
+  if (value === 'planned') return <Tag color="blue">已规划</Tag>
+  if (value === 'needs_review') return <Tag color="gold">待复核</Tag>
+  return <Tag>未确认</Tag>
+}
+
+function parseModuleLabel(value: string) {
+  const labels: Record<string, string> = {
+    basic: '基础信息',
+    qualification: '资格要求',
+    evaluation: '评审办法',
+    submission: '递交要求',
+    invalid_risk: '否决风险',
+    annex: '附件格式',
+  }
+  return labels[value] ?? '其他信息'
+}
+
+function parseReviewTag(needsReview: boolean) {
+  return needsReview ? <Tag color="gold">待确认</Tag> : <Tag color="green">可确认</Tag>
+}
+
 function formatStructuredValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value.map((item) => String(item)).join('、')
@@ -1306,6 +1513,82 @@ function formatStructuredValue(value: unknown): string {
       .join('、')
   }
   return value ? String(value) : ''
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return null
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+type RequirementCoverageRow = {
+  id: string
+  requirement: string
+  evidence: string
+  label: string
+  color: 'green' | 'gold' | 'default'
+}
+
+function latestRequirementCoverageRows(versions: BidChapterVersionDTO[] | undefined): RequirementCoverageRow[] {
+  for (const version of versions ?? []) {
+    const rows = requirementCoverageRows(version.model_metadata)
+    if (rows.length) return rows
+  }
+  return []
+}
+
+function requirementCoverageRows(metadata: Record<string, unknown> | undefined): RequirementCoverageRow[] {
+  const record = objectRecord(metadata)
+  if (!record) return []
+  const selfCheck = objectRecord(record.self_check)
+  const coverageItems = arrayValue(record.requirement_coverage).length
+    ? arrayValue(record.requirement_coverage)
+    : arrayValue(selfCheck?.requirement_coverage)
+  return coverageItems
+    .map((item, index) => {
+      const coverage = objectRecord(item)
+      if (!coverage) return null
+      const requirement = formatStructuredValue(coverage.requirement)
+      if (!requirement) return null
+      const status = requirementCoverageStatus(coverage)
+      const sourceCount = arrayValue(coverage.source_refs).length
+      const evidence = formatStructuredValue(coverage.evidence)
+      return {
+        id: String(coverage.requirement_id || `coverage-${index}`),
+        requirement,
+        evidence: evidence || (sourceCount ? `已关联 ${sourceCount} 处来源` : ''),
+        label: status.label,
+        color: status.color,
+      }
+    })
+    .filter((row): row is RequirementCoverageRow => Boolean(row))
+}
+
+function requirementCoverageStatus(record: Record<string, unknown>): Pick<RequirementCoverageRow, 'label' | 'color'> {
+  if (record.satisfied === true && record.needs_review !== true) {
+    return { label: '已覆盖', color: 'green' }
+  }
+  if (record.needs_review === true || record.satisfied === false) {
+    return { label: '待复核', color: 'gold' }
+  }
+  return { label: '未确认', color: 'default' }
+}
+
+function summarizeRequirementCoverage(rows: RequirementCoverageRow[]) {
+  return rows.reduce(
+    (summary, row) => {
+      if (row.label === '已覆盖') summary.done += 1
+      else if (row.label === '待复核') summary.review += 1
+      else summary.pending += 1
+      return summary
+    },
+    { done: 0, review: 0, pending: 0 },
+  )
 }
 
 function materialRefRecord(value: unknown): Record<string, unknown> {
@@ -1508,6 +1791,8 @@ export function BidEditorPage() {
     : 0
   const humanInputItems = currentChapter?.needs_human_input ?? []
   const latestChapterTaskFailure = taskFailureMessage(latestChapterTask, '本章处理失败')
+  const requirementCoverageRows = latestRequirementCoverageRows(versions.data)
+  const requirementCoverageSummary = summarizeRequirementCoverage(requirementCoverageRows)
 
   const switchPart = (code: string) => {
     setSearchParams(code === 'all' ? {} : { part: code })
@@ -1677,6 +1962,29 @@ export function BidEditorPage() {
                   <li key={item}>{item}</li>
                 ))}
               </ul>
+            ) : null}
+            {requirementCoverageRows.length ? (
+              <div className="requirement-coverage">
+                <div className="requirement-coverage-head">
+                  <span>响应覆盖</span>
+                  <Space size={4} wrap>
+                    <Tag color="green">已覆盖 {requirementCoverageSummary.done}</Tag>
+                    <Tag color="gold">待复核 {requirementCoverageSummary.review}</Tag>
+                    <Tag>未确认 {requirementCoverageSummary.pending}</Tag>
+                  </Space>
+                </div>
+                <ul className="requirement-coverage-list">
+                  {requirementCoverageRows.slice(0, 5).map((row) => (
+                    <li key={row.id}>
+                      <div className="requirement-coverage-line">
+                        <span>{row.requirement}</span>
+                        <Tag color={row.color}>{row.label}</Tag>
+                      </div>
+                      {row.evidence ? <p>{row.evidence}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
             {isRegenerating || latestChapterTask?.status === 'running' ? (
               <Alert

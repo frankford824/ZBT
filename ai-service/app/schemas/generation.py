@@ -16,6 +16,22 @@ class RetrievedKnowledgeRef(BaseModel):
     score: float = 0
 
 
+class TenderRequirementRef(BaseModel):
+    id: str
+    module: str = ""
+    type: str = ""
+    requirement: str
+    priority: str = "medium"
+    mandatory: bool = False
+    score: float | None = None
+    expected_response: str = ""
+    status: str = ""
+    source_text: str = ""
+    page_start: int | None = None
+    page_end: int | None = None
+    needs_review: bool = False
+
+
 class ChapterGenerateRequest(BaseModel):
     task_id: str | None = None
     tenant_id: str
@@ -24,6 +40,7 @@ class ChapterGenerateRequest(BaseModel):
     chapter_id: str
     chapter_title: str
     tender_requirements: list[str] = Field(default_factory=list)
+    requirement_refs: list[TenderRequirementRef] = Field(default_factory=list)
     selected_knowledge_refs: list[str] = Field(default_factory=list)
     retrieved_knowledge_refs: list[RetrievedKnowledgeRef] = Field(default_factory=list)
     callback_url: str | None = None

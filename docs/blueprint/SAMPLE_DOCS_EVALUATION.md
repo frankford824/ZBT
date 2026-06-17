@@ -7,6 +7,9 @@ sample_docs 用于 Loop 6 起验证 PDF / Word 解析、切片、embedding、搜
 - docs/sample_docs/tender_samples：招标文件样本。
 - docs/sample_docs/bid_samples：投标文件样本。
 - docs/sample_docs/expected_outputs：解析和生成期望输出。
+- docs/sample_docs/golden：真实样本的可执行解析验收配置。
+
+当前已建立 `docs/sample_docs/golden/工程1.parse.json`，引用本地 `docs/ex/工程1` 的标准招投标文件，不复制原始文件内容。
 
 ## 基础指标
 
@@ -15,3 +18,22 @@ sample_docs 用于 Loop 6 起验证 PDF / Word 解析、切片、embedding、搜
 3. chunk 带 section_path、page_start、page_end、source_file_id。
 4. 搜索结果带 source_refs。
 5. 低置信 OCR 内容标记需人工确认。
+
+## 工程1 解析回归
+
+运行命令：
+
+```bash
+cd ai-service
+.venv/bin/python -m app.evaluation.tender_parse_eval \
+  --golden ../docs/sample_docs/golden/工程1.parse.json
+```
+
+验收覆盖：
+
+1. `采购文件桥梁检查.pdf`：PDF 文本层、页数、表格块、OCR 标记、项目名、截止日、采购人、预算、地点、资格要求、评分项、否决风险、附件/清单要求。
+2. `响应文件格式.docx`：Word 段落、表格块、响应函/承诺书/清单格式。
+3. `盖章投标文件.pdf`：已盖章响应文件的 PDF 文本层、页数、表格块和供应商文本。
+4. `清单（固化）(1).xlsx`：清单工作表、表格块、最高单价/综合单价字段。
+
+当前门槛为 63 项检查全部通过；失败时 CLI 返回非 0，并输出失败项的 expected/actual。

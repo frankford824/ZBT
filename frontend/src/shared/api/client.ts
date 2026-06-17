@@ -817,6 +817,40 @@ export type BidParseResultDTO = {
   updated_at: string
 }
 
+export type BidRequirementItemDTO = {
+  id: string
+  bid_document_id: string
+  parse_result_id: string | null
+  external_id: string
+  module: string
+  type: string
+  requirement: string
+  priority: 'high' | 'medium' | 'low'
+  mandatory: boolean
+  score: number | null
+  expected_response: string
+  coverage_status: 'unmapped' | 'planned' | 'covered' | 'needs_review'
+  source_ref: Record<string, unknown>
+  needs_review: boolean
+  sort_order: number
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type BidPipelineGateDTO = {
+  id: string
+  bid_document_id: string
+  stage: 'interpret' | 'plan' | 'generate' | 'check' | 'format'
+  status: 'pending' | 'needs_review' | 'passed' | 'blocked'
+  reviewed_by: string | null
+  reviewed_at: string | null
+  reason: string
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 export type BidTenderFileDTO = {
   id: string
   bid_document_id: string
@@ -1578,6 +1612,16 @@ export async function parseBidTender(bidId: string): Promise<ParseBidTenderDTO> 
 export async function fetchBidParseResult(bidId: string): Promise<BidParseResultDTO> {
   const { data } = await apiClient.get<BidParseResultDTO>(`/bids/${bidId}/parse-result`)
   return data
+}
+
+export async function fetchBidRequirements(bidId: string): Promise<BidRequirementItemDTO[]> {
+  const { data } = await apiClient.get<{ items: BidRequirementItemDTO[] }>(`/bids/${bidId}/requirements`)
+  return data.items
+}
+
+export async function fetchBidPipelineGates(bidId: string): Promise<BidPipelineGateDTO[]> {
+  const { data } = await apiClient.get<{ items: BidPipelineGateDTO[] }>(`/bids/${bidId}/pipeline-gates`)
+  return data.items
 }
 
 export async function confirmBidParseResult(

@@ -150,7 +150,7 @@ export function ShellLayout() {
                     {
                       key: 'profile',
                       icon: <UserOutlined />,
-                      label: roleLabels[user.role] || '团队成员',
+                      label: roleLabels[user.role] || user.role || '团队成员',
                     },
                     {
                       key: 'logout',

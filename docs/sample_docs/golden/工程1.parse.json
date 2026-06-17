@@ -1,0 +1,153 @@
+{
+  "name": "工程1 招投标样本解析",
+  "minimum_score": 1.0,
+  "documents": [
+    {
+      "id": "tender_pdf",
+      "path": "docs/ex/工程1/采购文件桥梁检查.pdf",
+      "content_type": "application/pdf",
+      "parser": "pymupdf",
+      "min_chunks": 35,
+      "min_pages": 80,
+      "min_table_blocks": 30,
+      "ocr_required": false,
+      "text_contains": [
+        "桥梁检查劳务合作项目",
+        "最高限价",
+        "供应商资格要求",
+        "评审办法"
+      ]
+    },
+    {
+      "id": "response_docx",
+      "path": "docs/ex/工程1/响应文件格式.docx",
+      "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "parser": "python-docx",
+      "min_chunks": 50,
+      "min_table_blocks": 25,
+      "text_contains": [
+        "不参与围标串标承诺书",
+        "响应函",
+        "已标价工程量清单"
+      ]
+    },
+    {
+      "id": "sealed_bid_pdf",
+      "path": "docs/ex/工程1/盖章投标文件.pdf",
+      "content_type": "application/pdf",
+      "parser": "pymupdf",
+      "min_chunks": 45,
+      "min_pages": 300,
+      "min_table_blocks": 25,
+      "ocr_required": false,
+      "text_contains": [
+        "保通建设工程有限公司",
+        "响应文件",
+        "工作方案"
+      ]
+    },
+    {
+      "id": "boq_xlsx",
+      "path": "docs/ex/工程1/清单（固化）(1).xlsx",
+      "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "parser": "openpyxl",
+      "min_chunks": 1,
+      "min_table_blocks": 1,
+      "text_contains": [
+        "中级养护技术员",
+        "最高单价",
+        "综合单价"
+      ]
+    }
+  ],
+  "tender_parse": {
+    "document_id": "tender_pdf",
+    "filename": "采购文件桥梁检查.pdf",
+    "content_type": "application/pdf",
+    "required_modules": [
+      "basic",
+      "qualification",
+      "evaluation",
+      "submission",
+      "invalid_risk",
+      "annex"
+    ],
+    "fields": [
+      {
+        "path": "project_name",
+        "contains": "2025年度江苏东方路桥建设养护有限公司桥梁检查劳务合作项目"
+      },
+      {
+        "path": "deadline",
+        "equals": "2025-04-17"
+      },
+      {
+        "path": "modules.basic.fields.purchaser",
+        "contains": "江苏东方路桥建设养护有限公司"
+      },
+      {
+        "path": "modules.basic.fields.budget",
+        "contains": "2246400.00"
+      },
+      {
+        "path": "modules.basic.fields.location",
+        "contains": "江苏省内"
+      },
+      {
+        "path": "qualification_requirements",
+        "contains": [
+          "营业执照",
+          "不接受联合体"
+        ]
+      },
+      {
+        "path": "invalid_clause_risks",
+        "contains": "否决"
+      },
+      {
+        "path": "scoring_points",
+        "contains": "评审办法"
+      }
+    ],
+    "requirements": {
+      "min_count": 35,
+      "required_modules": [
+        "qualification",
+        "evaluation",
+        "submission",
+        "invalid_risk",
+        "annex"
+      ],
+      "must_contain": [
+        {
+          "module": "qualification",
+          "text": "营业执照"
+        },
+        {
+          "module": "qualification",
+          "text": "不接受联合体"
+        },
+        {
+          "module": "evaluation",
+          "text": "评审办法"
+        },
+        {
+          "module": "submission",
+          "text": "电子采购平台"
+        },
+        {
+          "module": "invalid_risk",
+          "text": "否决"
+        },
+        {
+          "module": "annex",
+          "text": "工程量清单"
+        }
+      ]
+    },
+    "evidence": {
+      "min_count": 20,
+      "max_missing_source_count": 0
+    }
+  }
+}

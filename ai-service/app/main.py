@@ -9,6 +9,7 @@ import os
 import re
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,9 +25,11 @@ from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
 from app.pipelines.parse.document_parser import parse_document
 from app.pipelines.parse.tender_parser import (
-    build_tender_parse_prompt,
+    MODULE_ORDER,
+    build_tender_module_prompt,
     build_tender_structured_result,
-    merge_tender_structured_result,
+    mark_tender_module_enhancement_failed,
+    merge_tender_module_result,
 )
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.cost import CostAdviceRequest
@@ -44,7 +47,7 @@ from app.schemas.knowledge import (
     KnowledgeRerankResponse,
     KnowledgeRerankResult,
 )
-from app.schemas.tender import TenderParseRequest
+from app.schemas.tender import TenderParseModule, TenderParseRequest
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +87,8 @@ DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_TASK_OBJECT_MAX_BYTES = 128 * 1024 * 1024
 MAX_TASK_OBJECT_MAX_BYTES = 256 * 1024 * 1024
 MINIO_READ_CHUNK_BYTES = 1024 * 1024
+DEFAULT_TENDER_PARSE_MODULE_CONCURRENCY = 3
+MAX_TENDER_PARSE_MODULE_CONCURRENCY = len(MODULE_ORDER)
 
 
 class CallbackResponseTooLargeError(RuntimeError):
@@ -248,19 +253,79 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
             content_type=payload.content_type,
         )
         parsed = parse_document(parse_payload, content)
-        base_structured = build_tender_structured_result(payload, parsed)
-        prompt = build_tender_parse_prompt(payload, parsed, base_structured)
-
-        def generate(route: RouteTarget, provider: object) -> tuple[dict[str, object], int, int]:
-            model_result = provider.generate_json(prompt, route.schema_name or "TenderParseResult")
-            structured = merge_tender_structured_result(base_structured, model_result)
-            output_text = json.dumps(structured, ensure_ascii=False)
-            input_tokens = provider.count_tokens(prompt) if hasattr(provider, "count_tokens") else estimate_tokens(prompt)
-            output_tokens = provider.count_tokens(output_text) if hasattr(provider, "count_tokens") else estimate_tokens(output_text)
-            return structured, input_tokens, output_tokens
-
-        route, provider, generated = run_llm_task("tender_parse", payload.tenant_id, generate)
-        structured, input_tokens, output_tokens = generated
+        structured = build_tender_structured_result(payload, parsed)
+        module_calls: list[dict[str, object]] = []
+        input_tokens = 0
+        output_tokens = 0
+        module_concurrency = tender_parse_module_concurrency()
+        module_results: dict[str, dict[str, object]] = {}
+        with ThreadPoolExecutor(max_workers=module_concurrency) as executor:
+            futures = {
+                executor.submit(run_tender_parse_module, payload, parsed, structured, module): module
+                for module in MODULE_ORDER
+            }
+            for future in as_completed(futures):
+                module = futures[future]
+                try:
+                    module_results[module] = future.result()
+                except Exception as exc:
+                    module_results[module] = {
+                        "module": module,
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                    }
+        for module in MODULE_ORDER:
+            module_result = module_results.get(module)
+            if not module_result or module_result.get("status") != "done":
+                error_type = str((module_result or {}).get("error_type") or "RuntimeError")
+                structured = mark_tender_module_enhancement_failed(
+                    structured,
+                    module,
+                    error_type,
+                )
+                module_calls.append(
+                    {
+                        "module": module,
+                        "status": "failed",
+                        "error_type": error_type,
+                    }
+                )
+                continue
+            model_result = module_result.get("model_result")
+            if not isinstance(model_result, dict):
+                structured = mark_tender_module_enhancement_failed(
+                    structured,
+                    module,
+                    "InvalidModuleResult",
+                )
+                module_calls.append(
+                    {
+                        "module": module,
+                        "status": "failed",
+                        "error_type": "InvalidModuleResult",
+                    }
+                )
+                continue
+            structured = merge_tender_module_result(structured, module, model_result)
+            module_input_tokens = int(module_result.get("input_tokens") or 0)
+            module_output_tokens = int(module_result.get("output_tokens") or 0)
+            input_tokens += module_input_tokens
+            output_tokens += module_output_tokens
+            module_calls.append(
+                {
+                    "module": module,
+                    "status": "done",
+                    "provider": module_result.get("provider"),
+                    "model": module_result.get("model"),
+                    "fallback_from": module_result.get("fallback_from"),
+                    "input_tokens": module_input_tokens,
+                    "output_tokens": module_output_tokens,
+                }
+            )
+        first_successful_module = next(
+            (call for call in module_calls if call.get("status") == "done"),
+            {},
+        )
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -274,9 +339,12 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                 "metadata": parsed.metadata,
                 "chunk_count": len(parsed.chunks),
                 "model_metadata": {
-                    "provider": provider_name(provider, route),
-                    "model": route.model,
-                    "fallback_from": route.fallback_from,
+                    "provider": first_successful_module.get("provider", "deterministic"),
+                    "model": first_successful_module.get("model", "deterministic"),
+                    "fallback_from": first_successful_module.get("fallback_from"),
+                    "module_call_count": len(module_calls),
+                    "module_concurrency": module_concurrency,
+                    "module_calls": module_calls,
                     "parser": parsed.metadata.get("parser"),
                 },
                 "token_usage": {
@@ -294,6 +362,47 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
         )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+def run_tender_parse_module(
+    payload: TenderParseRequest,
+    parsed: object,
+    base_structured: dict[str, object],
+    module: TenderParseModule,
+) -> dict[str, object]:
+    prompt = build_tender_module_prompt(payload, parsed, base_structured, module)
+
+    def generate(route: RouteTarget, provider: object) -> tuple[dict[str, object], int, int]:
+        schema_name = route.schema_name or "TenderParseModuleResult"
+        model_result = provider.generate_json(prompt, schema_name)
+        next_structured = merge_tender_module_result(base_structured, module, model_result)
+        modules = next_structured.get("modules")
+        module_output = modules.get(module) if isinstance(modules, dict) else model_result
+        output_text = json.dumps(module_output, ensure_ascii=False)
+        input_tokens = (
+            provider.count_tokens(prompt)
+            if hasattr(provider, "count_tokens")
+            else estimate_tokens(prompt)
+        )
+        output_tokens = (
+            provider.count_tokens(output_text)
+            if hasattr(provider, "count_tokens")
+            else estimate_tokens(output_text)
+        )
+        return model_result, input_tokens, output_tokens
+
+    route, provider, generated = run_llm_task("tender_parse", payload.tenant_id, generate)
+    model_result, input_tokens, output_tokens = generated
+    return {
+        "module": module,
+        "status": "done",
+        "provider": provider_name(provider, route),
+        "model": route.model,
+        "fallback_from": route.fallback_from,
+        "model_result": model_result,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+    }
 
 
 @app.post("/tasks/knowledge-process", response_model=TaskAccepted, status_code=202)
@@ -473,6 +582,15 @@ def embedding_batch_size() -> int:
     except ValueError:
         return DEFAULT_EMBEDDING_BATCH_SIZE
     return min(max(value, 1), DEFAULT_EMBEDDING_BATCH_SIZE)
+
+
+def tender_parse_module_concurrency() -> int:
+    return bounded_env_int(
+        "TENDER_PARSE_MODULE_CONCURRENCY",
+        DEFAULT_TENDER_PARSE_MODULE_CONCURRENCY,
+        minimum=1,
+        maximum=MAX_TENDER_PARSE_MODULE_CONCURRENCY,
+    )
 
 
 def post_callback(callback_url: str, payload: dict[str, object]) -> None:
@@ -1126,8 +1244,6 @@ def validate_production_config() -> None:
         raise RuntimeError("MINIO_ACCESS_KEY must be set to a non-development value in production")
     if insecure_config_value(os.getenv("MINIO_SECRET_KEY", DEFAULT_MINIO_SECRET_KEY), DEFAULT_MINIO_SECRET_KEY):
         raise RuntimeError("MINIO_SECRET_KEY must be set to a non-development value in production")
-    if allow_mock_providers_in_production():
-        return
     if os.getenv("USE_MOCK_PROVIDERS", "true").strip().lower() not in {"0", "false", "no"}:
         raise RuntimeError("USE_MOCK_PROVIDERS must be false in production")
     if os.getenv("ALLOW_MOCK_FALLBACK", "true").strip().lower() not in {"0", "false", "no"}:
@@ -1143,10 +1259,6 @@ def production_mode() -> bool:
         os.getenv(key, "").strip().lower() in {"prod", "production", "release"}
         for key in ("APP_ENV", "ZBT_ENV", "ENVIRONMENT", "GIN_MODE")
     )
-
-
-def allow_mock_providers_in_production() -> bool:
-    return os.getenv("ALLOW_MOCK_PROVIDERS_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes"}
 
 
 def insecure_config_value(value: str, development_default: str) -> bool:

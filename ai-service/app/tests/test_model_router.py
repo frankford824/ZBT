@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.gateway.model_router import ModelRouter
-from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef
+from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef, TenderRequirementRef
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +83,15 @@ def test_mock_chapter_generation_prefers_retrieved_refs() -> None:
             bid_part_id="part-tech",
             chapter_id="chapter-demo",
             chapter_title="技术方案",
+            requirement_refs=[
+                TenderRequirementRef(
+                    id="evaluation-001",
+                    module="evaluation",
+                    type="scoring",
+                    requirement="技术方案完整性评分 20 分",
+                    priority="high",
+                )
+            ],
             retrieved_knowledge_refs=[
                 RetrievedKnowledgeRef(
                     chunk_id="00000000-0000-4000-8000-00000000c001",
@@ -96,6 +105,8 @@ def test_mock_chapter_generation_prefers_retrieved_refs() -> None:
 
     assert response.source_refs[0].chunk_id == "00000000-0000-4000-8000-00000000c001"
     assert response.self_check["retrieved_ref_count"] == 1
+    assert response.self_check["requirement_ref_count"] == 1
+    assert response.self_check["requirement_coverage"][0]["requirement_id"] == "evaluation-001"
 
 
 def test_mock_embedding_is_deterministic_and_semantic_enough_for_pgvector_smoke() -> None:

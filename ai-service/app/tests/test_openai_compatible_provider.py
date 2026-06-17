@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 
 import pytest
@@ -9,8 +10,11 @@ from app.gateway.openai_compatible_provider import (
     CloudflareAIGatewayProvider,
     OpenAICompatibleProvider,
     OpenAICompatibleTarget,
+    _chapter_prompt,
+    _chapter_response_from_json,
     _json_from_text,
 )
+from app.schemas.generation import ChapterGenerateRequest, TenderRequirementRef
 
 
 def test_openai_rerank_accepts_numeric_string_indexes(monkeypatch) -> None:
@@ -104,6 +108,7 @@ def test_cloudflare_ai_gateway_provider_rejects_duplicate_gateway_id_header(monk
     monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_ID", "production-gateway")
     monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_HEADERS", '{"cf-aig-gateway-id":"other"}')
 
+    assert provider.health_check() is False
     with pytest.raises(RuntimeError, match="gateway id header is configured more than once"):
         provider._headers()
 
@@ -334,6 +339,7 @@ def test_openai_provider_rejects_invalid_extra_gateway_headers(monkeypatch) -> N
     monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"Bad\\nHeader":"value"}')
 
+    assert provider.health_check() is False
     with pytest.raises(RuntimeError, match="invalid header name"):
         provider._headers()
 
@@ -352,6 +358,7 @@ def test_openai_provider_rejects_extra_headers_that_override_auth(monkeypatch) -
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"Authorization":"Bearer override"}')
 
+    assert provider.health_check() is False
     with pytest.raises(RuntimeError, match="must not override Authorization"):
         provider._headers()
 
@@ -368,6 +375,7 @@ def test_openai_provider_rejects_gateway_auth_header_that_overrides_provider_aut
     monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
 
+    assert provider.health_check() is False
     with pytest.raises(RuntimeError, match="auth header must not override Authorization"):
         provider._headers()
 
@@ -384,6 +392,7 @@ def test_openai_provider_rejects_invalid_gateway_auth_header_name(monkeypatch) -
     monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
 
+    assert provider.health_check() is False
     with pytest.raises(RuntimeError, match="auth header contains an invalid header name"):
         provider._headers()
 
@@ -414,8 +423,68 @@ def test_openai_provider_rejects_duplicate_extra_headers_case_insensitively(monk
     monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"cf-aig-metadata":"a","CF-AIG-METADATA":"b"}')
 
+    assert provider.health_check() is False
     with pytest.raises(RuntimeError, match="duplicate header"):
         provider._headers()
+
+
+def test_chapter_prompt_includes_requirement_refs() -> None:
+    payload = ChapterGenerateRequest(
+        tenant_id="tenant-demo",
+        bid_document_id="bid-demo",
+        bid_part_id="part-tech",
+        chapter_id="chapter-demo",
+        chapter_title="总体技术方案",
+        tender_requirements=["评审要点：技术方案完整性"],
+        requirement_refs=[
+            TenderRequirementRef(
+                id="evaluation-001",
+                module="evaluation",
+                type="scoring",
+                requirement="技术方案完整性评分 20 分",
+                priority="high",
+                score=20,
+            )
+        ],
+    )
+
+    prompt = json.loads(_chapter_prompt(payload))
+
+    assert prompt["requirement_refs"][0]["id"] == "evaluation-001"
+    assert prompt["requirement_refs"][0]["score"] == 20
+    assert "requirement_coverage" in prompt["instruction"]
+
+
+def test_chapter_response_adds_requirement_coverage_when_model_omits_it() -> None:
+    payload = ChapterGenerateRequest(
+        tenant_id="tenant-demo",
+        bid_document_id="bid-demo",
+        bid_part_id="part-tech",
+        chapter_id="chapter-demo",
+        chapter_title="总体技术方案",
+        requirement_refs=[
+            TenderRequirementRef(
+                id="evaluation-001",
+                module="evaluation",
+                type="scoring",
+                requirement="技术方案完整性评分 20 分",
+                priority="high",
+            )
+        ],
+    )
+
+    response = _chapter_response_from_json(
+        {"plain_text": "章节正文", "self_check": {"status": "pass"}},
+        payload,
+        "fake",
+        "model-demo",
+    )
+
+    coverage = response.self_check["requirement_coverage"]
+    assert coverage[0]["requirement_id"] == "evaluation-001"
+    assert coverage[0]["satisfied"] is False
+    assert coverage[0]["needs_review"] is True
+    assert response.model_metadata["requirement_ref_count"] == 1
 
 
 def test_json_from_text_accepts_fenced_or_explained_json() -> None:

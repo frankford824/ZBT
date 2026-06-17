@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import threading
 import time
 from pathlib import Path
 from zipfile import ZipFile
@@ -39,6 +40,7 @@ from app.main import (
     require_backend_signature,
     safe_output_filename,
     tender_parse,
+    tender_parse_module_concurrency,
     validate_production_config,
     verify_request_signature,
 )
@@ -844,6 +846,57 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
     assert result["invalid_clause_risks"]
     assert result["scoring_points"]
     assert isinstance(result["outline"], dict)
+    assert set(result["modules"]) == {
+        "basic",
+        "qualification",
+        "evaluation",
+        "submission",
+        "invalid_risk",
+        "annex",
+    }
+    assert result["modules"]["basic"]["fields"]["project_name"] == "智慧交通平台建设"
+    assert result["modules"]["qualification"]["requirement_items"]
+    assert result["modules"]["submission"]["requirement_items"]
+    assert result["modules"]["annex"]["requirement_items"]
+    assert result["field_evidence"]
+    assert result["requirement_items"]
+    assert result["quality_gates"]["interpret"]["module_count"] == 6
+    assert result["parse_metadata"]["module_count"] == 6
+    assert result["parse_metadata"]["requirement_count"] == len(result["requirement_items"])
+
+
+def test_build_tender_structured_result_joins_cover_project_title_without_bid_title() -> None:
+    payload = TenderParseRequest(
+        tenant_id="tenant-demo",
+        bid_id="bid-demo",
+        file_id="file-demo",
+        object_key="tenant/bid_tender/demo.pdf",
+        filename="采购文件桥梁检查.pdf",
+        content_type="application/pdf",
+    )
+    parsed = KnowledgeProcessResult(
+        processed_title="demo",
+        summary="summary",
+        metadata={"parser": "pymupdf", "page_count": 90, "table_count": 36},
+        chunks=[
+            KnowledgeChunk(
+                title="封面",
+                content=(
+                    "[Page 1]\n"
+                    "2025 年度江苏东方路桥建设养护有限公司\n"
+                    "桥梁检查劳务合作项目\n"
+                    "询比采购文件\n"
+                    "采 购 人：江苏东方路桥建设养护有限公司\n"
+                    "采购代理：江苏交通工程投资咨询有限公司"
+                ),
+                section_path="封面",
+            )
+        ],
+    )
+
+    result = build_tender_structured_result(payload, parsed)
+
+    assert result["project_name"] == "2025年度江苏东方路桥建设养护有限公司桥梁检查劳务合作项目"
 
 
 def test_merge_tender_structured_result_preserves_source_file_and_uses_model_fields() -> None:
@@ -892,12 +945,45 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     class FakeProvider:
         name = "fake-llm"
 
-        def generate_json(self, _prompt: str, schema_name: str) -> dict[str, object]:
-            assert schema_name == "TenderParseResult"
-            return {
-                "project_name": "模型增强桥梁检查服务",
-                "qualification_requirements": ["模型识别资质要求"],
-            }
+        def generate_json(self, prompt: str, schema_name: str) -> dict[str, object]:
+            assert schema_name == "TenderParseModuleResult"
+            module = json.loads(prompt)["module"]
+            if module == "basic":
+                return {
+                    "module": "basic",
+                    "fields": {"project_name": "模型增强桥梁检查服务"},
+                    "evidence": [
+                        {
+                            "field": "project_name",
+                            "value": "模型增强桥梁检查服务",
+                            "confidence": 0.86,
+                            "source_text": "项目名称：桥梁检查服务",
+                        }
+                    ],
+                }
+            if module == "qualification":
+                return {
+                    "module": "qualification",
+                    "fields": {"qualification_requirements": ["模型识别资质要求"]},
+                    "requirement_items": [
+                        {
+                            "id": "qualification-001",
+                            "module": "qualification",
+                            "type": "qualification",
+                            "requirement": "模型识别资质要求",
+                            "priority": "high",
+                            "mandatory": True,
+                            "expected_response": "提供对应资质证明。",
+                            "source_ref": {
+                                "field": "qualification_requirements",
+                                "value": "模型识别资质要求",
+                                "confidence": 0.72,
+                                "source_text": "资格要求：具备桥梁检测资质",
+                            },
+                        }
+                    ],
+                }
+            return {"module": module, "fields": {}}
 
         def count_tokens(self, text: str) -> int:
             return max(1, len(text) // 4)
@@ -905,7 +991,7 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     class FakeRouter:
         def resolve(self, _task_type: str, tenant_id: str) -> RouteTarget:
             assert tenant_id == "tenant-demo"
-            return RouteTarget(provider="fake-llm", model="fake-model", schema_name="TenderParseResult")
+            return RouteTarget(provider="fake-llm", model="fake-model", schema_name="TenderParseModuleResult")
 
         def get_llm(self, _task_type: str, tenant_id: str) -> FakeProvider:
             assert tenant_id == "tenant-demo"
@@ -933,9 +1019,135 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     result = callbacks[0]["result"]
     assert isinstance(result, dict)
     assert result["structured_result"]["project_name"] == "模型增强桥梁检查服务"
+    assert set(result["structured_result"]["modules"]) == {
+        "basic",
+        "qualification",
+        "evaluation",
+        "submission",
+        "invalid_risk",
+        "annex",
+    }
+    assert result["structured_result"]["modules"]["basic"]["fields"]["project_name"] == "模型增强桥梁检查服务"
+    assert result["structured_result"]["modules"]["qualification"]["fields"]["qualification_requirements"] == [
+        "模型识别资质要求"
+    ]
+    assert result["structured_result"]["modules"]["qualification"]["requirement_items"][0]["needs_review"] is False
+    assert result["structured_result"]["requirement_items"]
+    assert result["structured_result"]["field_evidence"]
+    assert result["structured_result"]["quality_gates"]["interpret"]["module_count"] == 6
     assert result["model_metadata"]["provider"] == "fake-llm"
     assert result["model_metadata"]["model"] == "fake-model"
+    assert result["model_metadata"]["module_call_count"] == 6
+    assert len(result["model_metadata"]["module_calls"]) == 6
     assert result["token_usage"]["input_tokens"] > 0
+
+
+def test_process_tender_parse_runs_modules_with_configured_concurrency(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+    lock = threading.Lock()
+    active_calls = 0
+    max_active_calls = 0
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return (
+                "项目名称：桥梁检查服务\n"
+                "资格要求：具备桥梁检测资质\n"
+                "评分标准：技术方案 20 分\n"
+                "响应文件格式：按附件签章提交\n"
+            ).encode()
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class SlowProvider:
+        name = "slow-llm"
+
+        def generate_json(self, prompt: str, schema_name: str) -> dict[str, object]:
+            nonlocal active_calls, max_active_calls
+            assert schema_name == "TenderParseModuleResult"
+            module = json.loads(prompt)["module"]
+            with lock:
+                active_calls += 1
+                max_active_calls = max(max_active_calls, active_calls)
+            try:
+                time.sleep(0.03)
+                return {"module": module, "fields": {}}
+            finally:
+                with lock:
+                    active_calls -= 1
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
+    provider = SlowProvider()
+
+    class FakeRouter:
+        def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
+            assert tenant_id == "tenant-demo"
+            return [
+                RouteTarget(
+                    provider="slow-llm",
+                    model="slow-model",
+                    schema_name="TenderParseModuleResult",
+                )
+            ]
+
+        def provider_for_target(self, _target: RouteTarget) -> SlowProvider:
+            return provider
+
+    monkeypatch.setenv("TENDER_PARSE_MODULE_CONCURRENCY", "2")
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="tenant-demo/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    result = callbacks[0]["result"]
+    assert isinstance(result, dict)
+    assert result["model_metadata"]["module_concurrency"] == 2
+    assert result["model_metadata"]["module_call_count"] == 6
+    assert [call["module"] for call in result["model_metadata"]["module_calls"]] == [
+        "basic",
+        "qualification",
+        "evaluation",
+        "submission",
+        "invalid_risk",
+        "annex",
+    ]
+    assert max_active_calls == 2
+
+
+def test_tender_parse_module_concurrency_uses_safe_bounds(monkeypatch) -> None:
+    monkeypatch.setenv("TENDER_PARSE_MODULE_CONCURRENCY", "4")
+    assert tender_parse_module_concurrency() == 4
+
+    monkeypatch.setenv("TENDER_PARSE_MODULE_CONCURRENCY", "0")
+    assert tender_parse_module_concurrency() == 1
+
+    monkeypatch.setenv("TENDER_PARSE_MODULE_CONCURRENCY", "999")
+    assert tender_parse_module_concurrency() == 6
+
+    monkeypatch.setenv("TENDER_PARSE_MODULE_CONCURRENCY", "invalid")
+    assert tender_parse_module_concurrency() == 3
 
 
 def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkeypatch) -> None:
@@ -967,9 +1179,12 @@ def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkey
     class FallbackProvider:
         name = "fallback-llm"
 
-        def generate_json(self, _prompt: str, schema_name: str) -> dict[str, object]:
-            assert schema_name == "TenderParseResult"
-            return {"project_name": "fallback 解析项目"}
+        def generate_json(self, prompt: str, schema_name: str) -> dict[str, object]:
+            assert schema_name == "TenderParseModuleResult"
+            module = json.loads(prompt)["module"]
+            if module == "basic":
+                return {"module": "basic", "fields": {"project_name": "fallback 解析项目"}}
+            return {"module": module, "fields": {}}
 
         def count_tokens(self, text: str) -> int:
             return max(1, len(text) // 4)
@@ -978,11 +1193,11 @@ def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkey
         def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
             assert tenant_id == "tenant-demo"
             return [
-                RouteTarget(provider="primary-llm", model="primary-model", schema_name="TenderParseResult"),
+                RouteTarget(provider="primary-llm", model="primary-model", schema_name="TenderParseModuleResult"),
                 RouteTarget(
                     provider="fallback-llm",
                     model="fallback-model",
-                    schema_name="TenderParseResult",
+                    schema_name="TenderParseModuleResult",
                     fallback_from="primary-llm",
                 ),
             ]
@@ -1016,6 +1231,78 @@ def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkey
     assert result["model_metadata"]["provider"] == "fallback-llm"
     assert result["model_metadata"]["model"] == "fallback-model"
     assert result["model_metadata"]["fallback_from"] == "primary-llm"
+
+
+def test_process_tender_parse_keeps_result_when_one_module_enhancement_fails(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return (
+                "项目名称：桥梁检查服务\n"
+                "资格要求：具备桥梁检测资质\n"
+                "评分标准：技术方案 20 分\n"
+            ).encode()
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class PartiallyFailingProvider:
+        name = "module-llm"
+
+        def generate_json(self, prompt: str, schema_name: str) -> dict[str, object]:
+            assert schema_name == "TenderParseModuleResult"
+            module = json.loads(prompt)["module"]
+            if module == "evaluation":
+                raise RuntimeError("evaluation unavailable")
+            return {"module": module, "fields": {}}
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
+    class FakeRouter:
+        def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
+            assert tenant_id == "tenant-demo"
+            return [RouteTarget(provider="module-llm", model="module-model", schema_name="TenderParseModuleResult")]
+
+        def provider_for_target(self, _target: RouteTarget) -> object:
+            return PartiallyFailingProvider()
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="tenant-demo/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks[0]["status"] == "done", callbacks[0]
+    result = callbacks[0]["result"]
+    evaluation = result["structured_result"]["modules"]["evaluation"]
+    assert evaluation["status"] == "needs_review"
+    assert evaluation["enhancement_error"]["type"] == "RuntimeError"
+    failed_calls = [
+        call
+        for call in result["model_metadata"]["module_calls"]
+        if call["module"] == "evaluation"
+    ]
+    assert failed_calls == [{"module": "evaluation", "status": "failed", "error_type": "RuntimeError"}]
 
 
 def test_process_tender_parse_rejects_oversized_source_object(monkeypatch) -> None:
@@ -1127,6 +1414,15 @@ def test_validate_production_config_rejects_development_minio_credentials(monkey
 
 def test_validate_production_config_rejects_mock_provider_mode(monkeypatch) -> None:
     _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")
+
+    with pytest.raises(RuntimeError, match="USE_MOCK_PROVIDERS"):
+        validate_production_config()
+
+
+def test_validate_production_config_rejects_mock_provider_escape_hatch(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("ALLOW_MOCK_PROVIDERS_IN_PRODUCTION", "true")
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")
 
     with pytest.raises(RuntimeError, match="USE_MOCK_PROVIDERS"):

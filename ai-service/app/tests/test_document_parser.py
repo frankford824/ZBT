@@ -27,6 +27,13 @@ def test_pdf_parser_extracts_layout_blocks_and_table_candidates() -> None:
     assert result.metadata["parser"] == "pymupdf"
     assert result.metadata["layout_block_count"] >= 1
     assert result.metadata["table_count"] >= 1
+    assert result.metadata["table_block_count"] >= 1
+    assert result.metadata["table_blocks"][0]["source"] == "pdf"
+    assert result.metadata["table_blocks"][0]["page_start"] == 1
+    assert result.metadata["page_quality_count"] == 1
+    assert result.metadata["page_quality"][0]["text_char_count"] > 0
+    assert result.metadata["page_quality"][0]["table_candidate_count"] >= 1
+    assert result.metadata["page_quality"][0]["needs_ocr"] is False
     assert result.metadata["ocr_required"] is False
     assert "Equipment" in text
 
@@ -73,6 +80,7 @@ def test_empty_pdf_marks_ocr_required_without_claiming_success(monkeypatch) -> N
     assert result.metadata["parser"] == "pymupdf"
     assert result.metadata["ocr_required"] is True
     assert result.metadata["ocr"]["status"] == "provider_not_configured"
+    assert result.metadata["page_quality"][0]["needs_ocr"] is True
     assert result.chunks[0].metadata["needs_human_input"] is True
 
 
@@ -120,6 +128,8 @@ def test_mixed_pdf_runs_page_ocr_for_pages_without_text_layer(monkeypatch) -> No
 
     assert result.metadata["ocr_required"] is False
     assert result.metadata["ocr_page_count"] == 1
+    assert result.metadata["page_quality_count"] == 2
+    assert result.metadata["page_quality"][1]["needs_ocr"] is True
     assert result.metadata["ocr_pages"] == [
         {"status": "done", "provider": "fake_ocr", "metadata": {"confidence": 0.96}, "page": 2}
     ]
@@ -151,6 +161,58 @@ def test_image_parser_clears_ocr_required_after_successful_ocr(monkeypatch) -> N
     assert result.metadata["ocr_required"] is False
     assert result.metadata["ocr"]["status"] == "done"
     assert "图片识别文本" in text
+
+
+def test_ocr_success_response_is_normalized(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(
+            b"""
+            {
+              "pages": [
+                {
+                  "page": 1,
+                  "text": "\xe9\xa6\x96\xe9\xa1\xb5\xe8\xaf\x86\xe5\x88\xab\xe6\x96\x87\xe6\x9c\xac",
+                  "confidence": 0.92,
+                  "blocks": [
+                    {
+                      "type": "text",
+                      "text": "\xe9\xa6\x96\xe9\xa1\xb5\xe8\xaf\x86\xe5\x88\xab\xe6\x96\x87\xe6\x9c\xac",
+                      "bbox": [1, 2, 30, 40],
+                      "confidence": 0.91
+                    }
+                  ],
+                  "tables": [
+                    {
+                      "index": 1,
+                      "rows": [["\xe9\xa1\xb9", "\xe5\x80\xbc"]],
+                      "confidence": 0.88
+                    }
+                  ]
+                }
+              ],
+              "metadata": {"request_id": "ocr-demo"}
+            }
+            """
+        ),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    text = "\n".join(chunk.content for chunk in result.chunks)
+    ocr = result.metadata["ocr"]
+
+    assert result.metadata["ocr_required"] is False
+    assert "首页识别文本" in text
+    assert ocr["status"] == "done"
+    assert ocr["confidence"] == 0.92
+    assert ocr["provider_metadata"] == {"request_id": "ocr-demo"}
+    assert ocr["metadata"] == {"request_id": "ocr-demo"}
+    assert ocr["pages"][0]["text"] == "首页识别文本"
+    assert ocr["pages"][0]["blocks"][0]["bbox"] == [1, 2, 30, 40]
+    assert ocr["pages"][0]["tables"][0]["source"] == "ocr"
+    assert ocr["pages"][0]["tables"][0]["confidence"] == 0.88
+    assert ocr["blocks"][0]["text"] == "首页识别文本"
 
 
 def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> None:
@@ -330,6 +392,16 @@ def test_docx_parser_includes_paragraphs_and_tables() -> None:
     assert "工期 | 90天" in text
     assert result.metadata["docx_paragraph_count"] == 1
     assert result.metadata["docx_table_count"] == 1
+    assert result.metadata["table_count"] == 1
+    assert result.metadata["table_blocks"] == [
+        {
+            "source": "docx",
+            "index": 1,
+            "rows": [["工期", "90天"]],
+            "row_count": 1,
+            "extraction": "python-docx",
+        }
+    ]
     assert result.metadata["truncated_after_parse_limit"] is False
 
 
@@ -380,6 +452,9 @@ def test_xlsx_parser_extracts_sheet_rows() -> None:
     assert result.metadata["parser"] == "openpyxl"
     assert "[Sheet] 报价" in text
     assert "设备 | 1200" in text
+    assert result.metadata["table_blocks"][0]["source"] == "xlsx"
+    assert result.metadata["table_blocks"][0]["sheet"] == "报价"
+    assert result.metadata["table_blocks"][0]["rows"] == [["科目", "金额"], ["设备", "1200"]]
 
 
 def test_xlsx_parser_preserves_uncached_formula_text() -> None:
@@ -463,6 +538,31 @@ def test_pptx_parser_extracts_slide_text() -> None:
     assert result.metadata["parser"] == "python-pptx"
     assert "实施路线" in text
     assert "里程碑计划" in text
+
+
+def test_pptx_parser_extracts_table_blocks() -> None:
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    table_shape = slide.shapes.add_table(1, 2, 0, 0, 1000000, 1000000)
+    table_shape.table.cell(0, 0).text = "节点"
+    table_shape.table.cell(0, 1).text = "完成"
+    content = BytesIO()
+    presentation.save(content)
+
+    result = parse_document(_request("deck.pptx"), content.getvalue())
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert "节点 | 完成" in text
+    assert result.metadata["table_blocks"] == [
+        {
+            "source": "pptx",
+            "index": 1,
+            "rows": [["节点", "完成"]],
+            "row_count": 1,
+            "slide": 1,
+            "extraction": "python-pptx",
+        }
+    ]
 
 
 def test_pptx_parser_stops_at_configured_slide_limit(monkeypatch) -> None:

@@ -78,13 +78,8 @@ class OpenAICompatibleProvider:
     def health_check(self) -> bool:
         try:
             self._base_url()
+            self._headers()
         except RuntimeError:
-            return False
-        if self.api_key_required and not self._api_key():
-            return False
-        if self.auth_header_name and not self.auth_header_env:
-            return False
-        if self.auth_header_env and not os.getenv(self.auth_header_env, "").strip():
             return False
         return True
 
@@ -526,15 +521,19 @@ def _parse_rank_index(value: object, document_count: int) -> int | None:
 
 def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
     refs = [ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]]
+    requirement_refs = [ref.model_dump() for ref in payload.requirement_refs[:20]]
     return json.dumps(
         {
             "chapter_title": payload.chapter_title,
             "tender_requirements": payload.tender_requirements,
+            "requirement_refs": requirement_refs,
             "selected_knowledge_refs": payload.selected_knowledge_refs,
             "retrieved_knowledge_refs": refs,
             "instruction": (
                 "Generate bid chapter JSON with fields: tiptap_json, source_refs, "
-                "self_check, needs_human_input. Keep unsupported facts in needs_human_input."
+                "self_check, needs_human_input. self_check must include requirement_coverage "
+                "items with requirement_id, satisfied, evidence, source_refs. Keep unsupported "
+                "facts in needs_human_input."
             ),
         },
         ensure_ascii=False,
@@ -549,8 +548,13 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
             "chapter_title": payload.chapter_title,
             "current_plain_text": payload.current_plain_text,
             "current_tiptap_json": payload.current_tiptap_json,
+            "tender_requirements": payload.tender_requirements,
+            "requirement_refs": [ref.model_dump() for ref in payload.requirement_refs[:20]],
             "retrieved_knowledge_refs": [ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]],
-            "output_contract": "Return JSON with tiptap_json, source_refs, self_check, needs_human_input.",
+            "output_contract": (
+                "Return JSON with tiptap_json, source_refs, self_check, needs_human_input. "
+                "self_check.requirement_coverage must review every requirement_ref."
+            ),
         },
         ensure_ascii=False,
     )
@@ -586,18 +590,46 @@ def _chapter_response_from_json(
         ]
     output_text = json.dumps(result, ensure_ascii=False)
     input_text = _chapter_prompt(payload)
+    self_check = result.get("self_check") if isinstance(result.get("self_check"), dict) else {"status": "needs_review"}
+    if payload.requirement_refs and not isinstance(self_check.get("requirement_coverage"), list):
+        self_check = dict(self_check)
+        self_check["requirement_coverage"] = _fallback_requirement_coverage(payload, source_refs)
+        self_check.setdefault("status", "needs_review")
     return ChapterGenerateResponse(
         trace_id=f"trace-{provider}-{int(time.time() * 1000)}",
         tiptap_json=tiptap_json,
         source_refs=source_refs,
-        self_check=result.get("self_check") if isinstance(result.get("self_check"), dict) else {"status": "needs_review"},
+        self_check=self_check,
         needs_human_input=_string_list(result.get("needs_human_input")),
-        model_metadata={"provider": provider, "model": model},
+        model_metadata={
+            "provider": provider,
+            "model": model,
+            "requirement_ref_count": len(payload.requirement_refs),
+        },
         token_usage={
             "input_tokens": max(1, len(input_text) // 4),
             "output_tokens": max(1, len(output_text) // 4),
         },
     )
+
+
+def _fallback_requirement_coverage(
+    payload: ChapterGenerateRequest,
+    refs: list[SourceRef],
+) -> list[dict[str, object]]:
+    source_refs = [ref.model_dump() for ref in refs[:3]]
+    return [
+        {
+            "requirement_id": requirement.id,
+            "module": requirement.module,
+            "requirement": requirement.requirement,
+            "satisfied": False,
+            "evidence": "",
+            "source_refs": source_refs,
+            "needs_review": True,
+        }
+        for requirement in payload.requirement_refs[:20]
+    ]
 
 
 def _string_list(value: object) -> list[str]:

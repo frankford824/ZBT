@@ -61,17 +61,49 @@ class MockProvider:
             scored.append((phrase_bonus + coverage + density, index))
         return [index for _, index in sorted(scored, key=lambda item: (-item[0], item[1]))]
 
+    def recognize_document(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, object]:
+        return {
+            "filename": filename,
+            "content_type": content_type,
+            "size_bytes": len(content),
+            "text": "",
+            "pages": [],
+            "blocks": [],
+            "tables": [],
+            "confidence": 1.0,
+        }
+
+    def recognize_page(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        page_index: int | None = None,
+    ) -> dict[str, object]:
+        result = self.recognize_document(filename=filename, content_type=content_type, content=content)
+        result["page"] = page_index
+        return result
+
+    def extract_layout(self, result: dict[str, object]) -> list[dict[str, object]]:
+        blocks = result.get("blocks")
+        return blocks if isinstance(blocks, list) else []
+
+    def extract_tables(self, result: dict[str, object]) -> list[dict[str, object]]:
+        tables = result.get("tables")
+        return tables if isinstance(tables, list) else []
+
     def parse_pdf(self, object_key: str) -> dict[str, object]:
         return {"object_key": object_key, "pages": [], "ocr_required": False}
 
     def parse_image(self, object_key: str) -> dict[str, object]:
         return {"object_key": object_key, "text": "", "confidence": 1.0}
-
-    def extract_layout(self, object_key: str) -> dict[str, object]:
-        return {"object_key": object_key, "blocks": []}
-
-    def extract_tables(self, object_key: str) -> list[dict[str, object]]:
-        return []
 
     def generate_chapter(self, payload: ChapterGenerateRequest) -> ChapterGenerateResponse:
         refs = [
@@ -96,6 +128,7 @@ class MockProvider:
             ]
         context_titles = "、".join(ref.title for ref in refs[:3])
         context_text = f"已引用知识库素材：{context_titles}。" if context_titles else "未检索到可引用知识库素材。"
+        requirement_coverage = _requirement_coverage(payload, refs)
         return ChapterGenerateResponse(
             trace_id="trace-mock-chapter",
             tiptap_json={
@@ -115,11 +148,17 @@ class MockProvider:
             source_refs=refs,
             self_check={
                 "status": "pass",
-                "notes": ["mock provider validates schema only"],
+                "notes": ["mock provider validates schema and requirement coverage only"],
                 "retrieved_ref_count": len(payload.retrieved_knowledge_refs),
+                "requirement_ref_count": len(payload.requirement_refs),
+                "requirement_coverage": requirement_coverage,
             },
             needs_human_input=["企业资质证书编号", "项目经理证书有效期"],
-            model_metadata={"provider": self.name, "model": payload.model_hint or "mock-model"},
+            model_metadata={
+                "provider": self.name,
+                "model": payload.model_hint or "mock-model",
+                "requirement_ref_count": len(payload.requirement_refs),
+            },
             token_usage={
                 "input_tokens": 128 + sum(self.count_tokens(ref.content) for ref in payload.retrieved_knowledge_refs[:5]),
                 "output_tokens": 256,
@@ -162,6 +201,7 @@ class MockProvider:
             rewritten = base_text
         else:
             rewritten = f"{action_label}：{base_text} 已结合招标要求和知识库引用进行处理。"
+        requirement_coverage = _requirement_coverage(payload, refs)
         return ChapterGenerateResponse(
             trace_id=f"trace-mock-chapter-action-{payload.action}",
             tiptap_json={
@@ -178,13 +218,20 @@ class MockProvider:
                 "status": "pass" if payload.action != "self_check" else "needs_review",
                 "action": payload.action,
                 "notes": [
-                    "mock rewrite assistant validates schema only",
+                    "mock rewrite assistant validates schema and requirement coverage only",
                     "事实性企业资质、证书、人员和金额仍需人工核对",
                 ],
                 "retrieved_ref_count": len(payload.retrieved_knowledge_refs),
+                "requirement_ref_count": len(payload.requirement_refs),
+                "requirement_coverage": requirement_coverage,
             },
             needs_human_input=["需人工复核事实性资质、人员、证书、金额和日期"],
-            model_metadata={"provider": self.name, "model": payload.model_hint or "mock-rewrite-model", "action": payload.action},
+            model_metadata={
+                "provider": self.name,
+                "model": payload.model_hint or "mock-rewrite-model",
+                "action": payload.action,
+                "requirement_ref_count": len(payload.requirement_refs),
+            },
             token_usage={
                 "input_tokens": self.count_tokens(base_text) + sum(self.count_tokens(ref.content) for ref in payload.retrieved_knowledge_refs[:5]),
                 "output_tokens": self.count_tokens(rewritten),
@@ -248,3 +295,22 @@ def _embedding_tokens(text: str) -> list[str]:
     if not tokens:
         tokens.append("__empty__")
     return tokens
+
+
+def _requirement_coverage(
+    payload: ChapterGenerateRequest | ChapterActionRequest,
+    refs: list[SourceRef],
+) -> list[dict[str, object]]:
+    source_refs = [ref.model_dump() for ref in refs[:3]]
+    return [
+        {
+            "requirement_id": requirement.id,
+            "module": requirement.module,
+            "requirement": requirement.requirement,
+            "satisfied": not requirement.needs_review,
+            "evidence": "已纳入章节生成上下文，待人工复核事实性材料。",
+            "source_refs": source_refs,
+            "needs_review": requirement.needs_review,
+        }
+        for requirement in payload.requirement_refs[:20]
+    ]

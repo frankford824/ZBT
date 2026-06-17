@@ -38,12 +38,25 @@ class RerankProvider(Protocol):
 
 
 class OCRProvider(Protocol):
-    def parse_pdf(self, object_key: str) -> dict[str, object]: ...
+    def recognize_document(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+    ) -> dict[str, object]: ...
 
-    def parse_image(self, object_key: str) -> dict[str, object]: ...
+    def recognize_page(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        page_index: int | None = None,
+    ) -> dict[str, object]: ...
 
-    def extract_layout(self, object_key: str) -> dict[str, object]: ...
+    def extract_layout(self, result: dict[str, object]) -> list[dict[str, object]]: ...
 
-    def extract_tables(self, object_key: str) -> list[dict[str, object]]: ...
+    def extract_tables(self, result: dict[str, object]) -> list[dict[str, object]]: ...
 
     def health_check(self) -> bool: ...

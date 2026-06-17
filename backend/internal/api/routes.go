@@ -124,6 +124,8 @@ var routeSpecs = []routeSpec{
 	{"POST", "/bids/:id/parse-tender", "bid", true},
 	{"GET", "/bids/:id/parse-result", "bid", false},
 	{"PUT", "/bids/:id/parse-result", "bid", false},
+	{"GET", "/bids/:id/requirements", "bid", false},
+	{"GET", "/bids/:id/pipeline-gates", "bid", false},
 	{"POST", "/bids/:id/outline/generate", "bid", true},
 	{"GET", "/bids/:id/parts", "bid", false},
 	{"GET", "/bids/:id/parts/:partId/outline", "bid", false},
@@ -654,6 +656,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/bids/:id/parse-tender", rbac.Require("bid", rbac.LevelFull), s.parseBidTender)
 	group.GET("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelRead), s.getBidParseResult)
 	group.PUT("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelFull), s.confirmBidParseResult)
+	group.GET("/bids/:id/requirements", rbac.Require("bid", rbac.LevelRead), s.listBidRequirements)
+	group.GET("/bids/:id/pipeline-gates", rbac.Require("bid", rbac.LevelRead), s.listBidPipelineGates)
 	group.POST("/bids/:id/outline/generate", rbac.Require("bid", rbac.LevelFull), s.generateBidOutline)
 	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
 	group.GET("/bids/:id/parts/:partId/outline", rbac.Require("bid", rbac.LevelRead), s.getBidPartOutline)
@@ -797,6 +801,8 @@ func customRouteSet() map[string]bool {
 		"POST /bids/:id/parse-tender":                  true,
 		"GET /bids/:id/parse-result":                   true,
 		"PUT /bids/:id/parse-result":                   true,
+		"GET /bids/:id/requirements":                   true,
+		"GET /bids/:id/pipeline-gates":                 true,
 		"POST /bids/:id/outline/generate":              true,
 		"GET /bids/:id/parts":                          true,
 		"GET /bids/:id/parts/:partId/outline":          true,
@@ -1703,6 +1709,16 @@ func (s *server) confirmBidParseResult(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	result, err := s.bidStore.ConfirmParseResult(c.Request.Context(), tenant.FromContext(c.Request.Context()), userID.(string), c.Param("id"), req)
 	respond(c, result, err)
+}
+
+func (s *server) listBidRequirements(c *gin.Context) {
+	result, err := s.bidStore.ListRequirementItems(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) listBidPipelineGates(c *gin.Context) {
+	result, err := s.bidStore.ListPipelineGates(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	respond(c, gin.H{"items": result}, err)
 }
 
 func (s *server) generateBidOutline(c *gin.Context) {
