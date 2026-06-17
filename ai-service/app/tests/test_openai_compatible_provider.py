@@ -42,6 +42,43 @@ def test_openai_provider_timeout_uses_default_for_invalid_env(monkeypatch) -> No
     assert provider._timeout() == 45
 
 
+def test_openai_provider_normalizes_valid_base_url(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "fake",
+        base_url_env="FAKE_OPENAI_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+    )
+    monkeypatch.setenv("FAKE_OPENAI_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai/")
+
+    assert provider._base_url() == "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "file:///etc/passwd",
+        "https://token@example.test/v1",
+        "https://example.test/v1?debug=1",
+        "https://example.test/v1#fragment",
+        "https://example.test/v1\\chat",
+        "https://example.test/v1\nX-Injected: yes",
+        "example.test/v1",
+    ],
+)
+def test_openai_provider_rejects_invalid_base_url(monkeypatch, base_url) -> None:
+    provider = OpenAICompatibleProvider(
+        "fake",
+        base_url_env="FAKE_OPENAI_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        api_key_required=False,
+    )
+    monkeypatch.setenv("FAKE_OPENAI_BASE_URL", base_url)
+
+    assert provider.health_check() is False
+    with pytest.raises(RuntimeError, match="base URL env FAKE_OPENAI_BASE_URL"):
+        provider._base_url()
+
+
 def test_openai_embedding_dimensions_require_positive_int(monkeypatch) -> None:
     provider = OpenAICompatibleProvider(
         "fake",

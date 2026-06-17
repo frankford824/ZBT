@@ -6,6 +6,7 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -74,7 +75,9 @@ class OpenAICompatibleProvider:
         )
 
     def health_check(self) -> bool:
-        if not os.getenv(self.base_url_env, self.default_base_url).strip():
+        try:
+            self._base_url()
+        except RuntimeError:
             return False
         if self.api_key_required and not self._api_key():
             return False
@@ -219,7 +222,7 @@ class OpenAICompatibleProvider:
         base_url = os.getenv(self.base_url_env, self.default_base_url).strip()
         if not base_url:
             raise RuntimeError(f"{self.name} is not configured: missing {self.base_url_env}")
-        return base_url.rstrip("/")
+        return _safe_base_url(base_url, self.name, self.base_url_env)
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -281,6 +284,30 @@ def _read_limited_response(response: object, max_bytes: int) -> bytes:
     if len(content) > max_bytes:
         raise OpenAICompatibleResponseTooLargeError
     return content
+
+
+def _safe_base_url(value: str, provider_name: str, env_name: str) -> str:
+    if _contains_url_unsafe_character(value):
+        raise RuntimeError(f"{provider_name} base URL env {env_name} is invalid")
+    parsed = urllib.parse.urlparse(value)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(f"{provider_name} base URL env {env_name} must be an absolute HTTP(S) URL")
+    if _contains_url_unsafe_character(parsed.netloc) or _contains_url_unsafe_character(parsed.path):
+        raise RuntimeError(f"{provider_name} base URL env {env_name} is invalid")
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def _contains_url_unsafe_character(value: str) -> bool:
+    return "\\" in value or any(ord(char) <= 0x20 or ord(char) == 0x7F for char in value)
 
 
 def _choice_text(data: dict[str, Any]) -> str:
