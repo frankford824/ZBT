@@ -2421,3 +2421,47 @@ git diff --check
 
 1. 本轮实现 Provider-agnostic HTTP 异步轮询；未内置某个厂商 SDK，也不把 MinerU/PaddleOCR 变成硬依赖。
 2. 轮询状态仍由 Python 进程内完成；若后续需要处理超长 OCR 任务，应把 OCR 任务拆成独立 ai_task 子任务并持久化进度。
+
+## Loop-36 / 生成覆盖与来源引用离线评测 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐清单中“生成评测：每个 requirement_item 是否被章节覆盖、source_ref 是否可解析”的可执行入口。
+2. 复用现有 AutoRFP 式 `Requirement -> Coverage -> Source` 数据结构，不引入数据库依赖。
+3. 为后续真实样本生成验收提供可放入 CI 的 JSON 检查器。
+
+### 代码交付
+
+1. 新增 `ai-service/app/evaluation/generation_coverage_eval.py`。
+2. 输入 JSON 支持 `requirements` / `requirement_items`、`chapters[].requirement_coverage`、`model_metadata.self_check.requirement_coverage`、章节 `source_refs` 和 `knowledge_chunks`。
+3. 输出 mandatory requirement 覆盖率、已覆盖 mandatory 数、source_ref 总数、可解析 source_ref 数、source_ref 解析率和逐项 checks。
+4. 评测规则要求强制项覆盖率满足阈值、已覆盖项必须携带来源、source_refs 必须能通过 `chunk_id/document_id` 或 `resolved=true` 解析。
+5. 新增 `test_generation_coverage_eval.py` 覆盖完整通过样例，以及强制项未覆盖和来源未解析的失败样例。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 与 `SAMPLE_DOCS_EVALUATION.md` 更新生成覆盖评测入口说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s
+cd ai-service && .venv/bin/ruff check app/evaluation/generation_coverage_eval.py app/tests/test_generation_coverage_eval.py
+cd ai-service && .venv/bin/python -m compileall -q app/evaluation/generation_coverage_eval.py app/tests/test_generation_coverage_eval.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 新增生成覆盖评测测试 2 条全部通过。
+2. AI 服务完整测试 211 条全部通过。
+3. Ruff 针对新增评测器和测试文件检查通过。
+4. Python compileall 通过。
+5. Go 后端全量测试通过。
+6. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮先提供离线 JSON 评测器；尚未把运行态章节生成结果自动导出为 `<生成覆盖样本>.json`。
+2. 评测器验证来源是否能解析到给定 `knowledge_chunks`，不直接查询 PostgreSQL；运行态解析仍由 Go 回调链路负责。

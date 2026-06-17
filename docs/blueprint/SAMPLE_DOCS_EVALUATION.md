@@ -29,6 +29,22 @@ cd ai-service
   --golden ../docs/sample_docs/golden/工程1.parse.json
 ```
 
+生成覆盖与来源引用可使用独立离线评测入口：
+
+```bash
+cd ai-service
+.venv/bin/python -m app.evaluation.generation_coverage_eval \
+  --input ../docs/sample_docs/golden/<生成覆盖样本>.json
+```
+
+输入 JSON 至少包含：
+
+- `requirements` 或 `requirement_items`：解析出的招标要求，强制项使用 `mandatory=true` 或 `priority=high|mandatory|required`。
+- `chapters`：章节生成结果，可在章节顶层或 `model_metadata.self_check.requirement_coverage` 放置覆盖矩阵。
+- `knowledge_chunks`：可解析来源集合，字段为 `chunk_id` 和可选 `document_id`。
+
+评测会输出 mandatory requirement 覆盖率、source_ref 解析率，并检查已覆盖项是否携带来源。
+
 验收覆盖：
 
 1. `采购文件桥梁检查.pdf`：PDF 文本层、页数、表格块、OCR 标记、项目名、截止日、采购人、预算、地点、资格要求、评分项、否决风险、附件/清单要求。
