@@ -1,6 +1,8 @@
 # AI 与文档处理流水线
 
-外部同类项目方法论已转成 ZBT 自有任务清单，见 `docs/blueprint/AI_IMPLEMENTATION_CHECKLIST.md`。该清单只复用解析、OCR、Skill Pipeline、问题矩阵和来源引用的方案思路，不复制外部代码。
+外部同类项目方法论已转成 ZBT 自有任务清单，见 `docs/blueprint/AI_IMPLEMENTATION_CHECKLIST.md`。行业 MCP / Skills 雷达见 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`。这些清单只复用解析、OCR、Skill Pipeline、问题矩阵、来源引用、外部数据工具和交付物编排的方案思路，不复制外部代码。
+
+外部 MCP / Skills 的边界：MCP 只负责确定性外部数据和只读工具调用，Skill 只负责流程编排、检查清单和交付物方法论。客户招标文件、投标文件、报价、资质证明和合同条款不得默认外发到第三方 MCP；任何外部工具接入必须由租户显式开启，并经过脱敏、RBAC、审计、调用限额和成本估算。智标通的解析、生成、合规、导出和租户隔离仍由本工程主链路实现。
 
 ## 文档处理
 

@@ -2956,3 +2956,37 @@ git diff --check
 
 1. 本轮补齐人工调整当前快照，不新增多轮覆盖历史时间线；覆盖历史仍保留在章节版本 `model_metadata.requirement_coverage` 和人工 `metadata.manual_coverage` 中。
 2. 本轮前端只支持补充文本证据；附件级证据上传、证据引用精确选区和批量调整仍属后续增强。
+
+## Loop-48 / 行业 MCP 与 Skills 雷达固化 - 2026-06-17
+
+### 本轮目标
+
+1. 把全网和 GitHub 上招投标、采购、RFP 方向的 MCP / Skills 调研沉淀为工程内可追踪文档。
+2. 区分可接入数据源、可借鉴工具边界、可借鉴 Skill 方法论和暂不采用项，避免把普通仓库误当成生产能力。
+3. 明确外部 MCP 接入的租户授权、脱敏、审计、成本和只读边界。
+
+### 代码交付
+
+1. 新增 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`。
+2. 雷达文档按“可优先评估接入”“可借鉴工具边界”“可借鉴 Skill 方法论”“全球采购数据 MCP 观察池”分层记录外部项目。
+3. 明确智标通接入清单：P0 只读外部 MCP 工具网关、P1 业务入口、P2 Skill 方法论内化。
+4. 明确不做事项：不把外部 RFP MCP 作为生产解析/生成主路径，不默认外发文件原文，不绕过 RBAC/RLS/审计/成本核算。
+5. `AI_IMPLEMENTATION_CHECKLIST.md` 增加雷达文档指针。
+6. `AI_PIPELINE.md` 增加“MCP 负责确定性外部数据，Skill 负责交付物方法论”的边界说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+git diff --check
+```
+
+结果：
+
+1. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮只固化调研和接入清单，不实现 MCP client。
+2. 真实外部 MCP 接入必须先补租户配置、工具白名单、脱敏策略和审计表后再进入业务界面。
