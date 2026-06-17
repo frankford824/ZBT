@@ -26,6 +26,11 @@ LEGACY_OFFICE_TARGETS = {
     ".xls": ".xlsx",
     ".ppt": ".pptx",
 }
+DEFAULT_OCR_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+
+
+class OCRResponseTooLargeError(Exception):
+    pass
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -310,7 +315,18 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
     )
     try:
         with request.urlopen(req, timeout=_env_int("OCR_HTTP_TIMEOUT_S", 120)) as response:
-            result = json.loads(response.read().decode("utf-8"))
+            max_response_bytes = _env_int(
+                "OCR_MAX_RESPONSE_BYTES",
+                DEFAULT_OCR_RESPONSE_MAX_BYTES,
+                minimum=1024,
+            )
+            result = json.loads(_read_limited_response(response, max_response_bytes).decode("utf-8"))
+        if not isinstance(result, dict):
+            return {
+                "status": "failed",
+                "provider": provider,
+                "error": "ocr response invalid",
+            }
         text = str(result.get("text") or "")
         return {
             "status": "done" if text.strip() else "empty_result",
@@ -325,8 +341,21 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
             "error": "ocr request failed",
             "http_status": exc.code,
         }
+    except OCRResponseTooLargeError:
+        return {
+            "status": "failed",
+            "provider": provider,
+            "error": "ocr response too large",
+        }
     except Exception:
         return {"status": "failed", "provider": provider, "error": "ocr request failed"}
+
+
+def _read_limited_response(response: object, max_bytes: int) -> bytes:
+    content = response.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise OCRResponseTooLargeError
+    return content
 
 
 def _ocr_provider_name() -> str:

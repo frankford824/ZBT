@@ -192,6 +192,38 @@ def test_ocr_skips_oversized_content_without_external_request(monkeypatch) -> No
     assert result.metadata["ocr"]["max_bytes"] == 4
 
 
+def test_ocr_rejects_oversized_response_without_exposing_body(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setenv("OCR_MAX_RESPONSE_BYTES", "1024")
+    oversized_body = b'{"text":"' + (b"secret OCR response body" * 80) + b'"}'
+
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(oversized_body),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr"]["status"] == "failed"
+    assert result.metadata["ocr"]["error"] == "ocr response too large"
+    assert "secret OCR" not in str(result.metadata["ocr"])
+
+
+def test_ocr_rejects_non_object_response_without_exposing_body(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+
+    monkeypatch.setattr(
+        "app.pipelines.parse.document_parser.request.urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(b'["secret OCR response body"]'),
+    )
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert result.metadata["ocr"]["status"] == "failed"
+    assert result.metadata["ocr"]["error"] == "ocr response invalid"
+    assert "secret OCR" not in str(result.metadata["ocr"])
+
+
 def test_legacy_office_marks_human_input_when_converter_missing(monkeypatch) -> None:
     monkeypatch.delenv("LIBREOFFICE_BIN", raising=False)
     monkeypatch.delenv("LIBREOFFICE_PATH", raising=False)
@@ -461,3 +493,17 @@ def _request(filename: str) -> KnowledgeProcessRequest:
         filename=filename,
         content_type="application/octet-stream",
     )
+
+
+class _FakeHTTPResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = BytesIO(body)
+
+    def __enter__(self) -> "_FakeHTTPResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self._body.read(size)
