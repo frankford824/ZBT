@@ -74,6 +74,25 @@ func TestTruncateForRerankPreservesRuneBoundaries(t *testing.T) {
 	}
 }
 
+func TestEstimateTokensForRerankOutputUsesSerializedPayload(t *testing.T) {
+	results := []rerankResult{
+		{ID: "chunk-a", Index: 0, Score: 1},
+		{ID: "chunk-b", Index: 1, Score: 0.5},
+	}
+
+	got := estimateTokensForRerankOutput(results)
+	want := estimateTokens(`[{"id":"chunk-a","index":0,"score":1},{"id":"chunk-b","index":1,"score":0.5}]`)
+	if got != want {
+		t.Fatalf("expected serialized rerank output token estimate %d, got %d", want, got)
+	}
+	if got <= len(results) {
+		t.Fatalf("expected token estimate to exceed result count, got %d for %d results", got, len(results))
+	}
+	if empty := estimateTokensForRerankOutput(nil); empty != 0 {
+		t.Fatalf("expected empty rerank output to cost 0 tokens, got %d", empty)
+	}
+}
+
 func TestValidateKnowledgeChunksRejectsUnsafeCallbackChunks(t *testing.T) {
 	for name, chunks := range map[string][]ChunkInput{
 		"empty list": {},

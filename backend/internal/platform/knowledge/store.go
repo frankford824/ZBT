@@ -1332,7 +1332,7 @@ func (s *Store) rerankKnowledgeResults(ctx context.Context, tenantID, userID, qu
 			Provider:     decoded.Provider,
 			Model:        decoded.Model,
 			InputTokens:  estimateTokens(query) + estimateTokensForRerank(documents),
-			OutputTokens: len(decoded.Results),
+			OutputTokens: estimateTokensForRerankOutput(decoded.Results),
 			LatencyMS:    int(time.Since(startedAt).Milliseconds()),
 			Status:       "done",
 			BizRef: map[string]any{
@@ -1418,6 +1418,17 @@ func estimateTokensForRerank(documents []rerankDocument) int {
 		total += estimateTokens(document.Content)
 	}
 	return total
+}
+
+func estimateTokensForRerankOutput(results []rerankResult) int {
+	if len(results) == 0 {
+		return 0
+	}
+	body, err := json.Marshal(results)
+	if err != nil {
+		return len(results)
+	}
+	return estimateTokens(string(body))
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
