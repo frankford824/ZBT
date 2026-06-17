@@ -407,6 +407,19 @@ def test_zip_path_removes_parent_segments() -> None:
     assert _safe_zip_path("../../evil/../资质.txt") == "evil/资质.txt"
 
 
+def test_zip_path_removes_windows_drive_segments() -> None:
+    assert _safe_zip_path(r"C:\secret\资质.txt") == "secret/资质.txt"
+
+
+def test_zip_path_renames_windows_reserved_filenames() -> None:
+    assert _safe_zip_path("附件/CON.txt") == "附件/_CON.txt"
+    assert _safe_zip_path("PRN") == "_PRN"
+
+
+def test_zip_path_replaces_control_characters() -> None:
+    assert _safe_zip_path("附件/\x00报价\t说明.txt") == "附件/-报价-说明.txt"
+
+
 def _b64(value: str) -> str:
     return base64.b64encode(value.encode("utf-8")).decode("ascii")
 

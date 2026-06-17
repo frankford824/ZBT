@@ -32,6 +32,16 @@ from app.schemas.export import ExportAttachment, ExportChapter, ExportLayoutOpti
 
 MARKDOWN_TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
 TEMPLATE_FIELD = re.compile(r"{{\s*([A-Za-z0-9_.-]+)\s*}}")
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+WINDOWS_DRIVE_SEGMENT = re.compile(r"^[A-Za-z]:$")
+WINDOWS_RESERVED_FILENAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 ANCHOR_ALIASES = {
     "cover": {"ZBT_COVER", "zbt_cover", "cover"},
     "toc": {"ZBT_TOC", "zbt_toc", "toc"},
@@ -336,10 +346,28 @@ def _safe_zip_path(value: str) -> str:
     cleaned = value.strip().replace("\\", "/").strip("/")
     parts = []
     for part in cleaned.split("/"):
-        safe = _safe_filename(part).strip(".")
+        raw_part = part.strip()
+        if not raw_part or raw_part in {".", ".."} or WINDOWS_DRIVE_SEGMENT.fullmatch(raw_part):
+            continue
+        safe = _safe_filename(raw_part).strip(".")
         if safe:
             parts.append(safe)
     return "/".join(parts) or "attachment"
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = CONTROL_CHARS.sub("-", value.strip())
+    for char in '/\\:*?"<>|':
+        cleaned = cleaned.replace(char, "-")
+    cleaned = cleaned.strip(" .") or "document"
+    return _avoid_windows_reserved_filename(cleaned)
+
+
+def _avoid_windows_reserved_filename(value: str) -> str:
+    stem = value.split(".", 1)[0].rstrip(" .").upper()
+    if stem in WINDOWS_RESERVED_FILENAMES:
+        return f"_{value}"
+    return value
 
 
 def _validate_pdf_output(path: Path) -> dict[str, object]:
@@ -733,10 +761,3 @@ def _enable_field_updates(document: DocxDocument) -> None:
     update_fields = OxmlElement("w:updateFields")
     update_fields.set(qn("w:val"), "true")
     settings.append(update_fields)
-
-
-def _safe_filename(value: str) -> str:
-    cleaned = value.strip() or "document"
-    for char in '/\\:*?"<>|':
-        cleaned = cleaned.replace(char, "-")
-    return cleaned
