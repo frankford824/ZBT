@@ -152,6 +152,62 @@ def test_openai_post_json_rejects_non_object_success_response(monkeypatch) -> No
     assert "tenant secret" not in message
 
 
+def test_openai_provider_supports_authenticated_gateway_without_provider_key(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        api_key_required=False,
+        auth_header_name="cf-aig-authorization",
+        auth_header_env="FAKE_CF_GATEWAY_TOKEN",
+        extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.delenv("FAKE_OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"cf-aig-metadata":"{\\"tenant\\":\\"demo\\"}"}')
+
+    headers = provider._headers()
+
+    assert provider.health_check() is True
+    assert "Authorization" not in headers
+    assert headers["cf-aig-authorization"] == "Bearer gateway-token"
+    assert headers["cf-aig-metadata"] == '{"tenant":"demo"}'
+
+
+def test_openai_provider_rejects_invalid_extra_gateway_headers(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        api_key_required=False,
+        extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"Bad\\nHeader":"value"}')
+
+    with pytest.raises(RuntimeError, match="invalid header name"):
+        provider._headers()
+
+
+def test_openai_provider_rejects_extra_headers_that_override_auth(monkeypatch) -> None:
+    provider = OpenAICompatibleProvider(
+        "cloudflare",
+        base_url_env="FAKE_CF_GATEWAY_BASE_URL",
+        api_key_env="FAKE_OPENAI_API_KEY",
+        auth_header_name="cf-aig-authorization",
+        auth_header_env="FAKE_CF_GATEWAY_TOKEN",
+        extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
+    )
+    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
+    monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"Authorization":"Bearer override"}')
+
+    with pytest.raises(RuntimeError, match="must not override Authorization"):
+        provider._headers()
+
+
 def test_json_from_text_accepts_fenced_or_explained_json() -> None:
     assert _json_from_text('{"indexes":[1,0]}') == {"indexes": [1, 0]}
     assert _json_from_text('```json\n{"indexes":[2,0]}\n```') == {"indexes": [2, 0]}

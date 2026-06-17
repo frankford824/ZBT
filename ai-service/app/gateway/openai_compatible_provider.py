@@ -31,12 +31,20 @@ class OpenAICompatibleProvider:
         base_url_env: str,
         api_key_env: str,
         default_base_url: str = "",
+        api_key_required: bool = True,
+        auth_header_name: str = "",
+        auth_header_env: str = "",
+        extra_headers_env: str = "",
         target: OpenAICompatibleTarget | None = None,
     ) -> None:
         self.name = name
         self.base_url_env = base_url_env
         self.api_key_env = api_key_env
         self.default_base_url = default_base_url
+        self.api_key_required = api_key_required
+        self.auth_header_name = auth_header_name
+        self.auth_header_env = auth_header_env
+        self.extra_headers_env = extra_headers_env
         self.target = target
 
     def bind(self, target: Any) -> "OpenAICompatibleProvider":
@@ -45,6 +53,10 @@ class OpenAICompatibleProvider:
             base_url_env=self.base_url_env,
             api_key_env=self.api_key_env,
             default_base_url=self.default_base_url,
+            api_key_required=self.api_key_required,
+            auth_header_name=self.auth_header_name,
+            auth_header_env=self.auth_header_env,
+            extra_headers_env=self.extra_headers_env,
             target=OpenAICompatibleTarget(
                 model=target.model,
                 dimensions=target.dimensions,
@@ -54,7 +66,13 @@ class OpenAICompatibleProvider:
         )
 
     def health_check(self) -> bool:
-        return bool(self._api_key()) and bool(os.getenv(self.base_url_env, self.default_base_url).strip())
+        if not os.getenv(self.base_url_env, self.default_base_url).strip():
+            return False
+        if self.api_key_required and not self._api_key():
+            return False
+        if self.auth_header_env and not os.getenv(self.auth_header_env, "").strip():
+            return False
+        return True
 
     def complete(self, prompt: str) -> str:
         data = self._post_json(
@@ -186,19 +204,37 @@ class OpenAICompatibleProvider:
             raise RuntimeError(f"{self.name} is not configured: missing {self.base_url_env}")
         return base_url.rstrip("/")
 
-    def _post_json(self, path: str, payload: dict[str, object]) -> dict[str, Any]:
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
         api_key = self._api_key()
-        if not api_key:
+        if api_key:
+            headers["Authorization"] = _bearer_header(api_key)
+        elif self.api_key_required:
             raise RuntimeError(f"{self.name} is not configured: missing {self.api_key_env}")
+
+        if self.auth_header_name:
+            if not self.auth_header_env:
+                raise RuntimeError(f"{self.name} auth header is missing an environment variable")
+            token = os.getenv(self.auth_header_env, "").strip()
+            if not token:
+                raise RuntimeError(f"{self.name} is not configured: missing {self.auth_header_env}")
+            headers[self.auth_header_name] = _bearer_header(token)
+
+        extra_headers = _extra_headers_from_env(self.extra_headers_env, self.name)
+        reserved_names = {key.lower() for key in headers}
+        for key in extra_headers:
+            if key.lower() in reserved_names:
+                raise RuntimeError(f"{self.name} extra headers must not override {key}")
+        headers.update(extra_headers)
+        return headers
+
+    def _post_json(self, path: str, payload: dict[str, object]) -> dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             self._base_url() + path,
             data=body,
             method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=self._headers(),
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
@@ -278,6 +314,44 @@ def _env_positive_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _bearer_header(token: str) -> str:
+    value = _safe_header_value(token)
+    if value.lower().startswith("bearer "):
+        return value
+    return f"Bearer {value}"
+
+
+def _extra_headers_from_env(env_name: str, provider_name: str) -> dict[str, str]:
+    if not env_name:
+        return {}
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{provider_name} extra headers env {env_name} must be a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{provider_name} extra headers env {env_name} must be a JSON object")
+
+    headers: dict[str, str] = {}
+    for key, value in parsed.items():
+        header_name = str(key).strip()
+        if not header_name or any(char in header_name for char in "\r\n:"):
+            raise RuntimeError(f"{provider_name} extra headers env {env_name} contains an invalid header name")
+        if not isinstance(value, str):
+            raise RuntimeError(f"{provider_name} extra headers env {env_name} values must be strings")
+        headers[header_name] = _safe_header_value(value)
+    return headers
+
+
+def _safe_header_value(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned or any(char in cleaned for char in "\r\n"):
+        raise RuntimeError("configured HTTP header value is invalid")
+    return cleaned
 
 
 def _json_from_text(text: str) -> dict[str, object]:

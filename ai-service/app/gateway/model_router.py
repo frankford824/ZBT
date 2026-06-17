@@ -163,6 +163,10 @@ class ModelRouter:
                     base_url_env=str(config.get("base_url_env") or "OPENAI_BASE_URL"),
                     api_key_env=str(config.get("api_key_env") or "OPENAI_API_KEY"),
                     default_base_url=str(config.get("default_base_url") or ""),
+                    api_key_required=bool(config.get("api_key_required", True)),
+                    auth_header_name=str(config.get("auth_header_name") or ""),
+                    auth_header_env=str(config.get("auth_header_env") or ""),
+                    extra_headers_env=str(config.get("extra_headers_env") or ""),
                 )
             else:
                 supported = ", ".join(self.SUPPORTED_PROVIDER_TYPES)

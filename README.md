@@ -85,6 +85,23 @@ ALLOW_MOCK_FALLBACK=true
 
 没有真实 API Key 时，MockProvider 可以作为显式 fallback 跑通 embedding、rerank、章节生成、章节改写、成本建议和导出链路；配置 Key 后会优先走真实 Provider。真实 Key 只允许放在 `.env` 或密钥管理中，不要写入代码、prompt、日志或数据库。切换真实 Provider 时，可直接编辑 `model_routing.yaml`；也可以配置 `AI_LLM_PROVIDER` / `AI_LLM_MODEL`、`AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL`、`AI_RERANK_PROVIDER` / `AI_RERANK_MODEL` 覆盖每类任务的 provider/model。生产环境必须设置 `USE_MOCK_PROVIDERS=false` 和 `ALLOW_MOCK_FALLBACK=false`；真实 Provider 不可用时只会走显式 fallback，不会静默回退 mock。
 
+可选接入 Cloudflare AI Gateway 时，不需要改业务代码，直接使用内置的 `cloudflare_ai_gateway` Provider：
+
+```bash
+CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL=https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/openai
+CLOUDFLARE_AI_GATEWAY_TOKEN=<gateway_access_token>
+AI_LLM_PROVIDER=cloudflare_ai_gateway
+AI_LLM_MODEL=gpt-4o-mini
+AI_EMBEDDING_PROVIDER=cloudflare_ai_gateway
+AI_EMBEDDING_MODEL=text-embedding-3-large
+AI_RERANK_PROVIDER=cloudflare_ai_gateway
+AI_RERANK_MODEL=gpt-4o-mini
+USE_MOCK_PROVIDERS=false
+ALLOW_MOCK_FALLBACK=false
+```
+
+`cloudflare_ai_gateway` 会自动发送 `cf-aig-authorization` 网关认证头。若 AI Gateway 使用 BYOK 或统一计费，可以不设置 `OPENAI_API_KEY`；若选择请求侧透传 provider key，则继续设置 `OPENAI_API_KEY`，服务会同时发送 provider `Authorization` 和 Cloudflare 网关认证头。需要传递网关 metadata、cache 等附加头时，可用 JSON 对象配置 `CLOUDFLARE_AI_GATEWAY_HEADERS`，例如 `{"cf-aig-metadata":"{\"tenant\":\"prod\"}"}`。
+
 AI 调用成本通过后端环境变量 `AI_MODEL_PRICING_JSON` 配置，例如：
 
 ```bash

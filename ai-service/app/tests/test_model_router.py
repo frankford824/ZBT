@@ -22,6 +22,9 @@ def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         "DEEPSEEK_BASE_URL",
         "DASHSCOPE_API_KEY",
         "DASHSCOPE_BASE_URL",
+        "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
+        "CLOUDFLARE_AI_GATEWAY_TOKEN",
+        "CLOUDFLARE_AI_GATEWAY_HEADERS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -229,6 +232,26 @@ def test_real_provider_routes_accept_environment_model_override(monkeypatch: pyt
     assert target.provider == "deepseek"
     assert target.model == "deepseek-chat"
     assert target.fallback_from is None
+
+
+def test_cloudflare_ai_gateway_provider_can_use_gateway_token_without_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AI_LLM_PROVIDER", "cloudflare_ai_gateway")
+    monkeypatch.setenv("AI_LLM_MODEL", "gpt-4o-mini")
+    monkeypatch.setenv(
+        "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
+        "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
+    )
+    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "gateway-token")
+
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    target = router.resolve("chapter_generate", tenant_id="tenant-demo")
+
+    assert target.provider == "cloudflare_ai_gateway"
+    assert target.model == "gpt-4o-mini"
+    assert router.health_check()["cloudflare_ai_gateway"] is True
 
 
 def test_provider_backed_mock_routes_detects_environment_provider_override(
