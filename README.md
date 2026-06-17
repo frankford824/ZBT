@@ -119,7 +119,7 @@ AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1
 
 AI 服务向后端投递任务回调时，成功响应默认最多读取 64 KB，可用 `AI_CALLBACK_MAX_RESPONSE_BYTES` 在 1 MB 内调整；超限响应会触发重试且不会把响应体写入错误信息。
 
-API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整，最大允许配置到 256 MB。
+Go 后端 API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整，最大允许配置到 256 MB。AI 服务入口请求体同样默认限制为 96 MB，可通过 `AI_SERVICE_MAX_BODY_BYTES` 调整，最大允许配置到 256 MB。
 
 ## 文件和对象存储
 

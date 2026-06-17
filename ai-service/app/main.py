@@ -77,6 +77,9 @@ DEFAULT_CALLBACK_MAX_ATTEMPTS = 3
 DEFAULT_CALLBACK_RETRY_DELAY_SECONDS = 0.25
 DEFAULT_CALLBACK_MAX_RESPONSE_BYTES = 64 * 1024
 MAX_CALLBACK_MAX_RESPONSE_BYTES = 1024 * 1024
+DEFAULT_AI_SERVICE_MAX_BODY_BYTES = 96 * 1024 * 1024
+MIN_AI_SERVICE_MAX_BODY_BYTES = 1024 * 1024
+MAX_AI_SERVICE_MAX_BODY_BYTES = 256 * 1024 * 1024
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
 DEFAULT_TASK_OBJECT_MAX_BYTES = 128 * 1024 * 1024
 MAX_TASK_OBJECT_MAX_BYTES = 256 * 1024 * 1024
@@ -87,6 +90,10 @@ class CallbackResponseTooLargeError(RuntimeError):
     pass
 
 
+class AIServiceRequestBodyTooLargeError(RuntimeError):
+    pass
+
+
 @app.middleware("http")
 async def require_backend_signature(request: Request, call_next):
     if request.url.path in PUBLIC_PATHS:
@@ -94,7 +101,13 @@ async def require_backend_signature(request: Request, call_next):
     secret = ai_service_hmac_secret()
     if not secret:
         return await call_next(request)
-    body = await request.body()
+    try:
+        body = await read_request_body_with_limit(request, ai_service_max_body_bytes())
+    except AIServiceRequestBodyTooLargeError:
+        return JSONResponse(
+            status_code=413,
+            content={"code": "payload_too_large", "error": "请求内容过大"},
+        )
     if not verify_request_signature(
         request.headers.get("X-ZBT-Timestamp", ""),
         request.headers.get("X-ZBT-Signature", ""),
@@ -110,6 +123,40 @@ async def require_backend_signature(request: Request, call_next):
         return {"type": "http.request", "body": body, "more_body": False}
 
     return await call_next(Request(request.scope, receive))
+
+
+def ai_service_max_body_bytes() -> int:
+    configured = os.getenv("AI_SERVICE_MAX_BODY_BYTES", "").strip()
+    if not configured:
+        return DEFAULT_AI_SERVICE_MAX_BODY_BYTES
+    try:
+        value = int(configured)
+    except ValueError:
+        return DEFAULT_AI_SERVICE_MAX_BODY_BYTES
+    if value < MIN_AI_SERVICE_MAX_BODY_BYTES:
+        return DEFAULT_AI_SERVICE_MAX_BODY_BYTES
+    return min(value, MAX_AI_SERVICE_MAX_BODY_BYTES)
+
+
+async def read_request_body_with_limit(request: Request, max_bytes: int) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_bytes:
+                raise AIServiceRequestBodyTooLargeError("AI service request body is too large")
+        except ValueError:
+            pass
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > max_bytes:
+            raise AIServiceRequestBodyTooLargeError("AI service request body is too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def minio_client() -> Minio:

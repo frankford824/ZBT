@@ -13,9 +13,12 @@ from starlette.responses import JSONResponse
 
 from app.main import (
     CallbackResponseTooLargeError,
+    DEFAULT_AI_SERVICE_MAX_BODY_BYTES,
+    MAX_AI_SERVICE_MAX_BODY_BYTES,
     DEFAULT_AI_HMAC_SECRET,
     DEFAULT_MINIO_ACCESS_KEY,
     DEFAULT_MINIO_SECRET_KEY,
+    ai_service_max_body_bytes,
     ai_service_hmac_secret,
     callback_allowed_hosts,
     download_minio_object_base64,
@@ -86,6 +89,34 @@ def test_ai_service_middleware_keeps_only_public_paths_unsigned() -> None:
     assert asyncio.run(middleware_status("GET", "/healthz")) == 209
     assert asyncio.run(middleware_status("GET", "/not-found")) == 401
     assert asyncio.run(middleware_status("GET", "/not-found", signed_headers(b""))) == 209
+    body = b'{"task":"demo"}'
+    assert asyncio.run(middleware_status("POST", "/tasks/demo", signed_headers(body), body=body)) == 209
+
+
+def test_ai_service_max_body_bytes_uses_safe_env_bounds(monkeypatch) -> None:
+    monkeypatch.setenv("AI_SERVICE_MAX_BODY_BYTES", "2097152")
+    assert ai_service_max_body_bytes() == 2 * 1024 * 1024
+
+    monkeypatch.setenv("AI_SERVICE_MAX_BODY_BYTES", "1")
+    assert ai_service_max_body_bytes() == DEFAULT_AI_SERVICE_MAX_BODY_BYTES
+
+    monkeypatch.setenv("AI_SERVICE_MAX_BODY_BYTES", "999999999")
+    assert ai_service_max_body_bytes() == MAX_AI_SERVICE_MAX_BODY_BYTES
+
+
+def test_ai_service_middleware_rejects_known_oversized_body(monkeypatch) -> None:
+    monkeypatch.setenv("AI_SERVICE_MAX_BODY_BYTES", "1048576")
+    headers = signed_headers(b"")
+    headers["Content-Length"] = str(1024 * 1024 + 1)
+
+    assert asyncio.run(middleware_status("POST", "/tasks/demo", headers, body=b"")) == 413
+
+
+def test_ai_service_middleware_rejects_unknown_length_oversized_body(monkeypatch) -> None:
+    monkeypatch.setenv("AI_SERVICE_MAX_BODY_BYTES", "1048576")
+    body = b"x" * (1024 * 1024 + 1)
+
+    assert asyncio.run(middleware_status("POST", "/tasks/demo", signed_headers(body), body=body)) == 413
 
 
 def test_ai_service_hmac_secret_has_development_default(monkeypatch) -> None:
@@ -1212,14 +1243,20 @@ def signed_headers(body: bytes) -> dict[str, str]:
     }
 
 
-async def middleware_status(method: str, path: str, headers: dict[str, str] | None = None) -> int:
+async def middleware_status(
+    method: str,
+    path: str,
+    headers: dict[str, str] | None = None,
+    *,
+    body: bytes = b"",
+) -> int:
     raw_headers = [
         (key.lower().encode("latin-1"), value.encode("latin-1"))
         for key, value in (headers or {}).items()
     ]
 
     async def receive() -> dict[str, object]:
-        return {"type": "http.request", "body": b"", "more_body": False}
+        return {"type": "http.request", "body": body, "more_body": False}
 
     request = Request(
         {
