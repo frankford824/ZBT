@@ -3119,3 +3119,41 @@ git diff --check
 1. 本轮补齐带历史的 xlsx 导出，不提供跨要求批量审阅、批量修改和筛选 UI。
 2. xlsx 使用标准库生成基础工作簿，未加样式、冻结窗格、筛选器和列宽优化。
 3. 真实外部 MinerU/PaddleOCR 服务端到端样本验证仍需要可用 endpoint/key。
+
+## Loop-52 / OCR Provider 真实 endpoint 验收入口 - 2026-06-17
+
+### 本轮目标
+
+1. 把 MinerU / PaddleOCR 从“代码支持和假 HTTP 单测”推进到可对真实 endpoint/key 重复运行的验收命令。
+2. 默认使用工程1真实样本，且必须走 OCR Provider 路径，避免只验证 PDF 文本层。
+3. 没有 endpoint 时明确输出 skipped，不伪装为通过。
+
+### 代码交付
+
+1. 新增 `ai-service/app/evaluation/ocr_provider_eval.py`。
+2. CLI 默认读取 `docs/ex/工程1/采购文件桥梁检查.pdf`，把第一页渲染为 PNG 后调用现有 `parse_document()`，从而触发 `OCR_PROVIDER=mineru|paddleocr` 的真实 Provider 路径。
+3. 验收检查包含：Provider 支持、endpoint 配置、样本存在、OCR status、provider 匹配、识别文本长度、chunk 数、provider_profile.endpoint_env，并支持 `--min-table-blocks` / `--min-layout-blocks`。
+4. 新增 `--allow-skip`，用于本地或 CI 未配置真实 endpoint 时不阻断流水线，但结果状态仍为 `skipped`。
+5. 新增 `ai-service/app/tests/test_ocr_provider_eval.py`，覆盖 endpoint 缺失 skipped、MinerU 假服务通过、PaddleOCR 缺表格按门槛失败。
+6. `SAMPLE_DOCS_EVALUATION.md` 和 `AI_IMPLEMENTATION_CHECKLIST.md` 同步新增 OCR Provider 验收命令和边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_ocr_provider_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval --provider mineru --allow-skip
+cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval --provider paddleocr --allow-skip
+```
+
+结果：
+
+1. OCR Provider 验收 CLI 单元测试 3 条全部通过。
+2. 当前本地未配置 `MINERU_HTTP_ENDPOINT`，MinerU 验收输出 `skipped provider=mineru passed=1/2`。
+3. 当前本地未配置 `PADDLEOCR_HTTP_ENDPOINT`，PaddleOCR 验收输出 `skipped provider=paddleocr passed=1/2`。
+
+### 偏离蓝图
+
+1. 本轮新增真实 endpoint 验收入口，但当前环境没有 MinerU/PaddleOCR endpoint/key，因此不能宣称真实 Provider 已通过端到端样本。
+2. CLI 默认验证第一页 OCR；多页扫描件、复杂表格、多 Provider 对比评分仍需后续扩展。

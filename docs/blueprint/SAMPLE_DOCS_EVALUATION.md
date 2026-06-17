@@ -50,6 +50,29 @@ cd ai-service
 
 评测会输出 mandatory requirement 覆盖率、source_ref 解析率，并检查已覆盖项是否携带来源。
 
+MinerU / PaddleOCR 真实 Provider 可使用独立 OCR 验收入口。默认会把 `docs/ex/工程1/采购文件桥梁检查.pdf` 第一页渲染为 PNG 后走 OCR Provider，避免只验证 PDF 文本层：
+
+```bash
+cd ai-service
+
+# MinerU：需要配置 MINERU_HTTP_ENDPOINT，可选 MINERU_API_KEY / MINERU_PARSE_MODE / MINERU_POLL_ENDPOINT
+.venv/bin/python -m app.evaluation.ocr_provider_eval \
+  --provider mineru \
+  --min-text-chars 20
+
+# PaddleOCR：需要配置 PADDLEOCR_HTTP_ENDPOINT，可选 PADDLEOCR_API_KEY / PADDLEOCR_PIPELINE / PADDLEOCR_POLL_ENDPOINT
+.venv/bin/python -m app.evaluation.ocr_provider_eval \
+  --provider paddleocr \
+  --min-text-chars 20
+
+# 本地或 CI 没有真实 endpoint 时可允许 skipped，但报告不会伪装成 passed
+.venv/bin/python -m app.evaluation.ocr_provider_eval \
+  --provider mineru \
+  --allow-skip
+```
+
+OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 provider_profile 的 endpoint_env。需要表格或版面块验收时可加 `--min-table-blocks` / `--min-layout-blocks`。
+
 验收覆盖：
 
 1. `采购文件桥梁检查.pdf`：PDF 文本层、页数、表格块、OCR 标记、项目名、截止日、采购人、预算、地点、资格要求、评分项、否决风险、附件/清单要求。

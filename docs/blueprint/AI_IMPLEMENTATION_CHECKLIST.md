@@ -26,6 +26,7 @@
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
 - `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox` 和可用的 `cell_bboxes`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析；OCR 顶层 `tables/table_blocks` 与页级 `pages[].tables` 会合并去重，常见 `cells` 输出会归一成 `rows`、`md_table`、`cell_bboxes` 并进入 chunk 文本。
+- `ai-service/app/evaluation/ocr_provider_eval.py` 已提供 MinerU / PaddleOCR 真实 endpoint 验收入口，默认把工程1采购 PDF 首页渲染成 PNG 后走 OCR Provider；无 endpoint 时输出 `skipped`，不会伪装为通过。
 - `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”和“响应要点”视图，不展示模型、token、schema 等技术口径。
 - `backend/internal/db/migrations/00031_bid_requirement_items.sql` 已新增 `bid_requirement_items` 独立表，按租户启用 RLS，承接 AutoRFP 式 referenceId/source attribution 思路。
 - `backend/internal/platform/bid/store.go` 已在解析回调和人工确认两条路径同步 `requirement_items`，并提供 `ListRequirementItems`。
@@ -115,6 +116,7 @@
    - 当前配置入口：通用 HTTP 使用 `OCR_HTTP_ENDPOINT` / `OCR_API_KEY`；MinerU 使用 `OCR_PROVIDER=mineru`、`MINERU_HTTP_ENDPOINT`、`MINERU_API_KEY`、`MINERU_PARSE_MODE`；PaddleOCR 使用 `OCR_PROVIDER=paddleocr`、`PADDLEOCR_HTTP_ENDPOINT`、`PADDLEOCR_API_KEY`、`PADDLEOCR_PIPELINE`。
    - Provider 不可用时不伪装成功，必须返回 `provider_not_configured` 或 `failed`。
    - 当前已落地异步轮询：初始响应为 202 或 `pending/running/processing` 时，使用响应 `status_url` / `poll_url`、`OCR_POLL_ENDPOINT`、`MINERU_POLL_ENDPOINT` 或 `PADDLEOCR_POLL_ENDPOINT` 轮询；未提供轮询地址时默认请求 `endpoint/{task_id}`。轮询结果归一到 `pages`、`blocks`、`tables`、`markdown`、`layout_blocks`，超时和失败只保存安全摘要。
+   - 当前已落地真实 endpoint 验收命令：`python -m app.evaluation.ocr_provider_eval --provider mineru|paddleocr`，可设置最小文本、表格块和版面块门槛；无 endpoint 时返回 skipped。
    - OCR Provider 只作为可替换插件，不进入主业务 schema 的厂商字段。
 
 3. 页级质量分流：`ai-service/app/pipelines/parse/document_parser.py`
