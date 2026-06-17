@@ -2,10 +2,12 @@ from io import BytesIO
 import urllib.error
 
 import fitz
+import pytest
 from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
 
+from app.pipelines.parse import document_parser
 from app.pipelines.parse.document_parser import _env_int, _extract_pdf_tables, _libreoffice_convert_executable, parse_document
 from app.schemas.knowledge import KnowledgeProcessRequest
 
@@ -319,6 +321,34 @@ def test_xlsx_parser_preserves_uncached_formula_text() -> None:
 
     assert "设备 | 1200" in text
     assert "合计 | =SUM(B2:B3)" in text
+
+
+def test_xlsx_parser_closes_primary_workbook_when_formula_open_fails(monkeypatch) -> None:
+    class FakeWorkbook:
+        worksheets: list[object] = []
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    workbook = FakeWorkbook()
+    calls = 0
+
+    def fake_load_workbook(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return workbook
+        raise RuntimeError("formula workbook open failed")
+
+    monkeypatch.setattr(document_parser, "load_workbook", fake_load_workbook)
+
+    with pytest.raises(RuntimeError, match="formula workbook open failed"):
+        document_parser._parse_xlsx(b"xlsx-bytes")
+
+    assert workbook.closed is True
 
 
 def test_xlsx_parser_stops_at_configured_row_limit(monkeypatch) -> None:

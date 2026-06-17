@@ -371,9 +371,8 @@ def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:
 
 def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
     workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    formula_workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
+    formula_workbook = None
     lines: list[str] = []
-    sheet_count = len(workbook.worksheets)
     max_sheets = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_SHEETS", 20)
     max_rows = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_ROWS_PER_SHEET", 5000)
     max_columns = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_COLUMNS", 80)
@@ -381,6 +380,8 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
     parsed_sheets = 0
     parsed_rows = 0
     try:
+        formula_workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
+        sheet_count = len(workbook.worksheets)
         sheets = workbook.worksheets
         formula_sheets = {sheet.title: sheet for sheet in formula_workbook.worksheets}
         for sheet in sheets[:max_sheets]:
@@ -413,7 +414,8 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
             truncated = True
     finally:
         workbook.close()
-        formula_workbook.close()
+        if formula_workbook is not None:
+            formula_workbook.close()
     return "\n".join(lines), {
         "xlsx_sheet_count": sheet_count,
         "xlsx_parsed_sheet_count": parsed_sheets,
