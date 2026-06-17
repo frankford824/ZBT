@@ -177,10 +177,16 @@ def normalize_minio_endpoint(raw: str, fallback_secure: bool) -> tuple[str, bool
     endpoint = raw.strip()
     if not endpoint:
         raise RuntimeError("MINIO_ENDPOINT is required")
+    if _contains_url_config_unsafe_character(endpoint):
+        raise RuntimeError("MINIO_ENDPOINT contains invalid characters")
     if "://" in endpoint:
         parsed = urlparse(endpoint)
         if not parsed.netloc:
             raise RuntimeError("MINIO_ENDPOINT must include a host")
+        if parsed.username is not None or parsed.password is not None:
+            raise RuntimeError("MINIO_ENDPOINT must not include credentials")
+        if _contains_url_config_unsafe_character(parsed.netloc):
+            raise RuntimeError("MINIO_ENDPOINT contains invalid characters")
         if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
             raise RuntimeError("MINIO_ENDPOINT must not include a path, query, or fragment")
         if parsed.scheme == "http":
@@ -188,9 +194,13 @@ def normalize_minio_endpoint(raw: str, fallback_secure: bool) -> tuple[str, bool
         if parsed.scheme == "https":
             return parsed.netloc, True
         raise RuntimeError("MINIO_ENDPOINT must use http or https")
-    if any(char in endpoint for char in "/?#"):
+    if any(char in endpoint for char in "/?#@"):
         raise RuntimeError("MINIO_ENDPOINT must not include a path, query, or fragment")
     return endpoint, fallback_secure
+
+
+def _contains_url_config_unsafe_character(value: str) -> bool:
+    return "\\" in value or any(ord(char) <= 0x20 or ord(char) == 0x7F for char in value)
 
 
 def env_bool(key: str) -> bool:
@@ -537,9 +547,15 @@ def read_limited_callback_response(response: object) -> bytes:
 
 
 def ensure_callback_url_allowed(callback_url: str) -> None:
+    if callback_url != callback_url.strip() or _contains_url_config_unsafe_character(callback_url):
+        raise RuntimeError("callback_url contains invalid characters")
     parsed = urlparse(callback_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise RuntimeError("callback_url must be an absolute http(s) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise RuntimeError("callback_url must not include credentials")
+    if parsed.fragment:
+        raise RuntimeError("callback_url must not include a fragment")
     host = parsed.hostname.rstrip(".").lower()
     if host not in callback_allowed_hosts():
         raise RuntimeError(f"callback_url host is not allowed: {host}")

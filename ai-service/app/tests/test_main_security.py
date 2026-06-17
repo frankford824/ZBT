@@ -150,6 +150,12 @@ def test_callback_url_rejects_non_http_or_unlisted_hosts(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="absolute http"):
         ensure_callback_url_allowed("file:///etc/passwd")
+    with pytest.raises(RuntimeError, match="credentials"):
+        ensure_callback_url_allowed("http://token@backend:8080/api/v1/ai/callbacks/tasks")
+    with pytest.raises(RuntimeError, match="invalid characters"):
+        ensure_callback_url_allowed("http://backend:8080/api/v1/ai/callbacks/tasks\nX-Injected: yes")
+    with pytest.raises(RuntimeError, match="fragment"):
+        ensure_callback_url_allowed("http://backend:8080/api/v1/ai/callbacks/tasks#secret")
     with pytest.raises(RuntimeError, match="not allowed"):
         ensure_callback_url_allowed("http://169.254.169.254/latest/meta-data")
     with pytest.raises(RuntimeError, match="not allowed"):
@@ -1192,8 +1198,13 @@ def test_normalize_minio_endpoint_rejects_paths_and_unsupported_schemes() -> Non
     for raw in (
         "",
         "ftp://example-account.r2.cloudflarestorage.com",
+        "https://access:secret@example-account.r2.cloudflarestorage.com",
         "https://example-account.r2.cloudflarestorage.com/bucket",
         "minio:9000/bucket",
+        "user:secret@minio:9000",
+        "minio\\9000",
+        "min io:9000",
+        "minio:9000\r\nX-Injected: yes",
         "https://example-account.r2.cloudflarestorage.com?bucket=zbt",
     ):
         with pytest.raises(RuntimeError, match="MINIO_ENDPOINT"):
