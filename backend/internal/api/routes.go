@@ -31,6 +31,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
 	platformtender "github.com/frankford824/ZBT/backend/internal/platform/tender"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type routeSpec struct {
@@ -224,6 +225,8 @@ var routeAdditionalRequirements = map[string][]routeRequirement{
 		{Module: "knowledge", Required: rbac.LevelFull},
 	},
 }
+
+const maxCallbackTaskIDLength = 256
 
 func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
@@ -2083,6 +2086,10 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 		respondBadRequest(c)
 		return
 	}
+	if !normalizeAndValidateCallbackPayload(&payload) {
+		respondBadRequest(c)
+		return
+	}
 	task, err := s.knowledgeStore.GetTaskByExternalID(c.Request.Context(), payload.TenantID, payload.TaskID)
 	if err != nil {
 		respond(c, nil, err)
@@ -2122,6 +2129,30 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 	default:
 		c.JSON(http.StatusBadRequest, apiError("unsupported_callback_resource", "回调资源类型不支持"))
 	}
+}
+
+func normalizeAndValidateCallbackPayload(payload *knowledge.CallbackPayload) bool {
+	payload.TenantID = strings.TrimSpace(payload.TenantID)
+	payload.TaskID = strings.TrimSpace(payload.TaskID)
+	if payload.TenantID == "" || payload.TaskID == "" {
+		return false
+	}
+	if _, err := uuid.Parse(payload.TenantID); err != nil {
+		return false
+	}
+	if len(payload.TaskID) > maxCallbackTaskIDLength {
+		return false
+	}
+	return !hasControlChars(payload.TaskID)
+}
+
+func hasControlChars(value string) bool {
+	for _, ch := range value {
+		if ch < 0x20 || ch == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *server) recordTaskCallback(c *gin.Context, tenantID, taskID string, result map[string]any, status string, errorMessage *string) error {

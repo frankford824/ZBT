@@ -13,6 +13,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
+	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/gin-gonic/gin"
@@ -335,6 +336,54 @@ func TestAITaskAccessModuleMapsResourceTypes(t *testing.T) {
 		if got != tc.want || ok != tc.wantOK {
 			t.Fatalf("expected %q/%q to map to %q, got %q", tc.resourceType, tc.taskType, tc.want, got)
 		}
+	}
+}
+
+func TestNormalizeAndValidateCallbackPayloadAcceptsTrimmedIdentifiers(t *testing.T) {
+	payload := knowledge.CallbackPayload{
+		TenantID: "  8fb82203-6c4f-4d7f-90de-7ab9ce0f0b35  ",
+		TaskID:   "  task-123  ",
+	}
+
+	if !normalizeAndValidateCallbackPayload(&payload) {
+		t.Fatal("expected valid callback identifiers to be accepted")
+	}
+	if payload.TenantID != "8fb82203-6c4f-4d7f-90de-7ab9ce0f0b35" || payload.TaskID != "task-123" {
+		t.Fatalf("expected callback identifiers to be trimmed, got tenant_id=%q task_id=%q", payload.TenantID, payload.TaskID)
+	}
+}
+
+func TestNormalizeAndValidateCallbackPayloadRejectsInvalidTenantID(t *testing.T) {
+	payload := knowledge.CallbackPayload{
+		TenantID: "tenant-1",
+		TaskID:   "task-123",
+	}
+
+	if normalizeAndValidateCallbackPayload(&payload) {
+		t.Fatal("expected invalid tenant UUID to be rejected")
+	}
+}
+
+func TestNormalizeAndValidateCallbackPayloadRejectsUnsafeTaskID(t *testing.T) {
+	for _, taskID := range []string{"", "  ", "task\n123", "task\x7f123"} {
+		payload := knowledge.CallbackPayload{
+			TenantID: "8fb82203-6c4f-4d7f-90de-7ab9ce0f0b35",
+			TaskID:   taskID,
+		}
+		if normalizeAndValidateCallbackPayload(&payload) {
+			t.Fatalf("expected unsafe task id %q to be rejected", taskID)
+		}
+	}
+}
+
+func TestNormalizeAndValidateCallbackPayloadRejectsTooLongTaskID(t *testing.T) {
+	payload := knowledge.CallbackPayload{
+		TenantID: "8fb82203-6c4f-4d7f-90de-7ab9ce0f0b35",
+		TaskID:   strings.Repeat("a", maxCallbackTaskIDLength+1),
+	}
+
+	if normalizeAndValidateCallbackPayload(&payload) {
+		t.Fatal("expected too-long task id to be rejected")
 	}
 }
 
