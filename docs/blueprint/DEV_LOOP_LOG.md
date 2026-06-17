@@ -2865,3 +2865,48 @@ cd ai-service && .venv/bin/python -m pytest app/tests -q -s
 
 1. 本轮只展示最新一次覆盖证据；多章节、多轮生成的覆盖历史仍保留在章节版本 `model_metadata.requirement_coverage`，暂未做历史时间线。
 2. 本轮不新增人工编辑覆盖状态接口，也不新增响应矩阵导出。
+
+## Loop-46 / 评审响应矩阵 CSV 导出 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式响应矩阵的可交付输出，不能只停留在页面展示和 JSON API。
+2. 矩阵导出必须使用业务字段，包含覆盖状态、响应证据、响应来源和招标原文来源。
+3. 导出应走只读权限，不进入 AI 导出队列，也不写文件资产，避免把确定性数据导出变成异步任务。
+
+### 代码交付
+
+1. `backend/internal/api/routes.go` 新增 `GET /bids/:id/requirements/export`，返回带 UTF-8 BOM 的 CSV 文件。
+2. CSV 列包含：来源分组、要求、是否必须响应、优先级、分值、覆盖状态、复核状态、期望响应、响应证据、响应来源数量、响应来源、招标原文来源和更新时间。
+3. `routes_test.go` 新增路由元数据测试和 CSV 内容测试，覆盖只读权限、非异步标记、中文 BOM、证据、来源数量和页码摘要。
+4. `frontend/src/shared/api/client.ts` 新增 Blob 下载方法，并从 `Content-Disposition` 解析中文文件名。
+5. `frontend/src/features/bid/index.tsx` 在“响应要点”页签新增“导出矩阵”按钮。
+6. `AI_IMPLEMENTATION_CHECKLIST.md`、`AI_PIPELINE.md`、`API_SPEC.md` 同步更新当前状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w backend/internal/api/routes.go backend/internal/api/routes_test.go
+cd backend && go test ./internal/api
+pnpm --dir frontend build
+git diff --check
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+```
+
+结果：
+
+1. Go API 专项测试通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过。
+4. Go 后端全量测试通过。
+5. AI 服务完整测试 217 条全部通过。
+6. 工程1 真实样本解析评测 103/103 通过。
+
+### 偏离蓝图
+
+1. 本轮导出 CSV，不生成 xlsx；CSV 使用 UTF-8 BOM 保证主流表格软件可直接打开中文。
+2. 本轮导出当前快照，不包含多轮覆盖历史；覆盖历史仍保留在章节版本元数据中。

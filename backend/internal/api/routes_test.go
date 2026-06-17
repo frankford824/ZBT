@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
 	platformapproval "github.com/frankford824/ZBT/backend/internal/platform/approval"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
+	"github.com/frankford824/ZBT/backend/internal/platform/bid"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
@@ -617,6 +620,80 @@ func TestRouteInfosExposeGenerationCoverageAsReadOnlyBidRoute(t *testing.T) {
 	}
 	if route.Async {
 		t.Fatal("expected generation coverage route to be synchronous read-only export")
+	}
+}
+
+func TestRouteInfosExposeRequirementMatrixExportAsReadOnlyBidRoute(t *testing.T) {
+	route, ok := routeInfoByKey(http.MethodGet, "/bids/:id/requirements/export")
+	if !ok {
+		t.Fatal("expected requirement matrix export route metadata to be present")
+	}
+	if route.Module != "bid" || route.Required != rbac.LevelRead {
+		t.Fatalf("expected requirement matrix export route to require bid read, got %+v", route)
+	}
+	if route.Async {
+		t.Fatal("expected requirement matrix export route to be synchronous read-only export")
+	}
+}
+
+func TestBidRequirementMatrixCSVIncludesCoverageEvidenceAndSources(t *testing.T) {
+	score := 12.5
+	updatedAt := time.Date(2026, 6, 17, 9, 30, 0, 0, time.UTC)
+	body, err := bidRequirementMatrixCSV([]bid.RequirementItem{
+		{
+			Module:           "evaluation",
+			Requirement:      "技术方案需覆盖评分点",
+			Priority:         "high",
+			Mandatory:        true,
+			Score:            &score,
+			ExpectedResponse: "在技术方案章节逐条响应",
+			CoverageStatus:   "covered",
+			NeedsReview:      false,
+			SourceRef: map[string]any{
+				"filename":    "招标文件.pdf",
+				"page_start":  5,
+				"page_end":    6,
+				"source_text": "评分点原文",
+			},
+			Metadata: map[string]any{
+				"latest_coverage": map[string]any{
+					"evidence": "响应了评分点",
+					"source_refs": []any{
+						map[string]any{"title": "技术方案.docx", "page": 3, "source_text": "响应章节"},
+					},
+				},
+			},
+			UpdatedAt: updatedAt,
+		},
+	})
+	if err != nil {
+		t.Fatalf("build requirement matrix csv: %v", err)
+	}
+	if !bytes.HasPrefix(body, []byte{0xEF, 0xBB, 0xBF}) {
+		t.Fatal("expected exported CSV to include UTF-8 BOM for spreadsheet compatibility")
+	}
+	records, err := csv.NewReader(bytes.NewReader(body[3:])).ReadAll()
+	if err != nil {
+		t.Fatalf("read csv: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected header plus one row, got %d rows", len(records))
+	}
+	row := records[1]
+	if row[1] != "评审办法" || row[3] != "是" || row[4] != "高" || row[5] != "12.5" || row[6] != "已覆盖" {
+		t.Fatalf("unexpected requirement summary row: %#v", row)
+	}
+	if row[9] != "响应了评分点" || row[10] != "1" {
+		t.Fatalf("expected coverage evidence and source count, got evidence=%q count=%q", row[9], row[10])
+	}
+	if !strings.Contains(row[11], "技术方案.docx，第3页，摘录：响应章节") {
+		t.Fatalf("expected response source summary, got %q", row[11])
+	}
+	if !strings.Contains(row[12], "招标文件.pdf，第5-6页，摘录：评分点原文") {
+		t.Fatalf("expected tender source summary, got %q", row[12])
+	}
+	if row[13] != "2026-06-17 09:30:00" {
+		t.Fatalf("expected formatted update time, got %q", row[13])
 	}
 }
 

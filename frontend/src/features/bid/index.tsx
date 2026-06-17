@@ -57,6 +57,7 @@ import {
   createBidExport,
   createPresignedUpload,
   deleteBid,
+  exportBidRequirements,
   fetchAITask,
   fetchBidChapters,
   fetchBid,
@@ -749,6 +750,14 @@ export function BidWizardPage() {
     },
     onError: (error) => message.error(getApiErrorMessage(error, '获取下载链接失败')),
   })
+  const requirementExportMutation = useMutation({
+    mutationFn: () => exportBidRequirements(bidId),
+    onSuccess: ({ blob, filename }) => {
+      saveBlobFile(blob, filename)
+      message.success('响应矩阵已导出')
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '导出响应矩阵失败')),
+  })
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
@@ -911,17 +920,28 @@ export function BidWizardPage() {
                       label: '响应要点',
                       children: (
                         <Space orientation="vertical" size={12} className="full-width">
-                          <Segmented
-                            size="small"
-                            value={requirementFilter}
-                            onChange={(value) => setRequirementFilter(value as RequirementFilter)}
-                            options={[
-                              { label: '全部', value: 'all' },
-                              { label: '必须', value: 'mandatory' },
-                              { label: '待确认', value: 'review' },
-                              { label: '已覆盖', value: 'covered' },
-                            ]}
-                          />
+                          <Space wrap align="center">
+                            <Segmented
+                              size="small"
+                              value={requirementFilter}
+                              onChange={(value) => setRequirementFilter(value as RequirementFilter)}
+                              options={[
+                                { label: '全部', value: 'all' },
+                                { label: '必须', value: 'mandatory' },
+                                { label: '待确认', value: 'review' },
+                                { label: '已覆盖', value: 'covered' },
+                              ]}
+                            />
+                            <Button
+                              size="small"
+                              icon={<DownloadOutlined />}
+                              loading={requirementExportMutation.isPending}
+                              disabled={!syncedRequirementRows.length}
+                              onClick={() => requirementExportMutation.mutate()}
+                            >
+                              导出矩阵
+                            </Button>
+                          </Space>
                           <Table
                             size="small"
                             pagination={{ pageSize: 6, size: 'small' }}
@@ -1522,6 +1542,17 @@ function requirementEvidenceCell(row: ParseRequirementRow) {
 
 function latestCoverageFromMetadata(metadata: Record<string, unknown> | undefined) {
   return objectRecord(objectRecord(metadata)?.latest_coverage)
+}
+
+function saveBlobFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 function parseModuleLabel(value: string) {

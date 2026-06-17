@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -125,6 +127,7 @@ var routeSpecs = []routeSpec{
 	{"GET", "/bids/:id/parse-result", "bid", false},
 	{"PUT", "/bids/:id/parse-result", "bid", false},
 	{"GET", "/bids/:id/requirements", "bid", false},
+	{"GET", "/bids/:id/requirements/export", "bid", false},
 	{"GET", "/bids/:id/pipeline-gates", "bid", false},
 	{"POST", "/bids/:id/outline/generate", "bid", true},
 	{"GET", "/bids/:id/parts", "bid", false},
@@ -658,6 +661,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelRead), s.getBidParseResult)
 	group.PUT("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelFull), s.confirmBidParseResult)
 	group.GET("/bids/:id/requirements", rbac.Require("bid", rbac.LevelRead), s.listBidRequirements)
+	group.GET("/bids/:id/requirements/export", rbac.Require("bid", rbac.LevelRead), s.exportBidRequirements)
 	group.GET("/bids/:id/pipeline-gates", rbac.Require("bid", rbac.LevelRead), s.listBidPipelineGates)
 	group.POST("/bids/:id/outline/generate", rbac.Require("bid", rbac.LevelFull), s.generateBidOutline)
 	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
@@ -804,6 +808,7 @@ func customRouteSet() map[string]bool {
 		"GET /bids/:id/parse-result":                   true,
 		"PUT /bids/:id/parse-result":                   true,
 		"GET /bids/:id/requirements":                   true,
+		"GET /bids/:id/requirements/export":            true,
 		"GET /bids/:id/pipeline-gates":                 true,
 		"POST /bids/:id/outline/generate":              true,
 		"GET /bids/:id/parts":                          true,
@@ -1717,6 +1722,256 @@ func (s *server) confirmBidParseResult(c *gin.Context) {
 func (s *server) listBidRequirements(c *gin.Context) {
 	result, err := s.bidStore.ListRequirementItems(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) exportBidRequirements(c *gin.Context) {
+	items, err := s.bidStore.ListRequirementItems(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	body, err := bidRequirementMatrixCSV(items)
+	if err != nil {
+		respondInternal(c)
+		return
+	}
+	filename := "响应矩阵-" + time.Now().Format("20060102-150405") + ".csv"
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="requirements.csv"; filename*=UTF-8''`+url.PathEscape(filename))
+	c.Header("Cache-Control", "no-store")
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", body)
+}
+
+func bidRequirementMatrixCSV(items []bid.RequirementItem) ([]byte, error) {
+	var buffer bytes.Buffer
+	buffer.Write([]byte{0xEF, 0xBB, 0xBF})
+	writer := csv.NewWriter(&buffer)
+	if err := writer.Write([]string{
+		"序号",
+		"来源分组",
+		"要求",
+		"是否必须响应",
+		"优先级",
+		"分值",
+		"覆盖状态",
+		"复核状态",
+		"期望响应",
+		"响应证据",
+		"响应来源数量",
+		"响应来源",
+		"招标原文来源",
+		"更新时间",
+	}); err != nil {
+		return nil, err
+	}
+	for index, item := range items {
+		latestCoverage := mapFromCSVAny(mapFromCSVAny(item.Metadata)["latest_coverage"])
+		coverageSourceRefs := sourceRefsFromCSVRecord(latestCoverage)
+		if err := writer.Write([]string{
+			strconv.Itoa(index + 1),
+			csvModuleLabel(item.Module),
+			compactCSVCell(item.Requirement),
+			csvBoolLabel(item.Mandatory),
+			csvPriorityLabel(item.Priority),
+			csvScoreLabel(item.Score),
+			csvCoverageLabel(item.CoverageStatus),
+			csvReviewLabel(item.NeedsReview),
+			compactCSVCell(item.ExpectedResponse),
+			compactCSVCell(formatCSVValue(latestCoverage["evidence"])),
+			strconv.Itoa(len(coverageSourceRefs)),
+			compactCSVCell(csvSourceRefsSummary(coverageSourceRefs)),
+			compactCSVCell(csvSourceRefSummary(item.SourceRef)),
+			item.UpdatedAt.Format("2006-01-02 15:04:05"),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	writer.Flush()
+	return buffer.Bytes(), writer.Error()
+}
+
+func sourceRefsFromCSVRecord(record map[string]any) []any {
+	sourceRefs := sliceFromCSVAny(record["source_refs"])
+	if len(sourceRefs) > 0 {
+		return sourceRefs
+	}
+	if sourceRef := mapFromCSVAny(record["source_ref"]); len(sourceRef) > 0 {
+		return []any{sourceRef}
+	}
+	return nil
+}
+
+func csvSourceRefsSummary(values []any) string {
+	summaries := make([]string, 0, len(values))
+	for _, value := range values {
+		if summary := csvSourceRefSummary(value); summary != "" {
+			summaries = append(summaries, summary)
+		}
+	}
+	return strings.Join(summaries, "；")
+}
+
+func csvSourceRefSummary(value any) string {
+	record := mapFromCSVAny(value)
+	if len(record) == 0 {
+		return formatCSVValue(value)
+	}
+	parts := []string{}
+	if title := firstCSVString(record, "filename", "file_name", "document_title", "title", "name"); title != "" {
+		parts = append(parts, title)
+	}
+	if page := csvPageLabel(record); page != "" {
+		parts = append(parts, page)
+	}
+	if excerpt := firstCSVString(record, "source_text", "excerpt", "quote", "text", "content"); excerpt != "" {
+		parts = append(parts, "摘录："+excerpt)
+	}
+	return strings.Join(parts, "，")
+}
+
+func firstCSVString(record map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := compactCSVCell(formatCSVValue(record[key])); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func csvPageLabel(record map[string]any) string {
+	start := firstCSVString(record, "page_start", "page", "page_number")
+	end := firstCSVString(record, "page_end")
+	if start == "" {
+		return ""
+	}
+	if end != "" && end != start {
+		return "第" + start + "-" + end + "页"
+	}
+	return "第" + start + "页"
+}
+
+func formatCSVValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	case bool:
+		if typed {
+			return "是"
+		}
+		return "否"
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case json.Number:
+		return typed.String()
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := compactCSVCell(formatCSVValue(item)); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "；")
+	case map[string]any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := compactCSVCell(formatCSVValue(item)); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "；")
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
+}
+
+func mapFromCSVAny(value any) map[string]any {
+	if record, ok := value.(map[string]any); ok {
+		return record
+	}
+	return map[string]any{}
+}
+
+func sliceFromCSVAny(value any) []any {
+	if items, ok := value.([]any); ok {
+		return items
+	}
+	return nil
+}
+
+func compactCSVCell(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func csvBoolLabel(value bool) string {
+	if value {
+		return "是"
+	}
+	return "否"
+}
+
+func csvReviewLabel(value bool) string {
+	if value {
+		return "待复核"
+	}
+	return "可确认"
+}
+
+func csvScoreLabel(value *float64) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatFloat(*value, 'f', -1, 64)
+}
+
+func csvModuleLabel(value string) string {
+	labels := map[string]string{
+		"basic":         "基础信息",
+		"qualification": "资格要求",
+		"evaluation":    "评审办法",
+		"submission":    "递交要求",
+		"invalid_risk":  "否决风险",
+		"annex":         "附件格式",
+	}
+	if label, ok := labels[value]; ok {
+		return label
+	}
+	return "其他信息"
+}
+
+func csvPriorityLabel(value string) string {
+	switch value {
+	case "high":
+		return "高"
+	case "medium":
+		return "中"
+	case "low":
+		return "低"
+	default:
+		return "未确认"
+	}
+}
+
+func csvCoverageLabel(value string) string {
+	switch value {
+	case "covered":
+		return "已覆盖"
+	case "planned":
+		return "已规划"
+	case "needs_review":
+		return "待复核"
+	default:
+		return "未确认"
+	}
 }
 
 func (s *server) listBidPipelineGates(c *gin.Context) {

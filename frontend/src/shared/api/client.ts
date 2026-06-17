@@ -1672,6 +1672,28 @@ export async function fetchBidRequirements(bidId: string): Promise<BidRequiremen
   return data.items
 }
 
+export async function exportBidRequirements(bidId: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await apiClient.get<Blob>(`/bids/${bidId}/requirements/export`, { responseType: 'blob' })
+  return {
+    blob: response.data,
+    filename: filenameFromContentDisposition(response.headers['content-disposition']) || `响应矩阵-${bidId}.csv`,
+  }
+}
+
+function filenameFromContentDisposition(value: unknown): string {
+  const text = Array.isArray(value) ? String(value[0] || '') : String(value || '')
+  const encodedMatch = text.match(/filename\*=UTF-8''([^;]+)/i)
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1])
+    } catch {
+      return encodedMatch[1]
+    }
+  }
+  const filenameMatch = text.match(/filename="?([^";]+)"?/i)
+  return filenameMatch?.[1] ?? ''
+}
+
 export async function fetchBidPipelineGates(bidId: string): Promise<BidPipelineGateDTO[]> {
   const { data } = await apiClient.get<{ items: BidPipelineGateDTO[] }>(`/bids/${bidId}/pipeline-gates`)
   return data.items
