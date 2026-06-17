@@ -636,6 +636,19 @@ func TestRouteInfosExposeRequirementMatrixExportAsReadOnlyBidRoute(t *testing.T)
 	}
 }
 
+func TestRouteInfosExposeRequirementCoverageHistoryAsReadOnlyBidRoute(t *testing.T) {
+	route, ok := routeInfoByKey(http.MethodGet, "/bids/:id/requirements/:requirementId/history")
+	if !ok {
+		t.Fatal("expected requirement coverage history route metadata to be present")
+	}
+	if route.Module != "bid" || route.Required != rbac.LevelRead {
+		t.Fatalf("expected requirement coverage history route to require bid read, got %+v", route)
+	}
+	if route.Async {
+		t.Fatal("expected requirement coverage history route to be synchronous")
+	}
+}
+
 func TestRouteInfosExposeRequirementCoverageUpdateAsBidWriteRoute(t *testing.T) {
 	route, ok := routeInfoByKey(http.MethodPatch, "/bids/:id/requirements/:requirementId")
 	if !ok {

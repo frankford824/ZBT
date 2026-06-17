@@ -1111,6 +1111,11 @@ a {
   white-space: nowrap;
 }
 
+.requirement-history-evidence {
+  margin-bottom: 0 !important;
+  white-space: pre-wrap;
+}
+
 /* ---------- 版本对比 ---------- */
 
 .diff-grid {

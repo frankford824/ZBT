@@ -2990,3 +2990,49 @@ git diff --check
 
 1. 本轮只固化调研和接入清单，不实现 MCP client。
 2. 真实外部 MCP 接入必须先补租户配置、工具白名单、脱敏策略和审计表后再进入业务界面。
+
+## Loop-49 / 响应覆盖历史时间线 - 2026-06-17
+
+### 本轮目标
+
+1. 把 AutoRFP 式要求矩阵从“当前覆盖快照”推进到“模型/人工多轮覆盖历史可追溯”。
+2. 覆盖历史必须落库、启用 RLS，并保留响应证据、响应来源、章节和操作人信息。
+3. 前端只展示业务口径的响应历史，不暴露模型、token、provider、schema 等技术字段。
+
+### 代码交付
+
+1. 新增 `backend/internal/db/migrations/00033_bid_requirement_coverage_events.sql`，创建 `bid_requirement_coverage_events` RLS 表，记录模型回写和人工调整事件。
+2. `backend/internal/platform/bid/store.go` 在章节生成覆盖回写和人工调整覆盖状态时追加覆盖历史，并新增 `ListRequirementCoverageEvents()` 查询最近 50 条历史。
+3. `backend/internal/api/routes.go` 新增 `GET /bids/:id/requirements/:requirementId/history`，只读权限、同步接口，并加入自定义路由白名单。
+4. `frontend/src/shared/api/client.ts` 新增覆盖历史 DTO 和读取接口，路径参数使用 `encodeURIComponent` 防止外部要求编号包含特殊字符。
+5. `frontend/src/features/bid/index.tsx` 在“响应要点”表新增“历史”入口，弹窗按时间线展示覆盖状态、人工/自动来源、响应证据和响应来源摘要；打开新要求项时清理旧请求状态，避免历史缓存错显。
+6. `frontend/src/index.css` 增加历史证据换行样式。
+7. `API_SPEC.md`、`DATABASE_SCHEMA.md`、`AI_PIPELINE.md`、`AI_IMPLEMENTATION_CHECKLIST.md` 同步更新当前链路。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w backend/internal/platform/bid/store.go backend/internal/platform/bid/store_test.go backend/internal/api/routes.go backend/internal/api/routes_test.go
+cd backend && go test ./internal/platform/bid ./internal/api
+pnpm --dir frontend build
+git diff --check
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+```
+
+结果：
+
+1. Go bid/API 专项测试通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过。
+4. Go 后端全量测试通过。
+5. AI 服务完整测试 217 条全部通过。
+6. 工程1 真实样本解析评测 103/103 通过。
+
+### 偏离蓝图
+
+1. 本轮补齐单条要求的覆盖历史时间线；暂未提供跨要求批量审阅、按操作者/章节筛选和历史 xlsx 导出。
+2. 历史项保存响应来源摘要和原始 `source_refs`，但前端尚未支持点击跳转到原文精确选区或知识库 chunk。

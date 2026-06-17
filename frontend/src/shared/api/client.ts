@@ -838,6 +838,22 @@ export type BidRequirementItemDTO = {
   updated_at: string
 }
 
+export type BidRequirementCoverageEventDTO = {
+  id: string
+  bid_document_id: string
+  requirement_item_id: string
+  requirement_external_id: string
+  chapter_id: string | null
+  actor_user_id: string | null
+  source: 'model' | 'manual' | 'system'
+  coverage_status: BidRequirementItemDTO['coverage_status']
+  needs_review: boolean
+  evidence: string
+  source_refs: unknown[]
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export type BidPipelineGateDTO = {
   id: string
   bid_document_id: string
@@ -1689,8 +1705,21 @@ export async function updateBidRequirementCoverage(
     source_refs?: unknown[]
   },
 ): Promise<BidRequirementItemDTO> {
-  const { data } = await apiClient.patch<BidRequirementItemDTO>(`/bids/${bidId}/requirements/${requirementId}`, payload)
+  const { data } = await apiClient.patch<BidRequirementItemDTO>(
+    `/bids/${encodeURIComponent(bidId)}/requirements/${encodeURIComponent(requirementId)}`,
+    payload,
+  )
   return data
+}
+
+export async function fetchBidRequirementCoverageHistory(
+  bidId: string,
+  requirementId: string,
+): Promise<BidRequirementCoverageEventDTO[]> {
+  const { data } = await apiClient.get<{ items: BidRequirementCoverageEventDTO[] }>(
+    `/bids/${encodeURIComponent(bidId)}/requirements/${encodeURIComponent(requirementId)}/history`,
+  )
+  return data.items
 }
 
 function filenameFromContentDisposition(value: unknown): string {

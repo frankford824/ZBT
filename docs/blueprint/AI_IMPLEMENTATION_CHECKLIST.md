@@ -14,7 +14,7 @@
 
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测，仍需要继续做前端字段级编辑确认。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标和统一 `table_blocks`；仍缺少真实 OCR Provider 配置和样本回归评测。
-3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，并可导出评审响应矩阵 CSV；仍需继续补覆盖历史。
+3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV；仍需继续补历史批量审阅和带历史的 xlsx 导出。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考，不能绕过租户授权、脱敏、审计和成本核算。
 
@@ -34,6 +34,7 @@
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”筛选。
 - 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
 - `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements/:requirementId`，可人工调整单条要求覆盖状态并补充响应证据；人工结果写入 `metadata.latest_coverage` 和 `metadata.manual_coverage`，不覆盖招标原文 `source_ref`。
+- `backend/internal/db/migrations/00033_bid_requirement_coverage_events.sql` 已新增 `bid_requirement_coverage_events` RLS 表；模型回写和人工调整都会追加覆盖历史，`GET /bids/:id/requirements/:requirementId/history` 可按单条要求读取最近历史，前端“响应要点”表提供历史弹窗。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements/export`，前端“响应要点”页可导出 UTF-8 CSV 响应矩阵，包含模块、要求、强制性、分值、覆盖状态、复核状态、期望响应、响应证据、响应来源数量、响应来源、招标原文来源和更新时间。
 - `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 103 项检查。
 - `backend/internal/db/migrations/00032_bid_pipeline_gates.sql` 已新增 `bid_pipeline_gates` RLS 表。
@@ -163,7 +164,7 @@
    - 任一生成章节能追溯到对应 requirement_items。
    - 无引用的事实性段落进入 `needs_human_input`。
    - 前端能按“未覆盖/部分覆盖/已覆盖”过滤招标要求。
-   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”筛选，并在响应要点表展示响应证据和来源数量；`PATCH /bids/:id/requirements/:requirementId` 可人工调整覆盖状态和证据；`GET /bids/:id/requirements/export` 可下载评审响应矩阵 CSV。
+   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”筛选，并在响应要点表展示响应证据和来源数量；`PATCH /bids/:id/requirements/:requirementId` 可人工调整覆盖状态和证据；`GET /bids/:id/requirements/:requirementId/history` 可读取单条要求覆盖历史；`GET /bids/:id/requirements/export` 可下载评审响应矩阵 CSV。
 
 ## P1：Skill Pipeline 和阶段闸门
 

@@ -538,6 +538,18 @@ func TestManualRequirementCoverageMetadataRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+func TestNullableUUIDTextOnlyAllowsValidUUID(t *testing.T) {
+	valid := "52000000-0000-4000-8000-000000000001"
+	if got := nullableUUIDText(" " + valid + " "); got != valid {
+		t.Fatalf("expected valid UUID to be preserved, got %q", got)
+	}
+	for _, value := range []string{"", "user-1", "not-a-uuid"} {
+		if got := nullableUUIDText(value); got != "" {
+			t.Fatalf("expected invalid UUID %q to be cleared, got %q", value, got)
+		}
+	}
+}
+
 func TestBuildGenerationCoverageSpecUsesEvaluatorContract(t *testing.T) {
 	score := 12.5
 	coverage := []any{

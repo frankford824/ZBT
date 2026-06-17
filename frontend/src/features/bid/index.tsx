@@ -68,6 +68,7 @@ import {
   fetchBidMaterialSelection,
   fetchBidParseResult,
   fetchBidParts,
+  fetchBidRequirementCoverageHistory,
   fetchBidRequirements,
   fetchBidTemplates,
   fetchBids,
@@ -96,6 +97,7 @@ import {
   type BidExportDTO,
   type BidGenerationJobDTO,
   type BidGenerationSnapshotDTO,
+  type BidRequirementCoverageEventDTO,
   type BidRequirementItemDTO,
   type BidTemplateDTO,
 } from '../../shared/api/client'
@@ -494,6 +496,7 @@ export function BidWizardPage() {
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
   const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>('all')
+  const [historyRequirement, setHistoryRequirement] = useState<ParseRequirementRow | null>(null)
   const bid = useQuery({
     queryKey: ['bid', bidId],
     queryFn: () => fetchBid(bidId),
@@ -776,9 +779,19 @@ export function BidWizardPage() {
     },
     onError: (error) => message.error(getApiErrorMessage(error, '更新响应状态失败')),
   })
+  const requirementHistoryMutation = useMutation({
+    mutationFn: (requirementId: string) => fetchBidRequirementCoverageHistory(bidId, requirementId),
+    onError: (error) => message.error(getApiErrorMessage(error, '获取响应历史失败')),
+  })
   const updateRequirementStatus = (row: ParseRequirementRow, coverageStatus: BidRequirementItemDTO['coverage_status']) => {
     if (!row.canUpdate) return
     requirementCoverageMutation.mutate({ requirementId: row.id, coverageStatus })
+  }
+  const openRequirementHistory = (row: ParseRequirementRow) => {
+    if (!row.canUpdate) return
+    setHistoryRequirement(row)
+    requirementHistoryMutation.reset()
+    requirementHistoryMutation.mutate(row.id)
   }
   const openRequirementEvidenceModal = (row: ParseRequirementRow) => {
     if (!row.canUpdate) return
@@ -1041,6 +1054,23 @@ export function BidWizardPage() {
                                     {row.needsReview ? <Tag color="gold">待确认</Tag> : null}
                                   </Space>
                                 ),
+                              },
+                              {
+                                title: '历史',
+                                width: 80,
+                                render: (_, row) =>
+                                  row.canUpdate ? (
+                                    <Button
+                                      size="small"
+                                      type="link"
+                                      loading={requirementHistoryMutation.isPending && historyRequirement?.id === row.id}
+                                      onClick={() => openRequirementHistory(row)}
+                                    >
+                                      查看
+                                    </Button>
+                                  ) : (
+                                    <Typography.Text type="secondary">-</Typography.Text>
+                                  ),
                               },
                             ]}
                           />
@@ -1347,6 +1377,34 @@ export function BidWizardPage() {
           ) : null}
         </Card>
       </Space>
+      <Modal
+        title="响应历史"
+        open={Boolean(historyRequirement)}
+        footer={null}
+        width={720}
+        onCancel={() => {
+          setHistoryRequirement(null)
+          requirementHistoryMutation.reset()
+        }}
+      >
+        {historyRequirement ? (
+          <Space orientation="vertical" size={12} className="full-width">
+            <Typography.Text strong>{historyRequirement.requirement}</Typography.Text>
+            {requirementHistoryMutation.isPending ? (
+              <LoadingBlock />
+            ) : requirementHistoryMutation.data?.length ? (
+              <Timeline
+                items={requirementHistoryMutation.data.map((event) => ({
+                  color: requirementCoverageTimelineColor(event.coverage_status),
+                  children: requirementHistoryTimelineItem(event),
+                }))}
+              />
+            ) : (
+              <EmptyBlock description="暂无响应历史" />
+            )}
+          </Space>
+        ) : null}
+      </Modal>
     </PageFrame>
   )
 }
@@ -1588,6 +1646,60 @@ function requirementCoverageTag(value: BidRequirementItemDTO['coverage_status'])
   if (value === 'planned') return <Tag color="blue">已规划</Tag>
   if (value === 'needs_review') return <Tag color="gold">待复核</Tag>
   return <Tag>未确认</Tag>
+}
+
+function requirementCoverageTimelineColor(value: BidRequirementItemDTO['coverage_status']) {
+  if (value === 'covered') return 'green'
+  if (value === 'planned') return 'blue'
+  if (value === 'needs_review') return 'orange'
+  return 'gray'
+}
+
+function requirementHistoryTimelineItem(event: BidRequirementCoverageEventDTO) {
+  const sourceRefs = arrayValue(event.source_refs)
+  const sourceSummary = requirementSourceRefsSummary(sourceRefs)
+  return (
+    <Space orientation="vertical" size={4} className="full-width">
+      <Space size={6} wrap>
+        {requirementCoverageTag(event.coverage_status)}
+        <Tag>{requirementEventSourceLabel(event.source)}</Tag>
+        {event.needs_review ? <Tag color="gold">待确认</Tag> : null}
+        <Typography.Text type="secondary">{formatDateTime(event.created_at)}</Typography.Text>
+      </Space>
+      {event.evidence.trim() ? (
+        <Typography.Paragraph className="requirement-history-evidence">{event.evidence}</Typography.Paragraph>
+      ) : (
+        <Typography.Text type="secondary">未填写响应证据</Typography.Text>
+      )}
+      {sourceRefs.length ? (
+        <Typography.Text type="secondary">
+          来源 {sourceRefs.length} 处{sourceSummary ? `：${sourceSummary}` : ''}
+        </Typography.Text>
+      ) : (
+        <Typography.Text type="secondary">未关联响应来源</Typography.Text>
+      )}
+    </Space>
+  )
+}
+
+function requirementEventSourceLabel(value: BidRequirementCoverageEventDTO['source']) {
+  if (value === 'manual') return '人工调整'
+  if (value === 'model') return '自动生成'
+  return '系统记录'
+}
+
+function requirementSourceRefsSummary(sourceRefs: unknown[]) {
+  return sourceRefs
+    .map((ref) => {
+      const record = objectRecord(ref)
+      if (!record) return ''
+      const title = String(record.title || record.filename || record.document_title || '响应来源')
+      const page = String(record.page || record.page_start || '').trim()
+      const excerpt = formatStructuredValue(record.source_text || record.excerpt || record.text)
+      return [title, page ? `第${page}页` : '', excerpt ? `摘录：${excerpt}` : ''].filter(Boolean).join('，')
+    })
+    .filter(Boolean)
+    .join('；')
 }
 
 const requirementCoverageOptions = [

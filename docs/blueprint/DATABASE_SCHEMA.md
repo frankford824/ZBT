@@ -28,11 +28,13 @@ projects、project_milestones、project_members、project_logs。
 
 ## 标书
 
-bid_documents、bid_tender_files、bid_parse_results、bid_parts、bid_chapters、bid_chapter_versions、bid_generation_jobs、bid_generation_steps、bid_material_selections、bid_exports、bid_templates。
+bid_documents、bid_tender_files、bid_parse_results、bid_requirement_items、bid_requirement_coverage_events、bid_parts、bid_chapters、bid_chapter_versions、bid_generation_jobs、bid_generation_steps、bid_material_selections、bid_exports、bid_templates。
 
 标书类型：combined、separated、custom。bid_parts 支持 combined_body、tech、business、boq、attachment。
 
 `bid_tender_files` 关联已确认的 `file_assets`，记录某份标书当前使用的招标文件并支持 superseded 状态。`bid_parse_results` 保存招标文件结构化解析结果、解析状态、确认人和确认时间，当前用于资格要求、废标风险、评分点、目录建议和素材建议。`bid_material_selections` 保存用户确认后的素材勾选结果和备注，供后续逐章生成检索知识库时读取。
+
+`bid_requirement_items` 保存 AutoRFP 式要求矩阵，`external_id` 对应解析侧 referenceId，`source_ref` 保存招标原文来源，`coverage_status` / `needs_review` 保存当前响应覆盖状态，`metadata.latest_coverage` 保存最新响应证据。`bid_requirement_coverage_events` 保存每次模型回写或人工调整的覆盖历史，包含来源类型、覆盖状态、响应证据、响应来源、章节和操作人，并启用 RLS。
 
 `bid_generation_jobs` 保存整标、分册或指定章节生成任务，状态为 queued / running / paused / done / failed / cancelled，记录 progress、total_steps、completed_steps、failed_steps、trace_id 和 token 汇总。`bid_generation_steps` 保存每章独立 step，关联 `bid_chapters` 和 `ai_tasks`；Go 每次只派发一个 running step，章节回调完成后刷新 job 进度并按状态继续派发下一章。
 

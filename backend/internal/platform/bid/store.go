@@ -404,6 +404,22 @@ type RequirementItem struct {
 	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
+type RequirementCoverageEvent struct {
+	ID                    string         `json:"id"`
+	BidDocumentID         string         `json:"bid_document_id"`
+	RequirementItemID     string         `json:"requirement_item_id"`
+	RequirementExternalID string         `json:"requirement_external_id"`
+	ChapterID             *string        `json:"chapter_id"`
+	ActorUserID           *string        `json:"actor_user_id"`
+	Source                string         `json:"source"`
+	CoverageStatus        string         `json:"coverage_status"`
+	NeedsReview           bool           `json:"needs_review"`
+	Evidence              string         `json:"evidence"`
+	SourceRefs            []any          `json:"source_refs"`
+	Metadata              map[string]any `json:"metadata"`
+	CreatedAt             time.Time      `json:"created_at"`
+}
+
 type UpdateRequirementCoverageRequest struct {
 	CoverageStatus string `json:"coverage_status"`
 	Evidence       string `json:"evidence"`
@@ -1168,11 +1184,73 @@ func (s *Store) UpdateRequirementCoverage(ctx context.Context, tenantID, userID,
 		if err != nil {
 			return err
 		}
+		if err := insertRequirementCoverageEvent(ctx, tx, tenantID, bidID, item.ID, item.ExternalID, "", userID, "manual", status, needsReview, coverageMetadata); err != nil {
+			return err
+		}
 		result = item
 		return nil
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RequirementItem{}, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) ListRequirementCoverageEvents(ctx context.Context, tenantID, bidID, requirementID string) ([]RequirementCoverageEvent, error) {
+	bidID = strings.TrimSpace(bidID)
+	requirementID = strings.TrimSpace(requirementID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return nil, ErrInvalidRequest
+	}
+	if requirementID == "" {
+		return nil, ErrInvalidRequest
+	}
+	var result []RequirementCoverageEvent
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		var requirementItemID string
+		if err := tx.QueryRow(ctx, `
+			select id::text
+			from bid_requirement_items
+			where tenant_id = $1
+				and bid_document_id = $2
+				and (id::text = $3 or external_id = $3)
+		`, tenantID, bidID, requirementID).Scan(&requirementItemID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `
+			select id::text, bid_document_id::text, requirement_item_id::text, requirement_external_id,
+				chapter_id::text, actor_user_id::text, source, coverage_status, needs_review,
+				evidence, source_refs, metadata, created_at
+			from bid_requirement_coverage_events
+			where tenant_id = $1
+				and bid_document_id = $2
+				and requirement_item_id = $3::uuid
+			order by created_at desc, id desc
+			limit 50
+		`, tenantID, bidID, requirementItemID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		events := []RequirementCoverageEvent{}
+		for rows.Next() {
+			event, err := scanRequirementCoverageEvent(rows)
+			if err != nil {
+				return err
+			}
+			events = append(events, event)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		result = events
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
 	}
 	return result, err
 }
@@ -4292,7 +4370,8 @@ func syncRequirementCoverageStatuses(
 			coverageMetadata["source_refs"] = []any{sourceRef}
 		}
 		metadataJSON, _ := json.Marshal(coverageMetadata)
-		if _, err := tx.Exec(ctx, `
+		var requirementItemID, requirementExternalID string
+		if err := tx.QueryRow(ctx, `
 			update bid_requirement_items
 			set coverage_status = $4,
 				needs_review = $5,
@@ -4301,7 +4380,14 @@ func syncRequirementCoverageStatuses(
 			where tenant_id = $1
 				and bid_document_id = $2
 				and (external_id = $3 or id::text = $3)
-		`, tenantID, bidID, requirementID, status, needsReview, metadataJSON); err != nil {
+			returning id::text, external_id
+		`, tenantID, bidID, requirementID, status, needsReview, metadataJSON).Scan(&requirementItemID, &requirementExternalID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return err
+		}
+		if err := insertRequirementCoverageEvent(ctx, tx, tenantID, bidID, requirementItemID, requirementExternalID, chapterID, "", "model", status, needsReview, coverageMetadata); err != nil {
 			return err
 		}
 	}
@@ -4371,6 +4457,52 @@ func manualRequirementCoverageMetadata(requirementID, userID string, req UpdateR
 		metadata["source_refs"] = req.SourceRefs
 	}
 	return status, needsReview, metadata, nil
+}
+
+func insertRequirementCoverageEvent(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantID string,
+	bidID string,
+	requirementItemID string,
+	requirementExternalID string,
+	chapterID string,
+	actorUserID string,
+	source string,
+	status string,
+	needsReview bool,
+	coverageMetadata map[string]any,
+) error {
+	evidence := strings.TrimSpace(asString(coverageMetadata["evidence"]))
+	sourceRefs := anySlice(coverageMetadata["source_refs"])
+	sourceRefsRaw, _ := json.Marshal(sourceRefs)
+	metadataRaw, _ := json.Marshal(coverageMetadata)
+	_, err := tx.Exec(ctx, `
+		insert into bid_requirement_coverage_events (
+			tenant_id, bid_document_id, requirement_item_id, requirement_external_id,
+			chapter_id, actor_user_id, source, coverage_status, needs_review,
+			evidence, source_refs, metadata
+		)
+		values (
+			$1, $2, $3::uuid, $4,
+			nullif($5, '')::uuid, nullif($6, '')::uuid, $7, $8, $9,
+			$10, $11::jsonb, $12::jsonb
+		)
+	`, tenantID, bidID, requirementItemID, requirementExternalID,
+		nullableUUIDText(chapterID), nullableUUIDText(actorUserID), source, status, needsReview,
+		evidence, sourceRefsRaw, metadataRaw)
+	return err
+}
+
+func nullableUUIDText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if _, err := uuid.Parse(value); err != nil {
+		return ""
+	}
+	return value
 }
 
 func boolValue(value any) (bool, bool) {
@@ -5638,6 +5770,28 @@ func scanRequirementItem(row scanner) (RequirementItem, error) {
 	item.Metadata = map[string]any{}
 	_ = json.Unmarshal(metadataRaw, &item.Metadata)
 	return item, err
+}
+
+func scanRequirementCoverageEvent(row scanner) (RequirementCoverageEvent, error) {
+	var event RequirementCoverageEvent
+	var chapterID, actorUserID sql.NullString
+	var sourceRefsRaw, metadataRaw []byte
+	err := row.Scan(
+		&event.ID, &event.BidDocumentID, &event.RequirementItemID, &event.RequirementExternalID,
+		&chapterID, &actorUserID, &event.Source, &event.CoverageStatus, &event.NeedsReview,
+		&event.Evidence, &sourceRefsRaw, &metadataRaw, &event.CreatedAt,
+	)
+	if chapterID.Valid {
+		event.ChapterID = &chapterID.String
+	}
+	if actorUserID.Valid {
+		event.ActorUserID = &actorUserID.String
+	}
+	event.SourceRefs = []any{}
+	_ = json.Unmarshal(sourceRefsRaw, &event.SourceRefs)
+	event.Metadata = map[string]any{}
+	_ = json.Unmarshal(metadataRaw, &event.Metadata)
+	return event, err
 }
 
 func scanPipelineGate(row scanner) (PipelineGate, error) {
