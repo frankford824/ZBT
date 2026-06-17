@@ -56,11 +56,12 @@ type UpdateMemberRequest struct {
 }
 
 type Session struct {
-	User        User                  `json:"user"`
-	Tenant      Tenant                `json:"tenant"`
-	Role        Role                  `json:"role"`
-	Roles       []Role                `json:"roles"`
-	Permissions map[string]rbac.Level `json:"permissions"`
+	User             User                  `json:"user"`
+	Tenant           Tenant                `json:"tenant"`
+	Role             Role                  `json:"role"`
+	Roles            []Role                `json:"roles"`
+	Permissions      map[string]rbac.Level `json:"permissions"`
+	SessionRevokedAt *time.Time            `json:"-"`
 }
 
 type RegisterRequest struct {
@@ -217,6 +218,7 @@ func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID 
 				u.id::text, u.email, u.name,
 				t.id::text, t.name,
 				tm.id::text,
+				tm.session_revoked_at,
 				r.id::text, r.code, r.name
 			from users u
 			join tenant_members tm on tm.user_id = u.id
@@ -232,6 +234,7 @@ func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID 
 			&session.User.ID, &session.User.Email, &session.User.Name,
 			&session.Tenant.ID, &session.Tenant.Name,
 			&memberID,
+			&session.SessionRevokedAt,
 			&session.Role.ID, &session.Role.Code, &session.Role.Name,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -253,6 +256,34 @@ func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID 
 		return nil
 	})
 	return session, err
+}
+
+func (s *Store) RevokeUserSessions(ctx context.Context, tenantID, userID string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	userID = strings.TrimSpace(userID)
+	if tenantID == "" || userID == "" {
+		return ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(tenantID); err != nil {
+		return ErrInvalidRequest
+	}
+	if _, err := uuid.Parse(userID); err != nil {
+		return ErrInvalidRequest
+	}
+	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			update tenant_members
+			set session_revoked_at = clock_timestamp(), updated_at = now()
+			where tenant_id = $1 and user_id = $2
+		`, tenantID, userID)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (s *Store) GetTenant(ctx context.Context, tenantID string) (Tenant, error) {

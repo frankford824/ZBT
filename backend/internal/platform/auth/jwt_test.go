@@ -9,13 +9,16 @@ import (
 )
 
 func TestJWTSignParseAndReject(t *testing.T) {
+	issuedAt := time.Now()
 	token, err := SignJWT("secret", Claims{
-		UserID:    "user-1",
-		TenantID:  "tenant-1",
-		RoleID:    "role-1",
-		RoleCode:  "company_admin",
-		Roles:     []string{"company_admin"},
-		ExpiresAt: time.Now().Add(time.Minute).Unix(),
+		UserID:     "user-1",
+		TenantID:   "tenant-1",
+		RoleID:     "role-1",
+		RoleCode:   "company_admin",
+		Roles:      []string{"company_admin"},
+		IssuedAt:   issuedAt.Unix(),
+		IssuedAtNS: issuedAt.UnixNano(),
+		ExpiresAt:  issuedAt.Add(time.Minute).Unix(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -27,6 +30,9 @@ func TestJWTSignParseAndReject(t *testing.T) {
 	}
 	if claims.UserID != "user-1" || claims.TenantID != "tenant-1" || claims.RoleCode != "company_admin" {
 		t.Fatalf("unexpected claims: %#v", claims)
+	}
+	if claims.IssuedAt != issuedAt.Unix() || claims.IssuedAtNS != issuedAt.UnixNano() {
+		t.Fatalf("expected issued-at claims to round trip, got %#v", claims)
 	}
 
 	tampered := token[:len(token)-1] + "x"

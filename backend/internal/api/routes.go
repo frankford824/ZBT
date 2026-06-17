@@ -379,10 +379,24 @@ func (s *server) refresh(c *gin.Context) {
 		respondInternal(c)
 		return
 	}
+	if sessionRevoked(claims, session) {
+		respondUnauthorized(c)
+		return
+	}
 	respondSession(c, s.cfg, session)
 }
 
 func (s *server) logout(c *gin.Context) {
+	tenantID := strings.TrimSpace(c.GetString("tenant_id"))
+	userID := strings.TrimSpace(c.GetString("user_id"))
+	if tenantID == "" || userID == "" {
+		respondUnauthorized(c)
+		return
+	}
+	if err := s.store.RevokeUserSessions(c.Request.Context(), tenantID, userID); err != nil {
+		respondInternal(c)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
@@ -391,15 +405,18 @@ func respondSession(c *gin.Context, cfg config.Config, session saas.Session) {
 	if ttl <= 0 {
 		ttl = config.DefaultJWTAccessTTL
 	}
-	expiresAt := time.Now().Add(ttl)
+	now := time.Now()
+	expiresAt := now.Add(ttl)
 	roles := sessionRoleCodes(session)
 	token, err := auth.SignJWT(cfg.JWTSecret, auth.Claims{
-		UserID:    session.User.ID,
-		TenantID:  session.Tenant.ID,
-		RoleID:    session.Role.ID,
-		RoleCode:  session.Role.Code,
-		Roles:     roles,
-		ExpiresAt: expiresAt.Unix(),
+		UserID:     session.User.ID,
+		TenantID:   session.Tenant.ID,
+		RoleID:     session.Role.ID,
+		RoleCode:   session.Role.Code,
+		Roles:      roles,
+		IssuedAt:   now.Unix(),
+		IssuedAtNS: now.UnixNano(),
+		ExpiresAt:  expiresAt.Unix(),
 	})
 	if err != nil {
 		respondInternal(c)
@@ -452,6 +469,10 @@ func (s *server) authenticate() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, apiError("internal_error", "服务暂时不可用，请稍后重试"))
 			return
 		}
+		if sessionRevoked(claims, session) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, apiError("unauthorized", "登录状态已过期，请重新登录"))
+			return
+		}
 
 		c.Set("session", session)
 		c.Set("tenant_id", session.Tenant.ID)
@@ -460,6 +481,27 @@ func (s *server) authenticate() gin.HandlerFunc {
 		c.Set(rbac.ContextPermissionsKey, session.Permissions)
 		c.Next()
 	}
+}
+
+func sessionRevoked(claims auth.Claims, session saas.Session) bool {
+	if session.SessionRevokedAt == nil {
+		return false
+	}
+	issuedAt, ok := tokenIssuedAt(claims)
+	if !ok {
+		return true
+	}
+	return !issuedAt.After(*session.SessionRevokedAt)
+}
+
+func tokenIssuedAt(claims auth.Claims) (time.Time, bool) {
+	if claims.IssuedAtNS > 0 {
+		return time.Unix(0, claims.IssuedAtNS), true
+	}
+	if claims.IssuedAt > 0 {
+		return time.Unix(claims.IssuedAt, 0), true
+	}
+	return time.Time{}, false
 }
 
 func (s *server) currentUser(c *gin.Context) {

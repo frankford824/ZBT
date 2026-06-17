@@ -114,12 +114,34 @@ func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse signed token: %v", err)
 	}
+	if claims.IssuedAt <= 0 || claims.IssuedAtNS <= 0 {
+		t.Fatalf("expected JWT to include issued-at claims, got %#v", claims)
+	}
 	remaining := time.Until(time.Unix(claims.ExpiresAt, 0))
 	if remaining < 14*time.Minute || remaining > 16*time.Minute {
 		t.Fatalf("expected token exp to use configured TTL, remaining %s", remaining)
 	}
 	if len(claims.Roles) != 2 || claims.Roles[0] != "admin" || claims.Roles[1] != "auditor" {
 		t.Fatalf("expected JWT to include all session roles, got %v", claims.Roles)
+	}
+}
+
+func TestSessionRevokedRejectsTokensIssuedBeforeRevocation(t *testing.T) {
+	revokedAt := time.Now()
+	if !sessionRevoked(
+		auth.Claims{IssuedAtNS: revokedAt.Add(-time.Nanosecond).UnixNano()},
+		saas.Session{SessionRevokedAt: &revokedAt},
+	) {
+		t.Fatal("expected token issued before revocation to be rejected")
+	}
+	if sessionRevoked(
+		auth.Claims{IssuedAtNS: revokedAt.Add(time.Nanosecond).UnixNano()},
+		saas.Session{SessionRevokedAt: &revokedAt},
+	) {
+		t.Fatal("expected token issued after revocation to remain valid")
+	}
+	if !sessionRevoked(auth.Claims{}, saas.Session{SessionRevokedAt: &revokedAt}) {
+		t.Fatal("expected token without issued-at claims to be rejected after revocation")
 	}
 }
 
