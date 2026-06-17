@@ -303,6 +303,24 @@ def test_xlsx_parser_extracts_sheet_rows() -> None:
     assert "设备 | 1200" in text
 
 
+def test_xlsx_parser_preserves_uncached_formula_text() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "报价"
+    sheet.append(["科目", "金额"])
+    sheet.append(["设备", 1200])
+    sheet.append(["人工", 800])
+    sheet.append(["合计", "=SUM(B2:B3)"])
+    content = BytesIO()
+    workbook.save(content)
+
+    result = parse_document(_request("quote.xlsx"), content.getvalue())
+    text = "\n".join(chunk.content for chunk in result.chunks)
+
+    assert "设备 | 1200" in text
+    assert "合计 | =SUM(B2:B3)" in text
+
+
 def test_xlsx_parser_stops_at_configured_row_limit(monkeypatch) -> None:
     monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_XLSX_ROWS_PER_SHEET", "2")
     workbook = Workbook()

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+from itertools import zip_longest
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -370,6 +371,7 @@ def _parse_docx(content: bytes) -> tuple[str, dict[str, object]]:
 
 def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
     workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    formula_workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
     lines: list[str] = []
     sheet_count = len(workbook.worksheets)
     max_sheets = _env_int("KNOWLEDGE_PARSE_MAX_XLSX_SHEETS", 20)
@@ -380,21 +382,38 @@ def _parse_xlsx(content: bytes) -> tuple[str, dict[str, object]]:
     parsed_rows = 0
     try:
         sheets = workbook.worksheets
+        formula_sheets = {sheet.title: sheet for sheet in formula_workbook.worksheets}
         for sheet in sheets[:max_sheets]:
+            formula_sheet = formula_sheets.get(sheet.title)
             parsed_sheets += 1
             lines.append(f"[Sheet] {sheet.title}")
-            for row in sheet.iter_rows(max_row=max_rows, max_col=max_columns, values_only=True):
-                values = [_cell_text(value) for value in row]
+            data_rows = sheet.iter_rows(max_row=max_rows, max_col=max_columns, values_only=True)
+            formula_rows = (
+                formula_sheet.iter_rows(max_row=max_rows, max_col=max_columns, values_only=True)
+                if formula_sheet
+                else []
+            )
+            for row, formula_row in zip_longest(data_rows, formula_rows, fillvalue=()):
+                values = [
+                    _cell_text(value, formula_value)
+                    for value, formula_value in zip_longest(row or (), formula_row or (), fillvalue=None)
+                ]
                 values = [value for value in values if value]
                 if values:
                     lines.append(" | ".join(values))
                     parsed_rows += 1
-            if (sheet.max_row or 0) > max_rows or (sheet.max_column or 0) > max_columns:
+            formula_max_row = (formula_sheet.max_row or 0) if formula_sheet else 0
+            formula_max_column = (formula_sheet.max_column or 0) if formula_sheet else 0
+            if (
+                max(sheet.max_row or 0, formula_max_row) > max_rows
+                or max(sheet.max_column or 0, formula_max_column) > max_columns
+            ):
                 truncated = True
         if sheet_count > max_sheets:
             truncated = True
     finally:
         workbook.close()
+        formula_workbook.close()
     return "\n".join(lines), {
         "xlsx_sheet_count": sheet_count,
         "xlsx_parsed_sheet_count": parsed_sheets,
@@ -547,7 +566,9 @@ def _libreoffice_convert_executable() -> str | None:
     )
 
 
-def _cell_text(value: object) -> str:
+def _cell_text(value: object, formula_value: object | None = None) -> str:
+    if value is None:
+        value = formula_value
     if value is None:
         return ""
     return str(value).strip()
