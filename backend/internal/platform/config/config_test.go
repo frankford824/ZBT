@@ -47,6 +47,26 @@ func TestLoadBoundsJWTAccessTTL(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsBucketEnsureOverride(t *testing.T) {
+	t.Setenv("MINIO_ENSURE_BUCKET", "false")
+
+	cfg := Load()
+
+	if cfg.MinIOEnsureBucket {
+		t.Fatal("expected MINIO_ENSURE_BUCKET=false to disable bucket initialization")
+	}
+}
+
+func TestLoadEnablesBucketEnsureByDefault(t *testing.T) {
+	t.Setenv("MINIO_ENSURE_BUCKET", "")
+
+	cfg := Load()
+
+	if !cfg.MinIOEnsureBucket {
+		t.Fatal("expected bucket initialization to be enabled by default")
+	}
+}
+
 func TestValidateAllowsDevelopmentDefaultsOutsideProduction(t *testing.T) {
 	clearProductionEnv(t)
 	cfg := Load()

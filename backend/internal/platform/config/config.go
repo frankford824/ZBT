@@ -33,6 +33,7 @@ type Config struct {
 	MinIOUseSSL          bool
 	MinIORegion          string
 	MinIOBucket          string
+	MinIOEnsureBucket    bool
 	JWTSecret            string
 	JWTAccessTTL         time.Duration
 	DefaultTenantID      string
@@ -54,6 +55,7 @@ func Load() Config {
 		MinIOUseSSL:          envBool("MINIO_USE_SSL", false),
 		MinIORegion:          env("MINIO_REGION", "us-east-1"),
 		MinIOBucket:          env("MINIO_BUCKET", "zbt-files"),
+		MinIOEnsureBucket:    envBool("MINIO_ENSURE_BUCKET", true),
 		JWTSecret:            env("JWT_SECRET", DefaultJWTSecret),
 		JWTAccessTTL:         envDuration("JWT_ACCESS_TTL", DefaultJWTAccessTTL, minJWTAccessTTL, maxJWTAccessTTL),
 		DefaultTenantID:      env("DEFAULT_TENANT_ID", "00000000-0000-4000-8000-000000000001"),

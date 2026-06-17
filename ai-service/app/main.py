@@ -116,6 +116,7 @@ def minio_client() -> Minio:
         access_key=os.getenv("MINIO_ACCESS_KEY", "zbt_minio"),
         secret_key=os.getenv("MINIO_SECRET_KEY", "zbt_minio_secret"),
         secure=secure,
+        region=os.getenv("MINIO_REGION", "us-east-1").strip() or None,
     )
 
 

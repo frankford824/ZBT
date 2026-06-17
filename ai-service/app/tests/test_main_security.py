@@ -22,6 +22,7 @@ from app.main import (
     knowledge_embeddings,
     knowledge_process,
     knowledge_rerank,
+    minio_client,
     normalize_minio_endpoint,
     process_document_export,
     process_knowledge_document,
@@ -1120,6 +1121,32 @@ def test_normalize_minio_endpoint_rejects_paths_and_unsupported_schemes() -> Non
     ):
         with pytest.raises(RuntimeError, match="MINIO_ENDPOINT"):
             normalize_minio_endpoint(raw, fallback_secure=False)
+
+
+def test_minio_client_passes_configured_region(monkeypatch) -> None:
+    created: dict[str, object] = {}
+
+    class FakeMinio:
+        def __init__(self, endpoint: str, **kwargs: object) -> None:
+            created["endpoint"] = endpoint
+            created.update(kwargs)
+
+    monkeypatch.setenv("MINIO_ENDPOINT", "https://example-account.r2.cloudflarestorage.com")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "r2-access-key")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "r2-secret-key")
+    monkeypatch.setenv("MINIO_REGION", "auto")
+    monkeypatch.setattr("app.main.Minio", FakeMinio)
+
+    client = minio_client()
+
+    assert isinstance(client, FakeMinio)
+    assert created == {
+        "endpoint": "example-account.r2.cloudflarestorage.com",
+        "access_key": "r2-access-key",
+        "secret_key": "r2-secret-key",
+        "secure": True,
+        "region": "auto",
+    }
 
 
 def _set_production_security_env(monkeypatch) -> None:

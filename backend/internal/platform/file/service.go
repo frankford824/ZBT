@@ -43,10 +43,11 @@ var bizTypeAccessModules = map[string]string{
 }
 
 type Service struct {
-	pool     *pgxpool.Pool
-	bucket   string
-	internal *minio.Client
-	public   *minio.Client
+	pool                *pgxpool.Pool
+	bucket              string
+	ensureBucketOnStart bool
+	internal            *minio.Client
+	public              *minio.Client
 }
 
 type Asset struct {
@@ -106,10 +107,11 @@ func NewService(ctx context.Context, cfg config.Config, pool *pgxpool.Pool) (*Se
 		return nil, err
 	}
 	service := &Service{
-		pool:     pool,
-		bucket:   cfg.MinIOBucket,
-		internal: internal,
-		public:   public,
+		pool:                pool,
+		bucket:              cfg.MinIOBucket,
+		ensureBucketOnStart: cfg.MinIOEnsureBucket,
+		internal:            internal,
+		public:              public,
 	}
 	if err := service.ensureBucket(ctx); err != nil {
 		return nil, err
@@ -361,6 +363,9 @@ func (s *Service) DownloadURL(ctx context.Context, tenantID, fileID string, prev
 }
 
 func (s *Service) ensureBucket(ctx context.Context) error {
+	if !s.ensureBucketOnStart {
+		return nil
+	}
 	exists, err := s.internal.BucketExists(ctx, s.bucket)
 	if err != nil {
 		return err

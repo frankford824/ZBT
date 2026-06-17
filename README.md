@@ -102,6 +102,7 @@ API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整�
 - `MINIO_ENDPOINT=minio:9000` 用于容器内访问。
 - `MINIO_PUBLIC_ENDPOINT=127.0.0.1:9000` 用于浏览器直连预签名 URL。
 - `MINIO_USE_SSL=false`。
+- `MINIO_ENSURE_BUCKET=true`，启动时自动创建本地 bucket。
 - bucket 保持私有，下载/预览必须经 Go 鉴权后返回预签名 URL。
 
 生产环境可以直接切换到 Cloudflare R2 的 S3 兼容接口：
@@ -111,7 +112,8 @@ API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整�
 - `MINIO_USE_SSL=true`
 - `MINIO_REGION=auto`
 - `MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY` 使用 R2 API Token 生成的 S3 凭据。
-- `MINIO_BUCKET` 使用已创建的私有 bucket；浏览器上传需要在 R2 bucket 上允许业务域名的 `PUT` / `GET` / `HEAD` CORS。
+- `MINIO_BUCKET` 使用已创建的私有 bucket，`MINIO_ENSURE_BUCKET=false` 可避免应用启动凭据必须具备建桶权限。
+- 浏览器上传需要在 R2 bucket 上允许业务域名的 `PUT` / `GET` / `HEAD` CORS。
 
 预签名 URL 必须使用 R2 的 S3 API 域名，不要把自定义公开域名或 bucket path 写进 `MINIO_ENDPOINT` / `MINIO_PUBLIC_ENDPOINT`。
 

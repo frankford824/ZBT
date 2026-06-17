@@ -1,6 +1,7 @@
 package file
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -215,6 +216,14 @@ func TestStorageEndpointRejectsPathsAndUnsupportedSchemes(t *testing.T) {
 		if _, _, err := storageEndpoint(raw, false); err != ErrInvalidRequest {
 			t.Fatalf("expected %q to be rejected, got %v", raw, err)
 		}
+	}
+}
+
+func TestEnsureBucketCanBeDisabledForPrecreatedBuckets(t *testing.T) {
+	service := &Service{ensureBucketOnStart: false}
+
+	if err := service.ensureBucket(context.Background()); err != nil {
+		t.Fatalf("expected disabled bucket initialization to skip storage calls: %v", err)
 	}
 }
 
