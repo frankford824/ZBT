@@ -29,6 +29,17 @@ func TestEstimateCostSupportsProviderWildcardAndPerMillionRates(t *testing.T) {
 	}
 }
 
+func TestEstimateCostMatchesPricingCaseInsensitively(t *testing.T) {
+	t.Setenv("AI_MODEL_PRICING_JSON", `{
+		"deepseek/deepseek-chat": {"input_per_1k": 0.001, "output_per_1k": 0.002}
+	}`)
+
+	cost := estimateCost("DeepSeek", "DeepSeek-Chat", 1000, 500)
+	if cost != 0.002 {
+		t.Fatalf("expected case-insensitive provider/model pricing, got %.6f", cost)
+	}
+}
+
 func TestEstimateCostReturnsZeroWhenPricingMissing(t *testing.T) {
 	t.Setenv("AI_MODEL_PRICING_JSON", `{}`)
 

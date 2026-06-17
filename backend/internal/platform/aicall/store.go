@@ -397,18 +397,36 @@ func pricingFor(provider, model string) (pricingRate, bool) {
 	if err := json.Unmarshal([]byte(raw), &pricing); err != nil {
 		return pricingRate{}, false
 	}
-	keys := []string{
-		strings.TrimSpace(provider) + "/" + strings.TrimSpace(model),
-		strings.TrimSpace(model),
-		strings.TrimSpace(provider) + "/*",
-		"*",
-	}
-	for _, key := range keys {
+	for _, key := range pricingLookupKeys(provider, model) {
 		if rate, ok := pricing[key]; ok {
 			return rate, true
 		}
 	}
 	return pricingRate{}, false
+}
+
+func pricingLookupKeys(provider, model string) []string {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	lowerProvider := strings.ToLower(provider)
+	lowerModel := strings.ToLower(model)
+	keys := make([]string, 0, 7)
+	seen := map[string]bool{}
+	for _, key := range []string{
+		provider + "/" + model,
+		model,
+		provider + "/*",
+		"*",
+		lowerProvider + "/" + lowerModel,
+		lowerModel,
+		lowerProvider + "/*",
+	} {
+		if !seen[key] {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	return keys
 }
 
 func normalizeStatus(value string) string {
