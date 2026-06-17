@@ -53,11 +53,15 @@ class ModelRouter:
         _ = tenant_id
         candidates = [self.config["routes"][task_type]["primary"], *self.config["routes"][task_type].get("fallback", [])]
         candidate_targets = [self._route_target(task_type, route) for route in candidates]
+        missing_providers = [target.provider for target in candidate_targets if target.provider not in self.providers]
+        if missing_providers:
+            missing = ", ".join(dict.fromkeys(missing_providers))
+            raise RuntimeError(f"provider is not registered for {task_type}: {missing}")
         primary_provider = candidate_targets[0].provider
         targets: list[RouteTarget] = []
         for target in candidate_targets:
-            provider = self.providers.get(target.provider)
-            if provider is not None and provider.health_check():
+            provider = self.providers[target.provider]
+            if provider.health_check():
                 if target.provider != primary_provider:
                     target.fallback_from = primary_provider
                 targets.append(target)
@@ -166,8 +170,6 @@ class ModelRouter:
                     f"provider '{name}' has unsupported type '{provider_type}'; "
                     f"supported types: {supported}"
                 )
-        if "mock" not in providers:
-            providers["mock"] = MockProvider()
         return providers
 
     LLM_ROUTES = {

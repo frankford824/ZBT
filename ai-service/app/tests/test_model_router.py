@@ -201,6 +201,12 @@ def test_shipped_routing_config_declares_only_buildable_providers() -> None:
     assert declared == set(router.providers.keys())
 
 
+def test_router_does_not_inject_undeclared_mock_provider() -> None:
+    router = ModelRouter({"providers": {}, "routes": {}})
+
+    assert "mock" not in router.providers
+
+
 def test_shipped_routing_config_can_disable_all_mock_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
     monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
@@ -252,6 +258,36 @@ def test_provider_backed_mock_routes_detects_environment_provider_override(
 
     assert router.resolve("chapter_generate", tenant_id="tenant-demo").provider == "mock"
     assert router.provider_backed_mock_routes() == ["chapter_generate.primary"]
+
+
+def test_environment_provider_override_must_be_registered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_LLM_PROVIDER", "missing-provider")
+    monkeypatch.setenv("AI_LLM_MODEL", "real-model")
+    router = ModelRouter(
+        {
+            "providers": {
+                "mock": {"type": "mock"},
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                    "fallback": [{"provider": "mock", "model": "mock-model"}],
+                }
+            },
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="provider is not registered.*missing-provider"):
+        router.resolve("chapter_generate", tenant_id="tenant-demo")
 
 
 def test_router_rejects_unsupported_provider_type() -> None:
