@@ -505,6 +505,39 @@ func TestRequirementCoverageIDAcceptsAutoRFPReferenceFields(t *testing.T) {
 	}
 }
 
+func TestManualRequirementCoverageMetadataPreservesEvidence(t *testing.T) {
+	status, needsReview, metadata, err := manualRequirementCoverageMetadata("evaluation-001", "user-1", UpdateRequirementCoverageRequest{
+		CoverageStatus: "covered",
+		Evidence:       "已在实施方案章节逐条响应评分点",
+		SourceRefs: []any{
+			map[string]any{"title": "实施方案", "page": 3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("manual coverage metadata: %v", err)
+	}
+	if status != "covered" || needsReview {
+		t.Fatalf("unexpected normalized status: status=%q needsReview=%v", status, needsReview)
+	}
+	if metadata["source"] != "manual" || metadata["updated_by"] != "user-1" {
+		t.Fatalf("expected manual metadata owner, got %#v", metadata)
+	}
+	if metadata["evidence"] != "已在实施方案章节逐条响应评分点" {
+		t.Fatalf("expected evidence to be preserved, got %#v", metadata["evidence"])
+	}
+	if refs, ok := metadata["source_refs"].([]any); !ok || len(refs) != 1 {
+		t.Fatalf("expected source refs to be preserved, got %#v", metadata["source_refs"])
+	}
+}
+
+func TestManualRequirementCoverageMetadataRejectsInvalidStatus(t *testing.T) {
+	if _, _, _, err := manualRequirementCoverageMetadata("evaluation-001", "user-1", UpdateRequirementCoverageRequest{
+		CoverageStatus: "done_enough",
+	}); err != ErrInvalidRequest {
+		t.Fatalf("expected invalid manual coverage status to be rejected, got %v", err)
+	}
+}
+
 func TestBuildGenerationCoverageSpecUsesEvaluatorContract(t *testing.T) {
 	score := 12.5
 	coverage := []any{

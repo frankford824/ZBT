@@ -1680,6 +1680,19 @@ export async function exportBidRequirements(bidId: string): Promise<{ blob: Blob
   }
 }
 
+export async function updateBidRequirementCoverage(
+  bidId: string,
+  requirementId: string,
+  payload: {
+    coverage_status: BidRequirementItemDTO['coverage_status']
+    evidence?: string
+    source_refs?: unknown[]
+  },
+): Promise<BidRequirementItemDTO> {
+  const { data } = await apiClient.patch<BidRequirementItemDTO>(`/bids/${bidId}/requirements/${requirementId}`, payload)
+  return data
+}
+
 function filenameFromContentDisposition(value: unknown): string {
   const text = Array.isArray(value) ? String(value[0] || '') : String(value || '')
   const encodedMatch = text.match(/filename\*=UTF-8''([^;]+)/i)

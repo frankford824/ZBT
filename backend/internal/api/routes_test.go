@@ -636,6 +636,19 @@ func TestRouteInfosExposeRequirementMatrixExportAsReadOnlyBidRoute(t *testing.T)
 	}
 }
 
+func TestRouteInfosExposeRequirementCoverageUpdateAsBidWriteRoute(t *testing.T) {
+	route, ok := routeInfoByKey(http.MethodPatch, "/bids/:id/requirements/:requirementId")
+	if !ok {
+		t.Fatal("expected requirement coverage update route metadata to be present")
+	}
+	if route.Module != "bid" || route.Required != rbac.LevelFull {
+		t.Fatalf("expected requirement coverage update route to require bid full, got %+v", route)
+	}
+	if route.Async {
+		t.Fatal("expected requirement coverage update route to be synchronous")
+	}
+}
+
 func TestBidRequirementMatrixCSVIncludesCoverageEvidenceAndSources(t *testing.T) {
 	score := 12.5
 	updatedAt := time.Date(2026, 6, 17, 9, 30, 0, 0, time.UTC)

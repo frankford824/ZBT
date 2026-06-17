@@ -128,6 +128,7 @@ var routeSpecs = []routeSpec{
 	{"PUT", "/bids/:id/parse-result", "bid", false},
 	{"GET", "/bids/:id/requirements", "bid", false},
 	{"GET", "/bids/:id/requirements/export", "bid", false},
+	{"PATCH", "/bids/:id/requirements/:requirementId", "bid", false},
 	{"GET", "/bids/:id/pipeline-gates", "bid", false},
 	{"POST", "/bids/:id/outline/generate", "bid", true},
 	{"GET", "/bids/:id/parts", "bid", false},
@@ -662,6 +663,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PUT("/bids/:id/parse-result", rbac.Require("bid", rbac.LevelFull), s.confirmBidParseResult)
 	group.GET("/bids/:id/requirements", rbac.Require("bid", rbac.LevelRead), s.listBidRequirements)
 	group.GET("/bids/:id/requirements/export", rbac.Require("bid", rbac.LevelRead), s.exportBidRequirements)
+	group.PATCH("/bids/:id/requirements/:requirementId", rbac.Require("bid", rbac.LevelFull), s.updateBidRequirementCoverage)
 	group.GET("/bids/:id/pipeline-gates", rbac.Require("bid", rbac.LevelRead), s.listBidPipelineGates)
 	group.POST("/bids/:id/outline/generate", rbac.Require("bid", rbac.LevelFull), s.generateBidOutline)
 	group.GET("/bids/:id/parts", rbac.Require("bid", rbac.LevelRead), s.listBidParts)
@@ -809,6 +811,7 @@ func customRouteSet() map[string]bool {
 		"PUT /bids/:id/parse-result":                   true,
 		"GET /bids/:id/requirements":                   true,
 		"GET /bids/:id/requirements/export":            true,
+		"PATCH /bids/:id/requirements/:requirementId":  true,
 		"GET /bids/:id/pipeline-gates":                 true,
 		"POST /bids/:id/outline/generate":              true,
 		"GET /bids/:id/parts":                          true,
@@ -1740,6 +1743,22 @@ func (s *server) exportBidRequirements(c *gin.Context) {
 	c.Header("Content-Disposition", `attachment; filename="requirements.csv"; filename*=UTF-8''`+url.PathEscape(filename))
 	c.Header("Cache-Control", "no-store")
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", body)
+}
+
+func (s *server) updateBidRequirementCoverage(c *gin.Context) {
+	var req bid.UpdateRequirementCoverageRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	result, err := s.bidStore.UpdateRequirementCoverage(
+		c.Request.Context(),
+		tenant.FromContext(c.Request.Context()),
+		c.GetString("user_id"),
+		c.Param("id"),
+		c.Param("requirementId"),
+		req,
+	)
+	respond(c, result, err)
 }
 
 func bidRequirementMatrixCSV(items []bid.RequirementItem) ([]byte, error) {

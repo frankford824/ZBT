@@ -1092,10 +1092,14 @@ a {
 
 .requirement-evidence-cell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
   max-width: 100%;
+}
+
+.requirement-status-select {
+  width: 104px;
 }
 
 .requirement-evidence-text {

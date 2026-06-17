@@ -404,6 +404,12 @@ type RequirementItem struct {
 	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
+type UpdateRequirementCoverageRequest struct {
+	CoverageStatus string `json:"coverage_status"`
+	Evidence       string `json:"evidence"`
+	SourceRefs     []any  `json:"source_refs"`
+}
+
 type PipelineGate struct {
 	ID            string         `json:"id"`
 	BidDocumentID string         `json:"bid_document_id"`
@@ -1120,6 +1126,53 @@ func (s *Store) ListRequirementItems(ctx context.Context, tenantID, bidID string
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
+	}
+	return result, err
+}
+
+func (s *Store) UpdateRequirementCoverage(ctx context.Context, tenantID, userID, bidID, requirementID string, req UpdateRequirementCoverageRequest) (RequirementItem, error) {
+	bidID = strings.TrimSpace(bidID)
+	requirementID = strings.TrimSpace(requirementID)
+	if _, err := uuid.Parse(bidID); err != nil {
+		return RequirementItem{}, ErrInvalidRequest
+	}
+	if requirementID == "" {
+		return RequirementItem{}, ErrInvalidRequest
+	}
+	status, needsReview, coverageMetadata, err := manualRequirementCoverageMetadata(requirementID, userID, req)
+	if err != nil {
+		return RequirementItem{}, err
+	}
+	metadataJSON, _ := json.Marshal(coverageMetadata)
+	var result RequirementItem
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		item, err := scanRequirementItem(tx.QueryRow(ctx, `
+			update bid_requirement_items
+			set coverage_status = $4,
+				needs_review = $5,
+				metadata = coalesce(metadata, '{}'::jsonb)
+					|| jsonb_build_object('latest_coverage', coalesce(metadata->'latest_coverage', '{}'::jsonb) || $6::jsonb)
+					|| jsonb_build_object('manual_coverage', $6::jsonb),
+				updated_at = now()
+			where tenant_id = $1
+				and bid_document_id = $2
+				and (id::text = $3 or external_id = $3)
+			returning id::text, bid_document_id::text, parse_result_id::text, external_id,
+				module, requirement_type, requirement, priority, mandatory, score,
+				expected_response, coverage_status, source_ref, needs_review, sort_order,
+				metadata, created_at, updated_at
+		`, tenantID, bidID, requirementID, status, needsReview, metadataJSON))
+		if err != nil {
+			return err
+		}
+		result = item
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RequirementItem{}, ErrNotFound
 	}
 	return result, err
 }
@@ -4293,6 +4346,31 @@ func requirementCoverageStatus(item map[string]any) (string, bool, bool) {
 		return "needs_review", true, true
 	}
 	return "", false, false
+}
+
+func manualRequirementCoverageMetadata(requirementID, userID string, req UpdateRequirementCoverageRequest) (string, bool, map[string]any, error) {
+	status := normalizeRequirementCoverageStatus(req.CoverageStatus)
+	if status == "" {
+		return "", false, nil, ErrInvalidRequest
+	}
+	needsReview := status == "needs_review"
+	metadata := map[string]any{
+		"requirement_id": requirementID,
+		"status":         status,
+		"needs_review":   needsReview,
+		"updated_at":     time.Now().UTC().Format(time.RFC3339),
+		"source":         "manual",
+	}
+	if userID = strings.TrimSpace(userID); userID != "" {
+		metadata["updated_by"] = userID
+	}
+	if evidence := strings.TrimSpace(req.Evidence); evidence != "" {
+		metadata["evidence"] = evidence
+	}
+	if req.SourceRefs != nil {
+		metadata["source_refs"] = req.SourceRefs
+	}
+	return status, needsReview, metadata, nil
 }
 
 func boolValue(value any) (bool, bool) {

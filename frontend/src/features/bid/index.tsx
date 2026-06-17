@@ -32,6 +32,7 @@ import {
   Radio,
   Row,
   Segmented,
+  Select,
   Space,
   Steps,
   Table,
@@ -82,6 +83,7 @@ import {
   resumeBidGenerationJob,
   submitBidForApproval,
   updateBidMaterialSelection,
+  updateBidRequirementCoverage,
   updateBidPartOutline,
   updateChapterContent,
   uploadBidTenderFile,
@@ -758,6 +760,59 @@ export function BidWizardPage() {
     },
     onError: (error) => message.error(getApiErrorMessage(error, '导出响应矩阵失败')),
   })
+  const requirementCoverageMutation = useMutation({
+    mutationFn: (payload: {
+      requirementId: string
+      coverageStatus: BidRequirementItemDTO['coverage_status']
+      evidence?: string
+    }) =>
+      updateBidRequirementCoverage(bidId, payload.requirementId, {
+        coverage_status: payload.coverageStatus,
+        evidence: payload.evidence,
+      }),
+    onSuccess: async () => {
+      message.success('响应状态已更新')
+      await queryClient.invalidateQueries({ queryKey: ['bid-requirements', bidId] })
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '更新响应状态失败')),
+  })
+  const updateRequirementStatus = (row: ParseRequirementRow, coverageStatus: BidRequirementItemDTO['coverage_status']) => {
+    if (!row.canUpdate) return
+    requirementCoverageMutation.mutate({ requirementId: row.id, coverageStatus })
+  }
+  const openRequirementEvidenceModal = (row: ParseRequirementRow) => {
+    if (!row.canUpdate) return
+    let evidence = row.coverageEvidence
+    Modal.confirm({
+      title: '补充响应证据',
+      okText: '保存',
+      cancelText: '取消',
+      content: (
+        <Input.TextArea
+          defaultValue={row.coverageEvidence}
+          rows={4}
+          maxLength={1000}
+          showCount
+          autoFocus
+          onChange={(event) => {
+            evidence = event.target.value
+          }}
+        />
+      ),
+      onOk: () => {
+        const nextEvidence = evidence.trim()
+        if (!nextEvidence) {
+          message.warning('请填写响应证据')
+          return Promise.reject(new Error('empty evidence'))
+        }
+        return requirementCoverageMutation.mutateAsync({
+          requirementId: row.id,
+          coverageStatus: row.coverageStatus === 'unmapped' ? 'planned' : row.coverageStatus,
+          evidence: nextEvidence,
+        })
+      },
+    })
+  }
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
@@ -956,13 +1011,26 @@ export function BidWizardPage() {
                               },
                               {
                                 title: '状态',
-                                width: 100,
-                                render: (_, row) => requirementCoverageTag(row.coverageStatus),
+                                width: 128,
+                                render: (_, row) =>
+                                  row.canUpdate && canWrite ? (
+                                    <Select
+                                      size="small"
+                                      className="requirement-status-select"
+                                      value={row.coverageStatus}
+                                      disabled={requirementCoverageMutation.isPending}
+                                      onChange={(value) => updateRequirementStatus(row, value)}
+                                      options={requirementCoverageOptions}
+                                    />
+                                  ) : (
+                                    requirementCoverageTag(row.coverageStatus)
+                                  ),
                               },
                               {
                                 title: '响应证据',
                                 width: 260,
-                                render: (_, row) => requirementEvidenceCell(row),
+                                render: (_, row) =>
+                                  requirementEvidenceCell(row, canWrite, requirementCoverageMutation.isPending, openRequirementEvidenceModal),
                               },
                               {
                                 title: '属性',
@@ -1466,6 +1534,7 @@ function structuredRequirementRows(result: Record<string, unknown> | undefined) 
         coverageStatus: requirementCoverageStatusValue(record.status),
         coverageEvidence: '',
         coverageSourceCount: 0,
+        canUpdate: false,
       }
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row?.requirement))
@@ -1485,6 +1554,7 @@ function requirementRowsFromItems(items: BidRequirementItemDTO[]) {
         coverageStatus: item.coverage_status,
         coverageEvidence: formatStructuredValue(latestCoverage?.evidence),
         coverageSourceCount: sourceCount,
+        canUpdate: true,
       }
     })
     .filter((row) => Boolean(row.requirement.trim()))
@@ -1520,14 +1590,33 @@ function requirementCoverageTag(value: BidRequirementItemDTO['coverage_status'])
   return <Tag>未确认</Tag>
 }
 
-function requirementEvidenceCell(row: ParseRequirementRow) {
+const requirementCoverageOptions = [
+  { label: '未确认', value: 'unmapped' },
+  { label: '已规划', value: 'planned' },
+  { label: '已覆盖', value: 'covered' },
+  { label: '待复核', value: 'needs_review' },
+] satisfies Array<{ label: string; value: BidRequirementItemDTO['coverage_status'] }>
+
+function requirementEvidenceCell(
+  row: ParseRequirementRow,
+  canWrite: boolean,
+  isUpdating: boolean,
+  onEdit: (row: ParseRequirementRow) => void,
+) {
   const evidence = row.coverageEvidence.trim()
   const sourceCount = row.coverageSourceCount
+  const editButton =
+    canWrite && row.canUpdate ? (
+      <Button size="small" type="link" loading={isUpdating} onClick={() => onEdit(row)}>
+        补证据
+      </Button>
+    ) : null
   if (!evidence && sourceCount === 0) {
-    return row.coverageStatus === 'covered' ? (
-      <Tag color="gold">待补证据</Tag>
-    ) : (
-      <Typography.Text type="secondary">-</Typography.Text>
+    return (
+      <Space size={4}>
+        {row.coverageStatus === 'covered' ? <Tag color="gold">待补证据</Tag> : <Typography.Text type="secondary">-</Typography.Text>}
+        {editButton}
+      </Space>
     )
   }
   return (
@@ -1536,6 +1625,7 @@ function requirementEvidenceCell(row: ParseRequirementRow) {
         <Typography.Text className="requirement-evidence-text">{evidence || '已关联响应来源'}</Typography.Text>
       </Tooltip>
       {sourceCount > 0 ? <Tag color="green">来源 {sourceCount} 处</Tag> : <Tag color="gold">待补来源</Tag>}
+      {editButton}
     </div>
   )
 }

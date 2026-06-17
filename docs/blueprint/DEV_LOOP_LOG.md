@@ -2910,3 +2910,49 @@ cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden .
 
 1. 本轮导出 CSV，不生成 xlsx；CSV 使用 UTF-8 BOM 保证主流表格软件可直接打开中文。
 2. 本轮导出当前快照，不包含多轮覆盖历史；覆盖历史仍保留在章节版本元数据中。
+
+## Loop-47 / 人工调整响应覆盖状态 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式响应矩阵的人工闭环：模型生成后，业务人员必须能修正单条要求的覆盖状态。
+2. 人工补充的响应证据必须进入同一套 `latest_coverage` 展示与导出链路，不覆盖招标原文来源。
+3. 写操作必须走 `bid` full 权限，读取和导出仍保持 read 权限。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `UpdateRequirementCoverageRequest` 和 `UpdateRequirementCoverage()`，按租户、标书和要求项 id/external_id 定位单条 `bid_requirement_items`。
+2. 人工调整会更新 `coverage_status`、`needs_review`、`metadata.latest_coverage` 和 `metadata.manual_coverage`；人工元数据包含状态、证据、来源引用、更新人和更新时间，不覆盖 `source_ref`。
+3. `backend/internal/api/routes.go` 新增 `PATCH /bids/:id/requirements/:requirementId`，路由元数据声明为 `bid` full 权限、同步接口，并加入自定义路由白名单。
+4. `frontend/src/shared/api/client.ts` 新增 `updateBidRequirementCoverage()`。
+5. `frontend/src/features/bid/index.tsx` 在“响应要点”表格为可更新要求项提供覆盖状态下拉和“补证据”入口；保存成功后刷新要求矩阵。
+6. `frontend/src/index.css` 固定状态下拉与证据列布局，避免长证据、来源标签和操作按钮挤压错行。
+7. `AI_IMPLEMENTATION_CHECKLIST.md`、`AI_PIPELINE.md`、`API_SPEC.md` 同步更新人工调整接口和当前状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go internal/api/routes.go internal/api/routes_test.go
+cd backend && go test ./internal/platform/bid ./internal/api
+pnpm --dir frontend build
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+git diff --check
+```
+
+结果：
+
+1. Go bid/API 专项测试通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. Go 后端全量测试通过。
+4. AI 服务完整测试 217 条全部通过。
+5. 工程1 真实样本解析评测 103/103 通过。
+6. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮补齐人工调整当前快照，不新增多轮覆盖历史时间线；覆盖历史仍保留在章节版本 `model_metadata.requirement_coverage` 和人工 `metadata.manual_coverage` 中。
+2. 本轮前端只支持补充文本证据；附件级证据上传、证据引用精确选区和批量调整仍属后续增强。
