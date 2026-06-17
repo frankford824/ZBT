@@ -39,6 +39,20 @@ def test_pdf_parser_extracts_layout_blocks_and_table_candidates() -> None:
     assert "Equipment" in text
 
 
+def test_table_block_md_table_preserves_empty_cells_and_escapes_pipes() -> None:
+    block = document_parser._table_block(
+        "ocr",
+        {
+            "index": 2,
+            "rows": [["项目", "", "备注"], ["设备", "1200", "含|税"]],
+        },
+    )
+
+    assert block["column_count"] == 3
+    assert block["rows"] == [["项目", "", "备注"], ["设备", "1200", "含|税"]]
+    assert block["md_table"] == "| 项目 |  | 备注 |\n| --- | --- | --- |\n| 设备 | 1200 | 含\\|税 |"
+
+
 def test_pdf_table_extraction_error_keeps_heuristic_tables_without_sensitive_details() -> None:
     class BrokenTablePage:
         def find_tables(self) -> object:
@@ -644,6 +658,8 @@ def test_docx_parser_includes_paragraphs_and_tables() -> None:
             "index": 1,
             "rows": [["工期", "90天"]],
             "row_count": 1,
+            "column_count": 2,
+            "md_table": "| 工期 | 90天 |\n| --- | --- |",
             "extraction": "python-docx",
         }
     ]
@@ -700,6 +716,7 @@ def test_xlsx_parser_extracts_sheet_rows() -> None:
     assert result.metadata["table_blocks"][0]["source"] == "xlsx"
     assert result.metadata["table_blocks"][0]["sheet"] == "报价"
     assert result.metadata["table_blocks"][0]["rows"] == [["科目", "金额"], ["设备", "1200"]]
+    assert result.metadata["table_blocks"][0]["md_table"] == "| 科目 | 金额 |\n| --- | --- |\n| 设备 | 1200 |"
 
 
 def test_xlsx_parser_preserves_uncached_formula_text() -> None:
@@ -804,6 +821,8 @@ def test_pptx_parser_extracts_table_blocks() -> None:
             "index": 1,
             "rows": [["节点", "完成"]],
             "row_count": 1,
+            "column_count": 2,
+            "md_table": "| 节点 | 完成 |\n| --- | --- |",
             "slide": 1,
             "extraction": "python-pptx",
         }

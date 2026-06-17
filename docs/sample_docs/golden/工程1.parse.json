@@ -14,10 +14,15 @@
         "required_sources": ["pdf"],
         "min_total_rows": 180,
         "min_blocks_with_rows": 30,
+        "require_md_table": true,
         "must_contain": [
           "评审办法",
           "最高限价",
           "响应文件格式"
+        ],
+        "md_table_must_contain": [
+          "评审办法",
+          "最高限价"
         ]
       },
       "ocr_required": false,
@@ -39,10 +44,15 @@
         "required_sources": ["docx"],
         "min_total_rows": 200,
         "min_blocks_with_rows": 25,
+        "require_md_table": true,
         "must_contain": [
           "中级养护技术员",
           "最高单价",
           "综合单价"
+        ],
+        "md_table_must_contain": [
+          "中级养护技术员",
+          "最高单价"
         ]
       },
       "text_contains": [
@@ -63,9 +73,14 @@
         "required_sources": ["pdf"],
         "min_total_rows": 180,
         "min_blocks_with_rows": 25,
+        "require_md_table": true,
         "must_contain": [
           "中级养护技术员",
           "最高单价",
+          "综合单价"
+        ],
+        "md_table_must_contain": [
+          "中级养护技术员",
           "综合单价"
         ]
       },
@@ -87,10 +102,15 @@
         "required_sources": ["xlsx"],
         "min_total_rows": 8,
         "min_blocks_with_rows": 1,
+        "require_md_table": true,
         "must_contain": [
           "中级养护技术员",
           "最高单价",
           "综合单价"
+        ],
+        "md_table_must_contain": [
+          "中级养护技术员",
+          "最高单价"
         ]
       },
       "text_contains": [

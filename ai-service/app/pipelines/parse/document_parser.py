@@ -387,13 +387,19 @@ def _extract_pdf_tables(
 
 def _table_block(source: str, table: dict[str, object]) -> dict[str, object]:
     rows = table.get("rows")
-    normalized_rows = rows if isinstance(rows, list) else []
+    normalized_rows = _normalize_table_rows(rows)
     block: dict[str, object] = {
         "source": source,
         "index": _metadata_int(table.get("index"), 1),
         "rows": normalized_rows,
         "row_count": len(normalized_rows),
     }
+    column_count = max((len(row) for row in normalized_rows), default=0)
+    if column_count:
+        block["column_count"] = column_count
+    md_table = _table_md(table, normalized_rows)
+    if md_table:
+        block["md_table"] = md_table
     page = _metadata_int(table.get("page"), 0)
     if page:
         block["page_start"] = page
@@ -417,6 +423,47 @@ def _table_block(source: str, table: dict[str, object]) -> dict[str, object]:
     if confidence is not None:
         block["confidence"] = confidence
     return block
+
+
+def _normalize_table_rows(rows: object) -> list[list[str]]:
+    if not isinstance(rows, list):
+        return []
+    normalized: list[list[str]] = []
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        values = [str(cell).strip() for cell in row]
+        if any(values):
+            normalized.append(values)
+    return normalized
+
+
+def _table_md(table: dict[str, object], rows: list[list[str]]) -> str:
+    raw = table.get("md_table")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return _rows_to_md_table(rows)
+
+
+def _rows_to_md_table(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    column_count = max(len(row) for row in rows)
+    if column_count <= 0:
+        return ""
+    padded = [row + [""] * (column_count - len(row)) for row in rows]
+    header = padded[0]
+    body = padded[1:]
+    lines = [
+        "| " + " | ".join(_md_table_cell(cell) for cell in header) + " |",
+        "| " + " | ".join("---" for _ in range(column_count)) + " |",
+    ]
+    lines.extend("| " + " | ".join(_md_table_cell(cell) for cell in row) + " |" for row in body)
+    return "\n".join(lines)
+
+
+def _md_table_cell(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("|", "\\|").replace("\r\n", "<br>").replace("\n", "<br>")
 
 
 def _metadata_int(value: object, default: int) -> int:

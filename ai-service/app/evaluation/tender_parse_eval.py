@@ -159,6 +159,20 @@ def _evaluate_table_blocks(
             f">={expected}",
             actual,
         )
+    if table_spec.get("require_md_table") is True:
+        blocks_with_rows = [block for block in blocks if _table_row_count(block) > 0]
+        missing = [
+            block.get("index")
+            for block in blocks_with_rows
+            if not str(block.get("md_table") or "").strip()
+        ]
+        _add_check(
+            checks,
+            f"document.{document_id}.table_blocks.md_table_present",
+            bool(blocks_with_rows) and not missing,
+            "all row-backed table blocks include md_table",
+            {"blocks_with_rows": len(blocks_with_rows), "missing_indexes": missing},
+        )
     table_text = json.dumps(blocks, ensure_ascii=False)
     for index, expected_text in enumerate(_string_list(table_spec.get("must_contain")), start=1):
         _add_check(
@@ -167,6 +181,15 @@ def _evaluate_table_blocks(
             expected_text in table_text,
             expected_text,
             _excerpt(table_text, expected_text),
+        )
+    md_table_text = "\n\n".join(str(block.get("md_table") or "") for block in blocks)
+    for index, expected_text in enumerate(_string_list(table_spec.get("md_table_must_contain")), start=1):
+        _add_check(
+            checks,
+            f"document.{document_id}.table_blocks.md_table_must_contain[{index}]",
+            expected_text in md_table_text,
+            expected_text,
+            _excerpt(md_table_text, expected_text),
         )
 
 

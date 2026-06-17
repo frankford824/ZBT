@@ -2543,7 +2543,7 @@ git diff --check
 2. 工程1 真实样本解析评测 87/87 通过。
 3. Ruff 针对本轮 Python 文件检查通过。
 4. Python compileall 通过。
-5. AI 服务完整测试 213 条全部通过。
+5. AI 服务完整测试 214 条全部通过。
 6. Go 后端全量测试通过。
 7. `git diff --check` 通过。
 
@@ -2551,3 +2551,50 @@ git diff --check
 
 1. 本轮强化的是离线验收门槛，不改变解析算法本身。
 2. 表格块仍以 `rows` 和来源 metadata 为主，尚未要求 PDF 单元格级 bbox 全覆盖；bbox 覆盖应跟 OCR/版面 Provider 样本一起继续推进。
+
+## Loop-39 / table_blocks md_table 保真落地 - 2026-06-17
+
+### 本轮目标
+
+1. 将 xparse 清单中的“复杂表格保留 `md_table`”从文档要求推进到实际解析产物。
+2. 让 PDF、DOCX、XLSX、PPTX 和 OCR 归一化表格块都具备可直接给模型使用的 Markdown 表格文本。
+3. 把 `md_table` 纳入工程1真实样本离线验收。
+
+### 代码交付
+
+1. `document_parser.py` 的 `_table_block()` 对所有带 `rows` 的表格块生成 `md_table`，并保留 Provider 原始 `md_table`。
+2. 表格块新增 `column_count`，方便后续评估表头和列宽覆盖。
+3. `tender_parse_eval.py` 新增 `require_md_table` 和 `md_table_must_contain` 检查。
+4. `test_document_parser.py` 更新 DOCX/XLSX/PPTX 表格块断言，确认 `md_table` 输出。
+5. `test_tender_parse_eval.py` 增加 `md_table` 正反验收。
+6. `docs/sample_docs/golden/工程1.parse.json` 对四个样本文档启用 `require_md_table` 和 `md_table_must_contain`。
+7. `AI_IMPLEMENTATION_CHECKLIST.md` 与 `SAMPLE_DOCS_EVALUATION.md` 更新当前样本验收为 99/99。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd ai-service && .venv/bin/ruff check app/pipelines/parse/document_parser.py app/evaluation/tender_parse_eval.py app/tests/test_document_parser.py app/tests/test_tender_parse_eval.py
+cd ai-service && .venv/bin/python -m compileall -q app/pipelines/parse/document_parser.py app/evaluation/tender_parse_eval.py app/tests/test_document_parser.py app/tests/test_tender_parse_eval.py
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 文档解析与招标解析评测专项测试 47 条全部通过。
+2. 工程1 真实样本解析评测 99/99 通过。
+3. Ruff 针对本轮 Python 文件检查通过。
+4. Python compileall 通过。
+5. AI 服务完整测试 214 条全部通过。
+6. Go 后端全量测试通过。
+7. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. `md_table` 目前由行数据生成或保留 Provider 原文，不额外推断合并单元格语义。
+2. 单元格级 bbox、跨页表格合并和复杂表头层级仍需跟版面/OCR Provider 样本继续推进。
