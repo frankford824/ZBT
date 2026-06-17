@@ -130,6 +130,9 @@ func TestRecordFromTaskUsesModelMetadataFallbackAndPricing(t *testing.T) {
 	if input.EstimatedCost != 0.002 {
 		t.Fatalf("expected estimated cost 0.002, got %.6f", input.EstimatedCost)
 	}
+	if input.BizRef["module"] != "bid" || input.BizRef["stage"] != "interpret" {
+		t.Fatalf("expected biz ref to carry bid interpret context, got %#v", input.BizRef)
+	}
 }
 
 func TestRecordFromTaskParsesStringTokenAndCostFields(t *testing.T) {
@@ -305,6 +308,31 @@ func TestShouldUpdateExistingLogUsesCallbackStatusOrdering(t *testing.T) {
 	} {
 		if got := shouldUpdateExistingLog(tc.current, tc.next); got != tc.want {
 			t.Fatalf("expected %q -> %q update=%v, got %v", tc.current, tc.next, tc.want, got)
+		}
+	}
+}
+
+func TestModuleAndStageForTaskCoverBusinessRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		taskType     string
+		resourceType string
+		wantModule   string
+		wantStage    string
+	}{
+		{taskType: "tender_parse", resourceType: "bid_parse_result", wantModule: "bid", wantStage: "interpret"},
+		{taskType: "outline_generate", resourceType: "bid_document", wantModule: "bid", wantStage: "plan"},
+		{taskType: "chapter_generate", resourceType: "bid_chapter", wantModule: "bid", wantStage: "generate"},
+		{taskType: "chapter_ai_action", resourceType: "bid_chapter", wantModule: "bid", wantStage: "generate"},
+		{taskType: "document_export", resourceType: "bid_export", wantModule: "bid", wantStage: "format"},
+		{taskType: "knowledge_process", resourceType: "knowledge_document", wantModule: "knowledge", wantStage: "ingest"},
+		{taskType: "cost_advice", resourceType: "cost_project", wantModule: "cost", wantStage: "advise"},
+		{taskType: "compliance_check", resourceType: "compliance_check", wantModule: "compliance", wantStage: "check"},
+	} {
+		if got := moduleForTask(tc.resourceType, tc.taskType); got != tc.wantModule {
+			t.Fatalf("expected module for %s/%s to be %q, got %q", tc.resourceType, tc.taskType, tc.wantModule, got)
+		}
+		if got := stageForTask(tc.taskType); got != tc.wantStage {
+			t.Fatalf("expected stage for %s to be %q, got %q", tc.taskType, tc.wantStage, got)
 		}
 	}
 }

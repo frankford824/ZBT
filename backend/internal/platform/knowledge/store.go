@@ -1270,6 +1270,8 @@ func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string
 			Status:      "done",
 			BizRef: map[string]any{
 				"endpoint":   "/embeddings/knowledge",
+				"module":     "knowledge",
+				"stage":      "embed",
 				"text_count": len(texts),
 				"dimensions": decoded.Dimensions,
 			},
@@ -1337,6 +1339,8 @@ func (s *Store) rerankKnowledgeResults(ctx context.Context, tenantID, userID, qu
 			Status:       "done",
 			BizRef: map[string]any{
 				"endpoint":        "/rerank/knowledge",
+				"module":          "knowledge",
+				"stage":           "rerank",
 				"candidate_count": len(documents),
 				"result_count":    len(decoded.Results),
 			},

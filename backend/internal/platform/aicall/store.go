@@ -309,6 +309,8 @@ func recordFromTask(
 			"external_task_id":  externalTaskID,
 			"resource_type":     resourceType,
 			"resource_id":       resourceID,
+			"module":            moduleForTask(resourceType, taskType),
+			"stage":             stageForTask(taskType),
 			"provider_from":     providerSource(modelMetadata, route),
 			"callback_recorded": true,
 		},
@@ -362,6 +364,56 @@ func sanitizeCost(value float64) float64 {
 
 func shouldUpdateExistingLog(currentStatus, nextStatus string) bool {
 	return taskstatus.ShouldApplyCallback(currentStatus, nextStatus)
+}
+
+func moduleForTask(resourceType, taskType string) string {
+	switch strings.TrimSpace(strings.ToLower(resourceType)) {
+	case "bid_parse_result", "bid_document", "bid_chapter", "bid_export":
+		return "bid"
+	case "knowledge_document":
+		return "knowledge"
+	case "cost_project":
+		return "cost"
+	case "compliance_check":
+		return "compliance"
+	}
+	switch strings.TrimSpace(strings.ToLower(taskType)) {
+	case "knowledge_process", "knowledge_embedding", "knowledge_rerank":
+		return "knowledge"
+	case "cost_advice":
+		return "cost"
+	case "compliance_check":
+		return "compliance"
+	case "tender_parse", "outline_generate", "chapter_generate", "chapter_ai_action", "document_export":
+		return "bid"
+	default:
+		return ""
+	}
+}
+
+func stageForTask(taskType string) string {
+	switch strings.TrimSpace(strings.ToLower(taskType)) {
+	case "tender_parse":
+		return "interpret"
+	case "outline_generate":
+		return "plan"
+	case "chapter_generate", "chapter_ai_action":
+		return "generate"
+	case "compliance_check":
+		return "check"
+	case "document_export":
+		return "format"
+	case "knowledge_process":
+		return "ingest"
+	case "knowledge_embedding":
+		return "embed"
+	case "knowledge_rerank":
+		return "rerank"
+	case "cost_advice":
+		return "advise"
+	default:
+		return ""
+	}
 }
 
 type pricingRate struct {
