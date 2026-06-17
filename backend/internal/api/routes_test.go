@@ -662,6 +662,31 @@ func TestRouteInfosExposeRequirementCoverageUpdateAsBidWriteRoute(t *testing.T) 
 	}
 }
 
+func TestRouteInfosExposeExternalToolsAsTeamRoutes(t *testing.T) {
+	cases := []struct {
+		method   string
+		path     string
+		required rbac.Level
+	}{
+		{http.MethodGet, "/external-tools", rbac.LevelRead},
+		{http.MethodPut, "/external-tools/:providerKey", rbac.LevelFull},
+		{http.MethodPost, "/external-tools/:providerKey/invoke", rbac.LevelFull},
+		{http.MethodGet, "/external-tools/audit", rbac.LevelRead},
+	}
+	for _, tc := range cases {
+		route, ok := routeInfoByKey(tc.method, tc.path)
+		if !ok {
+			t.Fatalf("expected external tool route %s %s metadata to be present", tc.method, tc.path)
+		}
+		if route.Module != "team" || route.Required != tc.required {
+			t.Fatalf("expected %s %s to require team %s, got %+v", tc.method, tc.path, tc.required, route)
+		}
+		if route.Async {
+			t.Fatalf("expected %s %s to be synchronous", tc.method, tc.path)
+		}
+	}
+}
+
 func TestBidRequirementMatrixCSVIncludesCoverageEvidenceAndSources(t *testing.T) {
 	score := 12.5
 	updatedAt := time.Date(2026, 6, 17, 9, 30, 0, 0, time.UTC)

@@ -60,17 +60,26 @@
 
 ### P0：只读外部 MCP 工具网关
 
-1. 新增外部工具配置模型：
+当前后端基础已落地：
+
+1. `external_tool_configs`：租户级外部工具配置，当前只允许 `streamable_http`。
+2. `external_tool_audit_logs`：记录工具名、请求哈希、请求摘要、响应摘要、耗时、状态、费用估算和业务资源引用。
+3. `GET /external-tools`、`PUT /external-tools/:providerKey`、`POST /external-tools/:providerKey/invoke`、`GET /external-tools/audit`：通过 team 权限访问。
+4. 调用入口使用 JSON-RPC `tools/call`，强制 enabled、allowed_tools、timeout_ms、monthly_budget 和摘要审计。
+
+继续增强清单：
+
+1. 外部工具配置模型继续扩展：
    - tenant_id
    - provider_key
-   - transport：streamable_http / stdio
+   - transport：streamable_http，后续再评估 stdio
    - endpoint 或 command
    - enabled
    - allowed_tools
    - timeout_ms
    - monthly_budget
    - redaction_policy
-2. 新增外部工具审计：
+2. 外部工具审计继续扩展：
    - tool_provider
    - tool_name
    - request_hash

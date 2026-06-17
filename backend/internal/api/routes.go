@@ -26,6 +26,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	platformcost "github.com/frankford824/ZBT/backend/internal/platform/cost"
 	platformdashboard "github.com/frankford824/ZBT/backend/internal/platform/dashboard"
+	"github.com/frankford824/ZBT/backend/internal/platform/externaltool"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	platformproject "github.com/frankford824/ZBT/backend/internal/platform/project"
@@ -61,18 +62,19 @@ type routeRequirement struct {
 }
 
 type server struct {
-	cfg             config.Config
-	store           *saas.Store
-	fileService     *platformfile.Service
-	knowledgeStore  *knowledge.Store
-	bidStore        *bid.Store
-	tenderStore     *platformtender.Store
-	projectStore    *platformproject.Store
-	costStore       *platformcost.Store
-	complianceStore *platformcompliance.Store
-	approvalStore   *platformapproval.Store
-	dashboardStore  *platformdashboard.Store
-	aiCallStore     *aicall.Store
+	cfg               config.Config
+	store             *saas.Store
+	fileService       *platformfile.Service
+	knowledgeStore    *knowledge.Store
+	bidStore          *bid.Store
+	tenderStore       *platformtender.Store
+	projectStore      *platformproject.Store
+	costStore         *platformcost.Store
+	complianceStore   *platformcompliance.Store
+	approvalStore     *platformapproval.Store
+	dashboardStore    *platformdashboard.Store
+	aiCallStore       *aicall.Store
+	externalToolStore *externaltool.Store
 }
 
 var routeSpecs = []routeSpec{
@@ -89,6 +91,10 @@ var routeSpecs = []routeSpec{
 	{"POST", "/roles", "team", false},
 	{"PATCH", "/roles/:id", "team", false},
 	{"DELETE", "/roles/:id", "team", false},
+	{"GET", "/external-tools", "team", false},
+	{"PUT", "/external-tools/:providerKey", "team", false},
+	{"POST", "/external-tools/:providerKey/invoke", "team", false},
+	{"GET", "/external-tools/audit", "team", false},
 	{"GET", "/tenders", "tender", false},
 	{"POST", "/tenders", "tender", false},
 	{"GET", "/tenders/:id", "tender", false},
@@ -239,11 +245,11 @@ var routeAdditionalRequirements = map[string][]routeRequirement{
 const maxCallbackTaskIDLength = 256
 const maxBearerTokenLength = 8 * 1024
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, externalToolStore *externaltool.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware(), limitRequestBody(maxRequestBodyBytes()))
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, externalToolStore: externalToolStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -629,6 +635,10 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.POST("/roles", rbac.Require("team", rbac.LevelFull), s.createRole)
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
 	group.DELETE("/roles/:id", rbac.Require("team", rbac.LevelFull), s.deleteRole)
+	group.GET("/external-tools", rbac.Require("team", rbac.LevelRead), s.listExternalTools)
+	group.PUT("/external-tools/:providerKey", rbac.Require("team", rbac.LevelFull), s.upsertExternalTool)
+	group.POST("/external-tools/:providerKey/invoke", rbac.Require("team", rbac.LevelFull), s.invokeExternalTool)
+	group.GET("/external-tools/audit", rbac.Require("team", rbac.LevelRead), s.listExternalToolAuditLogs)
 	group.GET("/notifications", rbac.Require("team", rbac.LevelRead), s.listNotifications)
 	group.GET("/knowledge", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeHome)
 	group.GET("/knowledge/categories", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeCategories)
@@ -726,6 +736,10 @@ func customRouteSet() map[string]bool {
 		"POST /roles":                                       true,
 		"PATCH /roles/:id":                                  true,
 		"DELETE /roles/:id":                                 true,
+		"GET /external-tools":                               true,
+		"PUT /external-tools/:providerKey":                  true,
+		"POST /external-tools/:providerKey/invoke":          true,
+		"GET /external-tools/audit":                         true,
 		"GET /notifications":                                true,
 		"GET /tenders":                                      true,
 		"POST /tenders":                                     true,
@@ -1382,6 +1396,42 @@ func (s *server) deleteRole(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusNoContent)
+}
+
+func (s *server) listExternalTools(c *gin.Context) {
+	result, err := s.externalToolStore.ListConfigs(c.Request.Context(), tenant.FromContext(c.Request.Context()))
+	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) upsertExternalTool(c *gin.Context) {
+	var req externaltool.UpsertConfigRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	result, err := s.externalToolStore.UpsertConfig(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("providerKey"), req)
+	respond(c, result, err)
+}
+
+func (s *server) invokeExternalTool(c *gin.Context) {
+	var req externaltool.InvokeRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	userID, _ := c.Get("user_id")
+	result, err := s.externalToolStore.Invoke(
+		c.Request.Context(),
+		tenant.FromContext(c.Request.Context()),
+		userID.(string),
+		c.Param("providerKey"),
+		req,
+	)
+	respond(c, result, err)
+}
+
+func (s *server) listExternalToolAuditLogs(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	result, err := s.externalToolStore.ListAuditLogs(c.Request.Context(), tenant.FromContext(c.Request.Context()), limit)
+	respond(c, gin.H{"items": result}, err)
 }
 
 func (s *server) listNotifications(c *gin.Context) {
@@ -2640,7 +2690,7 @@ func respondInternal(c *gin.Context) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) || errors.Is(err, externaltool.ErrNotFound) {
 		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return
 	}
@@ -2648,7 +2698,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusForbidden, apiError("permission_denied", "当前账号没有此操作权限"))
 		return
 	}
-	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) {
+	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
 	}

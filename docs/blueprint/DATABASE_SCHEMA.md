@@ -4,13 +4,15 @@
 
 ## SaaS 底座
 
-tenants、users、tenant_members、tenant_member_roles、roles、permissions、role_permissions、module_permissions、audit_logs、notifications、file_assets、ai_call_logs。
+tenants、users、tenant_members、tenant_member_roles、roles、permissions、role_permissions、module_permissions、audit_logs、notifications、file_assets、ai_call_logs、external_tool_configs、external_tool_audit_logs。
 
 迁移连接使用 owner/superuser，业务连接使用非超级 `zbt_app`，否则 PostgreSQL superuser 会绕过 RLS。
 
 `file_assets` 记录 MinIO 对象元数据，`object_key` 固定为 `tenant_id/biz_type/uuid`，`status` 为 pending / ready / failed / deleted。上传链路先由 Go 生成预签名 URL，浏览器 PUT 到私有 bucket 后再 confirm 为 ready。
 
 `ai_call_logs` 保存当前租户内 AI/文档处理/导出调用审计，包含 trace_id、task_type、provider、model、input_tokens、output_tokens、latency_ms、status、error_message 和 biz_ref。Go 在知识库 embedding 和 rerank 搜索成功后直接写入日志；Python AI 服务通过 HMAC 回调完成的 knowledge_process、chapter_generate、chapter_ai_action、cost_advice、document_export 任务由 Go 验签、更新 `ai_tasks` 后追加日志。前端 `/team?tab=logs` 通过 `GET /ai-call-logs` 读取。
+
+`external_tool_configs` 保存租户级外部 MCP/工具网关配置，包含 provider_key、transport、endpoint、enabled、allowed_tools、timeout_ms、monthly_budget、redaction_policy 和 metadata；当前只允许 `streamable_http`。`external_tool_audit_logs` 保存外部工具调用审计，包含工具名、请求哈希、请求摘要、响应摘要、耗时、状态、费用估算和业务资源引用。两个表均启用 RLS，外部工具不能绕过租户授权、白名单、审计和预算控制。
 
 ## 标讯
 

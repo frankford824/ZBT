@@ -3036,3 +3036,44 @@ cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden .
 
 1. 本轮补齐单条要求的覆盖历史时间线；暂未提供跨要求批量审阅、按操作者/章节筛选和历史 xlsx 导出。
 2. 历史项保存响应来源摘要和原始 `source_refs`，但前端尚未支持点击跳转到原文精确选区或知识库 chunk。
+
+## Loop-50 / 外部 MCP 工具网关后端基础 - 2026-06-17
+
+### 本轮目标
+
+1. 把行业 MCP / Skills 雷达中的 P0 “只读外部 MCP 工具网关”从文档清单推进到后端可运行基础设施。
+2. 外部工具必须租户级显式启用、强制工具白名单、记录摘要审计和预算阻断，不能默认外发客户文件原文。
+3. 首轮只支持受控 `streamable_http` JSON-RPC `tools/call`，不引入 stdio、本地命令执行或黑盒解析/生成主链路。
+
+### 代码交付
+
+1. 新增 `backend/internal/db/migrations/00034_external_tool_gateway.sql`，创建 `external_tool_configs` 和 `external_tool_audit_logs` 两张 RLS 表。
+2. 新增 `backend/internal/platform/externaltool/store.go`，提供外部工具配置、白名单校验、调用预算校验、JSON-RPC `tools/call` 调用、环境变量 token 注入、请求摘要/响应摘要和审计记录。
+3. 新增 `backend/internal/platform/externaltool/store_test.go`，覆盖配置归一化、请求摘要不泄露原文、MCP `tools/call` envelope、Authorization header 和超时。
+4. `backend/internal/api/routes.go` 新增 `GET /external-tools`、`PUT /external-tools/:providerKey`、`POST /external-tools/:providerKey/invoke`、`GET /external-tools/audit`，配置和调用走 team full，审计读取走 team read。
+5. `backend/cmd/server/main.go` 注入 `externaltool.Store`，服务启动后可直接使用新网关。
+6. `API_SPEC.md`、`DATABASE_SCHEMA.md`、`AI_PIPELINE.md`、`AI_IMPLEMENTATION_CHECKLIST.md`、`EXTERNAL_MCP_SKILL_RADAR.md` 同步更新当前状态和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+gofmt -w backend/cmd/server/main.go backend/internal/api/routes.go backend/internal/api/routes_test.go backend/internal/platform/externaltool/store.go backend/internal/platform/externaltool/store_test.go
+cd backend && go test ./internal/platform/externaltool ./internal/api
+cd backend && go test ./...
+git diff --check
+```
+
+结果：
+
+1. 外部工具 store 单元测试通过。
+2. API 路由元数据和既有 API 测试通过。
+3. Go 后端全量测试通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮只完成后端 P0 网关，不提供前端配置页、业务页调用入口和审计页展示。
+2. 本轮只支持 `streamable_http`；stdio 工具、本地命令执行和 SSE 长连接暂不开放。
+3. 本轮只做通用 JSON-RPC MCP 调用，不内置 handaas 等 Provider 的字段模板和生产凭证验证。

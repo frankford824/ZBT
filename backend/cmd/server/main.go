@@ -21,6 +21,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/cost"
 	"github.com/frankford824/ZBT/backend/internal/platform/dashboard"
 	platformdb "github.com/frankford824/ZBT/backend/internal/platform/db"
+	"github.com/frankford824/ZBT/backend/internal/platform/externaltool"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	"github.com/frankford824/ZBT/backend/internal/platform/project"
@@ -58,7 +59,7 @@ func main() {
 	}
 
 	aiCallStore := aicall.NewStore(pool)
-	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool, aiCallStore), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(cfg, pool), compliance.NewStore(pool), approval.NewStore(pool), dashboard.NewStore(pool), aiCallStore)
+	router := api.NewRouter(cfg, saas.NewStore(pool), fileService, knowledge.NewStore(cfg, pool, aiCallStore), bid.NewStore(cfg, pool), tender.NewStore(pool), project.NewStore(pool), cost.NewStore(cfg, pool), compliance.NewStore(pool), approval.NewStore(pool), dashboard.NewStore(pool), aiCallStore, externaltool.NewStore(pool))
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           router,
