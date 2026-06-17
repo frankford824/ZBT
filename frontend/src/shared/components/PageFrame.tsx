@@ -1,4 +1,4 @@
-import { Card, Flex, Space, Typography } from 'antd'
+import { Flex, Space, Typography } from 'antd'
 import type { PropsWithChildren, ReactNode } from 'react'
 import { ForbiddenBlock } from './StateBlocks'
 
@@ -43,7 +43,7 @@ export function PageFrame({
       ) : bare ? (
         children
       ) : (
-        <Card className="work-surface">{children}</Card>
+        <div className="work-surface">{children}</div>
       )}
     </Space>
   )

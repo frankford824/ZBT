@@ -305,11 +305,11 @@ a {
 }
 
 .work-surface {
-  border-radius: 10px;
-}
-
-.work-surface > .ant-card-body {
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  width: 100%;
 }
 
 /* ---------- 去边框化：影代替线 ---------- */
