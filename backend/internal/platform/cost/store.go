@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
@@ -25,7 +26,13 @@ var (
 	ErrInvalidRequest = errors.New("invalid cost request")
 )
 
-const costAdviceSubmitFailureMessage = "成本建议生成启动失败，请稍后重试"
+const (
+	costAdviceSubmitFailureMessage = "成本建议生成启动失败，请稍后重试"
+	maxCostNameRunes               = 255
+	maxCostShortTextRunes          = 128
+	maxCostNoteRunes               = 1000
+	maxCostAmount                  = 999_999_999_999.99
+)
 
 type Store struct {
 	pool   *pgxpool.Pool
@@ -201,8 +208,10 @@ func (s *Store) CreateProject(ctx context.Context, tenantID string, req CreatePr
 		return Project{}, err
 	}
 	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = "成本项目"
+	if name != "" {
+		if err := validateCostTextLength(name, maxCostNameRunes); err != nil {
+			return Project{}, err
+		}
 	}
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -210,8 +219,11 @@ func (s *Store) CreateProject(ctx context.Context, tenantID string, req CreatePr
 		if err := tx.QueryRow(ctx, `select name from projects where tenant_id = $1 and id = $2`, tenantID, req.ProjectID).Scan(&projectName); err != nil {
 			return err
 		}
-		if strings.TrimSpace(req.Name) == "" {
-			name = projectName + "成本项目"
+		if name == "" {
+			name = boundedCostText(projectName+"成本项目", maxCostNameRunes)
+			if name == "" {
+				name = "成本项目"
+			}
 		}
 		return tx.QueryRow(ctx, `
 			insert into cost_projects (tenant_id, project_id, name, status, budget_amount, metadata)
@@ -258,17 +270,25 @@ func (s *Store) UpdateProject(ctx context.Context, tenantID, id string, req Upda
 	if err := validateOptionalAmount(req.BudgetAmount); err != nil {
 		return Project{}, err
 	}
+	var requestedName *string
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			return Project{}, ErrInvalidRequest
+		}
+		if err := validateCostTextLength(name, maxCostNameRunes); err != nil {
+			return Project{}, err
+		}
+		requestedName = &name
+	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := scanProject(tx.QueryRow(ctx, projectSelectSQL()+` where cp.tenant_id = $1 and cp.id = $2`, tenantID, id))
 		if err != nil {
 			return err
 		}
 		name := current.Name
-		if req.Name != nil {
-			name = strings.TrimSpace(*req.Name)
-			if name == "" {
-				return ErrInvalidRequest
-			}
+		if requestedName != nil {
+			name = *requestedName
 		}
 		status := current.Status
 		if req.Status != nil {
@@ -880,6 +900,8 @@ func normalizeProjectStatus(value string) (string, error) {
 func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 	req.Category = strings.TrimSpace(req.Category)
 	req.Name = strings.TrimSpace(req.Name)
+	req.Vendor = strings.TrimSpace(req.Vendor)
+	req.Note = strings.TrimSpace(req.Note)
 	costType, err := normalizeCostType(req.CostType)
 	if err != nil {
 		return req, err
@@ -890,8 +912,6 @@ func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 	}
 	req.CostType = costType
 	req.Status = status
-	req.Vendor = strings.TrimSpace(req.Vendor)
-	req.Note = strings.TrimSpace(req.Note)
 	if err := validateAmount(req.BudgetAmount); err != nil {
 		return req, err
 	}
@@ -903,6 +923,19 @@ func normalizeItemRequest(req CreateItemRequest) (CreateItemRequest, error) {
 	}
 	if req.Name == "" {
 		return req, ErrInvalidRequest
+	}
+	for _, check := range []struct {
+		value string
+		limit int
+	}{
+		{value: req.Category, limit: maxCostShortTextRunes},
+		{value: req.Name, limit: maxCostNameRunes},
+		{value: req.Vendor, limit: maxCostNameRunes},
+		{value: req.Note, limit: maxCostNoteRunes},
+	} {
+		if err := validateCostTextLength(check.value, check.limit); err != nil {
+			return req, err
+		}
 	}
 	return req, nil
 }
@@ -977,10 +1010,32 @@ func validateOptionalAmount(value *float64) error {
 }
 
 func validateAmount(value float64) error {
-	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+	if value < 0 || value > maxCostAmount || math.IsNaN(value) || math.IsInf(value, 0) {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func validateCostTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 {
+		return ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func boundedCostText(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxRunes]))
 }
 
 func normalizeTaskStatus(status string) string {

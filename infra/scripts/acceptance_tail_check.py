@@ -404,6 +404,27 @@ def check_static_docs() -> None:
     require("if (errorMessage?.trim()) return errorMessage.trim()" not in cost_page, "Cost advice UI exposes raw task error message")
     require("getUserFacingErrorMessage(errorMessage" in cost_page, "Cost advice UI missing user-facing error filter")
 
+    cost_store = (ROOT / "backend/internal/platform/cost/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxCostNameRunes",
+        "maxCostShortTextRunes",
+        "maxCostNoteRunes",
+        "maxCostAmount",
+        "validateCostTextLength",
+        "boundedCostText",
+        "utf8.RuneCountInString",
+        "value > maxCostAmount",
+    ):
+        require(needle in cost_store, f"Cost store missing business input boundary: {needle}")
+    cost_store_tests = (ROOT / "backend/internal/platform/cost/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestCostProjectWriteRejectsOversizedNameBeforeDB",
+        "TestBoundedCostTextTrimsGeneratedFallbackNames",
+        "TestNormalizeItemRequestRejectsOversizedTextFields",
+        "TestNormalizeItemRequestAcceptsBoundedUnicodeText",
+    ):
+        require(needle in cost_store_tests, f"Cost store missing business input boundary regression test: {needle}")
+
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
         require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")

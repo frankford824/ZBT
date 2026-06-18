@@ -3,6 +3,7 @@ package cost
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
@@ -118,10 +119,40 @@ func TestMergeItemUpdateRequestRejectsInvalidProvidedFields(t *testing.T) {
 	}
 }
 
+func TestCostProjectWriteRejectsOversizedNameBeforeDB(t *testing.T) {
+	store := NewStore(config.Config{}, nil)
+	projectID := "00000000-0000-4000-8000-000000000001"
+	oversized := strings.Repeat("成", maxCostNameRunes+1)
+
+	_, err := store.CreateProject(context.Background(), "tenant-id", CreateProjectRequest{
+		ProjectID: projectID,
+		Name:      oversized,
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized create project name to be rejected before DB, got %v", err)
+	}
+
+	_, err = store.UpdateProject(context.Background(), "tenant-id", projectID, UpdateProjectRequest{
+		Name: &oversized,
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized update project name to be rejected before DB, got %v", err)
+	}
+}
+
+func TestBoundedCostTextTrimsGeneratedFallbackNames(t *testing.T) {
+	raw := strings.Repeat("项", maxCostNameRunes+10)
+	got := boundedCostText(raw, maxCostNameRunes)
+
+	if len([]rune(got)) != maxCostNameRunes {
+		t.Fatalf("expected generated fallback name to be capped at %d runes, got %d", maxCostNameRunes, len([]rune(got)))
+	}
+}
+
 func TestProjectBudgetRejectsInvalidAmountsBeforeDB(t *testing.T) {
 	store := NewStore(config.Config{}, nil)
 	projectID := "00000000-0000-4000-8000-000000000001"
-	for _, amount := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+	for _, amount := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1), maxCostAmount + 0.01} {
 		_, err := store.CreateProject(context.Background(), "tenant-id", CreateProjectRequest{
 			ProjectID:    projectID,
 			Name:         "成本项目",
@@ -146,9 +177,24 @@ func TestNormalizeItemRequestRejectsInvalidAmounts(t *testing.T) {
 		{Name: "实施顾问", ActualAmount: -1},
 		{Name: "实施顾问", BudgetAmount: math.NaN()},
 		{Name: "实施顾问", ActualAmount: math.Inf(1)},
+		{Name: "实施顾问", BudgetAmount: maxCostAmount + 0.01},
+		{Name: "实施顾问", ActualAmount: maxCostAmount + 0.01},
 	} {
 		if _, err := normalizeItemRequest(req); err != ErrInvalidRequest {
 			t.Fatalf("expected invalid item amount in %+v to be rejected, got %v", req, err)
+		}
+	}
+}
+
+func TestNormalizeItemRequestRejectsOversizedTextFields(t *testing.T) {
+	for _, req := range []CreateItemRequest{
+		{Name: "实施顾问", Category: strings.Repeat("分", maxCostShortTextRunes+1)},
+		{Name: strings.Repeat("顾", maxCostNameRunes+1)},
+		{Name: "实施顾问", Vendor: strings.Repeat("供", maxCostNameRunes+1)},
+		{Name: "实施顾问", Note: strings.Repeat("备", maxCostNoteRunes+1)},
+	} {
+		if _, err := normalizeItemRequest(req); err != ErrInvalidRequest {
+			t.Fatalf("expected oversized item text in %+v to be rejected, got %v", req, err)
 		}
 	}
 }
@@ -160,5 +206,23 @@ func TestNormalizeItemRequestPreservesZeroAmounts(t *testing.T) {
 	}
 	if normalized.BudgetAmount != 0 || normalized.ActualAmount != 0 {
 		t.Fatalf("expected zero amounts to be preserved, got %+v", normalized)
+	}
+}
+
+func TestNormalizeItemRequestAcceptsBoundedUnicodeText(t *testing.T) {
+	normalized, err := normalizeItemRequest(CreateItemRequest{
+		Category: strings.Repeat("分", maxCostShortTextRunes),
+		Name:     strings.Repeat("项", maxCostNameRunes),
+		Vendor:   strings.Repeat("供", maxCostNameRunes),
+		Note:     strings.Repeat("备", maxCostNoteRunes),
+	})
+	if err != nil {
+		t.Fatalf("expected bounded unicode item text to normalize: %v", err)
+	}
+	if len([]rune(normalized.Category)) != maxCostShortTextRunes ||
+		len([]rune(normalized.Name)) != maxCostNameRunes ||
+		len([]rune(normalized.Vendor)) != maxCostNameRunes ||
+		len([]rune(normalized.Note)) != maxCostNoteRunes {
+		t.Fatalf("expected bounded unicode text to be preserved, got %+v", normalized)
 	}
 }

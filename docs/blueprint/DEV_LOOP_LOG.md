@@ -6032,3 +6032,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是文件名输入边界和下载响应稳定性，没有新增文件存储后端、对象扫描或病毒检测能力。
 2. 文件名上限按字符数处理，保留中文文件名兼容性；若未来需要兼容特定网关响应头字节上限，可进一步增加 `Content-Disposition` 级字节预算。
+
+## Loop-124 / 成本业务输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查成本模块写入入口，处理项目名称、明细名称、供应商、备注等业务文本缺少应用层长度边界的问题。
+2. 避免超长成本文本或异常金额进入数据库、报表与 AI 上下文，造成字段膨胀、导出异常或后续生成质量下降。
+3. 将 Go 成本模块的金额边界与数据库 `numeric(14,2)` 和 AI schema 的输入边界对齐，形成可测试、可回归的业务约束。
+
+### 代码交付
+
+1. `backend/internal/platform/cost/store.go` 新增成本模块输入边界常量：项目名称 255 字符、短文本 128 字符、备注 1000 字符、金额上限 `999_999_999_999.99`。
+2. 新增 `validateCostTextLength` 与 `boundedCostText`，使用 `utf8.RuneCountInString` 按字符数处理中文输入，避免按字节误伤中文业务文本。
+3. `CreateProject` 与 `UpdateProject` 在访问数据库前校验显式项目名称；从项目名生成的默认成本项目名称会被截断到安全长度。
+4. `normalizeItemRequest` 对分类、明细名称、供应商和备注做统一 trim 与长度校验，并继续拒绝负数、非有限数和超过金额上限的预算/实际金额。
+5. `backend/internal/platform/cost/store_test.go` 新增超长项目名拒绝、默认名称截断、超长明细字段拒绝、中文边界文本允许等回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求成本输入边界常量、rune 级长度校验、默认名称截断和对应回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/cost
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/cost` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `278 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是成本模块业务输入边界，没有新增成本预测算法、报价策略或模型能力。
+2. 金额上限按当前数据库 `numeric(14,2)` 能力收敛；租户级预算规则、币种规则和动态阈值仍属于后续业务策略层工作。
