@@ -314,12 +314,20 @@ def check_static_docs() -> None:
         "maxExternalToolArgumentsJSONBytes",
         "maxExternalToolResponseBytes",
         "maxExternalToolResourceTypeRunes",
+        "maxExternalToolConfigMetadataJSONBytes",
+        "maxExternalToolAuditMetadataJSONBytes",
         "normalizeExternalToolArguments",
+        "marshalExternalToolMetadataJSON",
         "readExternalToolResponseBody",
         "net.DefaultResolver.LookupNetIP",
         "CheckRedirect",
     ):
         require(needle in external_tool_store, f"External tool gateway missing public endpoint guard: {needle}")
+    for forbidden in (
+        "metadataRaw, _ := json.Marshal(normalized.Metadata)",
+        "metadataRaw, _ := json.Marshal(input.Metadata)",
+    ):
+        require(forbidden not in external_tool_store, f"External tool gateway still ignores metadata marshal failure: {forbidden}")
     require(
         "json.Marshal(value)" not in external_tool_store,
         "External tool audit summary still serializes raw response values",
@@ -340,6 +348,7 @@ def check_static_docs() -> None:
         "TestSafeErrorRedactsExternalEndpointAndSecrets",
         "TestNormalizeConfigNormalizesCostMetadata",
         "TestNormalizeConfigRejectsInvalidExternalToolMoney",
+        "TestMarshalExternalToolMetadataJSONRejectsInvalidAndOversizedValues",
         "TestCostPerCallIgnoresInvalidStoredMetadata",
         "TestNormalizeInvokeRequestRejectsOversizedAndNonJSONArguments",
         "TestCallStreamableHTTPRejectsNonJSONArgumentsBeforeOutboundRequest",

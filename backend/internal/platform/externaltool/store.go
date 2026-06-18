@@ -45,9 +45,11 @@ const (
 	maxTimeoutMS     = 60000
 	maxSummaryRunes  = 1000
 
-	maxExternalToolArgumentsJSONBytes = 64 * 1024
-	maxExternalToolResponseBytes      = 2 * 1024 * 1024
-	maxExternalToolResourceTypeRunes  = 64
+	maxExternalToolArgumentsJSONBytes      = 64 * 1024
+	maxExternalToolResponseBytes           = 2 * 1024 * 1024
+	maxExternalToolResourceTypeRunes       = 64
+	maxExternalToolConfigMetadataJSONBytes = 4 * 1024
+	maxExternalToolAuditMetadataJSONBytes  = 16 * 1024
 
 	maxExternalToolMonthlyBudget = 10000000
 	maxExternalToolCostPerCall   = 100000
@@ -180,9 +182,12 @@ func (s *Store) UpsertConfig(ctx context.Context, tenantID, providerKey string, 
 	if err != nil {
 		return Config{}, err
 	}
+	metadataRaw, err := marshalExternalToolMetadataJSON(normalized.Metadata, maxExternalToolConfigMetadataJSONBytes)
+	if err != nil {
+		return Config{}, err
+	}
 	var config Config
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		metadataRaw, _ := json.Marshal(normalized.Metadata)
 		created, err := scanConfig(tx.QueryRow(ctx, `
 			insert into external_tool_configs (
 				tenant_id, provider_key, name, transport, endpoint, command, enabled,
@@ -408,9 +413,12 @@ func (s *Store) recordAudit(ctx context.Context, input auditInput) (AuditLog, er
 	input.RequestSummary = truncateSummary(input.RequestSummary)
 	input.ResponseSummary = truncateSummary(input.ResponseSummary)
 	input.ErrorMessage = truncateSummary(input.ErrorMessage)
+	metadataRaw, err := marshalExternalToolMetadataJSON(input.Metadata, maxExternalToolAuditMetadataJSONBytes)
+	if err != nil {
+		return AuditLog{}, err
+	}
 	var log AuditLog
-	err := s.withTenant(ctx, input.TenantID, func(tx pgx.Tx) error {
-		metadataRaw, _ := json.Marshal(input.Metadata)
+	err = s.withTenant(ctx, input.TenantID, func(tx pgx.Tx) error {
 		created, err := scanAuditLog(tx.QueryRow(ctx, `
 			insert into external_tool_audit_logs (
 				tenant_id, user_id, config_id, tool_provider, tool_name,
@@ -615,6 +623,17 @@ func normalizeExternalToolMetadata(value map[string]any) (map[string]any, error)
 		result["cost_per_call"] = cost
 	}
 	return result, nil
+}
+
+func marshalExternalToolMetadataJSON(value map[string]any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(normalizeMetadata(value))
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
 }
 
 func parseExternalToolMoney(value any, max float64) (float64, bool) {

@@ -88,6 +88,23 @@ func TestNormalizeConfigRejectsInvalidExternalToolMoney(t *testing.T) {
 	}
 }
 
+func TestMarshalExternalToolMetadataJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	for name, value := range map[string]map[string]any{
+		"invalid number": {"bad": math.NaN()},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("审", maxExternalToolAuditMetadataJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalExternalToolMetadataJSON(value, maxExternalToolAuditMetadataJSONBytes); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("expected invalid external tool metadata to be rejected, got %v", err)
+			}
+		})
+	}
+	if raw, err := marshalExternalToolMetadataJSON(nil, maxExternalToolAuditMetadataJSONBytes); err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil metadata to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+}
+
 func TestNormalizeConfigRejectsUnsafeExternalEndpoints(t *testing.T) {
 	for _, endpoint := range []string{
 		"http://localhost:9000/mcp",
