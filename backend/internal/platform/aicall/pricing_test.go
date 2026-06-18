@@ -163,6 +163,52 @@ func TestNormalizeRecordBizRefTrimsAndBoundsExternalTaskID(t *testing.T) {
 	}
 }
 
+func TestUnmarshalAITaskJSONRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid object": []byte(`[{"bad":"shape"}]`),
+		"invalid json":   []byte(`{"route":`),
+		"oversized":      []byte(`{"payload":"` + strings.Repeat("审", maxAITaskRouteJSONBytes) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalAITaskJSON(raw, maxAITaskRouteJSONBytes); err == nil {
+				t.Fatal("expected invalid stored AI task JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalAITaskJSONNormalizesEmptyStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte("null"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := unmarshalAITaskJSON(raw, maxAITaskRouteJSONBytes)
+			if err != nil {
+				t.Fatalf("expected empty stored AI task JSON to normalize, got %v", err)
+			}
+			if result == nil || len(result) != 0 {
+				t.Fatalf("expected empty JSON map, got %#v", result)
+			}
+		})
+	}
+}
+
+func TestCallbackTaskResultPrefersCallbackPayload(t *testing.T) {
+	result, err := callbackTaskResult(map[string]any{"trace_id": "callback-trace"}, []byte(`{"result":`))
+	if err != nil {
+		t.Fatalf("expected callback result to bypass stale stored result, got %v", err)
+	}
+	if result["trace_id"] != "callback-trace" {
+		t.Fatalf("expected callback result to win, got %#v", result)
+	}
+
+	if _, err := callbackTaskResult(nil, []byte(`{"result":`)); err == nil {
+		t.Fatal("expected invalid stored result to be rejected when callback result is absent")
+	}
+}
+
 func TestEstimateCostRejectsOversizedComputedCost(t *testing.T) {
 	t.Setenv("AI_MODEL_PRICING_JSON", `{
 		"deepseek/deepseek-chat": {"input_per_1m": 1000000000, "output_per_1m": 1000000000}

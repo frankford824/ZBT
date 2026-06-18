@@ -1,6 +1,7 @@
 package aicall
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -25,6 +26,8 @@ const (
 	maxAIEstimatedCost             = 100000.0
 	maxAIBizRefJSONBytes           = 16 * 1024
 	maxAIBizRefExternalTaskIDRunes = 255
+	maxAITaskRouteJSONBytes        = 16 * 1024
+	maxAITaskResultJSONBytes       = 2 * 1024 * 1024
 )
 
 type Store struct {
@@ -230,11 +233,16 @@ func (s *Store) RecordTaskCallback(ctx context.Context, tenantID, externalTaskID
 		); err != nil {
 			return err
 		}
-		_ = json.Unmarshal(routeRaw, &task.Route)
-		_ = json.Unmarshal(resultRaw, &task.Result)
-		if callbackResult != nil {
-			task.Result = callbackResult
+		route, err := unmarshalAITaskJSON(routeRaw, maxAITaskRouteJSONBytes)
+		if err != nil {
+			return err
 		}
+		task.Route = route
+		result, err := callbackTaskResult(callbackResult, resultRaw)
+		if err != nil {
+			return err
+		}
+		task.Result = result
 		status := task.Status
 		if callbackStatus != "" {
 			status = callbackStatus
@@ -382,6 +390,31 @@ func normalizeRecordBizRef(values map[string]any) (map[string]any, []byte, strin
 		return nil, nil, "", ErrInvalidRequest
 	}
 	return normalized, raw, externalTaskID, nil
+}
+
+func callbackTaskResult(callbackResult map[string]any, storedRaw []byte) (map[string]any, error) {
+	if callbackResult != nil {
+		return callbackResult, nil
+	}
+	return unmarshalAITaskJSON(storedRaw, maxAITaskResultJSONBytes)
+}
+
+func unmarshalAITaskJSON(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return result, nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
 }
 
 func sanitizeCost(value float64) float64 {
