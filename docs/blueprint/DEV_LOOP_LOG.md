@@ -4656,3 +4656,37 @@ git diff --check
 
 1. 本轮是安全边界加固，不接真实 MinerU/PaddleOCR endpoint。
 2. 若某真实 OCR 厂商必须使用跨域响应轮询地址，需要通过部署环境显式配置 `*_POLL_ENDPOINT`，不能信任响应体直接指定跨域目标。
+
+## Loop-91 / OCR endpoint 端口合法性校验 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 OCR Provider URL 安全边界，补齐非法端口未在配置校验阶段拦截的问题。
+2. 避免 `https://host:bad/path` 或越界端口进入外部请求层，统一返回安全失败。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/document_parser.py` 的 `_url_port()` 现在会捕获 `urllib.parse` 对非法端口抛出的 `ValueError`，并转为 OCR endpoint 校验错误。
+2. `_safe_ocr_endpoint()` 会显式调用 `_url_port()`，确保主 OCR endpoint 和显式配置的 poll endpoint 都在发请求前校验端口合法性。
+3. `ai-service/app/tests/test_document_parser.py` 在非法 endpoint 参数化样例中加入非数字端口和越界端口，确认不会发出外部请求。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/pipelines/parse/document_parser.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py app/tests/test_ocr_provider_eval.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+git diff --check
+```
+
+结果：
+
+1. Python 语法检查通过。
+2. 文档解析与 OCR Provider 评测测试合计 56 项通过。
+3. Ruff 和 diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮只加固 URL 校验，不改变 OCR Provider 请求格式或响应归一化。

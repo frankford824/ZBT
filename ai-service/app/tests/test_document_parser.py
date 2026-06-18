@@ -725,6 +725,8 @@ def test_ocr_http_error_metadata_does_not_expose_response_body(monkeypatch) -> N
         "https://token@ocr.example.test/parse",
         "https://ocr.example.test/parse?debug=1",
         "https://ocr.example.test/parse#fragment",
+        "https://ocr.example.test:bad/parse",
+        "https://ocr.example.test:99999/parse",
         "https://ocr.example.test\\parse",
         "https://ocr.example.test/parse\nX-Injected: yes",
         "ocr.example.test/parse",

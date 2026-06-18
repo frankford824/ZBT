@@ -1192,8 +1192,12 @@ def _same_origin_endpoint(left: str, right: str) -> bool:
 
 
 def _url_port(parsed: parse.ParseResult) -> int | None:
-    if parsed.port is not None:
-        return parsed.port
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("OCR endpoint port is invalid") from exc
+    if port is not None:
+        return port
     if parsed.scheme == "https":
         return 443
     if parsed.scheme == "http":
@@ -1233,6 +1237,7 @@ def _safe_ocr_endpoint(value: str) -> str:
         or parsed.fragment
     ):
         raise RuntimeError("OCR_HTTP_ENDPOINT must be an absolute HTTP(S) URL")
+    _url_port(parsed)
     return parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path or "/", "", "", ""))
 
 
