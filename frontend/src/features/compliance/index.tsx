@@ -57,7 +57,17 @@ import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/St
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
-const levelOptions = ['L1', 'L2', 'L3', 'L4'].map((value) => ({ label: value, value }))
+const complianceLevelLabels: Record<ComplianceRuleDTO['level'], string> = {
+  L1: '基础完整性',
+  L2: '响应一致性',
+  L3: '废标条款',
+  L4: '评分优化',
+}
+
+const levelOptions = (Object.keys(complianceLevelLabels) as ComplianceRuleDTO['level'][]).map((value) => ({
+  label: complianceLevelLabel(value),
+  value,
+}))
 
 const severityOptions: Array<{ label: string; value: ComplianceSeverity }> = [
   { label: '通过', value: 'pass' },
@@ -100,6 +110,10 @@ function verdictColor(result: string) {
 function severityTag(severity: ComplianceSeverity) {
   const color = severity === 'fail' ? 'red' : severity === 'fail_candidate' ? 'orange' : severity === 'warn' ? 'gold' : 'green'
   return <Tag color={color}>{severityLabels[severity] || '状态未知'}</Tag>
+}
+
+function complianceLevelLabel(level: ComplianceRuleDTO['level']) {
+  return complianceLevelLabels[level] || '规则层级'
 }
 
 function statusTag(status: string) {
@@ -319,7 +333,7 @@ export function CompliancePage() {
                         columns={[
                           { title: '名称', dataIndex: 'name', width: 180 },
                           { title: '分类', dataIndex: 'category', width: 130 },
-                          { title: '层级', dataIndex: 'level', width: 80, render: (value) => <Tag>{value}</Tag> },
+                          { title: '层级', dataIndex: 'level', width: 110, render: (value) => <Tag>{complianceLevelLabel(value)}</Tag> },
                           { title: '严重度', dataIndex: 'severity', width: 120, render: severityTag },
                           { title: '说明', dataIndex: 'description', ellipsis: true, render: (value) => value || '-' },
                           {

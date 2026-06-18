@@ -5358,3 +5358,40 @@ cd frontend && pnpm build
 
 1. 本轮只修复响应证据补充弹窗的内部校验错误文案，不调整响应矩阵数据结构。
 2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。
+
+## Loop-109 / 合规规则层级展示收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查合规规则页，处理规则层级直接展示 `L1/L2/L3/L4` 编码的问题。
+2. 用业务语义展示检查层级，避免用户理解技术枚举。
+3. 将合规层级展示加入静态验收防回退。
+
+### 代码交付
+
+1. `frontend/src/features/compliance/index.tsx` 新增 `complianceLevelLabels` 和 `complianceLevelLabel()`，把 L1-L4 显示为“基础完整性 / 响应一致性 / 废标条款 / 评分优化”。
+2. 检查层级选择器和规则表层级列统一显示业务标签，提交给后端的枚举值保持不变。
+3. `infra/scripts/acceptance_tail_check.py --static-docs` 新增防回退检查，禁止回到 raw L1-L4 label 和 `<Tag>{value}</Tag>`。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新记录识别为 Loop-109。
+2. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+3. AI pytest 通过：`237 passed`。
+4. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+5. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 后端仍保留 L1-L4 枚举作为规则配置和接口契约，本轮只调整前端展示语义。
+2. 未新增浏览器截图验收；继续用静态防漂移、lint、build 和总检验证。

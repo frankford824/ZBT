@@ -327,8 +327,12 @@ def check_static_docs() -> None:
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
         require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")
+    require("['L1', 'L2', 'L3', 'L4'].map((value) => ({ label: value, value }))" not in compliance_page, "Compliance level selector exposes raw level codes")
+    require("render: (value) => <Tag>{value}</Tag>" not in compliance_page, "Compliance rule table exposes raw level codes")
     for needle in ("createComplianceRuleCode", "可选，选择需要检查的标书"):
         require(needle in compliance_page, f"Compliance UI missing user-facing workflow guard: {needle}")
+    for needle in ("complianceLevelLabels", "complianceLevelLabel", "基础完整性", "响应一致性", "废标条款", "评分优化"):
+        require(needle in compliance_page, f"Compliance UI missing business level label: {needle}")
 
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
