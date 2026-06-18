@@ -4838,3 +4838,42 @@ cd ai-service && .venv/bin/python -m ruff check app
 ### 偏离蓝图
 
 1. 本轮仍只收紧工程验证入口，不改变业务功能。
+
+## Loop-96 / 工程1黄金样本纳入总检 - 2026-06-18
+
+### 本轮目标
+
+1. 继续按标准招投标文件验证系统功能可用性，避免黄金样本只停留在手动验收。
+2. 将工程1的解析、投标文件生成覆盖、导出格式验收纳入 `./infra/scripts/check.sh`。
+3. 让后续每次总检都能回归核心业务闭环，而不只验证单元测试和静态检查。
+
+### 代码交付
+
+1. `infra/scripts/check.sh` 在 AI 服务 pytest 后新增工程1黄金样本回归：
+   - `app.evaluation.tender_parse_eval --golden docs/sample_docs/golden/工程1.parse.json`
+   - `app.evaluation.generation_coverage_eval --input docs/sample_docs/golden/工程1.generation_coverage.json`
+   - `app.evaluation.export_format_eval --input docs/sample_docs/golden/工程1.export.json`
+2. 复用本地 `ai-service/.venv/bin/python` 优先策略，保证总检与手动验收使用同一 Python 环境。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+cd ai-service && .venv/bin/python -m app.evaluation.generation_coverage_eval --input ../docs/sample_docs/golden/工程1.generation_coverage.json
+cd ai-service && .venv/bin/python -m app.evaluation.export_format_eval --input ../docs/sample_docs/golden/工程1.export.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 工程1解析黄金样本通过：`score=1.0 passed=109/109`。
+2. 工程1生成覆盖验收通过：`mandatory_coverage=1.0 source_ref_resolution=1.0 source_ref_reference_id=1.0 source_ref_location=1.0 passed=9/9`。
+3. 工程1导出格式验收通过：`passed=23/23 name=工程1.export`。
+4. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest + 工程1三项黄金样本回归全部通过。
+
+### 偏离蓝图
+
+1. OCR Provider 的真实外部端点验收仍未纳入总检，因为它依赖部署环境中的 provider 地址和凭据；本轮先固化可离线重复执行的业务黄金样本。
+2. Docker 中 AI 服务容器未运行，容器内 pytest 仍按既有逻辑跳过。

@@ -31,6 +31,12 @@ fi
   exit 1
 }
 "$AI_PYTHON" -m pytest app/tests -q -s
+"$AI_PYTHON" -m app.evaluation.tender_parse_eval \
+  --golden "$ROOT/docs/sample_docs/golden/工程1.parse.json"
+"$AI_PYTHON" -m app.evaluation.generation_coverage_eval \
+  --input "$ROOT/docs/sample_docs/golden/工程1.generation_coverage.json"
+"$AI_PYTHON" -m app.evaluation.export_format_eval \
+  --input "$ROOT/docs/sample_docs/golden/工程1.export.json"
 
 cd "$ROOT"
 if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
