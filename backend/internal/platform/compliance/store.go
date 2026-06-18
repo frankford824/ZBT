@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,6 +19,21 @@ import (
 var (
 	ErrNotFound       = errors.New("compliance resource not found")
 	ErrInvalidRequest = errors.New("invalid compliance request")
+)
+
+const (
+	maxComplianceCheckNameRunes       = 255
+	maxComplianceLevelSelections      = 4
+	maxComplianceRuleCodeRunes        = 128
+	maxComplianceRuleNameRunes        = 255
+	maxComplianceRuleCategoryRunes    = 128
+	maxComplianceRuleDescriptionRunes = 2000
+	maxComplianceRuleMetadataEntries  = 50
+	maxComplianceRuleMetadataKeyRunes = 128
+	maxComplianceRuleMetadataBytes    = 16 * 1024
+	maxComplianceIssueTitleRunes      = 255
+	maxComplianceIssueEvidenceRunes   = 1000
+	maxComplianceIssueSuggestionRunes = 1000
 )
 
 type Store struct {
@@ -134,9 +150,9 @@ func (s *Store) ListChecks(ctx context.Context, tenantID string) ([]Check, error
 }
 
 func (s *Store) CreateCheck(ctx context.Context, tenantID string, req CreateCheckRequest) (CheckSnapshot, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = "合规检查"
+	name, err := normalizeCheckName(req.Name)
+	if err != nil {
+		return CheckSnapshot{}, err
 	}
 	levels, err := normalizeLevels(req.Levels)
 	if err != nil {
@@ -356,7 +372,10 @@ func (s *Store) CreateRule(ctx context.Context, tenantID string, req CreateRuleR
 	if err != nil {
 		return Rule{}, err
 	}
-	metadata, _ := json.Marshal(normalized.Metadata)
+	metadata, err := json.Marshal(normalized.Metadata)
+	if err != nil {
+		return Rule{}, ErrInvalidRequest
+	}
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := ensureUniqueRuleCode(ctx, tx, tenantID, normalized.Code, ""); err != nil {
@@ -382,7 +401,10 @@ func (s *Store) UpdateRule(ctx context.Context, tenantID, id string, req UpdateR
 	if err != nil {
 		return Rule{}, err
 	}
-	metadata, _ := json.Marshal(normalized.Metadata)
+	metadata, err := json.Marshal(normalized.Metadata)
+	if err != nil {
+		return Rule{}, ErrInvalidRequest
+	}
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var exists bool
 		if err := tx.QueryRow(ctx, `select exists(select 1 from compliance_rules where tenant_id = $1 and id = $2)`, tenantID, id).Scan(&exists); err != nil {
@@ -577,6 +599,12 @@ func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID
 			continue
 		}
 		evidence, suggestion := evidenceForRule(rule)
+		title := boundedComplianceText(rule.Name, maxComplianceIssueTitleRunes)
+		if title == "" {
+			title = "合规问题"
+		}
+		evidence = boundedComplianceText(evidence, maxComplianceIssueEvidenceRunes)
+		suggestion = boundedComplianceText(suggestion, maxComplianceIssueSuggestionRunes)
 		locationMap, err := buildIssueLocation(ctx, tx, tenantID, bidID, rule)
 		if err != nil {
 			return err
@@ -585,7 +613,7 @@ func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID
 		if _, err := tx.Exec(ctx, `
 			insert into compliance_issues (tenant_id, check_id, rule_id, category, severity, status, title, evidence, suggestion, location)
 			values ($1, $2, $3, $4, $5, 'open', $6, $7, $8, $9)
-		`, tenantID, checkID, rule.ID, rule.Category, rule.Severity, rule.Name, evidence, suggestion, location); err != nil {
+		`, tenantID, checkID, rule.ID, rule.Category, rule.Severity, title, evidence, suggestion, location); err != nil {
 			return err
 		}
 	}
@@ -893,11 +921,26 @@ func nullableUUIDString(value any) string {
 	return ""
 }
 
+func normalizeCheckName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = "合规检查"
+	}
+	if err := validateComplianceTextLength(value, maxComplianceCheckNameRunes); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
 func normalizeLevels(levels []string) ([]string, error) {
 	if len(levels) == 0 {
 		return []string{"L1", "L2", "L3"}, nil
 	}
+	if len(levels) > maxComplianceLevelSelections {
+		return nil, ErrInvalidRequest
+	}
 	allowed := map[string]bool{"L1": true, "L2": true, "L3": true, "L4": true}
+	seen := map[string]bool{}
 	result := []string{}
 	for _, level := range levels {
 		level = strings.ToUpper(strings.TrimSpace(level))
@@ -905,7 +948,10 @@ func normalizeLevels(levels []string) ([]string, error) {
 			continue
 		}
 		if allowed[level] {
-			result = append(result, level)
+			if !seen[level] {
+				result = append(result, level)
+				seen[level] = true
+			}
 			continue
 		}
 		return nil, ErrInvalidRequest
@@ -926,6 +972,19 @@ func normalizeRule(req CreateRuleRequest) (CreateRuleRequest, error) {
 	if req.Code == "" || req.Name == "" || req.Category == "" {
 		return req, ErrInvalidRequest
 	}
+	for _, check := range []struct {
+		value string
+		limit int
+	}{
+		{req.Code, maxComplianceRuleCodeRunes},
+		{req.Name, maxComplianceRuleNameRunes},
+		{req.Category, maxComplianceRuleCategoryRunes},
+		{req.Description, maxComplianceRuleDescriptionRunes},
+	} {
+		if err := validateComplianceTextLength(check.value, check.limit); err != nil {
+			return req, err
+		}
+	}
 	if req.Level == "" {
 		req.Level = "L1"
 	} else if !map[string]bool{"L1": true, "L2": true, "L3": true, "L4": true}[req.Level] {
@@ -936,10 +995,62 @@ func normalizeRule(req CreateRuleRequest) (CreateRuleRequest, error) {
 	} else if !map[string]bool{"pass": true, "warn": true, "fail_candidate": true, "fail": true}[req.Severity] {
 		return req, ErrInvalidRequest
 	}
-	if req.Metadata == nil {
-		req.Metadata = map[string]any{}
+	metadata, err := normalizeRuleMetadata(req.Metadata)
+	if err != nil {
+		return req, err
 	}
+	req.Metadata = metadata
 	return req, nil
+}
+
+func normalizeRuleMetadata(metadata map[string]any) (map[string]any, error) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if len(metadata) > maxComplianceRuleMetadataEntries {
+		return nil, ErrInvalidRequest
+	}
+	normalized := map[string]any{}
+	for key, value := range metadata {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, ErrInvalidRequest
+		}
+		if err := validateComplianceTextLength(key, maxComplianceRuleMetadataKeyRunes); err != nil {
+			return nil, err
+		}
+		normalized[key] = value
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	if len(raw) > maxComplianceRuleMetadataBytes {
+		return nil, ErrInvalidRequest
+	}
+	return normalized, nil
+}
+
+func validateComplianceTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 {
+		return ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func boundedComplianceText(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxRunes]))
 }
 
 func validateUUID(value string) error {

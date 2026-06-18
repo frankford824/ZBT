@@ -464,6 +464,30 @@ def check_static_docs() -> None:
     ):
         require(needle in project_store_tests, f"Project store missing business input boundary regression test: {needle}")
 
+    compliance_store = (ROOT / "backend/internal/platform/compliance/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxComplianceCheckNameRunes",
+        "maxComplianceLevelSelections",
+        "maxComplianceRuleCodeRunes",
+        "maxComplianceRuleMetadataBytes",
+        "normalizeCheckName",
+        "normalizeRuleMetadata",
+        "validateComplianceTextLength",
+        "boundedComplianceText",
+        "utf8.RuneCountInString",
+    ):
+        require(needle in compliance_store, f"Compliance store missing business input boundary: {needle}")
+    compliance_store_tests = (ROOT / "backend/internal/platform/compliance/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestNormalizeLevelsDedupesAndBoundsSelections",
+        "TestCreateCheckRejectsOversizedNameAndLevelsBeforeDB",
+        "TestNormalizeRuleRejectsOversizedTextAndMetadata",
+        "TestNormalizeRuleTrimsMetadataKeysAndAcceptsBoundedUnicodeText",
+        "TestNormalizeRuleMetadataRejectsTooManyEntries",
+        "TestBoundedComplianceTextTrimsGeneratedIssueText",
+    ):
+        require(needle in compliance_store_tests, f"Compliance store missing business input boundary regression test: {needle}")
+
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
         require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")

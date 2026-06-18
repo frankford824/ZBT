@@ -6225,3 +6225,51 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是项目业务输入与派生文本边界，没有新增项目协同、成本分析或知识库检索能力。
 2. 派生标题/文件名采用字符数截断，优先保证中文业务名称可读；若未来需要适配特定网关响应头字节预算，可在下载响应层继续增加字节级限制。
+
+## Loop-128 / 合规规则输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查合规模块写入链路，处理检查名称、规则字段、规则 metadata 和 levels 配置缺少边界的问题。
+2. 避免超长检查名、重复层级数组或异常 metadata 放大 `compliance_checks.config`、`compliance_rules.metadata`、问题列表和报告链路。
+3. 对旧规则生成 issue 的标题、证据和建议补派生文本边界，避免历史异常数据继续扩散到前端和报告。
+
+### 代码交付
+
+1. `backend/internal/platform/compliance/store.go` 新增合规模块输入边界常量：检查名称 255 字符、层级选择最多 4 项、规则 code 128 字符、规则名 255 字符、分类 128 字符、描述 2000 字符、metadata 最多 50 项且 JSON 不超过 16KB。
+2. 新增 `normalizeCheckName()`、`normalizeRuleMetadata()`、`validateComplianceTextLength()` 和 `boundedComplianceText()`，统一按 `utf8.RuneCountInString` 做中文友好的长度校验。
+3. `normalizeLevels()` 增加层级数量上限和去重逻辑，保留空层级默认 L1-L3 的既有行为。
+4. `CreateCheck()` 在进入事务前校验检查名称和 levels，超长请求直接返回 `ErrInvalidRequest`。
+5. `CreateRule()` / `UpdateRule()` 对规则文本和 metadata 做写库前校验，并不再忽略 metadata marshal 错误。
+6. `generateIssues()` 对规则派生的 issue 标题、证据和建议做截断保护，并为空标题保留业务兜底。
+7. `backend/internal/platform/compliance/store_test.go` 新增 levels 去重/上限、检查名写库前拒绝、规则文本/metadata 边界、metadata key trim 和派生文本截断回归测试。
+8. `infra/scripts/acceptance_tail_check.py --static-docs` 增加合规模块业务输入边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/compliance/store.go internal/platform/compliance/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/compliance
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/compliance` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `282 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是合规规则和检查输入边界，没有新增语义合规模型、OCR 或人工复核工作流。
+2. metadata 当前按条目数和 JSON 字节预算收敛；若后续需要复杂规则参数，应拆成明确字段或版本化 schema，而不是继续扩大自由 JSON。
