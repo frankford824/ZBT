@@ -3305,3 +3305,39 @@ git diff --check
 
 1. 本轮实现当前页前端筛选，不新增跨页服务端条件批处理。
 2. 本轮不做来源原文精确跳转或知识库 chunk 定位。
+
+## Loop-57 / 响应来源原文预览入口 - 2026-06-17
+
+### 本轮目标
+
+1. 补齐响应矩阵来源只显示数量、不能打开原文的缺口。
+2. 优先复用现有文件预览和知识库文档预览接口，不新增来源解析旁路。
+3. 仍保持业务口径：展示文件或章节、页码、原文摘录和“查看原文”，不暴露 chunk_id、schema、provider、token 等技术字段。
+
+### 代码交付
+
+1. `frontend/src/shared/api/client.ts` 新增 `fetchKnowledgeDocumentPreview()`，调用 `GET /knowledge/documents/:id/preview` 获取知识库文档预览链接。
+2. `frontend/src/features/bid/index.tsx` 将“来源 N 处”从标签改成可点击入口，打开响应来源列表。
+3. 来源列表逐条展示来源标题和摘录；来源携带 `file_id` / `file_asset_id` 时走文件预览，携带 `document_id` / `source_document_id` 时走知识库文档预览。
+4. 有页码的来源会给预览 URL 附加 `#page=N` 锚点，PDF 预览器可直接定位对应页。
+5. `frontend/src/index.css` 新增来源预览列表的响应式布局，避免标题、摘录和按钮错位。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 同步更新当前能力和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 TypeScript 构建和 Vite 打包通过。
+2. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮实现文件/文档级预览和页码锚点，不做 chunk 内文本高亮。
+2. 人工录入但没有文件或文档 ID 的来源只能展示详情，不能伪装成可跳转来源。

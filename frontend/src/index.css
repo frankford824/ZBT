@@ -1146,6 +1146,25 @@ a {
   min-width: 0;
 }
 
+.requirement-source-preview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.requirement-source-preview-row:last-child {
+  border-bottom: 0;
+}
+
+.requirement-source-preview-text {
+  margin: 4px 0 0 !important;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .requirement-source-row {
     grid-template-columns: minmax(0, 1fr) 72px 32px;
@@ -1153,6 +1172,10 @@ a {
 
   .requirement-source-row .ant-input-textarea {
     grid-column: 1 / -1;
+  }
+
+  .requirement-source-preview-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

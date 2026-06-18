@@ -1509,6 +1509,11 @@ export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocumentDTO[]>
   return data.items
 }
 
+export async function fetchKnowledgeDocumentPreview(documentId: string): Promise<PresignedFileUrlDTO> {
+  const { data } = await apiClient.get<PresignedFileUrlDTO>(`/knowledge/documents/${documentId}/preview`)
+  return data
+}
+
 export async function updateKnowledgeDocument(
   documentId: string,
   payload: {

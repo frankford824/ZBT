@@ -75,6 +75,8 @@ import {
   fetchBids,
   fetchChapterDiff,
   fetchChapterVersions,
+  fetchFileURL,
+  fetchKnowledgeDocumentPreview,
   getApiErrorMessage,
   generateBid,
   generateBidOutline,
@@ -829,6 +831,55 @@ export function BidWizardPage() {
     requirementHistoryMutation.reset()
     requirementHistoryMutation.mutate(row.id)
   }
+  const openRequirementSourcePreview = async (sourceRef: unknown) => {
+    const target = requirementSourcePreviewTarget(sourceRef)
+    if (!target) {
+      message.info('该来源暂未关联可预览文件')
+      return
+    }
+    try {
+      const result =
+        target.type === 'file' ? await fetchFileURL(target.id, 'preview') : await fetchKnowledgeDocumentPreview(target.id)
+      const openError = fileOpenErrorMessage(openFileUrl(withPreviewPageAnchor(result.url, requirementSourcePage(sourceRef))))
+      if (openError) {
+        message.error(openError)
+      }
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '获取来源预览失败'))
+    }
+  }
+  const openRequirementSourcesModal = (row: ParseRequirementRow) => {
+    const sourceRefs = row.coverageSourceRefs
+    if (!sourceRefs.length) {
+      message.info('暂未关联响应来源')
+      return
+    }
+    Modal.info({
+      title: '响应来源',
+      width: 720,
+      okText: '关闭',
+      content: (
+        <Space direction="vertical" size={10} className="full-width">
+          {sourceRefs.map((sourceRef, index) => {
+            const target = requirementSourcePreviewTarget(sourceRef)
+            return (
+              <div className="requirement-source-preview-row" key={index}>
+                <div>
+                  <Typography.Text strong>{requirementSourceTitle(sourceRef)}</Typography.Text>
+                  <Typography.Paragraph className="requirement-source-preview-text">
+                    {requirementSourceRefsSummary([sourceRef]) || '未填写来源摘录'}
+                  </Typography.Paragraph>
+                </div>
+                <Button size="small" disabled={!target} onClick={() => void openRequirementSourcePreview(sourceRef)}>
+                  查看原文
+                </Button>
+              </div>
+            )
+          })}
+        </Space>
+      ),
+    })
+  }
   const openRequirementEvidenceModal = (row: ParseRequirementRow) => {
     if (!row.canUpdate) return
     let evidence = row.coverageEvidence
@@ -1191,7 +1242,13 @@ export function BidWizardPage() {
                                 title: '响应证据',
                                 width: 260,
                                 render: (_, row) =>
-                                  requirementEvidenceCell(row, canWrite, isRequirementUpdating, openRequirementEvidenceModal),
+                                  requirementEvidenceCell(
+                                    row,
+                                    canWrite,
+                                    isRequirementUpdating,
+                                    openRequirementEvidenceModal,
+                                    openRequirementSourcesModal,
+                                  ),
                               },
                               {
                                 title: '属性',
@@ -1871,6 +1928,55 @@ function requirementSourceRefsSummary(sourceRefs: unknown[]) {
     .join('；')
 }
 
+function requirementSourceTitle(sourceRef: unknown) {
+  const record = objectRecord(sourceRef)
+  if (!record) return '响应来源'
+  return String(record.title || record.filename || record.document_title || '响应来源')
+}
+
+function requirementSourcePreviewTarget(sourceRef: unknown): { type: 'file' | 'document'; id: string } | null {
+  const record = objectRecord(sourceRef)
+  if (!record) return null
+  const fileID = firstSourceRefString(record, ['file_id', 'fileId', 'file_asset_id', 'fileAssetId'])
+  if (fileID) {
+    return { type: 'file', id: fileID }
+  }
+  const documentID = firstSourceRefString(record, ['source_document_id', 'sourceDocumentId', 'document_id', 'documentId'])
+  if (documentID) {
+    return { type: 'document', id: documentID }
+  }
+  return null
+}
+
+function firstSourceRefString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = String(record[key] || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function requirementSourcePage(sourceRef: unknown) {
+  const record = objectRecord(sourceRef)
+  if (!record) return null
+  for (const key of ['page', 'page_start', 'pageStart']) {
+    const value = Number(record[key])
+    if (Number.isInteger(value) && value > 0) return value
+  }
+  return null
+}
+
+function withPreviewPageAnchor(url: string, page: number | null) {
+  if (!page) return url
+  try {
+    const nextURL = new URL(url, window.location.href)
+    nextURL.hash = `page=${page}`
+    return nextURL.toString()
+  } catch {
+    return url
+  }
+}
+
 const requirementCoverageOptions = [
   { label: '未确认', value: 'unmapped' },
   { label: '已规划', value: 'planned' },
@@ -1991,6 +2097,7 @@ function requirementEvidenceCell(
   canWrite: boolean,
   isUpdating: boolean,
   onEdit: (row: ParseRequirementRow) => void,
+  onOpenSources: (row: ParseRequirementRow) => void,
 ) {
   const evidence = row.coverageEvidence.trim()
   const sourceCount = row.coverageSourceCount
@@ -2013,7 +2120,13 @@ function requirementEvidenceCell(
       <Tooltip title={evidence || '已关联响应来源'}>
         <Typography.Text className="requirement-evidence-text">{evidence || '已关联响应来源'}</Typography.Text>
       </Tooltip>
-      {sourceCount > 0 ? <Tag color="green">来源 {sourceCount} 处</Tag> : <Tag color="gold">待补来源</Tag>}
+      {sourceCount > 0 ? (
+        <Button size="small" type="link" onClick={() => onOpenSources(row)}>
+          来源 {sourceCount} 处
+        </Button>
+      ) : (
+        <Tag color="gold">待补来源</Tag>
+      )}
       {editButton}
     </div>
   )
