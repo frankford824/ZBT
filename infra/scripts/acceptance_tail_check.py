@@ -267,8 +267,14 @@ def check_static_docs() -> None:
     team_page = (ROOT / "frontend/src/features/team/index.tsx").read_text(encoding="utf-8")
     require("preset.token_env" not in team_page, "Team external data source UI exposes token env names")
     require("endpoint_hint" not in team_page, "Team external data source UI exposes endpoint templates")
+    require(
+        "{ title: '数据源', dataIndex: 'tool_provider'" not in team_page,
+        "Team external audit UI exposes provider keys directly",
+    )
     for needle in ("授权状态", "授权说明", "启用能力"):
         require(needle in team_page, f"Team external data source UI missing user-facing label: {needle}")
+    for needle in ("formatExternalToolProviderName", "externalToolDisplayNameMap"):
+        require(needle in team_page, f"Team external audit UI missing provider display guard: {needle}")
 
     bid_page = (ROOT / "frontend/src/features/bid/index.tsx").read_text(encoding="utf-8")
     require(

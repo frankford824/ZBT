@@ -5034,3 +5034,41 @@ cd frontend && pnpm build
 
 1. 后端仍保留 `code` 作为合规规则唯一键；本轮只把它从用户录入界面收口为前端自动生成。
 2. 未新增浏览器截图验收；本轮先用静态防漂移、lint、build 和总检验证。
+
+## Loop-101 / 外部数据源调用记录名称收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查团队页外部数据源模块，处理调用记录里残留的 provider key 展示问题。
+2. 让租户管理员在调用记录中看到业务数据源名称，而不是 `tool_provider` 对应的内部标识。
+3. 把这类调用日志字段展示约束纳入静态验收。
+
+### 代码交付
+
+1. `frontend/src/features/team/index.tsx` 新增 `externalToolDisplayNameMap`，优先使用外部数据源目录名称，目录缺失时使用已配置名称。
+2. 调用记录“数据源”列不再直接展示 `tool_provider`，统一通过 `formatExternalToolProviderName()` 渲染为业务名称；未知来源显示“外部数据源”。
+3. `acceptance_tail_check.py --static-docs` 新增团队页调用记录守卫，禁止回到直接绑定 `tool_provider` 的展示方式，并要求保留名称映射函数。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 静态防漂移检查通过，最新交付日志识别为 Loop-101。
+2. 前端 ESLint 和生产构建通过。
+3. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest、工程1三项黄金样本回归均通过。
+4. Docker 中 AI 服务容器未运行时，容器内 pytest 仍按既有逻辑跳过。
+
+### 偏离蓝图
+
+1. 后端审计日志仍保存 `tool_provider` 作为内部追踪键；本轮只收口用户侧展示。
+2. 未新增浏览器截图验收；本轮先用静态防漂移、lint、build 和总检验证。

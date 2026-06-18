@@ -193,6 +193,10 @@ function formatExternalToolName(value: string) {
   return externalToolNameLabels[value] || '外部能力'
 }
 
+function formatExternalToolProviderName(value: string, displayNameMap: Map<string, string>) {
+  return displayNameMap.get(value) || '外部数据源'
+}
+
 function externalToolAuthorizationLabel(preset: ExternalToolProviderPresetDTO) {
   return preset.requires_token ? '需要授权' : '无需单独授权'
 }
@@ -274,6 +278,18 @@ export function TeamPage() {
       })),
     [externalCatalogQuery.data, externalToolConfigMap],
   )
+  const externalToolDisplayNameMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const preset of externalCatalogQuery.data ?? []) {
+      map.set(preset.provider_key, preset.name)
+    }
+    for (const config of externalToolsQuery.data ?? []) {
+      if (!map.has(config.provider_key)) {
+        map.set(config.provider_key, config.name)
+      }
+    }
+    return map
+  }, [externalCatalogQuery.data, externalToolsQuery.data])
 
   const inviteMutation = useMutation({
     mutationFn: inviteMember,
@@ -731,7 +747,12 @@ export function TeamPage() {
                       locale={{ emptyText: <EmptyBlock /> }}
                       scroll={{ x: 960 }}
                       columns={[
-                        { title: '数据源', dataIndex: 'tool_provider', width: 150 },
+                        {
+                          title: '数据源',
+                          dataIndex: 'tool_provider',
+                          width: 150,
+                          render: (value) => formatExternalToolProviderName(value, externalToolDisplayNameMap),
+                        },
                         { title: '能力', dataIndex: 'tool_name', width: 180, render: formatExternalToolName },
                         { title: '状态', dataIndex: 'status', width: 90, render: statusTag },
                         { title: '费用', dataIndex: 'estimated_cost', width: 90, render: formatEstimatedCost },
