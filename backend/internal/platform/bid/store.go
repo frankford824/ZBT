@@ -47,6 +47,12 @@ const (
 	maxExportFilenameLabelRunes         = 64
 	requirementCoverageBatchLimit       = 100
 	maxExactJSONInteger                 = int64(1<<53 - 1)
+
+	maxBidExternalTaskIDRunes   = 128
+	maxBidTaskErrorMessageRunes = 1000
+	maxBidTaskPayloadJSONBytes  = 96 * 1024 * 1024
+	maxBidTaskResultJSONBytes   = 2 * 1024 * 1024
+	maxBidTaskRouteJSONBytes    = 16 * 1024
 )
 
 type Store struct {
@@ -543,6 +549,9 @@ func normalizeAcceptedTask(accepted aiTaskAccepted) (aiTaskAccepted, error) {
 	if accepted.TaskID == "" {
 		return aiTaskAccepted{}, ErrInvalidRequest
 	}
+	if err := validateBidTaskTextLength(accepted.TaskID, maxBidExternalTaskIDRunes); err != nil {
+		return aiTaskAccepted{}, err
+	}
 	status := normalizeTaskStatus(accepted.Status)
 	if status == "" {
 		status = "queued"
@@ -550,6 +559,9 @@ func normalizeAcceptedTask(accepted aiTaskAccepted) (aiTaskAccepted, error) {
 	accepted.Status = status
 	if accepted.Route == nil {
 		accepted.Route = map[string]any{}
+	}
+	if _, err := marshalBidTaskJSON(accepted.Route, maxBidTaskRouteJSONBytes); err != nil {
+		return aiTaskAccepted{}, err
 	}
 	return accepted, nil
 }
@@ -1060,7 +1072,10 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 			ContentType: file.ContentType,
 			CallbackURL: s.cfg.AICallbackURL,
 		}
-		payloadJSON, _ := json.Marshal(requestPayload)
+		payloadJSON, err := marshalBidTaskJSON(requestPayload, maxBidTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
 		task, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status, external_task_id,
@@ -1494,14 +1509,23 @@ func (s *Store) GenerateOutline(ctx context.Context, tenantID, userID, bidID str
 			"parts_count":     len(specs),
 			"chapters_count":  outlineChapterCount(specs),
 		}
-		payloadJSON, _ := json.Marshal(map[string]any{
+		payloadJSON, err := marshalBidTaskJSON(map[string]any{
 			"tenant_id":       tenantID,
 			"bid_document_id": bidID,
 			"parse_result_id": parseResult.ID,
 			"mode":            "deterministic_bootstrap",
-		})
-		resultJSON, _ := json.Marshal(resultPayload)
-		routeJSON, _ := json.Marshal(map[string]any{"route": "local.outline_generate"})
+		}, maxBidTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
+		resultJSON, err := marshalBidTaskJSON(resultPayload, maxBidTaskResultJSONBytes)
+		if err != nil {
+			return err
+		}
+		routeJSON, err := marshalBidTaskJSON(map[string]any{"route": "local.outline_generate"}, maxBidTaskRouteJSONBytes)
+		if err != nil {
+			return err
+		}
 		task, err = scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status, external_task_id,
@@ -2289,7 +2313,10 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 			RetrievedKnowledgeRefs: knowledgeRefs,
 			CallbackURL:            s.cfg.AICallbackURL,
 		}
-		payloadJSON, _ := json.Marshal(requestPayload)
+		payloadJSON, err := marshalBidTaskJSON(requestPayload, maxBidTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
 		createdTask, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status,
@@ -2382,7 +2409,10 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 			CurrentPlainText:  chapter.PlainText,
 			CurrentTiptapJSON: chapter.Content,
 		}
-		payloadJSON, _ := json.Marshal(requestPayload)
+		payloadJSON, err := marshalBidTaskJSON(requestPayload, maxBidTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
 		createdTask, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status,
@@ -2647,7 +2677,10 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 			payload["part_title"] = "投标文件全套"
 			payload["parts"] = partPayload
 		}
-		payloadJSON, _ := json.Marshal(payload)
+		payloadJSON, err := marshalBidTaskJSON(payload, maxBidTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			insert into file_assets (
 				id, tenant_id, owner_user_id, biz_type, biz_id,
@@ -2714,22 +2747,21 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 }
 
 func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Task, error) {
-	status := normalizeTaskStatus(payload.Status)
-	if status == "" || payload.TenantID == "" || payload.TaskID == "" {
-		return Task{}, ErrInvalidRequest
+	payload, resultJSON, err := normalizeBidCallbackPayload(payload)
+	if err != nil {
+		return Task{}, err
 	}
 	var task Task
 	var nextJobID string
-	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
 		current, err := lockTaskByExternalID(ctx, tx, payload.TenantID, payload.TaskID)
 		if err != nil {
 			return err
 		}
 		task = current
-		if !taskstatus.ShouldApplyCallback(current.Status, status) {
+		if !taskstatus.ShouldApplyCallback(current.Status, payload.Status) {
 			return nil
 		}
-		resultJSON, _ := json.Marshal(payload.Result)
 		updated, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
 			set status = $3,
@@ -2742,14 +2774,14 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, payload.TenantID, current.ID, status, resultJSON, payload.ErrorMessage))
+		`, payload.TenantID, current.ID, payload.Status, resultJSON, payload.ErrorMessage))
 		if err != nil {
 			return err
 		}
 		task = updated
 		switch task.ResourceType {
 		case "bid_parse_result":
-			switch status {
+			switch payload.Status {
 			case "done":
 				structured, ok := tenderStructuredResultFromCallback(payload.Result)
 				if !ok {
@@ -2806,7 +2838,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				}
 			case "queued", "running":
 				parseStatus := "queued"
-				if status == "running" {
+				if payload.Status == "running" {
 					parseStatus = "processing"
 				}
 				if _, err := tx.Exec(ctx, `
@@ -2823,7 +2855,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				}
 				if err := upsertPipelineGate(ctx, tx, payload.TenantID, bidID, "interpret", "pending", "", "招标文件正在解读，完成后需要人工确认。", map[string]any{
 					"parse_result_id": task.ResourceID,
-					"task_status":     status,
+					"task_status":     payload.Status,
 				}); err != nil {
 					return err
 				}
@@ -2837,7 +2869,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			`, payload.TenantID, task.ResourceID).Scan(&bidID, &exportType); err != nil {
 				return err
 			}
-			if status == "done" {
+			if payload.Status == "done" {
 				sizeBytes, contentType, err := exportCallbackFileResult(exportType, payload.Result)
 				if err != nil {
 					return err
@@ -2855,7 +2887,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					return err
 				}
 			}
-			if status == "failed" || status == "cancelled" {
+			if payload.Status == "failed" || payload.Status == "cancelled" {
 				if _, err := tx.Exec(ctx, `
 					update file_assets
 					set status = 'failed',
@@ -2875,10 +2907,10 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					completed_at = case when $3 in ('done', 'failed', 'cancelled') then now() else completed_at end,
 					updated_at = now()
 				where tenant_id = $1 and id = $2
-			`, payload.TenantID, task.ResourceID, status, resultJSON, payload.ErrorMessage); err != nil {
+			`, payload.TenantID, task.ResourceID, payload.Status, resultJSON, payload.ErrorMessage); err != nil {
 				return err
 			}
-			if gateStatus := pipelineGateStatusForTask(status); gateStatus != "" {
+			if gateStatus := pipelineGateStatusForTask(payload.Status); gateStatus != "" {
 				if err := upsertPipelineGate(ctx, tx, payload.TenantID, bidID, "format", gateStatus, "", pipelineGateReason("format", gateStatus), exportGateMetadata(task.ResourceID, exportType, payload.Result)); err != nil {
 					return err
 				}
@@ -2888,7 +2920,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			if err != nil {
 				return err
 			}
-			if status == "done" {
+			if payload.Status == "done" {
 				generation, err := chapterGenerationFromResult(payload.Result)
 				if err != nil {
 					return err
@@ -2903,7 +2935,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					}
 				}
 			}
-			if applyChapterSideEffects && (status == "failed" || status == "cancelled") {
+			if applyChapterSideEffects && (payload.Status == "failed" || payload.Status == "cancelled") {
 				if _, err := tx.Exec(ctx, `
 					update bid_chapters
 					set status = 'needs_fix',
@@ -2917,7 +2949,7 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 					return err
 				}
 			}
-			jobID, shouldDispatch, err := updateGenerationStepForTask(ctx, tx, payload.TenantID, task.ID, status, payload.ErrorMessage)
+			jobID, shouldDispatch, err := updateGenerationStepForTask(ctx, tx, payload.TenantID, task.ID, payload.Status, payload.ErrorMessage)
 			if err != nil {
 				return err
 			}
@@ -3100,10 +3132,16 @@ func (s *Store) bindAcceptedTask(
 		return Task{}, err
 	}
 	accepted = normalized
+	payloadJSON, err := marshalBidTaskJSON(payload, maxBidTaskPayloadJSONBytes)
+	if err != nil {
+		return Task{}, err
+	}
+	routeJSON, err := marshalBidTaskJSON(accepted.Route, maxBidTaskRouteJSONBytes)
+	if err != nil {
+		return Task{}, err
+	}
 	var task Task
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		payloadJSON, _ := json.Marshal(payload)
-		routeJSON, _ := json.Marshal(accepted.Route)
 		found, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
 			set status = case
@@ -3207,7 +3245,10 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 			RetrievedKnowledgeRefs: knowledgeRefs,
 			CallbackURL:            s.cfg.AICallbackURL,
 		}
-		payloadJSON, _ := json.Marshal(requestPayload)
+		payloadJSON, err := marshalBidTaskJSON(requestPayload, maxBidTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
 		createdTask, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status,
@@ -3221,13 +3262,16 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 		if err != nil {
 			return err
 		}
-		metadataJSON, _ := json.Marshal(map[string]any{
+		metadataJSON, err := marshalBidTaskJSON(map[string]any{
 			"job_id":             jobID,
 			"bid_document_id":    bidID,
 			"chapter_title":      chapter.Title,
 			"knowledge_ref_ct":   len(knowledgeRefs),
 			"requirement_ref_ct": len(requirementRefs),
-		})
+		}, maxBidTaskRouteJSONBytes)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			update bid_generation_steps
 			set status = 'running',
@@ -3268,8 +3312,11 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 		return err
 	}
 	_, err = s.bindAcceptedTask(ctx, tenantID, dispatch.ChapterID, dispatch.TaskID, accepted, dispatch.Payload, func(ctx context.Context, tx pgx.Tx) error {
-		routeJSON, _ := json.Marshal(accepted.Route)
-		_, err := tx.Exec(ctx, `
+		routeJSON, err := marshalBidTaskJSON(accepted.Route, maxBidTaskRouteJSONBytes)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `
 			update bid_generation_steps
 			set external_task_id = $3,
 				metadata = metadata || jsonb_build_object('route', $4::jsonb),
@@ -6749,6 +6796,48 @@ func normalizeChapterAction(value string) string {
 	default:
 		return ""
 	}
+}
+
+func marshalBidTaskJSON(value any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func normalizeBidCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {
+	payload.TenantID = strings.TrimSpace(payload.TenantID)
+	payload.TaskID = strings.TrimSpace(payload.TaskID)
+	payload.Status = normalizeTaskStatus(payload.Status)
+	payload.ErrorMessage = strings.TrimSpace(payload.ErrorMessage)
+	if payload.Result == nil {
+		payload.Result = map[string]any{}
+	}
+	if payload.TenantID == "" || payload.TaskID == "" || payload.Status == "" {
+		return payload, nil, ErrInvalidRequest
+	}
+	if err := validateBidTaskTextLength(payload.TaskID, maxBidExternalTaskIDRunes); err != nil {
+		return payload, nil, err
+	}
+	if err := validateBidTaskTextLength(payload.ErrorMessage, maxBidTaskErrorMessageRunes); err != nil {
+		return payload, nil, err
+	}
+	resultJSON, err := marshalBidTaskJSON(payload.Result, maxBidTaskResultJSONBytes)
+	if err != nil {
+		return payload, nil, err
+	}
+	return payload, resultJSON, nil
+}
+
+func validateBidTaskTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 || utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func defaultPartTitle(code string) string {

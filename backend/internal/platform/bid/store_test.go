@@ -1,10 +1,12 @@
 package bid
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +128,81 @@ func TestNormalizeAcceptedTaskSanitizesProviderStatus(t *testing.T) {
 func TestNormalizeAcceptedTaskRejectsMissingTaskID(t *testing.T) {
 	if _, err := normalizeAcceptedTask(aiTaskAccepted{TaskID: "  ", Status: "queued"}); err != ErrInvalidRequest {
 		t.Fatalf("expected missing task id to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeAcceptedTaskRejectsOversizedRoute(t *testing.T) {
+	_, err := normalizeAcceptedTask(aiTaskAccepted{
+		TaskID: "task-bid-00000000-0000-4000-8000-000000000001",
+		Status: "running",
+		Route: map[string]any{
+			"payload": strings.Repeat("路", maxBidTaskRouteJSONBytes),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized accepted route to be rejected, got %v", err)
+	}
+}
+
+func TestBidCallbackRejectsInvalidResultBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.ApplyCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-bid-00000000-0000-4000-8000-000000000001",
+		Status:   "failed",
+		Result: map[string]any{
+			"invalid": math.NaN(),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid callback result JSON to be rejected before DB, got %v", err)
+	}
+}
+
+func TestBidCallbackRejectsOversizedResultBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.ApplyCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-bid-00000000-0000-4000-8000-000000000001",
+		Status:   "failed",
+		Result: map[string]any{
+			"payload": strings.Repeat("结", maxBidTaskResultJSONBytes),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized callback result to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeBidCallbackBoundsErrorMessage(t *testing.T) {
+	_, _, err := normalizeBidCallbackPayload(CallbackPayload{
+		TenantID:     "tenant-id",
+		TaskID:       "task-bid-00000000-0000-4000-8000-000000000001",
+		Status:       "failed",
+		ErrorMessage: strings.Repeat("错", maxBidTaskErrorMessageRunes+1),
+		Result:       map[string]any{},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized callback error message to be rejected, got %v", err)
+	}
+}
+
+func TestBindAcceptedTaskRejectsInvalidPayloadBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.bindAcceptedTask(
+		context.Background(),
+		"tenant-id",
+		"resource-id",
+		"task-id",
+		aiTaskAccepted{TaskID: "task-bid-00000000-0000-4000-8000-000000000001", Status: "running"},
+		map[string]any{"bad": func() {}},
+		nil,
+	)
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid accepted payload JSON to be rejected before DB, got %v", err)
 	}
 }
 

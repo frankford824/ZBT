@@ -6784,3 +6784,50 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是知识库 AI 任务回调与外部响应的后端写入边界，没有新增 OCR、表格抽取或真实 embedding Provider。
 2. result 上限采用 256KB；若后续解析结果需要返回大型全文、表格或附件，应落到文件/知识片段表，而不是继续扩大 `ai_tasks.result`。
+
+## Loop-140 / 标书 AI 任务回调边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书模块 AI 任务链路，处理 accepted route、callback result 和 task payload 入库仍存在忽略 JSON marshal 错误的问题。
+2. 避免 AI 服务响应或回调携带不可序列化值、超大 result/route/error_message 时污染 `ai_tasks`、导出记录和生成步骤 metadata。
+3. 将标书 AI 任务公共边界固化进静态验收，覆盖招标解析、章节生成、章节动作和文档导出任务。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增标书 AI 任务边界常量，覆盖外部 task id、回调错误文本、任务 payload、callback result 和 accepted route 的 JSON 字节预算。
+2. 新增 `marshalBidTaskJSON()`、`normalizeBidCallbackPayload()` 和 `validateBidTaskTextLength()`。
+3. `normalizeAcceptedTask()` 扩展为校验 task id 长度和 route JSON 可序列化/字节上限。
+4. `ApplyCallback()` 在进入租户事务前统一完成状态归一化、task id/error_message 长度校验和 result JSON 校验，不再忽略 `json.Marshal(payload.Result)` 错误。
+5. `bindAcceptedTask()` 在进入租户事务前校验 payload 和 route JSON；招标解析、章节生成、章节动作、文档导出和生成队列派发的 task payload 入库改为使用已校验 JSON。
+6. `backend/internal/platform/bid/store_test.go` 新增 accepted route 超界、callback result 非法/超界、error_message 超界和 bind payload 非法 JSON 的写库前拒绝回归测试。
+7. `infra/scripts/acceptance_tail_check.py --static-docs` 增加标书 AI 任务 JSON 边界防回退检查，并禁止回退到忽略 payload/result/route marshal 错误。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书模块 AI task 写入边界，没有新增真实大模型 Provider、OCR 或文档排版母版能力。
+2. payload 上限为 96MB，保留导出任务携带大章节文本和附件引用的能力；后续若需要更低数据库压力，应把大 payload 拆成文件资产或任务输入引用。

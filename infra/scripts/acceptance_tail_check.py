@@ -789,6 +789,34 @@ def check_static_docs() -> None:
     ):
         require(needle in generation_schema_tests, f"Chapter generation schema missing regression test: {needle}")
 
+    bid_store = (ROOT / "backend/internal/platform/bid/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxBidExternalTaskIDRunes",
+        "maxBidTaskPayloadJSONBytes",
+        "maxBidTaskResultJSONBytes",
+        "maxBidTaskRouteJSONBytes",
+        "marshalBidTaskJSON",
+        "normalizeBidCallbackPayload",
+        "validateBidTaskTextLength",
+    ):
+        require(needle in bid_store, f"Bid AI task boundary missing guard: {needle}")
+    for forbidden in (
+        "payloadJSON, _ := json.Marshal(requestPayload)",
+        "payloadJSON, _ := json.Marshal(payload)",
+        "resultJSON, _ := json.Marshal(payload.Result)",
+        "routeJSON, _ := json.Marshal(accepted.Route)",
+    ):
+        require(forbidden not in bid_store, f"Bid store still ignores AI task JSON marshal failure: {forbidden}")
+    bid_store_tests = (ROOT / "backend/internal/platform/bid/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestNormalizeAcceptedTaskRejectsOversizedRoute",
+        "TestBidCallbackRejectsInvalidResultBeforeDB",
+        "TestBidCallbackRejectsOversizedResultBeforeDB",
+        "TestNormalizeBidCallbackBoundsErrorMessage",
+        "TestBindAcceptedTaskRejectsInvalidPayloadBeforeDB",
+    ):
+        require(needle in bid_store_tests, f"Bid AI task boundary missing regression test: {needle}")
+
     cost_schema = (ROOT / "ai-service/app/schemas/cost.py").read_text(encoding="utf-8")
     for needle in (
         "MAX_COST_CATEGORY_TOTALS",
