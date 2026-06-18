@@ -139,6 +139,40 @@ func TestMarshalRequirementCoverageMetadataJSONRejectsInvalidAndOversizedValues(
 	}
 }
 
+func TestMarshalBidPartMetadataJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	if raw, err := marshalBidPartMetadataJSON(nil); err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil bid part metadata to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+	for name, metadata := range map[string]map[string]any{
+		"invalid number": {"bad": math.NaN()},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("部", maxBidPartMetadataJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalBidPartMetadataJSON(metadata); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid bid part metadata JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestMarshalPlainTextChapterContentJSONRejectsOversizedContent(t *testing.T) {
+	raw, err := marshalPlainTextChapterContentJSON("")
+	if err != nil {
+		t.Fatalf("expected empty plain text to use default Tiptap content, got %v", err)
+	}
+	content := map[string]any{}
+	if err := json.Unmarshal(raw, &content); err != nil {
+		t.Fatalf("expected valid Tiptap JSON, got %v", err)
+	}
+	if content["type"] != "doc" || len(anySlice(content["content"])) == 0 {
+		t.Fatalf("expected default Tiptap doc content, got %#v", content)
+	}
+	if _, err := marshalPlainTextChapterContentJSON(strings.Repeat("章", maxBidChapterContentJSONBytes)); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized chapter plain text JSON to be rejected, got %v", err)
+	}
+}
+
 func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	bidID := "00000000-0000-4000-8000-000000000001"
 	otherBidID := "00000000-0000-4000-8000-000000000002"

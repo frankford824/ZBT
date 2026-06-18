@@ -7283,3 +7283,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书需求覆盖 metadata 入库可靠性，没有新增合规语义模型、OCR/表格抽取或覆盖评估算法。
 2. 需求覆盖 metadata 上限沿用 512KB，适合覆盖状态、证据、source_refs 和人工/模型审计字段；若后续需要保存大段原文或多轮覆盖明细，应拆到覆盖事件或文件资产引用。
+
+## Loop-151 / 标书目录章节内容与分部 metadata JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书目录和章节初始化链路，处理 `UpdatePartOutline()` 与 `applyOutlineSpecs()` 中章节 Tiptap 内容和分部 metadata 入库前仍忽略 JSON marshal 错误的问题。
+2. 避免超大纯文本章节或异常 part metadata 静默写入空值/坏值，影响标书编辑器初始内容、解析目录应用和目录更新时间审计。
+3. 将章节纯文本转 Tiptap JSON 与 bid part metadata 的字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `maxBidPartMetadataJSONBytes`。
+2. 新增 `marshalPlainTextChapterContentJSON()`，统一使用章节内容 8MB 上限校验纯文本转 Tiptap JSON。
+3. 新增 `marshalBidPartMetadataJSON()`，统一将 nil part metadata 归一化为 `{}`，并处理 JSON marshal 错误和 256KB 上限。
+4. `UpdatePartOutline()` 和 `applyOutlineSpecs()` 改为使用受控 JSON marshal，不再忽略 `json.Marshal(tiptapFromPlainText(plainText))` 或 part metadata 的 marshal 错误。
+5. `backend/internal/platform/bid/store_test.go` 新增 part metadata 非法值、不可序列化值、超预算值、nil 归一化，以及空章节默认 Tiptap/超大章节内容的回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加标书目录章节内容与分部 metadata JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书目录和章节初始化入库可靠性，没有新增目录生成算法、章节编写模型或前端编辑器交互。
+2. part metadata 上限为 256KB，章节内容沿用 8MB；若后续需要保存完整解析原文或多版本目录生成轨迹，应拆到解析结果、章节版本或文件资产引用。

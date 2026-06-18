@@ -61,6 +61,7 @@ const (
 	maxBidPipelineGateMetadataJSONBytes     = 256 * 1024
 	maxBidRequirementItemSourceRefJSONBytes = 256 * 1024
 	maxBidRequirementItemMetadataJSONBytes  = 256 * 1024
+	maxBidPartMetadataJSONBytes             = 256 * 1024
 
 	maxBidChapterContentJSONBytes         = 8 * 1024 * 1024
 	maxBidChapterSourceRefsJSONBytes      = 512 * 1024
@@ -1698,7 +1699,10 @@ func (s *Store) UpdatePartOutline(ctx context.Context, tenantID, userID, bidID, 
 				if plainText == "" {
 					plainText = "请补充" + title + "内容。"
 				}
-				contentJSON, _ := json.Marshal(tiptapFromPlainText(plainText))
+				contentJSON, err := marshalPlainTextChapterContentJSON(plainText)
+				if err != nil {
+					return err
+				}
 				if _, err := tx.Exec(ctx, `
 					insert into bid_chapters (
 						tenant_id, bid_document_id, bid_part_id, title,
@@ -1715,7 +1719,11 @@ func (s *Store) UpdatePartOutline(ctx context.Context, tenantID, userID, bidID, 
 			}
 			var contentJSON []byte
 			if plainText != "" {
-				contentJSON, _ = json.Marshal(tiptapFromPlainText(plainText))
+				var err error
+				contentJSON, err = marshalPlainTextChapterContentJSON(plainText)
+				if err != nil {
+					return err
+				}
 			}
 			tag, err := tx.Exec(ctx, `
 				update bid_chapters
@@ -1734,10 +1742,13 @@ func (s *Store) UpdatePartOutline(ctx context.Context, tenantID, userID, bidID, 
 				return ErrNotFound
 			}
 		}
-		metadataJSON, _ := json.Marshal(map[string]any{
+		metadataJSON, err := marshalBidPartMetadataJSON(map[string]any{
 			"outline_updated_by": userID,
 			"outline_updated_at": time.Now().UTC().Format(time.RFC3339),
 		})
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			update bid_parts
 			set status = 'generated',
@@ -5256,10 +5267,13 @@ func applyOutlineSpecs(ctx context.Context, tx pgx.Tx, tenantID, bidID string, s
 		if title == "" {
 			title = defaultPartTitle(code)
 		}
-		metadataJSON, _ := json.Marshal(map[string]any{
+		metadataJSON, err := marshalBidPartMetadataJSON(map[string]any{
 			"outline_generated": true,
 			"outline_source":    "parse_result",
 		})
+		if err != nil {
+			return err
+		}
 		var partID string
 		if err := tx.QueryRow(ctx, `
 			insert into bid_parts (tenant_id, bid_document_id, code, title, sort_order, status, metadata)
@@ -5293,7 +5307,10 @@ func applyOutlineSpecs(ctx context.Context, tx pgx.Tx, tenantID, bidID string, s
 			if plainText == "" {
 				plainText = "请补充" + chapterTitle + "内容。"
 			}
-			contentJSON, _ := json.Marshal(tiptapFromPlainText(plainText))
+			contentJSON, err := marshalPlainTextChapterContentJSON(plainText)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 				insert into bid_chapters (
 					tenant_id, bid_document_id, bid_part_id, title,
@@ -6910,6 +6927,17 @@ func marshalRequirementCoverageMetadataJSON(metadata map[string]any) ([]byte, er
 		metadata = map[string]any{}
 	}
 	return marshalBidBusinessJSON(metadata, maxBidRequirementCoverageJSONBytes)
+}
+
+func marshalBidPartMetadataJSON(metadata map[string]any) ([]byte, error) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	return marshalBidBusinessJSON(metadata, maxBidPartMetadataJSONBytes)
+}
+
+func marshalPlainTextChapterContentJSON(text string) ([]byte, error) {
+	return marshalBidBusinessJSON(tiptapFromPlainText(text), maxBidChapterContentJSONBytes)
 }
 
 func marshalChapterGenerationJSON(generation chapterGenerateResponse) ([]byte, []byte, []byte, chapterGenerateResponse, error) {
