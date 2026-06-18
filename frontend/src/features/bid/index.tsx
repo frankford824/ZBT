@@ -859,7 +859,7 @@ export function BidWizardPage() {
     onError: (error) => message.error(getApiErrorMessage(error, '获取下载链接失败')),
   })
   const requirementExportMutation = useMutation({
-    mutationFn: (format: BidRequirementExportFormat) => exportBidRequirements(bidId, format),
+    mutationFn: (format: BidRequirementExportFormat) => exportBidRequirements(bidId, format, bid.data?.title),
     onSuccess: ({ blob, filename }) => {
       saveBlobFile(blob, filename)
       message.success('响应矩阵已导出')

@@ -5072,3 +5072,46 @@ cd frontend && pnpm build
 
 1. 后端审计日志仍保存 `tool_provider` 作为内部追踪键；本轮只收口用户侧展示。
 2. 未新增浏览器截图验收；本轮先用静态防漂移、lint、build 和总检验证。
+
+## Loop-102 / 响应矩阵导出文件名业务化 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书向导导出链路，处理响应矩阵下载文件名暴露标书 UUID 或缺少业务语义的问题。
+2. 让 CSV/XLSX 响应矩阵文件名包含标书标题和时间戳，便于用户在本地文件夹识别归档。
+3. 将导出文件名防退化约束纳入静态验收。
+
+### 代码交付
+
+1. `backend/internal/api/routes.go` 的响应矩阵导出接口先读取标书信息，并通过 `bidRequirementExportFilename()` 生成 `响应矩阵-<标书标题>-<时间>.csv` 或 `响应矩阵-覆盖历史-<标书标题>-<时间>.xlsx`。
+2. 新增 `downloadSafeFilenamePart()` 清洗 Windows/macOS/Linux 文件名不安全字符，标题为空时回退“标书”。
+3. `frontend/src/shared/api/client.ts` 的导出兜底文件名不再使用 `bidId`，改为 `bidRequirementFallbackFilename()` + 当前标书标题。
+4. `frontend/src/features/bid/index.tsx` 调用导出接口时传入当前标书标题。
+5. `backend/internal/api/routes_test.go` 增加业务标题文件名和非法字符清洗单测。
+6. `acceptance_tail_check.py --static-docs` 增加防漂移检查，禁止 `响应矩阵-${bidId}` 回流，并要求保留前后端文件名清洗入口。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./internal/api
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 静态防漂移检查通过，最新交付日志识别为 Loop-102。
+2. 后端 API 单测通过，覆盖业务标题文件名和非法字符清洗。
+3. 前端 ESLint 和生产构建通过。
+4. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest、工程1三项黄金样本回归均通过。
+5. Docker 中 AI 服务容器未运行时，容器内 pytest 仍按既有逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮只处理响应矩阵 CSV/XLSX 的下载文件名，不改动 DOCX/PDF/ZIP 正式标书导出物的命名策略。
+2. 未新增浏览器下载行为截图验收；本轮以单测、静态防漂移、lint、build 和总检验证。

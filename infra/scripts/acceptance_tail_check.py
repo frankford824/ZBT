@@ -283,6 +283,13 @@ def check_static_docs() -> None:
     )
     for needle in ("parseModuleObjectSummary", "parseModuleFieldItemSummary"):
         require(needle in bid_page, f"Bid parse confirmation UI missing readable formatter: {needle}")
+    api_client = (ROOT / "frontend/src/shared/api/client.ts").read_text(encoding="utf-8")
+    require("`响应矩阵-${bidId}" not in api_client, "Requirement export fallback filename exposes bid UUID")
+    for needle in ("bidRequirementFallbackFilename", "downloadSafeFilenamePart"):
+        require(needle in api_client, f"Requirement export fallback filename missing business guard: {needle}")
+    api_routes = (ROOT / "backend/internal/api/routes.go").read_text(encoding="utf-8")
+    for needle in ("bidRequirementExportFilename(document.Title", "downloadSafeFilenamePart"):
+        require(needle in api_routes, f"Requirement export response filename missing business guard: {needle}")
 
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):

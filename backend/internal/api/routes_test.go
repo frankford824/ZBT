@@ -132,6 +132,20 @@ func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
 	}
 }
 
+func TestBidRequirementExportFilenameUsesBusinessTitle(t *testing.T) {
+	now := time.Date(2026, 6, 18, 9, 8, 7, 0, time.UTC)
+
+	csvName := bidRequirementExportFilename(`智慧交通/桥梁:检测*项目?`, "csv", now)
+	if csvName != "响应矩阵-智慧交通 桥梁 检测 项目-20260618-090807.csv" {
+		t.Fatalf("unexpected csv filename: %q", csvName)
+	}
+
+	xlsxName := bidRequirementExportFilename("  ..  ", "xlsx", now)
+	if xlsxName != "响应矩阵-覆盖历史-标书-20260618-090807.xlsx" {
+		t.Fatalf("unexpected xlsx filename: %q", xlsxName)
+	}
+}
+
 func TestBearerTokenNormalizesSchemeAndRejectsUnsafeValues(t *testing.T) {
 	if got := bearerToken("bearer abc.def.ghi"); got != "abc.def.ghi" {
 		t.Fatalf("expected lowercase bearer scheme to be accepted, got %q", got)

@@ -1794,14 +1794,21 @@ func (s *server) listBidRequirements(c *gin.Context) {
 }
 
 func (s *server) exportBidRequirements(c *gin.Context) {
-	items, err := s.bidStore.ListRequirementItems(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
+	tenantID := tenant.FromContext(c.Request.Context())
+	bidID := c.Param("id")
+	document, err := s.bidStore.GetDocument(c.Request.Context(), tenantID, bidID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	items, err := s.bidStore.ListRequirementItems(c.Request.Context(), tenantID, bidID)
 	if err != nil {
 		respond(c, nil, err)
 		return
 	}
 	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "csv")))
 	if format == "xlsx" {
-		history, err := s.bidStore.ListRequirementCoverageEventsForBid(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"), 5000)
+		history, err := s.bidStore.ListRequirementCoverageEventsForBid(c.Request.Context(), tenantID, bidID, 5000)
 		if err != nil {
 			respond(c, nil, err)
 			return
@@ -1811,7 +1818,7 @@ func (s *server) exportBidRequirements(c *gin.Context) {
 			respondInternal(c)
 			return
 		}
-		filename := "响应矩阵-覆盖历史-" + time.Now().Format("20060102-150405") + ".xlsx"
+		filename := bidRequirementExportFilename(document.Title, "xlsx", time.Now())
 		c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 		c.Header("Content-Disposition", `attachment; filename="requirements.xlsx"; filename*=UTF-8''`+url.PathEscape(filename))
 		c.Header("Cache-Control", "no-store")
@@ -1827,11 +1834,60 @@ func (s *server) exportBidRequirements(c *gin.Context) {
 		respondInternal(c)
 		return
 	}
-	filename := "响应矩阵-" + time.Now().Format("20060102-150405") + ".csv"
+	filename := bidRequirementExportFilename(document.Title, "csv", time.Now())
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", `attachment; filename="requirements.csv"; filename*=UTF-8''`+url.PathEscape(filename))
 	c.Header("Cache-Control", "no-store")
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", body)
+}
+
+func bidRequirementExportFilename(title, format string, now time.Time) string {
+	ext := "csv"
+	prefix := "响应矩阵"
+	if strings.EqualFold(strings.TrimSpace(format), "xlsx") {
+		ext = "xlsx"
+		prefix = "响应矩阵-覆盖历史"
+	}
+	return fmt.Sprintf("%s-%s-%s.%s", prefix, downloadSafeFilenamePart(title, "标书"), now.Format("20060102-150405"), ext)
+}
+
+func downloadSafeFilenamePart(value, fallback string) string {
+	var builder strings.Builder
+	lastWasSpace := false
+	for _, r := range strings.TrimSpace(value) {
+		unsafe := r < 32 || r == 127 || strings.ContainsRune(`/\:*?"<>|`, r)
+		if unsafe {
+			if builder.Len() > 0 && !lastWasSpace {
+				builder.WriteRune(' ')
+				lastWasSpace = true
+			}
+			continue
+		}
+		if r == '\t' || r == '\n' || r == '\r' {
+			if builder.Len() > 0 && !lastWasSpace {
+				builder.WriteRune(' ')
+				lastWasSpace = true
+			}
+			continue
+		}
+		if r == ' ' {
+			if builder.Len() > 0 && !lastWasSpace {
+				builder.WriteRune(' ')
+				lastWasSpace = true
+			}
+			continue
+		}
+		builder.WriteRune(r)
+		lastWasSpace = false
+	}
+	cleaned := strings.Trim(strings.TrimSpace(builder.String()), ".")
+	if cleaned == "" {
+		cleaned = strings.Trim(strings.TrimSpace(fallback), ".")
+	}
+	if cleaned == "" {
+		return "文件"
+	}
+	return cleaned
 }
 
 func (s *server) listBidRequirementCoverageHistory(c *gin.Context) {

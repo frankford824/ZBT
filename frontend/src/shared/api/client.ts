@@ -1815,6 +1815,7 @@ export type BidRequirementExportFormat = 'csv' | 'xlsx'
 export async function exportBidRequirements(
   bidId: string,
   format: BidRequirementExportFormat = 'csv',
+  fallbackTitle?: string,
 ): Promise<{ blob: Blob; filename: string }> {
   const response = await apiClient.get<Blob>(`/bids/${bidId}/requirements/export`, {
     params: format === 'xlsx' ? { format: 'xlsx' } : undefined,
@@ -1824,7 +1825,7 @@ export async function exportBidRequirements(
     blob: response.data,
     filename:
       filenameFromContentDisposition(response.headers['content-disposition']) ||
-      `响应矩阵-${bidId}.${format === 'xlsx' ? 'xlsx' : 'csv'}`,
+      bidRequirementFallbackFilename(fallbackTitle, format),
   }
 }
 
@@ -1885,6 +1886,46 @@ function filenameFromContentDisposition(value: unknown): string {
   }
   const filenameMatch = text.match(/filename="?([^";]+)"?/i)
   return filenameMatch?.[1] ?? ''
+}
+
+function bidRequirementFallbackFilename(title: string | undefined, format: BidRequirementExportFormat) {
+  const ext = format === 'xlsx' ? 'xlsx' : 'csv'
+  const prefix = format === 'xlsx' ? '响应矩阵-覆盖历史' : '响应矩阵'
+  return `${prefix}-${downloadSafeFilenamePart(title, '标书')}-${filenameTimestamp()}.${ext}`
+}
+
+function filenameTimestamp() {
+  const value = new Date()
+  const pad = (input: number) => String(input).padStart(2, '0')
+  return [
+    value.getFullYear(),
+    pad(value.getMonth() + 1),
+    pad(value.getDate()),
+    '-',
+    pad(value.getHours()),
+    pad(value.getMinutes()),
+    pad(value.getSeconds()),
+  ].join('')
+}
+
+function downloadSafeFilenamePart(value: string | undefined, fallback: string) {
+  let cleaned = ''
+  let lastWasSpace = false
+  for (const char of String(value || '').trim()) {
+    const code = char.charCodeAt(0)
+    const unsafe = code < 32 || code === 127 || '\\/:*?"<>|'.includes(char)
+    if (unsafe || /\s/.test(char)) {
+      if (cleaned && !lastWasSpace) {
+        cleaned += ' '
+        lastWasSpace = true
+      }
+      continue
+    }
+    cleaned += char
+    lastWasSpace = false
+  }
+  cleaned = cleaned.trim().replace(/^\.+|\.+$/g, '')
+  return cleaned || fallback
 }
 
 export async function fetchBidPipelineGates(bidId: string): Promise<BidPipelineGateDTO[]> {
