@@ -5395,3 +5395,45 @@ python3 infra/scripts/acceptance_tail_check.py --static-docs
 
 1. 后端仍保留 L1-L4 枚举作为规则配置和接口契约，本轮只调整前端展示语义。
 2. 未新增浏览器截图验收；继续用静态防漂移、lint、build 和总检验证。
+
+## Loop-110 / 外部数据源调用记录展示收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查团队页外部数据源调用记录，处理结构化请求摘要和 JSON 结果摘要直接展示的问题。
+2. 将 `keyword=string(len=...)`、`{"items":[...]}` 这类工程口径改为业务化摘要。
+3. 将调用记录摘要展示加入静态验收防回退。
+
+### 代码交付
+
+1. `frontend/src/features/team/index.tsx` 新增 `formatExternalToolAuditRequest()`，把外部调用请求摘要显示为“提交 N 项条件”。
+2. 新增 `formatExternalToolSuccessSummary()`、`parseExternalToolSummary()` 和 `countExternalToolResultItems()`，成功结果不再直出 JSON，而是显示“返回 N 条结果”或“已返回结果”。
+3. 调用记录表头从“请求摘要 / 结果”调整为“提交内容 / 结果摘要”，避免暴露内部结构字段。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 新增防回退检查，禁止回到 `request_summary` 直出和 `row.response_summary || '调用成功'`。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新记录识别为 Loop-110。
+2. `cd frontend && pnpm lint` 通过。
+3. `cd frontend && pnpm build` 通过。
+4. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+5. AI pytest 通过：`237 passed`。
+6. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+7. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 后端审计仍保留结构化摘要与原始 JSON 摘要用于排查，本轮只调整前端展示口径。
+2. 未新增浏览器截图验收；继续用静态防漂移、lint、build 和总检验证。

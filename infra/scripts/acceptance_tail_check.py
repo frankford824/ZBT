@@ -277,7 +277,26 @@ def check_static_docs() -> None:
         "render: (_, row) => row.error_message" not in team_page,
         "Team external audit UI exposes raw external tool errors",
     )
-    for needle in ("formatExternalToolProviderName", "externalToolDisplayNameMap", "formatExternalToolAuditResult", "externalToolBusinessErrorMessage"):
+    require(
+        "{ title: '请求摘要', dataIndex: 'request_summary'" not in team_page,
+        "Team external audit UI exposes structural request summaries",
+    )
+    require(
+        "return row.response_summary || '调用成功'" not in team_page,
+        "Team external audit UI exposes raw success summaries",
+    )
+    for needle in (
+        "formatExternalToolProviderName",
+        "externalToolDisplayNameMap",
+        "formatExternalToolAuditResult",
+        "externalToolBusinessErrorMessage",
+        "formatExternalToolAuditRequest",
+        "formatExternalToolSuccessSummary",
+        "parseExternalToolSummary",
+        "countExternalToolResultItems",
+        "提交内容",
+        "结果摘要",
+    ):
         require(needle in team_page, f"Team external audit UI missing provider display guard: {needle}")
 
     bid_page = (ROOT / "frontend/src/features/bid/index.tsx").read_text(encoding="utf-8")

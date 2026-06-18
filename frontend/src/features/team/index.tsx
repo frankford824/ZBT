@@ -200,10 +200,47 @@ function formatExternalToolProviderName(value: string, displayNameMap: Map<strin
 
 function formatExternalToolAuditResult(row: ExternalToolAuditLogDTO) {
   if (row.status === 'success') {
-    return row.response_summary || '调用成功'
+    return formatExternalToolSuccessSummary(row.response_summary)
   }
   const message = row.error_message || row.response_summary
   return externalToolBusinessErrorMessage(message, row.status)
+}
+
+function formatExternalToolAuditRequest(value: string) {
+  const summary = value.trim()
+  if (!summary) return '-'
+  const itemCount = summary.split(',').map((item) => item.trim()).filter(Boolean).length
+  if (!itemCount) return '已提交条件'
+  return itemCount === 1 ? '提交 1 项条件' : `提交 ${itemCount} 项条件`
+}
+
+function formatExternalToolSuccessSummary(value: string) {
+  const summary = value.trim()
+  if (!summary) return '调用成功'
+  const parsed = parseExternalToolSummary(summary)
+  if (parsed === null) return '调用成功'
+  const itemCount = countExternalToolResultItems(parsed)
+  if (itemCount > 0) return `返回 ${itemCount} 条结果`
+  return '已返回结果'
+}
+
+function parseExternalToolSummary(value: string): unknown | null {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+function countExternalToolResultItems(value: unknown): number {
+  if (Array.isArray(value)) return value.length
+  if (!value || typeof value !== 'object') return 0
+  const record = value as Record<string, unknown>
+  for (const key of ['items', 'results', 'data', 'documents', 'questions', 'tenders']) {
+    const item = record[key]
+    if (Array.isArray(item)) return item.length
+  }
+  return 0
 }
 
 function externalToolBusinessErrorMessage(value: string, status: ExternalToolAuditLogDTO['status']) {
@@ -790,9 +827,14 @@ export function TeamPage() {
                         { title: '状态', dataIndex: 'status', width: 90, render: statusTag },
                         { title: '费用', dataIndex: 'estimated_cost', width: 90, render: formatEstimatedCost },
                         { title: '耗时', dataIndex: 'latency_ms', width: 100, render: formatLatency },
-                        { title: '请求摘要', dataIndex: 'request_summary', width: 220, ellipsis: true },
                         {
-                          title: '结果',
+                          title: '提交内容',
+                          dataIndex: 'request_summary',
+                          width: 140,
+                          render: formatExternalToolAuditRequest,
+                        },
+                        {
+                          title: '结果摘要',
                           width: 220,
                           ellipsis: true,
                           render: (_, row) => formatExternalToolAuditResult(row),
