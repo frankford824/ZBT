@@ -516,11 +516,13 @@ def check_static_docs() -> None:
         "maxCostNoteRunes",
         "maxCostAmount",
         "maxCostExternalTaskIDRunes",
+        "maxCostTaskPayloadJSONBytes",
         "maxCostTaskResultJSONBytes",
         "maxCostTaskRouteJSONBytes",
         "validateCostTextLength",
         "boundedCostText",
         "marshalCostTaskJSON",
+        "unmarshalCostTaskJSON",
         "normalizeCostAdviceCallbackPayload",
         "normalizeAcceptedTask",
         "utf8.RuneCountInString",
@@ -530,6 +532,9 @@ def check_static_docs() -> None:
     for forbidden in (
         "resultJSON, _ := json.Marshal(payload.Result)",
         "routeJSON, _ := json.Marshal(accepted.Route)",
+        "_ = json.Unmarshal(payloadRaw, &task.Payload)",
+        "_ = json.Unmarshal(routeRaw, &task.Route)",
+        "_ = json.Unmarshal(resultRaw, &task.Result)",
     ):
         require(forbidden not in cost_store, f"Cost store still ignores AI task JSON marshal failure: {forbidden}")
     cost_store_tests = (ROOT / "backend/internal/platform/cost/store_test.go").read_text(encoding="utf-8")
@@ -540,6 +545,8 @@ def check_static_docs() -> None:
         "TestNormalizeItemRequestAcceptsBoundedUnicodeText",
         "TestCostAdviceCallbackRejectsInvalidResultBeforeDB",
         "TestCostAdviceCallbackRejectsOversizedResultBeforeDB",
+        "TestScanTaskRejectsInvalidStoredJSONFields",
+        "TestScanTaskNormalizesEmptyStoredJSONFields",
         "TestNormalizeAcceptedTaskRejectsOversizedRoute",
     ):
         require(needle in cost_store_tests, f"Cost store missing business input boundary regression test: {needle}")

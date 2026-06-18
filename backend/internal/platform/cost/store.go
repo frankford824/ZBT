@@ -859,9 +859,15 @@ func scanTask(row scanner) (Task, error) {
 	task.Payload = map[string]any{}
 	task.Route = map[string]any{}
 	task.Result = map[string]any{}
-	_ = json.Unmarshal(payloadRaw, &task.Payload)
-	_ = json.Unmarshal(routeRaw, &task.Route)
-	_ = json.Unmarshal(resultRaw, &task.Result)
+	if task.Payload, err = unmarshalCostTaskJSON(payloadRaw, maxCostTaskPayloadJSONBytes); err != nil {
+		return Task{}, err
+	}
+	if task.Route, err = unmarshalCostTaskJSON(routeRaw, maxCostTaskRouteJSONBytes); err != nil {
+		return Task{}, err
+	}
+	if task.Result, err = unmarshalCostTaskJSON(resultRaw, maxCostTaskResultJSONBytes); err != nil {
+		return Task{}, err
+	}
 	return task, nil
 }
 
@@ -1043,6 +1049,24 @@ func marshalCostTaskJSON(value any, maxBytes int) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func unmarshalCostTaskJSON(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return result, nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
 }
 
 func normalizeCostAdviceCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {
