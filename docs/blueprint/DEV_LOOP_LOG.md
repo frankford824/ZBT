@@ -3952,3 +3952,38 @@ git diff --check
 
 1. 本轮没有配置真实 MinerU/PaddleOCR endpoint 或 API Key；生产环境仍需提供凭证并保存持续回归报告。
 2. 当前门槛只检查 OCR Provider 返回的已归一化证据数量，不评价 OCR 文字准确率、表格语义正确性或 bbox 与原图的几何重合度。
+
+## Loop-74 / 文件预览来源定位条 - 2026-06-18
+
+### 本轮目标
+
+1. 缩小“来源预览依赖浏览器 search 参数，页面内没有稳定定位提示”的缺口。
+2. 可解析到文件 ID 的来源应打开前端文件预览页，并在页面内显示页码、摘录关键词和复制定位入口。
+3. 保持页面业务口径，不展示模型、token、provider、schema 等技术字段。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的来源打开逻辑改为：文件来源优先打开 `/files/:fileId/preview`，并携带 `page`、`search`、`source_title`、`source_locator` query；知识库文档来源仍复用原预签名预览链路。
+2. `frontend/src/features/knowledge/index.tsx` 的文件预览页读取 query，生成页面内“定位来源”条，展示来源标题、页码、摘录关键词，并支持复制定位。
+3. 文件预览页会继续把页码和搜索词写入内嵌文件 URL hash，保留浏览器/PDF viewer 原有页码和搜索能力。
+4. `frontend/src/index.css` 新增文件预览定位条布局和移动端单列样式，避免长摘录挤压按钮或窄屏错行。
+5. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录文件预览页定位条已落地，PDF canvas 选区框仍为后续增强。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+
+### 偏离蓝图
+
+1. 本轮没有自建 PDF canvas 选区框或 Word 文本坐标层；定位条提供稳定业务侧定位提示，内嵌 viewer 的实际文本高亮仍取决于浏览器/PDF 预览器支持。
+2. 知识库 document ID 来源暂时保留原预签名预览方式；只有携带 file_id/file_asset_id 的来源进入前端文件预览页。

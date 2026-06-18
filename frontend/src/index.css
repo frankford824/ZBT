@@ -1552,7 +1552,33 @@ a {
 .file-preview-shell {
   display: flex;
   flex-direction: column;
+  gap: 10px;
   min-width: 0;
+}
+
+.file-preview-source-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.file-preview-source-main {
+  min-width: 0;
+}
+
+.file-preview-source-icon {
+  color: var(--primary);
+}
+
+.file-preview-source-excerpt {
+  margin: 6px 0 0 !important;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .file-preview-frame {
@@ -1668,5 +1694,9 @@ a {
 
   .file-preview-frame {
     min-height: 420px;
+  }
+
+  .file-preview-source-bar {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

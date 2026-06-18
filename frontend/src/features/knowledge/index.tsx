@@ -1,5 +1,6 @@
 import {
   CloudUploadOutlined,
+  CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
@@ -13,7 +14,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App as AntApp, Button, Card, Col, Drawer, Form, Input, List, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography, Upload } from 'antd'
 import type { UploadProps } from 'antd'
 import { useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import {
   confirmFileUpload,
   createKnowledgeCategory,
@@ -947,6 +948,8 @@ export function KnowledgeTagsPage() {
 export function FilePreviewPage() {
   const { message } = AntApp.useApp()
   const { fileId } = useParams()
+  const [searchParams] = useSearchParams()
+  const sourceLocator = filePreviewSourceLocator(searchParams)
   const preview = useQuery({
     queryKey: ['file-preview', fileId],
     queryFn: () => fetchFileURL(fileId!, 'preview'),
@@ -966,7 +969,26 @@ export function FilePreviewPage() {
       message.error(getApiErrorMessage(error, '获取下载链接失败'))
     }
   }
-  const previewUrl = preview.data ? safeFileUrlString(preview.data.url) : null
+  const previewUrl = preview.data
+    ? safeFileUrlString(
+        withFilePreviewAnchor(preview.data.url, {
+          page: sourceLocator.page,
+          searchText: sourceLocator.searchText,
+        }),
+      )
+    : null
+  const copySourceLocator = async () => {
+    if (!sourceLocator.locatorText) {
+      message.info('暂无可复制定位')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(sourceLocator.locatorText)
+      message.success('定位已复制')
+    } catch {
+      message.error('复制失败，请手动选择定位信息')
+    }
+  }
 
   return (
     <PageFrame
@@ -985,7 +1007,25 @@ export function FilePreviewPage() {
       {preview.data && !previewUrl ? <ErrorBlock description="文件链接不可用，请重新获取" /> : null}
       {preview.data && previewUrl ? (
         <div className="file-preview-shell">
-          <FileSearchOutlined className="preview-icon" />
+          {sourceLocator.hasLocator ? (
+            <div className="file-preview-source-bar">
+              <div className="file-preview-source-main">
+                <Space size={6} wrap>
+                  <FileSearchOutlined className="file-preview-source-icon" />
+                  <Typography.Text strong>{sourceLocator.title || '定位来源'}</Typography.Text>
+                  {sourceLocator.page ? <Tag>页码：{sourceLocator.page}</Tag> : null}
+                </Space>
+                {sourceLocator.searchText ? (
+                  <Typography.Paragraph className="file-preview-source-excerpt">
+                    {sourceLocator.searchText}
+                  </Typography.Paragraph>
+                ) : null}
+              </div>
+              <Button size="small" icon={<CopyOutlined />} disabled={!sourceLocator.locatorText} onClick={() => void copySourceLocator()}>
+                复制定位
+              </Button>
+            </div>
+          ) : null}
           <iframe
             title={preview.data.file.filename}
             src={previewUrl}
@@ -997,6 +1037,49 @@ export function FilePreviewPage() {
       ) : null}
     </PageFrame>
   )
+}
+
+function filePreviewSourceLocator(searchParams: URLSearchParams) {
+  const page = positiveIntegerParam(searchParams.get('page'))
+  const searchText = normalizePreviewParam(searchParams.get('search'), 120)
+  const title = normalizePreviewParam(searchParams.get('source_title'), 120)
+  const locatorText = normalizePreviewParam(searchParams.get('source_locator'), 800)
+  return {
+    page,
+    searchText,
+    title,
+    locatorText,
+    hasLocator: Boolean(page || searchText || title || locatorText),
+  }
+}
+
+function positiveIntegerParam(value: string | null) {
+  const numberValue = Number(value)
+  return Number.isInteger(numberValue) && numberValue > 0 ? numberValue : null
+}
+
+function normalizePreviewParam(value: string | null, limit: number) {
+  const normalized = (value || '').replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  return normalized.length > limit ? normalized.slice(0, limit) : normalized
+}
+
+function withFilePreviewAnchor(rawUrl: string, { page, searchText }: { page: number | null; searchText: string }) {
+  if (!page && !searchText) return rawUrl
+  try {
+    const nextURL = new URL(rawUrl, window.location.href)
+    const params = new URLSearchParams(nextURL.hash.replace(/^#/, '').replace(/^:/, ''))
+    if (page) {
+      params.set('page', String(page))
+    }
+    if (searchText) {
+      params.set('search', searchText)
+    }
+    nextURL.hash = params.toString()
+    return nextURL.toString()
+  } catch {
+    return rawUrl
+  }
 }
 
 function fileModuleLabel(bizType?: string) {

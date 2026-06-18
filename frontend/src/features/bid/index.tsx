@@ -76,7 +76,6 @@ import {
   fetchBids,
   fetchChapterDiff,
   fetchChapterVersions,
-  fetchFileURL,
   fetchKnowledgeDocumentPreview,
   getApiErrorMessage,
   generateBid,
@@ -958,8 +957,14 @@ export function BidWizardPage() {
       return
     }
     try {
-      const result =
-        target.type === 'file' ? await fetchFileURL(target.id, 'preview') : await fetchKnowledgeDocumentPreview(target.id)
+      if (target.type === 'file') {
+        const openError = fileOpenErrorMessage(openFileUrl(filePreviewPageUrl(target.id, sourceRef)))
+        if (openError) {
+          message.error(openError)
+        }
+        return
+      }
+      const result = await fetchKnowledgeDocumentPreview(target.id)
       const openError = fileOpenErrorMessage(
         openFileUrl(
           withPreviewSourceAnchor(result.url, {
@@ -3139,6 +3144,33 @@ function requirementSourceLocatorText(sourceRef: unknown) {
 
 function requirementSourceSearchText(sourceRef: unknown) {
   return normalizePreviewSearchText(requirementSourceExcerpt(sourceRef))
+}
+
+function filePreviewPageUrl(fileId: string, sourceRef: unknown) {
+  const params = new URLSearchParams()
+  const page = requirementSourcePage(sourceRef)
+  const searchText = requirementSourceSearchText(sourceRef)
+  const title = requirementSourceTitle(sourceRef)
+  const locator = requirementSourceLocatorText(sourceRef)
+  if (page) {
+    params.set('page', String(page))
+  }
+  if (searchText) {
+    params.set('search', searchText)
+  }
+  if (title) {
+    params.set('source_title', truncatePreviewParam(title, 120))
+  }
+  if (locator) {
+    params.set('source_locator', truncatePreviewParam(locator, 800))
+  }
+  const query = params.toString()
+  return `/files/${encodeURIComponent(fileId)}/preview${query ? `?${query}` : ''}`
+}
+
+function truncatePreviewParam(value: string, limit: number) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length > limit ? normalized.slice(0, limit) : normalized
 }
 
 function normalizePreviewSearchText(value: string) {
