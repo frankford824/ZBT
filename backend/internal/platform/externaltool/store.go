@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -133,7 +135,7 @@ type auditInput struct {
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{
 		pool:   pool,
-		client: &http.Client{},
+		client: newExternalToolHTTPClient(),
 	}
 }
 
@@ -454,11 +456,8 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 		return Config{}, ErrInvalidRequest
 	}
 	endpoint := strings.TrimSpace(req.Endpoint)
-	if endpoint != "" {
-		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return Config{}, ErrInvalidRequest
-		}
+	if endpoint != "" && !validExternalToolEndpoint(endpoint) {
+		return Config{}, ErrInvalidRequest
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -562,6 +561,94 @@ func normalizeMetadata(value map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return value
+}
+
+func newExternalToolHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(address)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+				if err != nil {
+					return nil, err
+				}
+				if len(ips) == 0 {
+					return nil, ErrInvalidRequest
+				}
+				for _, ip := range ips {
+					if !publicExternalToolNetIP(ip) {
+						return nil, ErrInvalidRequest
+					}
+				}
+				return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+			},
+		},
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if !validExternalToolEndpoint(req.URL.String()) {
+				return ErrInvalidRequest
+			}
+			return nil
+		},
+	}
+}
+
+func validExternalToolEndpoint(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.User != nil {
+		return false
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return publicExternalToolNetIP(addr)
+	}
+	return strings.Contains(host, ".")
+}
+
+func publicExternalToolNetIP(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if !addr.IsValid() ||
+		!addr.IsGlobalUnicast() ||
+		addr.IsPrivate() ||
+		addr.IsLoopback() ||
+		addr.IsLinkLocalUnicast() ||
+		addr.IsLinkLocalMulticast() ||
+		addr.IsMulticast() ||
+		addr.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range externalToolSpecialUseIPPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+var externalToolSpecialUseIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
 }
 
 func toolAllowed(allowed []string, tool string) bool {

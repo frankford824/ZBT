@@ -5437,3 +5437,43 @@ cd frontend && pnpm build
 
 1. 后端审计仍保留结构化摘要与原始 JSON 摘要用于排查，本轮只调整前端展示口径。
 2. 未新增浏览器截图验收；继续用静态防漂移、lint、build 和总检验证。
+
+## Loop-111 / 外部数据源公网边界收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查外部 MCP 数据源配置和调用链路，处理 endpoint 仅校验 http/https 的 SSRF 风险。
+2. 禁止外部数据源指向 localhost、私网 IP、特殊用途 IP、`.local` 域名或携带 userinfo 的 URL。
+3. 让运行时 HTTP client 也执行 DNS 解析后的公网 IP 校验，防止历史配置或重定向绕过。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/store.go` 新增 `validExternalToolEndpoint()`、`publicExternalToolNetIP()` 和 `externalToolSpecialUseIPPrefixes`，配置保存时使用公网 endpoint 校验。
+2. 新增 `newExternalToolHTTPClient()`，`NewStore()` 默认使用受限 HTTP client；运行时 `DialContext` 对解析出的所有 IP 执行公网校验，`CheckRedirect` 对跳转目标再次校验。
+3. `backend/internal/platform/externaltool/store_test.go` 新增 unsafe endpoint 回归测试和 localhost runtime guard 测试。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 新增外部数据源公网边界静态防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新记录识别为 Loop-111。
+2. `cd backend && go test ./...` 通过。
+3. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+4. AI pytest 通过：`237 passed`。
+5. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+6. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮收紧外部 MCP endpoint 为公网 HTTP/HTTPS 地址；如需本地调试外部 MCP，应通过显式测试 client 或安全隧道处理，不再允许生产配置直连内网地址。
+2. 未新增端到端真实第三方 MCP 调用；本轮通过单元测试、静态验收和总检验证边界行为。

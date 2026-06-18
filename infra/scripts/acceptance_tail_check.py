@@ -299,6 +299,28 @@ def check_static_docs() -> None:
     ):
         require(needle in team_page, f"Team external audit UI missing provider display guard: {needle}")
 
+    external_tool_store = (ROOT / "backend/internal/platform/externaltool/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "validExternalToolEndpoint",
+        "newExternalToolHTTPClient",
+        "publicExternalToolNetIP",
+        "externalToolSpecialUseIPPrefixes",
+        "net.DefaultResolver.LookupNetIP",
+        "CheckRedirect",
+    ):
+        require(needle in external_tool_store, f"External tool gateway missing public endpoint guard: {needle}")
+    require(
+        'if endpoint != "" && !validExternalToolEndpoint(endpoint)' in external_tool_store,
+        "External tool config does not validate endpoints with the public endpoint guard",
+    )
+    require(
+        "client: newExternalToolHTTPClient()" in external_tool_store,
+        "External tool gateway does not use the guarded HTTP client",
+    )
+    external_tool_tests = (ROOT / "backend/internal/platform/externaltool/store_test.go").read_text(encoding="utf-8")
+    for needle in ("TestNormalizeConfigRejectsUnsafeExternalEndpoints", "TestExternalToolHTTPClientRejectsLocalhostDial"):
+        require(needle in external_tool_tests, f"External tool gateway missing SSRF regression test: {needle}")
+
     bid_page = (ROOT / "frontend/src/features/bid/index.tsx").read_text(encoding="utf-8")
     api_client = (ROOT / "frontend/src/shared/api/client.ts").read_text(encoding="utf-8")
     require("getUserFacingErrorMessage" in api_client, "API client missing shared user-facing error filter")

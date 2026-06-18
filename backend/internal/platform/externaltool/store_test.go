@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -36,6 +37,54 @@ func TestNormalizeConfigRequiresHTTPStreamableEndpoint(t *testing.T) {
 	}
 	if _, err := normalizeConfig("bad", UpsertConfigRequest{Enabled: &enabled}); err == nil {
 		t.Fatal("expected enabled external tool to require an endpoint")
+	}
+}
+
+func TestNormalizeConfigRejectsUnsafeExternalEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://localhost:9000/mcp",
+		"http://127.0.0.1:9000/mcp",
+		"http://10.0.0.8/mcp",
+		"http://172.16.0.8/mcp",
+		"http://192.168.1.20/mcp",
+		"http://[::1]/mcp",
+		"http://minio:9000/mcp",
+		"http://metadata.local/mcp",
+		"http://100.64.0.1/mcp",
+		"http://192.0.2.1/mcp",
+		"http://198.18.0.1/mcp",
+		"http://198.51.100.1/mcp",
+		"http://203.0.113.1/mcp",
+		"http://240.0.0.1/mcp",
+		"http://[2001:db8::1]/mcp",
+		"https://user:pass@example.com/mcp",
+		"https://example.com@127.0.0.1/mcp",
+		"//example.com/mcp",
+	} {
+		if _, err := normalizeConfig("handaas-bidding", UpsertConfigRequest{Endpoint: endpoint}); err == nil {
+			t.Fatalf("expected unsafe external endpoint %q to be rejected", endpoint)
+		}
+	}
+}
+
+func TestExternalToolHTTPClientRejectsLocalhostDial(t *testing.T) {
+	var received atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Store(true)
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer server.Close()
+
+	client := newExternalToolHTTPClient()
+	resp, err := client.Get(server.URL)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected guarded external tool client to reject localhost endpoint")
+	}
+	if received.Load() {
+		t.Fatal("guarded external tool client reached localhost handler")
 	}
 }
 
