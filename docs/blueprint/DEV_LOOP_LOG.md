@@ -5193,3 +5193,43 @@ cd frontend && pnpm build
 
 1. 本轮不改变 source_refs、source_bbox、chunk_id 等后端数据结构，也不改变预览 URL 的定位能力，只处理用户可见文案和复制文本。
 2. 未新增浏览器截图验收；本轮先使用静态防漂移、lint、build 和总检验证。
+
+## Loop-105 / 历史来源定位清洗修正 - 2026-06-18
+
+### 本轮目标
+
+1. 复查上一轮来源定位清洗逻辑，修正历史 `source_locator` 多行文本被通用归一化压平后无法过滤坐标行的问题。
+2. 保证旧链接中的“引用号/定位码/坐标”行在复制定位前仍会被清洗。
+3. 将“定位文本必须保留行边界再清洗”的实现约束加入静态验收。
+
+### 代码交付
+
+1. `frontend/src/features/knowledge/index.tsx` 新增 `normalizePreviewLocatorParam()`，对 `source_locator` 保留换行边界，仅清理行内空白。
+2. 文件预览页改为 `sanitizePreviewLocatorText(normalizePreviewLocatorParam(...))`，避免技术定位行在进入 sanitizer 前被压平成单行。
+3. `infra/scripts/acceptance_tail_check.py --static-docs` 新增防退化检查，禁止回到 `sanitizePreviewLocatorText(normalizePreviewParam(...))`。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 静态验收通过，最新交付循环识别为 Loop-105。
+2. 前端 `pnpm lint` 与 `pnpm build` 通过。
+3. 总检 `./infra/scripts/check.sh` 通过：前端构建/lint、后端 Go test/vet、AI 服务 compileall/ruff/pytest 均通过。
+4. AI 服务 pytest 结果为 `237 passed`。
+5. 工程1三段黄金样例回归通过：解析评分 `passed=109/109`、来源引用 `passed=9/9`、导出回归 `passed=23/23`。
+6. 本地未运行中的 `ai-service` 容器测试按脚本规则跳过：`ai-service container is not running; skipping container pytest`。
+
+### 偏离蓝图
+
+1. 本轮只修复文件预览页历史链接清洗链路，不改变新生成来源定位 URL 的参数结构。
+2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。

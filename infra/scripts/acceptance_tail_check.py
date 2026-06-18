@@ -299,8 +299,13 @@ def check_static_docs() -> None:
     knowledge_page = (ROOT / "frontend/src/features/knowledge/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("<Tag>坐标：", "`坐标: ${bboxText}`"):
         require(forbidden not in knowledge_page, f"File preview source UI exposes raw OCR coordinates: {forbidden}")
+    require(
+        "sanitizePreviewLocatorText(normalizePreviewParam" not in knowledge_page,
+        "File preview source locator sanitizer collapses line boundaries before filtering",
+    )
     for needle in ("原文位置：已定位", "sanitizePreviewLocatorText"):
         require(needle in knowledge_page, f"File preview source UI missing business locator guard: {needle}")
+    require("normalizePreviewLocatorParam" in knowledge_page, "File preview source UI missing line-preserving locator normalization")
 
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):

@@ -1052,7 +1052,7 @@ function filePreviewSourceLocator(searchParams: URLSearchParams) {
   const page = positiveIntegerParam(searchParams.get('page'))
   const searchText = normalizePreviewParam(searchParams.get('search'), 120)
   const title = normalizePreviewParam(searchParams.get('source_title'), 120)
-  const locatorText = sanitizePreviewLocatorText(normalizePreviewParam(searchParams.get('source_locator'), 800))
+  const locatorText = sanitizePreviewLocatorText(normalizePreviewLocatorParam(searchParams.get('source_locator'), 800))
   const bboxText = normalizePreviewParam(searchParams.get('source_bbox'), 120)
   const hasPrecisePosition = Boolean(bboxText)
   const copyText = locatorText || filePreviewLocatorCopyText({ title, page, searchText, hasPrecisePosition })
@@ -1093,6 +1093,17 @@ function sanitizePreviewLocatorText(value: string) {
     .map((line) => line.trim())
     .filter((line) => line && !/^(引用号|定位码|坐标)\s*[:：]/.test(line))
     .join('\n')
+}
+
+function normalizePreviewLocatorParam(value: string | null, limit: number) {
+  const normalized = (value || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/[ \t\f\v]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n')
+  if (!normalized) return ''
+  return normalized.length > limit ? normalized.slice(0, limit) : normalized
 }
 
 function positiveIntegerParam(value: string | null) {
