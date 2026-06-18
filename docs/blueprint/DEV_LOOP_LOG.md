@@ -3724,3 +3724,41 @@ pnpm --dir frontend build
 
 1. 本轮不实现预览器文本高亮；只补响应矩阵跨页服务端批处理。
 2. 服务端仍保留 `requirementCoverageBatchLimit`，超过限制的筛选批量会拒绝执行，避免误操作一次性覆盖过多要求项。
+
+## Loop-68 / 来源摘录高亮与预览搜索定位 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式响应来源“能看见来源”但缺少醒目摘录定位的问题。
+2. 打开原文时同时携带页码和摘录搜索文本，让浏览器/PDF 查看器有机会直接定位命中内容。
+3. 保持前端文案为业务口径，不暴露内部 JSON、chunk 或模型字段。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 新增 `requirementSourceExcerpt()`、`requirementSourceSearchText()`、`withPreviewSourceAnchor()` 和 `HighlightedSourceText()`。
+2. 响应来源弹窗不再把标题、页码、定位码和摘录挤成一行摘要，而是标题、定位标签、摘录分层展示，并对摘录加高亮。
+3. 解析确认表的字段依据列复用同一高亮组件，避免字段来源只是一段普通灰色文本。
+4. “查看原文”预览 URL 会携带 `page` 和 `search` hash 参数，保留原有页码跳转能力，同时把摘录作为搜索定位线索。
+5. `frontend/src/index.css` 新增 `.source-highlight-mark`，使用轻量背景和 `box-decoration-break` 保证跨行高亮不挤压表格布局。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 更新当前状态：已完成来源摘录高亮和预览搜索定位，内嵌 PDF/Word 选区框仍需后续自建预览器或 viewer 扩展。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过，无空白错误。
+
+### 偏离蓝图
+
+1. 浏览器内置 PDF/Office 预览器是否按 `search` 参数高亮命中，取决于具体 viewer 支持；本轮不自建 PDF canvas 选区层。
+2. 本轮只高亮来源摘录本身，不做跨页多片段、多 bbox 或表格单元格级定位。

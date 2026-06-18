@@ -1239,6 +1239,15 @@ a {
   overflow-wrap: anywhere;
 }
 
+.source-highlight-mark {
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: #fff3bf;
+  color: inherit;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .requirement-source-locator {
   display: flex;
   flex-wrap: wrap;

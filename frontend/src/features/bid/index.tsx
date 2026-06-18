@@ -919,7 +919,14 @@ export function BidWizardPage() {
     try {
       const result =
         target.type === 'file' ? await fetchFileURL(target.id, 'preview') : await fetchKnowledgeDocumentPreview(target.id)
-      const openError = fileOpenErrorMessage(openFileUrl(withPreviewPageAnchor(result.url, requirementSourcePage(sourceRef))))
+      const openError = fileOpenErrorMessage(
+        openFileUrl(
+          withPreviewSourceAnchor(result.url, {
+            page: requirementSourcePage(sourceRef),
+            searchText: requirementSourceSearchText(sourceRef),
+          }),
+        ),
+      )
       if (openError) {
         message.error(openError)
       }
@@ -954,12 +961,13 @@ export function BidWizardPage() {
         <Space direction="vertical" size={10} className="full-width">
           {sourceRefs.map((sourceRef, index) => {
             const target = requirementSourcePreviewTarget(sourceRef)
+            const excerpt = requirementSourceExcerpt(sourceRef)
             return (
               <div className="requirement-source-preview-row" key={index}>
                 <div>
                   <Typography.Text strong>{requirementSourceTitle(sourceRef)}</Typography.Text>
                   <Typography.Paragraph className="requirement-source-preview-text">
-                    {requirementSourceRefsSummary([sourceRef]) || '未填写来源摘录'}
+                    <HighlightedSourceText text={excerpt || '未填写来源摘录'} query={excerpt} />
                   </Typography.Paragraph>
                   <div className="requirement-source-locator">
                     {requirementSourceLocatorParts(sourceRef).map((part) => (
@@ -1319,37 +1327,40 @@ export function BidWizardPage() {
                                   },
                                   {
                                     title: '来源',
-                                    render: (_, row) => (
-                                      <div className="parse-field-source-cell">
-                                        <Typography.Paragraph className="parse-field-source-text">
-                                          {row.sourceText || '待补充原文依据'}
-                                        </Typography.Paragraph>
-                                        <div className="requirement-source-locator">
-                                          {requirementSourceLocatorParts(row.sourceRef).map((part) => (
-                                            <Tag key={`${row.id}-${part.label}-${part.value}`}>
-                                              {part.label}：{part.value}
-                                            </Tag>
-                                          ))}
-                                        </div>
-                                        <Space size={6} wrap>
-                                          <Button
-                                            size="small"
-                                            disabled={!requirementSourcePreviewTarget(row.sourceRef)}
-                                            onClick={() => void openRequirementSourcePreview(row.sourceRef)}
-                                          >
-                                            查看原文
-                                          </Button>
-                                          <Tooltip title="复制来源定位">
+                                    render: (_, row) => {
+                                      const sourceText = row.sourceText || requirementSourceExcerpt(row.sourceRef)
+                                      return (
+                                        <div className="parse-field-source-cell">
+                                          <Typography.Paragraph className="parse-field-source-text">
+                                            <HighlightedSourceText text={sourceText || '待补充原文依据'} query={sourceText} />
+                                          </Typography.Paragraph>
+                                          <div className="requirement-source-locator">
+                                            {requirementSourceLocatorParts(row.sourceRef).map((part) => (
+                                              <Tag key={`${row.id}-${part.label}-${part.value}`}>
+                                                {part.label}：{part.value}
+                                              </Tag>
+                                            ))}
+                                          </div>
+                                          <Space size={6} wrap>
                                             <Button
                                               size="small"
-                                              icon={<CopyOutlined />}
-                                              disabled={!requirementSourceLocatorText(row.sourceRef)}
-                                              onClick={() => void copyRequirementSourceLocator(row.sourceRef)}
-                                            />
-                                          </Tooltip>
-                                        </Space>
-                                      </div>
-                                    ),
+                                              disabled={!requirementSourcePreviewTarget(row.sourceRef)}
+                                              onClick={() => void openRequirementSourcePreview(row.sourceRef)}
+                                            >
+                                              查看原文
+                                            </Button>
+                                            <Tooltip title="复制来源定位">
+                                              <Button
+                                                size="small"
+                                                icon={<CopyOutlined />}
+                                                disabled={!requirementSourceLocatorText(row.sourceRef)}
+                                                onClick={() => void copyRequirementSourceLocator(row.sourceRef)}
+                                              />
+                                            </Tooltip>
+                                          </Space>
+                                        </div>
+                                      )
+                                    },
                                   },
                                   {
                                     title: '复核',
@@ -2581,7 +2592,7 @@ function requirementSourceRefsSummary(sourceRefs: unknown[]) {
       if (!record) return ''
       const title = String(record.title || record.filename || record.document_title || '响应来源')
       const page = String(record.page || record.page_start || '').trim()
-      const excerpt = formatStructuredValue(record.source_text || record.excerpt || record.text)
+      const excerpt = requirementSourceExcerpt(ref)
       const locator = firstSourceRefString(record, ['reference_id', 'referenceId', 'citation_id', 'citationId', 'chunk_id', 'chunkId'])
       return [title, page ? `第${page}页` : '', locator ? `定位：${locator}` : '', excerpt ? `摘录：${excerpt}` : '']
         .filter(Boolean)
@@ -2595,6 +2606,12 @@ function requirementSourceTitle(sourceRef: unknown) {
   const record = objectRecord(sourceRef)
   if (!record) return '响应来源'
   return String(record.title || record.filename || record.document_title || '响应来源')
+}
+
+function requirementSourceExcerpt(sourceRef: unknown) {
+  const record = objectRecord(sourceRef)
+  if (!record) return ''
+  return formatStructuredValue(record.source_text || record.sourceText || record.excerpt || record.text || record.quote || record.content).trim()
 }
 
 function requirementSourcePreviewTarget(sourceRef: unknown): { type: 'file' | 'document'; id: string } | null {
@@ -2657,19 +2674,52 @@ function requirementSourceLocatorText(sourceRef: unknown) {
   if (!record) return ''
   const title = requirementSourceTitle(sourceRef)
   const parts = requirementSourceLocatorParts(sourceRef).map((part) => `${part.label}: ${part.value}`)
-  const excerpt = formatStructuredValue(record.source_text || record.excerpt || record.text).trim()
+  const excerpt = requirementSourceExcerpt(sourceRef)
   return [title, ...parts, excerpt ? `摘录: ${excerpt}` : ''].filter(Boolean).join('\n')
 }
 
-function withPreviewPageAnchor(url: string, page: number | null) {
-  if (!page) return url
+function requirementSourceSearchText(sourceRef: unknown) {
+  return normalizePreviewSearchText(requirementSourceExcerpt(sourceRef))
+}
+
+function normalizePreviewSearchText(value: string) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  return normalized.length > 120 ? normalized.slice(0, 120) : normalized
+}
+
+function withPreviewSourceAnchor(url: string, { page, searchText }: { page: number | null; searchText: string }) {
+  if (!page && !searchText) return url
   try {
     const nextURL = new URL(url, window.location.href)
-    nextURL.hash = `page=${page}`
+    const params = new URLSearchParams(nextURL.hash.replace(/^#/, '').replace(/^:/, ''))
+    if (page) {
+      params.set('page', String(page))
+    }
+    if (searchText) {
+      params.set('search', searchText)
+    }
+    nextURL.hash = params.toString()
     return nextURL.toString()
   } catch {
     return url
   }
+}
+
+function HighlightedSourceText({ text, query }: { text: string; query?: string }) {
+  const normalizedQuery = normalizePreviewSearchText(query || '')
+  if (!normalizedQuery) return <>{text}</>
+  const index = text.indexOf(normalizedQuery)
+  if (index < 0) {
+    return <mark className="source-highlight-mark">{text}</mark>
+  }
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="source-highlight-mark">{text.slice(index, index + normalizedQuery.length)}</mark>
+      {text.slice(index + normalizedQuery.length)}
+    </>
+  )
 }
 
 const requirementCoverageOptions = [
