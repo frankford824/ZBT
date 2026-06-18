@@ -317,6 +317,7 @@ def check_static_docs() -> None:
         "maxExternalToolConfigMetadataJSONBytes",
         "maxExternalToolAuditMetadataJSONBytes",
         "normalizeExternalToolArguments",
+        "marshalExternalToolArgumentsJSON",
         "marshalExternalToolMetadataJSON",
         "readExternalToolResponseBody",
         "net.DefaultResolver.LookupNetIP",
@@ -324,6 +325,7 @@ def check_static_docs() -> None:
     ):
         require(needle in external_tool_store, f"External tool gateway missing public endpoint guard: {needle}")
     for forbidden in (
+        "raw, _ := json.Marshal(arguments)",
         "metadataRaw, _ := json.Marshal(normalized.Metadata)",
         "metadataRaw, _ := json.Marshal(input.Metadata)",
     ):
@@ -349,6 +351,7 @@ def check_static_docs() -> None:
         "TestNormalizeConfigNormalizesCostMetadata",
         "TestNormalizeConfigRejectsInvalidExternalToolMoney",
         "TestMarshalExternalToolMetadataJSONRejectsInvalidAndOversizedValues",
+        "TestMarshalExternalToolArgumentsJSONAndRequestHashRejectInvalidValues",
         "TestCostPerCallIgnoresInvalidStoredMetadata",
         "TestNormalizeInvokeRequestRejectsOversizedAndNonJSONArguments",
         "TestCallStreamableHTTPRejectsNonJSONArgumentsBeforeOutboundRequest",

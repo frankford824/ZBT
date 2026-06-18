@@ -263,7 +263,10 @@ func (s *Store) Invoke(ctx context.Context, tenantID, userID, providerKey string
 	if err != nil {
 		return InvokeResult{}, err
 	}
-	requestHash := requestHash(normalizedReq.Arguments)
+	requestHash, err := requestHash(normalizedReq.Arguments)
+	if err != nil {
+		return InvokeResult{}, err
+	}
 	requestSummary := summarizeArguments(normalizedReq.Arguments)
 	cost := costPerCall(config.Metadata)
 	if !config.Enabled {
@@ -599,9 +602,8 @@ func normalizeExternalToolArguments(arguments map[string]any) (map[string]any, e
 	if arguments == nil {
 		return map[string]any{}, nil
 	}
-	raw, err := json.Marshal(arguments)
-	if err != nil || len(raw) > maxExternalToolArgumentsJSONBytes {
-		return nil, ErrInvalidRequest
+	if _, err := marshalExternalToolArgumentsJSON(arguments); err != nil {
+		return nil, err
 	}
 	return arguments, nil
 }
@@ -631,6 +633,14 @@ func marshalExternalToolMetadataJSON(value map[string]any, maxBytes int) ([]byte
 	}
 	raw, err := json.Marshal(normalizeMetadata(value))
 	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func marshalExternalToolArgumentsJSON(arguments map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(normalizeMetadata(arguments))
+	if err != nil || len(raw) > maxExternalToolArgumentsJSONBytes {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
@@ -805,10 +815,13 @@ func allowedToolsWithin(values []string, allowed []string) bool {
 	return true
 }
 
-func requestHash(arguments map[string]any) string {
-	raw, _ := json.Marshal(arguments)
+func requestHash(arguments map[string]any) (string, error) {
+	raw, err := marshalExternalToolArgumentsJSON(arguments)
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func summarizeArguments(arguments map[string]any) string {

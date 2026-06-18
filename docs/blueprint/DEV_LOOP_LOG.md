@@ -7329,3 +7329,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书目录和章节初始化入库可靠性，没有新增目录生成算法、章节编写模型或前端编辑器交互。
 2. part metadata 上限为 256KB，章节内容沿用 8MB；若后续需要保存完整解析原文或多版本目录生成轨迹，应拆到解析结果、章节版本或文件资产引用。
+
+## Loop-152 / 外部工具参数指纹 JSON 边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查外部工具网关链路，处理 `requestHash()` 生成请求指纹时仍忽略 `json.Marshal(arguments)` 错误的问题。
+2. 避免未来绕过入口规范化调用请求指纹函数时，非法参数、非有限数或异常放大的参数静默生成错误 hash，影响外部工具调用审计、幂等分析和成本归因。
+3. 将外部工具 arguments JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/store.go` 新增 `marshalExternalToolArgumentsJSON()`，统一将 nil arguments 归一化为 `{}`，并处理 JSON marshal 错误和 64KB 上限。
+2. `normalizeExternalToolArguments()` 改为复用 `marshalExternalToolArgumentsJSON()`。
+3. `requestHash()` 改为返回 `(string, error)`，使用受控 JSON marshal，不再忽略 `json.Marshal(arguments)` 错误。
+4. `Invoke()` 在生成请求 hash 时处理错误，避免非法参数继续进入审计或外部调用链路。
+5. `backend/internal/platform/externaltool/store_test.go` 新增 arguments JSON 非法值、不可序列化值、超预算值、nil 归一化和请求 hash 的回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加外部工具 arguments JSON 入库/指纹边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/externaltool/store.go internal/platform/externaltool/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/externaltool
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/externaltool` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 外部工具请求参数 JSON 指纹可靠性，没有新增 MCP Provider、工具编排策略或前端调用配置。
+2. arguments 上限沿用 64KB，适合当前招投标行业 MCP 查询参数；若后续需要传输大文件或大段上下文，应改为文件资产引用或异步任务载荷。

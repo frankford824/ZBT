@@ -193,6 +193,34 @@ func TestNormalizeInvokeRequestRejectsOversizedAndNonJSONArguments(t *testing.T)
 	}
 }
 
+func TestMarshalExternalToolArgumentsJSONAndRequestHashRejectInvalidValues(t *testing.T) {
+	raw, err := marshalExternalToolArgumentsJSON(nil)
+	if err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil arguments to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+	hash, err := requestHash(nil)
+	if err != nil {
+		t.Fatalf("expected nil arguments to hash, got %v", err)
+	}
+	if len(hash) != 64 {
+		t.Fatalf("expected sha256 request hash, got %q", hash)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"invalid number": {"bad": math.Inf(-1)},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("参", maxExternalToolArgumentsJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalExternalToolArgumentsJSON(arguments); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("expected invalid arguments JSON to be rejected, got %v", err)
+			}
+			if _, err := requestHash(arguments); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("expected invalid request hash arguments to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
 func TestExternalToolHTTPClientRejectsLocalhostDial(t *testing.T) {
 	var received atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
