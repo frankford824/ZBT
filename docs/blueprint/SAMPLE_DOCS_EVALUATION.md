@@ -71,7 +71,7 @@ cd ai-service
   --allow-skip
 ```
 
-OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 provider_profile 的 endpoint_env。需要表格或版面块验收时可加 `--min-table-blocks` / `--min-layout-blocks`。
+OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 provider_profile 的 endpoint_env。`model_routing.yaml` 同时声明 `document_ocr` 本地路由，用于把 OCR Provider 纳入模型网关配置审计。需要表格或版面块验收时可加 `--min-table-blocks` / `--min-layout-blocks`。
 
 验收覆盖：
 

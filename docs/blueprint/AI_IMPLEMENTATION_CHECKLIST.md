@@ -13,7 +13,7 @@
 当前 ZBT 已有 Go 主后端、Python AI 服务、ModelRouter、OCR HTTP 接入点、RAG 检索、source_refs 落库、Word/PDF/ZIP 导出和 AI 调用成本审计。仍需要继续增强的核心差距：
 
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测，仍需要继续做前端字段级编辑确认。
-2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标和统一 `table_blocks`；仍缺少真实 OCR Provider 配置和样本回归评测。
+2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标、统一 `table_blocks` 和 `document_ocr` 网关路由；仍缺少真实 OCR Provider 配置和样本回归评测。
 3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；仍需继续补 chunk 级高亮定位和跨页服务端批处理。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考。后端 P0 外部工具网关已提供租户级配置、Provider 预设目录、默认工具白名单、摘要审计、预算阻断和 JSON-RPC `tools/call` 入口，前端团队管理页已提供外部数据源配置和审计入口；仍需继续补业务入口和生产凭证验证。
@@ -26,6 +26,7 @@
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
 - `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox` 和可用的 `cell_bboxes`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析；OCR 顶层 `tables/table_blocks` 与页级 `pages[].tables` 会合并去重，常见 `cells` 输出会归一成 `rows`、`md_table`、`cell_bboxes` 并进入 chunk 文本。
+- `ai-service/app/config/model_routing.yaml` 已声明 `document_ocr` 本地路由，便于 `/models/health`、Mock 路由审计和生产配置检查覆盖 OCR Provider 能力边界。
 - `ai-service/app/evaluation/ocr_provider_eval.py` 已提供 MinerU / PaddleOCR 真实 endpoint 验收入口，默认把工程1采购 PDF 首页渲染成 PNG 后走 OCR Provider；无 endpoint 时输出 `skipped`，不会伪装为通过。
 - `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”和“响应要点”视图，不展示模型、token、schema 等技术口径。
 - `backend/internal/db/migrations/00031_bid_requirement_items.sql` 已新增 `bid_requirement_items` 独立表，按租户启用 RLS，承接 AutoRFP 式 referenceId/source attribution 思路。
@@ -118,6 +119,7 @@
    - 保留 `OCR_HTTP_ENDPOINT` 通用 Provider。
    - 增加 MinerU/OpenAPI 兼容 Provider 配置：endpoint、token、timeout、poll_interval、max_attempts。
    - 当前配置入口：通用 HTTP 使用 `OCR_HTTP_ENDPOINT` / `OCR_API_KEY`；MinerU 使用 `OCR_PROVIDER=mineru`、`MINERU_HTTP_ENDPOINT`、`MINERU_API_KEY`、`MINERU_PARSE_MODE`；PaddleOCR 使用 `OCR_PROVIDER=paddleocr`、`PADDLEOCR_HTTP_ENDPOINT`、`PADDLEOCR_API_KEY`、`PADDLEOCR_PIPELINE`。
+   - 当前网关路由：`model_routing.yaml` 的 `document_ocr` 使用 `local` provider 和 `configurable-ocr-provider-pipeline`，实际厂商通过上述环境变量切换，避免把客户文件外发给未显式配置的模型路由。
    - Provider 不可用时不伪装成功，必须返回 `provider_not_configured` 或 `failed`。
    - 当前已落地异步轮询：初始响应为 202 或 `pending/running/processing` 时，使用响应 `status_url` / `poll_url`、`OCR_POLL_ENDPOINT`、`MINERU_POLL_ENDPOINT` 或 `PADDLEOCR_POLL_ENDPOINT` 轮询；未提供轮询地址时默认请求 `endpoint/{task_id}`。轮询结果归一到 `pages`、`blocks`、`tables`、`markdown`、`layout_blocks`，超时和失败只保存安全摘要。
    - 当前已落地真实 endpoint 验收命令：`python -m app.evaluation.ocr_provider_eval --provider mineru|paddleocr`，可设置最小文本、表格块和版面块门槛；无 endpoint 时返回 skipped。

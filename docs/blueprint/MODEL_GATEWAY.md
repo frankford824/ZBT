@@ -10,7 +10,7 @@ EmbeddingProvider：embed_text、embed_batch、get_dimensions、health_check。
 
 RerankProvider：rerank、health_check。
 
-OCRProvider：parse_pdf、parse_image、extract_layout、extract_tables、health_check。
+OCRProvider：parse_pdf、parse_image、extract_layout、extract_tables、health_check。`model_routing.yaml` 需要显式声明 `document_ocr` 路由，当前以 `local` provider 承接 MinerU/PaddleOCR/通用 HTTP OCR 的环境变量配置，便于 Mock 路由审计和生产切换检查覆盖 OCR。
 
 ModelRouter：resolve、fallback、log_call、quota_status、enforce_quota。
 

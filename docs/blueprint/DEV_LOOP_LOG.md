@@ -3421,3 +3421,39 @@ git diff --check
 1. 本轮不接真实第三方凭证，不执行生产 smoke test。
 2. 本轮只做团队管理入口，不把外部标讯搜索或企业画像接入项目/标书创建业务流。
 3. 配置弹窗不提供任意工具调用调试面板，避免用户把客户文件正文直接外发。
+
+## Loop-60 / OCR Provider 路由审计固化 - 2026-06-18
+
+### 本轮目标
+
+1. 修补 MinerU / PaddleOCR OCR Provider 已有环境变量和评测入口，但模型网关配置没有显式 `document_ocr` 路由的问题。
+2. 让 `/models/health`、`provider_backed_mock_routes()` 和生产配置检查能够覆盖 OCR Provider 能力边界。
+3. 保持 OCR 实际调用仍走本地解析管线，避免把扫描件交给未明确配置的外部 LLM 路由。
+
+### 代码交付
+
+1. `ai-service/app/config/model_routing.yaml` 新增 `document_ocr` 路由，使用 `local` provider、`configurable-ocr-provider-pipeline`、`OCRProviderResult` schema 和 300 秒超时。
+2. `ai-service/app/tests/test_model_router.py` 将 `document_ocr` 纳入本地管线路由断言，并新增 shipped config 审计测试，确保 OCR 路由不会被识别为 Mock Provider。
+3. `AI_IMPLEMENTATION_CHECKLIST.md`、`MODEL_GATEWAY.md`、`SAMPLE_DOCS_EVALUATION.md` 同步记录 OCR Provider 的路由审计口径。
+
+### 检查结果
+
+已运行：
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m pytest -s app/tests/test_model_router.py
+PYTHONPATH=. ./.venv/bin/python -m pytest -s app/tests/test_document_parser.py app/tests/test_ocr_provider_eval.py
+git diff --check
+```
+
+结果：
+
+1. 模型路由测试 46 项通过，`document_ocr` shipped config 审计通过。
+2. 文档解析和 OCR Provider 评测测试 49 项通过。
+3. AI 服务全量 pytest 221 项通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮不配置真实 MinerU / PaddleOCR endpoint，不执行真实 OCR smoke test。
+2. `document_ocr` 路由只用于配置审计和运行边界表达；实际 OCR HTTP 调用仍由 `document_parser.py` 根据 `OCR_PROVIDER` 系列环境变量完成。

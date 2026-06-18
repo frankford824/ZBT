@@ -153,7 +153,20 @@ def test_local_pipeline_routes_do_not_use_mock_provider() -> None:
     router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
 
     assert router.resolve("knowledge_process", tenant_id="tenant-demo").provider == "local"
+    assert router.resolve("document_ocr", tenant_id="tenant-demo").provider == "local"
     assert router.resolve("document_export", tenant_id="tenant-demo").provider == "local"
+
+
+def test_shipped_routing_config_declares_auditable_ocr_route() -> None:
+    router = ModelRouter.from_yaml(Path("app/config/model_routing.yaml"))
+    target = router.resolve("document_ocr", tenant_id="tenant-demo")
+
+    assert target.provider == "local"
+    assert target.model == "configurable-ocr-provider-pipeline"
+    assert target.output == "json"
+    assert target.schema_name == "OCRProviderResult"
+    assert target.timeout_s == 300
+    assert "document_ocr.primary" not in router.provider_backed_mock_routes()
 
 
 def test_router_uses_explicit_fallback_when_primary_provider_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:

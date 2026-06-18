@@ -64,6 +64,13 @@ routes:
       output: json
       schema: KnowledgeProcessTask
       timeout_s: 300
+  document_ocr:
+    primary:
+      provider: local
+      model: configurable-ocr-provider-pipeline
+      output: json
+      schema: OCRProviderResult
+      timeout_s: 300
   knowledge_rerank:
     primary:
       provider: openai_compatible_primary
