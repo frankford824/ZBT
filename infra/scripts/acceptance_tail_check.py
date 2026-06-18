@@ -585,6 +585,22 @@ def check_static_docs() -> None:
         "test_document_export_request_strips_bounded_text_fields",
     ):
         require(needle in export_schema_tests, f"Document export schema missing regression test: {needle}")
+    ai_main = (ROOT / "ai-service/app/main.py").read_text(encoding="utf-8")
+    for needle in (
+        "document_export_payload_for_endpoint",
+        '"export_type" in payload.model_fields_set',
+        "payload.export_type != export_type",
+        "HTTPException(status_code=400",
+        'detail="export_type must match export endpoint"',
+        'payload.model_copy(update={"export_type": export_type})',
+    ):
+        require(needle in ai_main, f"Document export endpoint missing type consistency guard: {needle}")
+    main_security_tests = (ROOT / "ai-service/app/tests/test_main_security.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_document_export_endpoint_normalizes_omitted_export_type_to_path",
+        "test_document_export_endpoint_rejects_explicit_export_type_mismatch",
+    ):
+        require(needle in main_security_tests, f"Document export endpoint missing consistency regression test: {needle}")
 
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")

@@ -5942,3 +5942,52 @@ cd backend && go test ./...
 
 1. 本轮治理的是 AI 回调响应契约边界，没有新增新的生成模型、成本分析算法或语义质量提升。
 2. 若 provider 返回超出响应预算的内容，当前策略是让任务进入失败回调，而不是自动截断模型输出；这样可以避免把不完整响应误当成可用业务结果。
+
+## Loop-122 / 文档导出 endpoint 类型一致性收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 服务导出入口，处理 `/tasks/export/{docx,pdf,zip}` 路径类型与 payload `export_type` 可能不一致的问题。
+2. 避免直接调用 AI 服务时带入矛盾的导出类型，造成请求语义、后台任务和回调结果之间的契约不清。
+3. 保持 endpoint 路径作为导出类型的权威来源，同时兼容未显式传 `export_type` 的请求。
+
+### 代码交付
+
+1. `ai-service/app/main.py` 新增 `document_export_payload_for_endpoint`，在入队前统一校验并归一化导出类型。
+2. 如果请求 payload 显式传入 `export_type` 且与 endpoint 路径不一致，AI 服务返回 `400`，错误为 `export_type must match export endpoint`。
+3. 如果请求 payload 未显式传入 `export_type`，入队前按 endpoint 路径补正，例如 `/tasks/export/pdf` 会把后台 payload 归一化为 `pdf`。
+4. `ai-service/app/tests/test_main_security.py` 新增两条回归测试，分别覆盖缺省 `export_type` 的路径归一化和显式 mismatch 的 400 拒绝。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求导出 endpoint 类型一致性 helper、400 拒绝、payload 归一化和回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/main.py app/tests/test_main_security.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd ai-service && .venv/bin/python -m ruff check app/main.py app/tests/test_main_security.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py app/tests/test_export_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py -q -s` 通过：`65 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/main.py app/tests/test_main_security.py` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py app/tests/test_export_schema.py -q -s` 通过：`75 passed`。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`278 passed`。
+7. `cd backend && go test ./...` 通过。
+8. `./infra/scripts/check.sh` 通过；其中工程1导出验收通过：`passed=23/23 name=工程1.export`；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是文档导出 endpoint 与 payload 的契约一致性，没有新增导出格式能力或排版能力。
+2. 对显式类型冲突采取 400 拒绝策略；对未显式传类型的请求采取按路径归一化策略，以保持现有路径语义兼容。

@@ -8,7 +8,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -27,6 +27,7 @@ from app.main import (
     ensure_callback_url_allowed,
     ensure_tenant_object_key_allowed,
     export_docx,
+    export_pdf,
     knowledge_embeddings,
     knowledge_process,
     knowledge_rerank,
@@ -651,6 +652,50 @@ def test_document_export_accepts_backend_task_id() -> None:
     accepted = asyncio.run(export_docx(payload, BackgroundTasks()))
 
     assert accepted.task_id == "task-export-backend-owned"
+
+
+def test_document_export_endpoint_normalizes_omitted_export_type_to_path() -> None:
+    payload = DocumentExportRequest(
+        task_id="task-export-pdf",
+        tenant_id="tenant-demo",
+        export_id="export-demo",
+        bid_id="bid-demo",
+        bid_title="测试项目",
+        part_code="tech",
+        part_title="技术标",
+        filename="测试项目.pdf",
+        object_key="tenant/bid_export/demo.pdf",
+    )
+    background_tasks = BackgroundTasks()
+
+    accepted = asyncio.run(export_pdf(payload, background_tasks))
+
+    assert accepted.task_id == "task-export-pdf"
+    assert len(background_tasks.tasks) == 1
+    scheduled = background_tasks.tasks[0]
+    assert scheduled.args[1].export_type == "pdf"
+    assert scheduled.args[2] == "pdf"
+
+
+def test_document_export_endpoint_rejects_explicit_export_type_mismatch() -> None:
+    payload = DocumentExportRequest(
+        task_id="task-export-mismatch",
+        tenant_id="tenant-demo",
+        export_id="export-demo",
+        bid_id="bid-demo",
+        bid_title="测试项目",
+        export_type="docx",
+        part_code="tech",
+        part_title="技术标",
+        filename="测试项目.pdf",
+        object_key="tenant/bid_export/demo.pdf",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(export_pdf(payload, BackgroundTasks()))
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "export_type must match export endpoint"
 
 
 def test_process_document_export_hydrates_object_key_attachments(monkeypatch, tmp_path) -> None:

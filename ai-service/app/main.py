@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from urllib import request
 from urllib.parse import urlparse
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from minio import Minio
 from starlette.responses import JSONResponse
 
@@ -1148,11 +1148,23 @@ def enqueue_document_export(
     payload: DocumentExportRequest,
     background_tasks: BackgroundTasks,
 ) -> TaskAccepted:
+    payload = document_export_payload_for_endpoint(export_type, payload)
     route = router.resolve("document_export", tenant_id=payload.tenant_id)
     task_suffix = payload.export_id.replace("-", "")[:12]
     task_id = payload.task_id or f"task-export-{task_suffix}"
     background_tasks.add_task(process_document_export, task_id, payload, export_type)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
+
+
+def document_export_payload_for_endpoint(
+    export_type: str,
+    payload: DocumentExportRequest,
+) -> DocumentExportRequest:
+    if "export_type" in payload.model_fields_set and payload.export_type != export_type:
+        raise HTTPException(status_code=400, detail="export_type must match export endpoint")
+    if payload.export_type != export_type:
+        return payload.model_copy(update={"export_type": export_type})
+    return payload
 
 
 def process_document_export(task_id: str, payload: DocumentExportRequest, export_type: str) -> None:
