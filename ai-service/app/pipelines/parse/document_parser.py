@@ -1222,21 +1222,30 @@ def _ocr_provider_name() -> str:
 
 def _ocr_provider_config() -> OCRProviderConfig:
     provider = _ocr_provider_name()
-    endpoint_env = _ocr_endpoint_env(provider)
-    api_key_env = _ocr_api_key_env(provider)
+    endpoint_env = _effective_env(_ocr_endpoint_env(provider), "OCR_HTTP_ENDPOINT")
+    api_key_env = _effective_env(_ocr_api_key_env(provider), "OCR_API_KEY")
+    poll_endpoint_env = _effective_env(_ocr_poll_endpoint_env(provider), "OCR_POLL_ENDPOINT")
     return OCRProviderConfig(
         provider=provider,
-        endpoint=os.getenv(endpoint_env, "").strip() or os.getenv("OCR_HTTP_ENDPOINT", "").strip(),
+        endpoint=os.getenv(endpoint_env, "").strip(),
         endpoint_env=endpoint_env,
-        api_key=os.getenv(api_key_env, "").strip() or os.getenv("OCR_API_KEY", "").strip(),
+        api_key=os.getenv(api_key_env, "").strip(),
         api_key_env=api_key_env,
         timeout_s=_env_int(_ocr_timeout_env(provider), _env_int("OCR_HTTP_TIMEOUT_S", 120)),
         mode=_ocr_mode(provider),
-        poll_endpoint=os.getenv(_ocr_poll_endpoint_env(provider), "").strip() or os.getenv("OCR_POLL_ENDPOINT", "").strip(),
-        poll_endpoint_env=_ocr_poll_endpoint_env(provider),
+        poll_endpoint=os.getenv(poll_endpoint_env, "").strip(),
+        poll_endpoint_env=poll_endpoint_env,
         poll_interval_s=_env_float(_ocr_poll_interval_env(provider), _env_float("OCR_POLL_INTERVAL_S", 2.0)),
         max_attempts=_env_int(_ocr_max_attempts_env(provider), _env_int("OCR_POLL_MAX_ATTEMPTS", 30)),
     )
+
+
+def _effective_env(primary_env: str, fallback_env: str) -> str:
+    if os.getenv(primary_env, "").strip():
+        return primary_env
+    if os.getenv(fallback_env, "").strip():
+        return fallback_env
+    return primary_env
 
 
 def _ocr_endpoint_env(provider: str) -> str:

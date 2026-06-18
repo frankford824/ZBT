@@ -314,6 +314,44 @@ def test_mineru_ocr_provider_uses_specific_endpoint_key_and_mode(monkeypatch) ->
     }
 
 
+def test_mineru_ocr_provider_profile_records_generic_fallback_envs(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["authorization"] = req.get_header("Authorization")
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return _FakeHTTPResponse(b'{"status":"done","text":"Generic endpoint OCR"}')
+
+    monkeypatch.setenv("OCR_PROVIDER", "mineru")
+    monkeypatch.delenv("MINERU_HTTP_ENDPOINT", raising=False)
+    monkeypatch.delenv("MINERU_API_KEY", raising=False)
+    monkeypatch.delenv("MINERU_POLL_ENDPOINT", raising=False)
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/generic")
+    monkeypatch.setenv("OCR_API_KEY", "generic-token")
+    monkeypatch.setenv("OCR_POLL_ENDPOINT", "https://ocr.example.test/tasks/{task_id}")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    ocr = result.metadata["ocr"]
+
+    assert captured["url"] == "https://ocr.example.test/generic"
+    assert captured["authorization"] == "Bearer generic-token"
+    assert captured["body"]["provider"] == "mineru"
+    assert ocr["provider"] == "mineru"
+    assert ocr["provider_profile"] == {
+        "provider": "mineru",
+        "endpoint_env": "OCR_HTTP_ENDPOINT",
+        "api_key_env": "OCR_API_KEY",
+        "mode": "auto",
+        "timeout_s": 120,
+        "poll_endpoint_env": "OCR_POLL_ENDPOINT",
+        "poll_interval_s": 2.0,
+        "max_attempts": 30,
+    }
+
+
 def test_mixed_pdf_page_ocr_uses_mineru_endpoint_without_generic_endpoint(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 

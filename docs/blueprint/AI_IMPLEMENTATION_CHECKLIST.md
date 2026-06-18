@@ -25,7 +25,7 @@
 - `ai-service/app/main.py` 已按 6 个模块逐一调用 `tender_parse` 路由，每个模块独立走 provider 候选和 fallback；单模块失败时保留基础解析并标记待确认。
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
-- `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox` 和可用的 `cell_bboxes`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析；OCR 顶层 `tables/table_blocks` 与页级 `pages[].tables` 会合并去重，常见 `cells` 输出会归一成 `rows`、`md_table`、`cell_bboxes` 并进入 chunk 文本。
+- `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox` 和可用的 `cell_bboxes`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata；若使用通用 `OCR_HTTP_ENDPOINT` / `OCR_API_KEY` / `OCR_POLL_ENDPOINT` 兜底，`provider_profile` 会记录实际生效的 env 名，便于生产排查。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析；OCR 顶层 `tables/table_blocks` 与页级 `pages[].tables` 会合并去重，常见 `cells` 输出会归一成 `rows`、`md_table`、`cell_bboxes` 并进入 chunk 文本。
 - `ai-service/app/config/model_routing.yaml` 已声明 `document_ocr` 本地路由，便于 `/models/health`、Mock 路由审计和生产配置检查覆盖 OCR Provider 能力边界。
 - `ai-service/app/evaluation/ocr_provider_eval.py` 已提供 MinerU / PaddleOCR 真实 endpoint 验收入口，默认把工程1采购 PDF 首页渲染成 PNG 后走 OCR Provider；无 endpoint 时输出 `skipped`，不会伪装为通过；可通过 `--min-page-confidence`、`--min-layout-bbox-count`、`--min-table-bbox-count`、`--min-cell-bbox-count` 把页级置信度和坐标级版面证据纳入验收。
 - `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”、“模块字段”和“响应要点”视图；“模块字段”会把 6 模块 `modules.*.fields` 展开为逐项编辑表，确认时写回原 `structured_result.modules`，并在 `parse_metadata.confirm_overrides.edited_module_fields` 记录调整路径。可解析到文件 ID 或知识库文档 ID 的来源会打开前端预览页，预览页展示来源标题、页码、摘录关键词、坐标标签和复制定位入口，并继续把页码/搜索词传给内嵌文件预览器。页面不展示模型、token、schema 等技术口径。
@@ -123,6 +123,7 @@
    - 保留 `OCR_HTTP_ENDPOINT` 通用 Provider。
    - 增加 MinerU/OpenAPI 兼容 Provider 配置：endpoint、token、timeout、poll_interval、max_attempts。
    - 当前配置入口：通用 HTTP 使用 `OCR_HTTP_ENDPOINT` / `OCR_API_KEY`；MinerU 使用 `OCR_PROVIDER=mineru`、`MINERU_HTTP_ENDPOINT`、`MINERU_API_KEY`、`MINERU_PARSE_MODE`；PaddleOCR 使用 `OCR_PROVIDER=paddleocr`、`PADDLEOCR_HTTP_ENDPOINT`、`PADDLEOCR_API_KEY`、`PADDLEOCR_PIPELINE`。
+   - 当前已落地：OCR `provider_profile` 记录实际生效的 endpoint/key/poll env；Provider 专属配置为空但通用 OCR 配置生效时，不会误报为使用了专属 env。
    - 当前网关路由：`model_routing.yaml` 的 `document_ocr` 使用 `local` provider 和 `configurable-ocr-provider-pipeline`，实际厂商通过上述环境变量切换，避免把客户文件外发给未显式配置的模型路由。
    - Provider 不可用时不伪装成功，必须返回 `provider_not_configured` 或 `failed`。
    - 当前已落地异步轮询：初始响应为 202 或 `pending/running/processing` 时，使用响应 `status_url` / `poll_url`、`OCR_POLL_ENDPOINT`、`MINERU_POLL_ENDPOINT` 或 `PADDLEOCR_POLL_ENDPOINT` 轮询；未提供轮询地址时默认请求 `endpoint/{task_id}`。轮询结果归一到 `pages`、`blocks`、`tables`、`markdown`、`layout_blocks`，超时和失败只保存安全摘要。

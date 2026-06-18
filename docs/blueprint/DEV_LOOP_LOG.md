@@ -4138,3 +4138,38 @@ git diff --check
 
 1. 本轮是坐标信息贯通和业务展示，不是自建 PDF canvas/Word 坐标层。
 2. 内嵌预览器仍由浏览器或对象存储预览 URL 承载，不能保证按坐标绘制选区框；后续若要视觉框选，需要引入可控 PDF/Office 渲染层。
+
+## Loop-79 / OCR Provider 生效配置审计 - 2026-06-18
+
+### 本轮目标
+
+1. 修正 MinerU/PaddleOCR 使用通用 OCR endpoint/key/poll 兜底时的审计 metadata。
+2. `provider_profile` 必须记录实际生效的环境变量，避免生产排查时误以为使用了 Provider 专属配置。
+3. 不改变 OCR 请求行为和未配置时的显式失败语义。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/document_parser.py` 新增 `_effective_env()`，在构建 `OCRProviderConfig` 时按“Provider 专属 env 有值优先，否则通用 OCR env，有值才记录”的顺序选择 `endpoint_env`、`api_key_env` 和 `poll_endpoint_env`。
+2. `provider_profile.endpoint_env` / `api_key_env` / `poll_endpoint_env` 现在代表实际读取的 env 名；例如 `OCR_PROVIDER=mineru` 且只配置 `OCR_HTTP_ENDPOINT` 时，profile 会记录 `OCR_HTTP_ENDPOINT`。
+3. `ai-service/app/tests/test_document_parser.py` 增加 MinerU 使用通用 OCR endpoint/key/poll 兜底的测试，覆盖请求 URL、Authorization 和 provider_profile。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py app/tests/test_ocr_provider_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+git diff --check
+```
+
+结果：
+
+1. 文档解析与 OCR Provider 评测相关单测 51 项通过。
+2. 工程1真实样本解析评测 109/109 通过。
+3. diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮修复配置审计准确性，不提供真实 MinerU/PaddleOCR endpoint 或 API Key。
+2. Provider 专属 timeout/mode 仍按 Provider 语义读取；本轮只修正 endpoint、key 和 poll endpoint 的实际来源记录。
