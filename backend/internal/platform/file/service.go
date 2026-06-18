@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
 	"github.com/google/uuid"
@@ -32,6 +33,7 @@ const (
 	defaultGeneratedBizType = "generated"
 	maxUploadSizeBytes      = 200 * 1024 * 1024
 	maxContentTypeBytes     = 255
+	maxFilenameRunes        = 255
 )
 
 var bizTypeAccessModules = map[string]string{
@@ -470,6 +472,9 @@ func sanitizeFilename(filename string) string {
 	}
 	base := stripControlChars(path.Base(cleaned))
 	if base == "." || base == ".." {
+		return ""
+	}
+	if utf8.RuneCountInString(base) > maxFilenameRunes {
 		return ""
 	}
 	return base

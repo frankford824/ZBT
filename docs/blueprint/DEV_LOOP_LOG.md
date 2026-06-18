@@ -5991,3 +5991,44 @@ cd backend && go test ./...
 
 1. 本轮治理的是文档导出 endpoint 与 payload 的契约一致性，没有新增导出格式能力或排版能力。
 2. 对显式类型冲突采取 400 拒绝策略；对未显式传类型的请求采取按路径归一化策略，以保持现有路径语义兼容。
+
+## Loop-123 / 文件名输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查后端文件服务的上传与生成资产入口，处理文件名只做路径清理、未限制长度的问题。
+2. 避免超长文件名进入 `file_assets.filename`、预签名下载响应和 `Content-Disposition`，造成数据库字段膨胀、响应头过大或前端下载体验异常。
+3. 保持中文业务文件名可用，同时给上传文件名设置明确、可测试、可回归的业务上限。
+
+### 代码交付
+
+1. `backend/internal/platform/file/service.go` 新增 `maxFilenameRunes = 255`，并在 `sanitizeFilename` 中使用 `utf8.RuneCountInString(base)` 拒绝超长文件名。
+2. 该校验位于共享清理函数中，覆盖预签名上传 `PresignUpload` 和后端生成资产 `CreateGeneratedAsset`。
+3. `backend/internal/platform/file/service_test.go` 新增超长文件名拒绝测试，以及 255 字符内中文文件名仍可接受的回归测试。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求文件名长度常量、rune 级长度校验和对应回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/file
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+2. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/file` 通过。
+3. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+4. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+5. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `278 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是文件名输入边界和下载响应稳定性，没有新增文件存储后端、对象扫描或病毒检测能力。
+2. 文件名上限按字符数处理，保留中文文件名兼容性；若未来需要兼容特定网关响应头字节上限，可进一步增加 `Content-Disposition` 级字节预算。

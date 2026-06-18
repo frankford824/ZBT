@@ -377,6 +377,16 @@ def check_static_docs() -> None:
         require(forbidden not in bid_page, f"Bid requirement source UI exposes technical locator field: {forbidden}")
     require("label: '原文位置'" in bid_page, "Bid requirement source UI missing business locator fallback")
 
+    file_service = (ROOT / "backend/internal/platform/file/service.go").read_text(encoding="utf-8")
+    for needle in ("maxFilenameRunes", "utf8.RuneCountInString(base)", "return \"\""):
+        require(needle in file_service, f"File upload service missing filename length guard: {needle}")
+    file_service_tests = (ROOT / "backend/internal/platform/file/service_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestSanitizeFilenameRejectsOversizedNames",
+        "TestSanitizeFilenameAllowsBoundedUnicodeNames",
+    ):
+        require(needle in file_service_tests, f"File upload service missing filename length regression test: {needle}")
+
     knowledge_page = (ROOT / "frontend/src/features/knowledge/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("<Tag>坐标：", "`坐标: ${bboxText}`"):
         require(forbidden not in knowledge_page, f"File preview source UI exposes raw OCR coordinates: {forbidden}")

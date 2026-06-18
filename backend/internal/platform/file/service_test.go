@@ -86,6 +86,19 @@ func TestSanitizeFilenameRemovesControlCharacters(t *testing.T) {
 	}
 }
 
+func TestSanitizeFilenameRejectsOversizedNames(t *testing.T) {
+	if got := sanitizeFilename(strings.Repeat("a", maxFilenameRunes+1) + ".pdf"); got != "" {
+		t.Fatalf("expected oversized filename to be rejected, got %q", got)
+	}
+}
+
+func TestSanitizeFilenameAllowsBoundedUnicodeNames(t *testing.T) {
+	name := strings.Repeat("标", maxFilenameRunes-len(".pdf")) + ".pdf"
+	if got := sanitizeFilename(name); got != name {
+		t.Fatalf("expected bounded unicode filename to be accepted, got %q", got)
+	}
+}
+
 func TestContentDispositionUsesHeaderSafeFallbackName(t *testing.T) {
 	header := contentDisposition("attachment", "投标\"\r\n文件\\demo.pdf")
 	if header != `attachment; filename="投标文件demo.pdf"; filename*=UTF-8''%E6%8A%95%E6%A0%87%22%E6%96%87%E4%BB%B6%5Cdemo.pdf` {
