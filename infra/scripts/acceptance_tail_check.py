@@ -226,12 +226,29 @@ def check_ai_logging_and_search(token: str, project_name: str, document_id: str)
     ok("46 AI calls write ai_call_logs", {"new_log_count": len(new_logs), "searched_document_id": document_id})
 
 
-def check_model_router_and_docs() -> None:
+def check_model_router_health() -> None:
     model_health = ai("GET", "/models/health")
     providers = model_health.get("providers") if isinstance(model_health, dict) else None
     require(isinstance(providers, dict) and providers.get("mock") is True, "AI /models/health did not report healthy mock provider")
     ok("48 MockProvider is healthy", providers)
 
+
+def latest_loop_section(loop_log: str) -> tuple[str, str]:
+    marker = "\n## Loop-"
+    start = loop_log.rfind(marker)
+    if start >= 0:
+        start += 1
+    elif loop_log.startswith("## Loop-"):
+        start = 0
+    else:
+        raise AcceptanceError("DEV_LOOP_LOG.md has no Loop section")
+    section = loop_log[start:]
+    heading = section.splitlines()[0] if section else ""
+    require(heading.startswith("## Loop-"), "DEV_LOOP_LOG.md latest section heading is invalid")
+    return heading, section
+
+
+def check_static_docs() -> None:
     routing = (ROOT / "ai-service/app/config/model_routing.yaml").read_text(encoding="utf-8")
     require("providers:" in routing and "mock:" in routing, "model_routing.yaml missing mock provider")
     for route in ("knowledge_embedding", "knowledge_rerank", "chapter_generate", "cost_advice", "document_export", "document_ocr"):
@@ -257,12 +274,26 @@ def check_model_router_and_docs() -> None:
         require(needle in sample_eval, f"SAMPLE_DOCS_EVALUATION.md missing OCR profile audit note: {needle}")
 
     loop_log = (ROOT / "docs/blueprint/DEV_LOOP_LOG.md").read_text(encoding="utf-8")
-    require("Loop-26 / x.md 尾部验收脚本" in loop_log, "DEV_LOOP_LOG.md missing latest loop record")
-    require("### 检查结果" in loop_log, "DEV_LOOP_LOG.md missing check result sections")
-    ok("50 DEV_LOOP_LOG records delivery loops", "docs/blueprint/DEV_LOOP_LOG.md")
+    latest_heading, latest_section = latest_loop_section(loop_log)
+    for needle in ("### 本轮目标", "### 代码交付", "### 检查结果", "### 偏离蓝图"):
+        require(needle in latest_section, f"DEV_LOOP_LOG.md latest section missing {needle}: {latest_heading}")
+    ok("50 DEV_LOOP_LOG records latest delivery loop", latest_heading)
 
 
-def main() -> int:
+def check_model_router_and_docs() -> None:
+    check_model_router_health()
+    check_static_docs()
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args == ["--static-docs"]:
+        check_static_docs()
+        print("[ok] x.md tail static acceptance docs passed")
+        return 0
+    if args:
+        raise AcceptanceError("usage: acceptance_tail_check.py [--static-docs]")
+
     stamp = time.strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
     token = login()
     check_approval_flow(token, stamp)

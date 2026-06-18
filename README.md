@@ -33,13 +33,16 @@ docker compose exec -T ai-service python -m pytest app/tests
 ./infra/scripts/check.sh
 python3 infra/scripts/acceptance_core_check.py
 python3 infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
 ```
 
-`./infra/scripts/check.sh` 会执行验收脚本语法检查、前端生产构建、Go 测试、AI `compileall`、可用时的 Python pytest、`docker compose config`，并在 `ai-service` 容器运行时追加容器内 pytest。
+`./infra/scripts/check.sh` 会执行验收脚本语法检查、尾部验收静态文档防漂移检查、前端生产构建和 lint、Go 测试和 vet、AI `compileall` / ruff / pytest、工程1黄金样本回归、`docker compose config`，并在 `ai-service` 容器运行时追加容器内 pytest。
 
 `python3 infra/scripts/acceptance_core_check.py` 需要在本地 Docker 服务启动后运行，会通过真实 API 和前端路由创建验收数据，覆盖 `x.md` 第 1-38 项：服务连通、注册登录、企业租户、成员邀请、角色权限、菜单权限依据、API 权限、多租户隔离、仪表盘、标讯、项目、标书、招标文件解析、知识库、素材选择、章节生成、版本/diff、三栏编辑器、DOCX/ZIP 导出和合规定位。
 
 `python3 infra/scripts/acceptance_tail_check.py` 需要在本地 Docker 服务启动后运行，会通过真实 API 创建验收数据，覆盖 `x.md` 第 39-50 项：审批提交/通过/驳回、驳回回到 editing、成本项目和成本项、成本分析、中标案例回流知识库、AI 调用日志、模型路由、MockProvider、README 和开发日志。
+
+`python3 infra/scripts/acceptance_tail_check.py --static-docs` 不需要启动服务，只检查模型路由、README、页面路由文档、AI_PIPELINE、SAMPLE_DOCS_EVALUATION 和 DEV_LOOP_LOG 最新 Loop 段落的防漂移约束；该检查已纳入 `./infra/scripts/check.sh`。
 
 ## 默认账号
 

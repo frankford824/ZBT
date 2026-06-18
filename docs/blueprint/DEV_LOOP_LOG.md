@@ -4877,3 +4877,42 @@ cd ai-service && .venv/bin/python -m app.evaluation.export_format_eval --input .
 
 1. OCR Provider 的真实外部端点验收仍未纳入总检，因为它依赖部署环境中的 provider 地址和凭据；本轮先固化可离线重复执行的业务黄金样本。
 2. Docker 中 AI 服务容器未运行，容器内 pytest 仍按既有逻辑跳过。
+
+## Loop-97 / 尾部验收静态防漂移实化 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查全工程验收脚本，修正尾部验收脚本对 DEV_LOOP_LOG 的过期断言。
+2. 避免脚本声称检查最新 Loop 记录，却只硬编码匹配早期 `Loop-26`。
+3. 将不依赖运行态服务的静态防漂移检查纳入 `./infra/scripts/check.sh`。
+
+### 代码交付
+
+1. `infra/scripts/acceptance_tail_check.py` 拆出 `check_model_router_health()` 与 `check_static_docs()`。
+2. 新增 `latest_loop_section()`，从 DEV_LOOP_LOG 末尾解析最新 Loop 段落，并要求最新段落同时包含“本轮目标 / 代码交付 / 检查结果 / 偏离蓝图”。
+3. `acceptance_tail_check.py --static-docs` 支持离线执行模型路由、README、页面路由、AI_PIPELINE、SAMPLE_DOCS_EVALUATION 和最新 Loop 结构检查。
+4. `infra/scripts/check.sh` 在语法检查后执行 `acceptance_tail_check.py --static-docs`。
+5. `README.md` 同步更新总检覆盖范围和 `--static-docs` 用法。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 尾部验收脚本语法检查通过。
+2. 静态防漂移检查通过，能识别最新 Loop 段落并检查必需小节。
+3. `git diff --check` 通过，无空白错误。
+4. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest、工程1三项黄金样本回归、尾部验收静态防漂移检查均通过。
+
+### 偏离蓝图
+
+1. 本轮未运行完整 `acceptance_core_check.py` / `acceptance_tail_check.py` 运行态验收；它们仍需要本地 Docker 栈启动并会创建运行态验收数据。
+2. Docker 中 AI 服务容器未运行时，容器内 pytest 仍按既有逻辑跳过。
