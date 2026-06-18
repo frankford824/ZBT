@@ -34,7 +34,7 @@
 - `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements` 只读接口。
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选。
-- 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
+- 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。生成回调中的章节 `source_refs` 和覆盖矩阵 `source_refs` 会统一派生 `citation_id`、`reference_id` 和 `source_locator`，避免模型只返回 chunk/page 时无法通过 AutoRFP 来源引用门禁。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
 - `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements/:requirementId`，可人工调整单条要求覆盖状态并补充响应证据；人工结果写入 `metadata.latest_coverage` 和 `metadata.manual_coverage`，不覆盖招标原文 `source_ref`。
 - `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements`，前端“响应要点”表支持勾选多条要求后批量标记覆盖状态、批量补充响应证据和批量编辑响应来源；也支持按当前覆盖/证据筛选条件对全部匹配要求做服务端批处理，批量操作会逐条写入覆盖历史，任一要求项不存在时整批失败。
 - 前端“响应要点”表的来源数量可打开响应来源列表；若来源携带 `file_id`、`file_asset_id`、`document_id` 或 `source_document_id`，可复用已有文件/知识库文档预览接口打开原文，带页码的来源会附加页码锚点；来源列表会展示并可复制页码、章节、引用号、定位码和摘录，便于人工复核传递精确定位。

@@ -3003,6 +3003,7 @@ func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID 
 		return err
 	}
 	sourceRefs := sourceRefsAsAny(generation.SourceRefs)
+	generation.SelfCheck = enrichSelfCheckSourceRefs(generation.SelfCheck, sourceRefs)
 	content := generation.TiptapJSON
 	plainText := plainTextFromTiptap(content)
 	if plainText == "" {
@@ -3050,10 +3051,7 @@ func chapterVersionModelMetadata(generation chapterGenerateResponse) map[string]
 	if len(generation.SelfCheck) == 0 {
 		return metadata
 	}
-	selfCheck := map[string]any{}
-	for key, value := range generation.SelfCheck {
-		selfCheck[key] = value
-	}
+	selfCheck := enrichSelfCheckSourceRefs(generation.SelfCheck, sourceRefsAsAny(generation.SourceRefs))
 	metadata["self_check"] = selfCheck
 	if coverage, ok := selfCheck["requirement_coverage"].([]any); ok {
 		metadata["requirement_coverage"] = coverage
@@ -5642,17 +5640,12 @@ func replaceKnowledgeReferences(ctx context.Context, tx pgx.Tx, tenantID string,
 		return err
 	}
 	for _, ref := range refs {
+		source := sourceRefAsAnyMap(ref)
+		source["trace_id"] = traceID
+		source["resolved"] = false
+		source["chapter_title"] = chapter.Title
 		metadata := map[string]any{
-			"source_ref": map[string]any{
-				"chunk_id":      ref.ChunkID,
-				"document_id":   ref.DocumentID,
-				"title":         ref.Title,
-				"page_start":    ref.PageStart,
-				"page_end":      ref.PageEnd,
-				"trace_id":      traceID,
-				"resolved":      false,
-				"chapter_title": chapter.Title,
-			},
+			"source_ref": source,
 		}
 		var sourceDocumentID any
 		var chunkID any
@@ -6250,15 +6243,182 @@ func asIntPtr(value any) *int {
 func sourceRefsAsAny(refs []sourceRef) []any {
 	result := make([]any, 0, len(refs))
 	for _, ref := range refs {
-		result = append(result, map[string]any{
-			"chunk_id":    ref.ChunkID,
-			"document_id": ref.DocumentID,
-			"title":       ref.Title,
-			"page_start":  ref.PageStart,
-			"page_end":    ref.PageEnd,
-		})
+		result = append(result, sourceRefAsAnyMap(ref))
 	}
 	return result
+}
+
+func sourceRefAsAnyMap(ref sourceRef) map[string]any {
+	source := map[string]any{
+		"chunk_id":    strings.TrimSpace(ref.ChunkID),
+		"document_id": strings.TrimSpace(ref.DocumentID),
+		"title":       strings.TrimSpace(ref.Title),
+	}
+	if ref.PageStart != nil {
+		source["page_start"] = *ref.PageStart
+	}
+	if ref.PageEnd != nil {
+		source["page_end"] = *ref.PageEnd
+	}
+	return enrichSourceRefTraceability(source, nil)
+}
+
+func enrichSelfCheckSourceRefs(selfCheck map[string]any, chapterSourceRefs []any) map[string]any {
+	if len(selfCheck) == 0 {
+		return selfCheck
+	}
+	result := copyStringAnyMap(selfCheck)
+	if result == nil {
+		result = map[string]any{}
+	}
+	coverage := anySlice(result["requirement_coverage"])
+	if len(coverage) == 0 {
+		return result
+	}
+	enrichedCoverage := make([]any, 0, len(coverage))
+	for _, raw := range coverage {
+		item := mapFromAny(raw)
+		if len(item) == 0 {
+			enrichedCoverage = append(enrichedCoverage, raw)
+			continue
+		}
+		item = copyStringAnyMap(item)
+		if refs := anySlice(item["source_refs"]); len(refs) > 0 {
+			item["source_refs"] = enrichSourceRefList(refs, chapterSourceRefs)
+		} else if sourceRef := mapFromAny(item["source_ref"]); len(sourceRef) > 0 {
+			item["source_ref"] = enrichSourceRefTraceability(sourceRef, chapterSourceRefs)
+		}
+		enrichedCoverage = append(enrichedCoverage, item)
+	}
+	result["requirement_coverage"] = enrichedCoverage
+	return result
+}
+
+func enrichSourceRefList(refs []any, chapterSourceRefs []any) []any {
+	result := make([]any, 0, len(refs))
+	for _, raw := range refs {
+		source := mapFromAny(raw)
+		if len(source) == 0 {
+			result = append(result, raw)
+			continue
+		}
+		result = append(result, enrichSourceRefTraceability(source, chapterSourceRefs))
+	}
+	return result
+}
+
+func enrichSourceRefTraceability(source map[string]any, chapterSourceRefs []any) map[string]any {
+	enriched := copyStringAnyMap(source)
+	if enriched == nil {
+		enriched = map[string]any{}
+	}
+	if fallback := matchingSourceRef(enriched, chapterSourceRefs); len(fallback) > 0 {
+		for _, key := range []string{"chunk_id", "chunkId", "document_id", "documentId", "source_document_id", "title", "page", "page_start", "pageStart", "page_end", "pageEnd", "citation_id", "citationId", "reference_id", "referenceId", "source_locator", "locator"} {
+			if !sourceRefValuePresent(enriched[key]) {
+				if value, exists := fallback[key]; exists && sourceRefValuePresent(value) {
+					enriched[key] = value
+				}
+			}
+		}
+	}
+	locator := sourceRefLocator(enriched)
+	if locator != "" {
+		if strings.TrimSpace(asString(enriched["source_locator"])) == "" {
+			enriched["source_locator"] = locator
+		}
+		if strings.TrimSpace(asString(enriched["locator"])) == "" {
+			enriched["locator"] = locator
+		}
+	}
+	citationID := sourceRefCitationID(enriched)
+	if citationID != "" {
+		if strings.TrimSpace(asString(enriched["citation_id"])) == "" {
+			enriched["citation_id"] = citationID
+		}
+		if strings.TrimSpace(asString(enriched["reference_id"])) == "" {
+			enriched["reference_id"] = citationID
+		}
+	}
+	return enriched
+}
+
+func sourceRefValuePresent(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String()) != ""
+	default:
+		return true
+	}
+}
+
+func matchingSourceRef(source map[string]any, candidates []any) map[string]any {
+	chunkID := strings.TrimSpace(firstString(source, "chunk_id", "chunkId"))
+	documentID := strings.TrimSpace(firstString(source, "document_id", "documentId", "source_document_id"))
+	for _, raw := range candidates {
+		candidate := mapFromAny(raw)
+		if len(candidate) == 0 {
+			continue
+		}
+		candidateChunkID := strings.TrimSpace(firstString(candidate, "chunk_id", "chunkId"))
+		candidateDocumentID := strings.TrimSpace(firstString(candidate, "document_id", "documentId", "source_document_id"))
+		if chunkID != "" && candidateChunkID == chunkID {
+			return candidate
+		}
+		if documentID != "" && candidateDocumentID == documentID {
+			sourcePage := asIntPtr(firstPresent(source, "page_start", "pageStart", "page"))
+			candidatePage := asIntPtr(firstPresent(candidate, "page_start", "pageStart", "page"))
+			if sourcePage == nil || candidatePage == nil || *sourcePage == *candidatePage {
+				return candidate
+			}
+		}
+	}
+	return nil
+}
+
+func sourceRefCitationID(source map[string]any) string {
+	for _, key := range []string{"citation_id", "citationId", "reference_id", "referenceId"} {
+		if value := strings.TrimSpace(asString(source[key])); value != "" {
+			return value
+		}
+	}
+	if locator := sourceRefLocator(source); locator != "" {
+		return locator
+	}
+	return ""
+}
+
+func sourceRefLocator(source map[string]any) string {
+	parts := []string{}
+	if chunkID := strings.TrimSpace(firstString(source, "chunk_id", "chunkId")); chunkID != "" {
+		parts = append(parts, "chunk:"+chunkID)
+	}
+	if documentID := strings.TrimSpace(firstString(source, "document_id", "documentId", "source_document_id")); documentID != "" {
+		parts = append(parts, "document:"+documentID)
+	}
+	if page := asIntPtr(firstPresent(source, "page_start", "pageStart", "page")); page != nil {
+		parts = append(parts, fmt.Sprintf("page:%d", *page))
+	}
+	if len(parts) == 0 {
+		return strings.TrimSpace(firstString(source, "source_locator", "locator"))
+	}
+	return strings.Join(parts, ";")
+}
+
+func firstString(source map[string]any, keys ...string) string {
+	return strings.TrimSpace(asString(firstPresent(source, keys...)))
+}
+
+func firstPresent(source map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, exists := source[key]; exists {
+			return value
+		}
+	}
+	return nil
 }
 
 func truncateRunes(value string, limit int) string {

@@ -4409,3 +4409,47 @@ git diff --check
 
 1. 本轮同步运行态导出阈值，不改历史已生成章节的旧 source_refs；旧数据若缺引用号会被评测器正确判为待修复。
 2. 新阈值证明来源结构完整，不替代来源语义一致性的人工抽样或后续语义评测。
+
+## Loop-86 / 生成来源引用归一化与验收门禁 - 2026-06-18
+
+### 本轮目标
+
+1. 修复生成源头仍可能只保存 `chunk_id/document_id/page_start`，但运行态评测已要求引用号/定位码的断层。
+2. 章节顶层 `source_refs`、`self_check.requirement_coverage[].source_refs` 和 `knowledge_references.metadata.source_ref` 必须共享同一套可追溯定位字段。
+3. 核心运行态验收脚本不能只检查“source_refs 非空”，还要检查引用号/定位码和来源位置线索。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增生成来源归一化：
+   - `sourceRefsAsAny()` 会从 chunk/document/page 派生 `citation_id`、`reference_id`、`source_locator` 和 `locator`。
+   - `chapterVersionModelMetadata()` 会补齐 `self_check.requirement_coverage[].source_refs` 中缺失的引用号和页码定位。
+   - `syncRequirementCoverageStatuses()` 通过已归一化 self_check 写入 `metadata.latest_coverage` 和覆盖历史。
+   - `replaceKnowledgeReferences()` 的 metadata.source_ref 复用同一归一化结果，并追加 trace、resolved 和章节标题。
+2. `backend/internal/platform/bid/store_test.go` 增加和扩展单测，覆盖章节 source_refs 派生稳定 locator，以及覆盖矩阵 source_refs 从章节来源补齐 citation/reference/page。
+3. `infra/scripts/acceptance_core_check.py` 增加 `require_traceable_source_refs()`，生成章节验收现在要求 source_refs 具备 citation/reference/locator 和 page/chunk/file/document 定位，并检查 `/generation-coverage` 导出默认携带新阈值。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录生成回调来源引用归一化。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_core_check.py
+cd backend && go test ./internal/platform/bid -run 'TestSourceRefsAsAnyAddsTraceableCitationAndLocator|TestChapterVersionModelMetadataCarriesSelfCheckCoverage|TestBuildGenerationCoverageSpecUsesEvaluatorContract'
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.generation_coverage_eval --input ../docs/sample_docs/golden/工程1.generation_coverage.json
+git diff --check
+```
+
+结果：
+
+1. 核心验收脚本语法检查通过。
+2. Go 生成来源归一化和导出契约相关单测通过。
+3. Python 生成覆盖评测单测 4 项通过。
+4. 工程1生成覆盖黄金样本 9/9 通过。
+5. diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮派生的是稳定定位码，不要求模型自然语言输出自带同名字段。
+2. 核心验收脚本仍依赖运行中的服务版本；若服务未重建，旧运行态仍会按新脚本失败。

@@ -407,8 +407,17 @@ func TestParseGateMetadataCarriesQualityAndCounts(t *testing.T) {
 }
 
 func TestChapterVersionModelMetadataCarriesSelfCheckCoverage(t *testing.T) {
+	pageStart := 5
 	generation := chapterGenerateResponse{
-		TraceID:       "trace-demo",
+		TraceID: "trace-demo",
+		SourceRefs: []sourceRef{
+			{
+				ChunkID:    "chunk-evaluation-001",
+				DocumentID: "doc-evaluation-001",
+				Title:      "评分办法",
+				PageStart:  &pageStart,
+			},
+		},
 		ModelMetadata: map[string]any{"provider": "real-provider"},
 		SelfCheck: map[string]any{
 			"status": "needs_review",
@@ -416,6 +425,12 @@ func TestChapterVersionModelMetadataCarriesSelfCheckCoverage(t *testing.T) {
 				map[string]any{
 					"requirement_id": "evaluation-001",
 					"satisfied":      false,
+					"source_refs": []any{
+						map[string]any{
+							"chunk_id":    "chunk-evaluation-001",
+							"document_id": "doc-evaluation-001",
+						},
+					},
 				},
 			},
 		},
@@ -437,9 +452,57 @@ func TestChapterVersionModelMetadataCarriesSelfCheckCoverage(t *testing.T) {
 	if !ok || len(coverage) != 1 {
 		t.Fatalf("expected requirement coverage rows, got %#v", metadata["requirement_coverage"])
 	}
+	coverageRow, ok := coverage[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected coverage row map, got %#v", coverage[0])
+	}
+	sourceRefs := anySlice(coverageRow["source_refs"])
+	if len(sourceRefs) != 1 {
+		t.Fatalf("expected enriched coverage source refs, got %#v", coverageRow["source_refs"])
+	}
+	sourceRef, ok := sourceRefs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected source ref map, got %#v", sourceRefs[0])
+	}
+	if sourceRef["citation_id"] == "" || sourceRef["reference_id"] == "" || sourceRef["source_locator"] == "" || sourceRef["page_start"] != pageStart {
+		t.Fatalf("expected coverage source ref to carry traceable citation and location, got %#v", sourceRef)
+	}
 	generation.ModelMetadata["provider"] = "mutated"
 	if metadata["provider"] != "real-provider" {
 		t.Fatalf("expected metadata to be copied, got %#v", metadata["provider"])
+	}
+}
+
+func TestSourceRefsAsAnyAddsTraceableCitationAndLocator(t *testing.T) {
+	pageStart := 7
+	pageEnd := 9
+
+	refs := sourceRefsAsAny([]sourceRef{
+		{
+			ChunkID:    "chunk-abc",
+			DocumentID: "doc-xyz",
+			Title:      "技术方案",
+			PageStart:  &pageStart,
+			PageEnd:    &pageEnd,
+		},
+	})
+
+	if len(refs) != 1 {
+		t.Fatalf("expected one source ref, got %#v", refs)
+	}
+	sourceRef, ok := refs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected source ref map, got %#v", refs[0])
+	}
+	expectedLocator := "chunk:chunk-abc;document:doc-xyz;page:7"
+	if sourceRef["citation_id"] != expectedLocator ||
+		sourceRef["reference_id"] != expectedLocator ||
+		sourceRef["source_locator"] != expectedLocator ||
+		sourceRef["locator"] != expectedLocator {
+		t.Fatalf("expected stable citation and locator, got %#v", sourceRef)
+	}
+	if sourceRef["page_start"] != pageStart || sourceRef["page_end"] != pageEnd {
+		t.Fatalf("expected page range to be dereferenced, got %#v", sourceRef)
 	}
 }
 

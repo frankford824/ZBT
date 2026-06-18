@@ -114,6 +114,45 @@ def ok(label: str, evidence: object) -> None:
     print(f"[ok] {label}: {evidence}")
 
 
+def _text(value: object) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def source_ref_has_reference_id(ref: dict[str, Any]) -> bool:
+    return any(_text(ref.get(key)) for key in ("citation_id", "citationId", "reference_id", "referenceId", "locator", "source_locator"))
+
+
+def source_ref_has_location(ref: dict[str, Any]) -> bool:
+    return any(
+        _text(ref.get(key))
+        for key in (
+            "chunk_id",
+            "chunkId",
+            "document_id",
+            "documentId",
+            "source_document_id",
+            "file_id",
+            "fileId",
+            "page",
+            "page_start",
+            "pageStart",
+            "source_locator",
+            "locator",
+        )
+    )
+
+
+def require_traceable_source_refs(refs: object, context: str) -> list[dict[str, Any]]:
+    require(isinstance(refs, list) and refs, f"{context} missing source_refs")
+    dict_refs = [ref for ref in refs if isinstance(ref, dict)]
+    require(len(dict_refs) == len(refs), f"{context} source_refs contain non-object entries")
+    missing_reference = [ref for ref in dict_refs if not source_ref_has_reference_id(ref)]
+    missing_location = [ref for ref in dict_refs if not source_ref_has_location(ref)]
+    require(not missing_reference, f"{context} source_refs missing citation/reference locator")
+    require(not missing_location, f"{context} source_refs missing page/chunk/file/document locator")
+    return dict_refs
+
+
 def login(email: str = ADMIN_EMAIL, tenant_id: str = TENANT_ID) -> tuple[str, dict[str, Any]]:
     result = api("POST", "/auth/login", payload={"tenant_id": tenant_id, "email": email, "password": PASSWORD})
     require(isinstance(result, dict), "login response is not an object")
@@ -487,9 +526,14 @@ def check_knowledge_and_generation(token: str, stamp: str, combined: dict[str, A
     chapter = next((item for item in all_chapters if item.get("id") == chapter_id), None)
     require(isinstance(chapter, dict), "generated chapter not found")
     require(chapter.get("status") == "generated", f"chapter status after generation is {chapter.get('status')}")
-    require(len(chapter.get("source_refs", [])) > 0, "generated chapter missing source_refs")
+    generated_source_refs = require_traceable_source_refs(chapter.get("source_refs"), "generated chapter")
+    coverage_spec = api("GET", f"/bids/{combined['id']}/generation-coverage", token=token)
+    thresholds = coverage_spec.get("thresholds") if isinstance(coverage_spec, dict) else None
+    require(isinstance(thresholds, dict), "generation coverage export missing thresholds")
+    require(thresholds.get("min_source_ref_reference_id_ratio") == 1, "generation coverage export missing reference id threshold")
+    require(thresholds.get("min_source_ref_location_ratio") == 1, "generation coverage export missing location threshold")
     require(len(chapter.get("needs_human_input", [])) > 0, "generated chapter missing needs_human_input")
-    ok("26,29,30 generate chapters with source refs and human input flags", {"chapter": chapter_id, "source_refs": len(chapter["source_refs"]), "needs_human_input": len(chapter["needs_human_input"])})
+    ok("26,29,30 generate chapters with source refs and human input flags", {"chapter": chapter_id, "source_refs": len(generated_source_refs), "needs_human_input": len(chapter["needs_human_input"])})
 
     accepted = api("POST", f"/chapters/{chapter_id}/accept", token=token)
     require(isinstance(accepted, dict) and accepted.get("status") == "accepted", "accept chapter did not mark accepted")
