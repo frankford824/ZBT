@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,6 +44,9 @@ const (
 	minTimeoutMS     = 500
 	maxTimeoutMS     = 60000
 	maxSummaryRunes  = 1000
+
+	maxExternalToolMonthlyBudget = 10000000
+	maxExternalToolCostPerCall   = 100000
 )
 
 type Store struct {
@@ -488,8 +493,12 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 	if timeoutMS == 0 {
 		timeoutMS = defaultTimeoutMS
 	}
-	if timeoutMS < minTimeoutMS || timeoutMS > maxTimeoutMS || req.MonthlyBudget < 0 {
+	if timeoutMS < minTimeoutMS || timeoutMS > maxTimeoutMS || !validExternalToolMoney(req.MonthlyBudget, maxExternalToolMonthlyBudget) {
 		return Config{}, ErrInvalidRequest
+	}
+	metadata, err := normalizeExternalToolMetadata(req.Metadata)
+	if err != nil {
+		return Config{}, err
 	}
 	allowedTools := normalizeAllowedTools(req.AllowedTools)
 	if len(allowedTools) == 0 && hasPreset {
@@ -507,9 +516,9 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 		Enabled:         enabled,
 		AllowedTools:    allowedTools,
 		TimeoutMS:       timeoutMS,
-		MonthlyBudget:   req.MonthlyBudget,
+		MonthlyBudget:   roundExternalToolMoney(req.MonthlyBudget),
 		RedactionPolicy: redactionPolicy,
-		Metadata:        normalizeMetadata(req.Metadata),
+		Metadata:        metadata,
 	}, nil
 }
 
@@ -561,6 +570,81 @@ func normalizeMetadata(value map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return value
+}
+
+func normalizeExternalToolMetadata(value map[string]any) (map[string]any, error) {
+	result := map[string]any{}
+	if value == nil {
+		return result, nil
+	}
+	rawCost, ok := value["cost_per_call"]
+	if !ok || rawCost == nil {
+		return result, nil
+	}
+	cost, ok := parseExternalToolMoney(rawCost, maxExternalToolCostPerCall)
+	if !ok {
+		return nil, ErrInvalidRequest
+	}
+	if cost > 0 {
+		result["cost_per_call"] = cost
+	}
+	return result, nil
+}
+
+func parseExternalToolMoney(value any, max float64) (float64, bool) {
+	var parsed float64
+	switch typed := value.(type) {
+	case float64:
+		parsed = typed
+	case float32:
+		parsed = float64(typed)
+	case int:
+		parsed = float64(typed)
+	case int8:
+		parsed = float64(typed)
+	case int16:
+		parsed = float64(typed)
+	case int32:
+		parsed = float64(typed)
+	case int64:
+		parsed = float64(typed)
+	case uint:
+		parsed = float64(typed)
+	case uint8:
+		parsed = float64(typed)
+	case uint16:
+		parsed = float64(typed)
+	case uint32:
+		parsed = float64(typed)
+	case uint64:
+		parsed = float64(typed)
+	case json.Number:
+		value, err := typed.Float64()
+		if err != nil {
+			return 0, false
+		}
+		parsed = value
+	case string:
+		value, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err != nil {
+			return 0, false
+		}
+		parsed = value
+	default:
+		return 0, false
+	}
+	if !validExternalToolMoney(parsed, max) {
+		return 0, false
+	}
+	return roundExternalToolMoney(parsed), true
+}
+
+func validExternalToolMoney(value float64, max float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= max
+}
+
+func roundExternalToolMoney(value float64) float64 {
+	return math.Round(value*10000) / 10000
 }
 
 func newExternalToolHTTPClient() *http.Client {
@@ -791,20 +875,9 @@ func costPerCall(metadata map[string]any) float64 {
 	if !ok {
 		return 0
 	}
-	switch typed := value.(type) {
-	case float64:
-		if typed > 0 {
-			return typed
-		}
-	case int:
-		if typed > 0 {
-			return float64(typed)
-		}
-	case string:
-		var parsed float64
-		if _, err := fmt.Sscanf(typed, "%f", &parsed); err == nil && parsed > 0 {
-			return parsed
-		}
+	cost, ok := parseExternalToolMoney(value, maxExternalToolCostPerCall)
+	if ok && cost > 0 {
+		return cost
 	}
 	return 0
 }

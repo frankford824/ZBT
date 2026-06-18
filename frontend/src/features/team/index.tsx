@@ -65,6 +65,8 @@ import { useCanAccess } from '../../shared/permissions/permissions'
 
 const teamTabs = ['members', 'approvals', 'external-tools', 'logs', 'notifications'] as const
 type TeamTab = (typeof teamTabs)[number]
+const MAX_EXTERNAL_TOOL_MONTHLY_BUDGET = 10000000
+const MAX_EXTERNAL_TOOL_COST_PER_CALL = 100000
 
 function normalizeTeamTab(value: string | null): TeamTab {
   return teamTabs.includes(value as TeamTab) ? (value as TeamTab) : 'members'
@@ -990,12 +992,24 @@ export function TeamPage() {
               </Col>
               <Col xs={24} md={8}>
                 <Form.Item label="月度预算" name="monthly_budget">
-                  <InputNumber min={0} step={10} addonAfter="元" className="full-width" />
+                  <InputNumber
+                    min={0}
+                    max={MAX_EXTERNAL_TOOL_MONTHLY_BUDGET}
+                    step={10}
+                    addonAfter="元"
+                    className="full-width"
+                  />
                 </Form.Item>
               </Col>
               <Col xs={24} md={8}>
                 <Form.Item label="单次估算" name="cost_per_call">
-                  <InputNumber min={0} step={0.01} addonAfter="元" className="full-width" />
+                  <InputNumber
+                    min={0}
+                    max={MAX_EXTERNAL_TOOL_COST_PER_CALL}
+                    step={0.01}
+                    addonAfter="元"
+                    className="full-width"
+                  />
                 </Form.Item>
               </Col>
             </Row>

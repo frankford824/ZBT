@@ -3,6 +3,7 @@ package externaltool
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -40,6 +41,51 @@ func TestNormalizeConfigRequiresHTTPStreamableEndpoint(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfigNormalizesCostMetadata(t *testing.T) {
+	cfg, err := normalizeConfig("handaas-bidding", UpsertConfigRequest{
+		Endpoint:      "https://example.com/mcp",
+		MonthlyBudget: 100.123456,
+		Metadata: map[string]any{
+			"cost_per_call": "12.34567",
+			"token":         "raw-secret",
+			"notes":         "should not be stored",
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalize config: %v", err)
+	}
+	if cfg.MonthlyBudget != 100.1235 {
+		t.Fatalf("expected rounded monthly budget, got %.8f", cfg.MonthlyBudget)
+	}
+	if got := cfg.Metadata["cost_per_call"]; got != 12.3457 {
+		t.Fatalf("expected rounded cost_per_call metadata, got %#v", got)
+	}
+	if _, ok := cfg.Metadata["token"]; ok {
+		t.Fatalf("expected unknown metadata keys to be dropped, got %#v", cfg.Metadata)
+	}
+	if len(cfg.Metadata) != 1 {
+		t.Fatalf("expected only governed metadata keys, got %#v", cfg.Metadata)
+	}
+}
+
+func TestNormalizeConfigRejectsInvalidExternalToolMoney(t *testing.T) {
+	for _, req := range []UpsertConfigRequest{
+		{Endpoint: "https://example.com/mcp", MonthlyBudget: -1},
+		{Endpoint: "https://example.com/mcp", MonthlyBudget: math.Inf(1)},
+		{Endpoint: "https://example.com/mcp", MonthlyBudget: maxExternalToolMonthlyBudget + 0.0001},
+		{Endpoint: "https://example.com/mcp", Metadata: map[string]any{"cost_per_call": -0.01}},
+		{Endpoint: "https://example.com/mcp", Metadata: map[string]any{"cost_per_call": math.Inf(1)}},
+		{Endpoint: "https://example.com/mcp", Metadata: map[string]any{"cost_per_call": "Infinity"}},
+		{Endpoint: "https://example.com/mcp", Metadata: map[string]any{"cost_per_call": "not-a-number"}},
+		{Endpoint: "https://example.com/mcp", Metadata: map[string]any{"cost_per_call": maxExternalToolCostPerCall + 0.0001}},
+		{Endpoint: "https://example.com/mcp", Metadata: map[string]any{"cost_per_call": map[string]any{"value": 1}}},
+	} {
+		if _, err := normalizeConfig("handaas-bidding", req); err == nil {
+			t.Fatalf("expected invalid money request to be rejected: %#v", req)
+		}
+	}
+}
+
 func TestNormalizeConfigRejectsUnsafeExternalEndpoints(t *testing.T) {
 	for _, endpoint := range []string{
 		"http://localhost:9000/mcp",
@@ -67,6 +113,23 @@ func TestNormalizeConfigRejectsUnsafeExternalEndpoints(t *testing.T) {
 		if _, err := normalizeConfig("handaas-bidding", UpsertConfigRequest{Endpoint: endpoint}); err == nil {
 			t.Fatalf("expected unsafe external endpoint %q to be rejected", endpoint)
 		}
+	}
+}
+
+func TestCostPerCallIgnoresInvalidStoredMetadata(t *testing.T) {
+	for _, metadata := range []map[string]any{
+		{"cost_per_call": math.Inf(1)},
+		{"cost_per_call": "1e999"},
+		{"cost_per_call": "not-a-number"},
+		{"cost_per_call": maxExternalToolCostPerCall + 0.0001},
+		{"cost_per_call": []any{1}},
+	} {
+		if got := costPerCall(metadata); got != 0 {
+			t.Fatalf("expected invalid stored cost metadata to be ignored, got %.8f for %#v", got, metadata)
+		}
+	}
+	if got := costPerCall(map[string]any{"cost_per_call": "0.123456"}); got != 0.1235 {
+		t.Fatalf("expected valid stored cost metadata to be rounded, got %.8f", got)
 	}
 }
 

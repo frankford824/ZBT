@@ -5525,3 +5525,51 @@ cd frontend && pnpm build
 
 1. 审计表仍保留字段名、数组数量和类型摘要，用于排查调用质量；不再保留第三方响应原始值。
 2. 本轮未新增真实第三方 MCP 端到端调用，继续用单元测试、静态验收和构建验证数据最小化行为。
+
+## Loop-113 / 外部工具成本元数据治理 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查外部 MCP/工具配置，处理 `monthly_budget` 和 `metadata.cost_per_call` 缺少后端金额边界的问题。
+2. 避免 API 客户端写入非有限值、超大金额或任意敏感 metadata，影响预算判断、审计写入和后续展示。
+3. 将成本字段治理固化进单元测试和尾部静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/store.go` 新增 `normalizeExternalToolMetadata()`、`parseExternalToolMoney()`、`validExternalToolMoney()` 和金额上限常量。
+2. `normalizeConfig()` 保存配置前校验并四舍五入 `monthly_budget`，只保留白名单内的 `cost_per_call` metadata，丢弃其他原始 metadata 字段。
+3. `costPerCall()` 复用统一金额解析逻辑，旧数据里如果出现 `Infinity`、超大值、非数字字符串或复杂对象，会按 0 处理，不再进入预算/审计金额。
+4. `backend/internal/platform/externaltool/store_test.go` 新增成本 metadata 规范化、非法金额拒绝、旧脏 metadata 忽略三组回归测试。
+5. `frontend/src/features/team/index.tsx` 为“月度预算”和“单次估算”输入框补充与后端一致的最大值，减少误填。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求金额治理函数和回归测试存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./internal/platform/externaltool
+cd backend && go test ./...
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && go test ./internal/platform/externaltool` 通过，覆盖 endpoint guard、结构化摘要、错误脱敏和成本 metadata 治理。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `cd backend && go test ./...` 通过。
+4. `cd frontend && pnpm lint` 通过。
+5. `cd frontend && pnpm build` 通过。
+6. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+7. AI pytest 通过：`237 passed`。
+8. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+9. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮只治理外部工具预算和单次成本的配置边界，没有新增真实第三方 MCP 调用。
+2. 成本金额目前按配置值估算，仍不是第三方真实 token/调用账单回传。

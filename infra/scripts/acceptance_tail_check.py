@@ -308,6 +308,9 @@ def check_static_docs() -> None:
         "externalToolEndpointHasSensitiveQuery",
         "structuralSummary",
         "redactExternalToolError",
+        "normalizeExternalToolMetadata",
+        "validExternalToolMoney",
+        "maxExternalToolCostPerCall",
         "net.DefaultResolver.LookupNetIP",
         "CheckRedirect",
     ):
@@ -330,6 +333,9 @@ def check_static_docs() -> None:
         "TestExternalToolHTTPClientRejectsLocalhostDial",
         "TestSummarizeValueDoesNotPersistRawExternalResponse",
         "TestSafeErrorRedactsExternalEndpointAndSecrets",
+        "TestNormalizeConfigNormalizesCostMetadata",
+        "TestNormalizeConfigRejectsInvalidExternalToolMoney",
+        "TestCostPerCallIgnoresInvalidStoredMetadata",
     ):
         require(needle in external_tool_tests, f"External tool gateway missing SSRF regression test: {needle}")
     external_tool_presets = (ROOT / "backend/internal/platform/externaltool/presets.go").read_text(encoding="utf-8")
