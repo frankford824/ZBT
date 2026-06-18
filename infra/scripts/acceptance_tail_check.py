@@ -694,11 +694,24 @@ def check_static_docs() -> None:
     knowledge_store = (ROOT / "backend/internal/platform/knowledge/store.go").read_text(encoding="utf-8")
     for needle in ("maxKnowledgeSearchQueryChars", "normalizeKnowledgeSearchQuery(req.Query)"):
         require(needle in knowledge_store, f"Knowledge search missing query size guard: {needle}")
+    for needle in (
+        "maxKnowledgeTemplateNameRunes",
+        "maxKnowledgeTemplateContentJSONBytes",
+        "normalizeDocumentTemplateRequest",
+        "normalizeDocumentTemplateContent",
+    ):
+        require(needle in knowledge_store, f"Knowledge template missing content size guard: {needle}")
     knowledge_store_tests = (ROOT / "backend/internal/platform/knowledge/store_test.go").read_text(encoding="utf-8")
     require(
         "TestNormalizeKnowledgeSearchQueryTrimsAndCapsRunes" in knowledge_store_tests,
         "Knowledge search query size guard missing regression test",
     )
+    for needle in (
+        "TestNormalizeDocumentTemplateRequestTrimsDefaultsAndBoundsContent",
+        "TestNormalizeDocumentTemplateRequestRejectsOversizedFieldsAndContent",
+        "TestCreateDocumentTemplateRejectsInvalidRequestBeforeDB",
+    ):
+        require(needle in knowledge_store_tests, f"Knowledge template missing content boundary regression test: {needle}")
 
     generation_schema = (ROOT / "ai-service/app/schemas/generation.py").read_text(encoding="utf-8")
     for needle in (

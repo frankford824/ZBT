@@ -1,6 +1,7 @@
 package knowledge
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"strings"
@@ -193,5 +194,84 @@ func TestKnowledgeChunkMetadataJSONRejectsOversizedMetadata(t *testing.T) {
 	)
 	if err != ErrInvalidRequest {
 		t.Fatalf("expected oversized metadata to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeDocumentTemplateRequestTrimsDefaultsAndBoundsContent(t *testing.T) {
+	normalized, contentJSON, err := normalizeDocumentTemplateRequest(CreateDocumentTemplateRequest{
+		Name:        " 项目实施方案 ",
+		Description: " 模板说明 ",
+		Content: map[string]any{
+			"sections": []any{"项目理解", "实施计划"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected template request to normalize: %v", err)
+	}
+	if normalized.Name != "项目实施方案" || normalized.Category != "通用模板" || normalized.Version != "v1.0" {
+		t.Fatalf("unexpected normalized template identity: %+v", normalized)
+	}
+	if normalized.Description != "模板说明" {
+		t.Fatalf("expected description to be trimmed, got %q", normalized.Description)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(contentJSON, &decoded); err != nil {
+		t.Fatalf("expected valid content json: %v", err)
+	}
+	if _, ok := decoded["sections"]; !ok {
+		t.Fatalf("expected content to be preserved, got %#v", decoded)
+	}
+}
+
+func TestNormalizeDocumentTemplateRequestRejectsOversizedFieldsAndContent(t *testing.T) {
+	for name, req := range map[string]CreateDocumentTemplateRequest{
+		"blank name": {
+			Name: " ",
+		},
+		"oversized name": {
+			Name: strings.Repeat("模", maxKnowledgeTemplateNameRunes+1),
+		},
+		"oversized category": {
+			Name:     "模板",
+			Category: strings.Repeat("类", maxKnowledgeTemplateCategoryRunes+1),
+		},
+		"oversized description": {
+			Name:        "模板",
+			Description: strings.Repeat("说", maxKnowledgeTemplateDescriptionRunes+1),
+		},
+		"oversized version": {
+			Name:    "模板",
+			Version: strings.Repeat("v", maxKnowledgeTemplateVersionRunes+1),
+		},
+		"oversized content": {
+			Name:    "模板",
+			Content: map[string]any{"payload": strings.Repeat("内", maxKnowledgeTemplateContentJSONBytes)},
+		},
+		"non json content": {
+			Name:    "模板",
+			Content: map[string]any{"bad": func() {}},
+		},
+		"invalid number content": {
+			Name:    "模板",
+			Content: map[string]any{"bad": math.Inf(1)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := normalizeDocumentTemplateRequest(req); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid template request, got %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateDocumentTemplateRejectsInvalidRequestBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.CreateDocumentTemplate(context.Background(), "tenant-id", CreateDocumentTemplateRequest{
+		Name:    "模板",
+		Content: map[string]any{"bad": func() {}},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid template content to be rejected before DB, got %v", err)
 	}
 }

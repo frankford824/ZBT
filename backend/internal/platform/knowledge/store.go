@@ -38,6 +38,12 @@ const (
 	maxKnowledgeChunkSectionChars  = 500
 	maxKnowledgeChunkMetadataBytes = 32 * 1024
 	maxKnowledgeSearchQueryChars   = 2000
+
+	maxKnowledgeTemplateNameRunes        = 255
+	maxKnowledgeTemplateCategoryRunes    = 128
+	maxKnowledgeTemplateDescriptionRunes = 2000
+	maxKnowledgeTemplateVersionRunes     = 64
+	maxKnowledgeTemplateContentJSONBytes = 64 * 1024
 )
 
 type Store struct {
@@ -668,25 +674,12 @@ func (s *Store) ListDocumentTemplates(ctx context.Context, tenantID string) ([]D
 }
 
 func (s *Store) CreateDocumentTemplate(ctx context.Context, tenantID string, req CreateDocumentTemplateRequest) (DocumentTemplate, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return DocumentTemplate{}, ErrInvalidRequest
+	normalized, contentJSON, err := normalizeDocumentTemplateRequest(req)
+	if err != nil {
+		return DocumentTemplate{}, err
 	}
-	category := strings.TrimSpace(req.Category)
-	if category == "" {
-		category = "通用模板"
-	}
-	version := strings.TrimSpace(req.Version)
-	if version == "" {
-		version = "v1.0"
-	}
-	content := req.Content
-	if content == nil {
-		content = map[string]any{}
-	}
-	contentJSON, _ := json.Marshal(content)
 	var template DocumentTemplate
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		created, err := scanDocumentTemplate(tx.QueryRow(ctx, `
 			insert into document_templates (
 				tenant_id, name, category, description, version, content
@@ -695,7 +688,7 @@ func (s *Store) CreateDocumentTemplate(ctx context.Context, tenantID string, req
 			on conflict (tenant_id, name, version) do update
 			set content = document_templates.content
 			returning id::text, name, category, description, version, content, usage_count, status, created_at, updated_at
-		`, tenantID, name, category, req.Description, version, contentJSON))
+		`, tenantID, normalized.Name, normalized.Category, normalized.Description, normalized.Version, contentJSON))
 		if err != nil {
 			return err
 		}
@@ -1562,6 +1555,57 @@ func knowledgeChunkMetadataJSON(metadata map[string]any, index int) ([]byte, err
 		return nil, ErrInvalidRequest
 	}
 	return metadataJSON, nil
+}
+
+func normalizeDocumentTemplateRequest(req CreateDocumentTemplateRequest) (CreateDocumentTemplateRequest, []byte, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Category = strings.TrimSpace(req.Category)
+	req.Description = strings.TrimSpace(req.Description)
+	req.Version = strings.TrimSpace(req.Version)
+	if req.Name == "" {
+		return CreateDocumentTemplateRequest{}, nil, ErrInvalidRequest
+	}
+	if req.Category == "" {
+		req.Category = "通用模板"
+	}
+	if req.Version == "" {
+		req.Version = "v1.0"
+	}
+	for _, check := range []struct {
+		value string
+		limit int
+	}{
+		{req.Name, maxKnowledgeTemplateNameRunes},
+		{req.Category, maxKnowledgeTemplateCategoryRunes},
+		{req.Description, maxKnowledgeTemplateDescriptionRunes},
+		{req.Version, maxKnowledgeTemplateVersionRunes},
+	} {
+		if utf8.RuneCountInString(check.value) > check.limit {
+			return CreateDocumentTemplateRequest{}, nil, ErrInvalidRequest
+		}
+	}
+	contentJSON, err := normalizeDocumentTemplateContent(req.Content)
+	if err != nil {
+		return CreateDocumentTemplateRequest{}, nil, err
+	}
+	if req.Content == nil {
+		req.Content = map[string]any{}
+	}
+	return req, contentJSON, nil
+}
+
+func normalizeDocumentTemplateContent(content map[string]any) ([]byte, error) {
+	if content == nil {
+		content = map[string]any{}
+	}
+	contentJSON, err := json.Marshal(content)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	if len(contentJSON) > maxKnowledgeTemplateContentJSONBytes {
+		return nil, ErrInvalidRequest
+	}
+	return contentJSON, nil
 }
 
 func vectorLiteralFromEmbedding(values []float64) (string, error) {

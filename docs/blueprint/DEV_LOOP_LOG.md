@@ -6598,3 +6598,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是外部工具网关调用载荷安全边界，没有新增具体行业 MCP Provider 的真实授权、账号绑定或工具编排。
 2. `arguments` 上限采用 64KB，符合“只传查询条件/结构化摘要、不上传完整招标正文”的网关定位；如后续工具确需大文件，应通过文件对象或受控存储引用传递。
+
+## Loop-136 / 知识库模板内容边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查知识库模板写入链路，处理 `document_templates.content` 由请求传入但缺少 JSON 字节预算的问题。
+2. 避免超长模板结构、不可序列化值或非有限数值在模板创建时延后到数据库层失败。
+3. 同步收敛模板名称、分类、版本和说明文本边界，减少模板库列表、标书模板复用和前端展示的异常输入面。
+
+### 代码交付
+
+1. `backend/internal/platform/knowledge/store.go` 新增模板名称 255 字符、分类 128 字符、说明 2000 字符、版本 64 字符、content JSON 64KB 边界常量。
+2. 新增 `normalizeDocumentTemplateRequest()`，统一 trim 模板文本字段，保留分类默认“通用模板”和版本默认 `v1.0`。
+3. 新增 `normalizeDocumentTemplateContent()`，在写库前拒绝不可 JSON 序列化、NaN/Inf 或超过字节预算的模板内容。
+4. `CreateDocumentTemplate()` 改为使用归一化结果和已校验 content JSON，不再忽略 `json.Marshal` 错误。
+5. `backend/internal/platform/knowledge/store_test.go` 新增模板默认值/内容保留、字段和 content 边界、写库前拒绝非法内容三组回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加知识库模板内容边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/platform/knowledge/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/knowledge
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/knowledge` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是知识库模板自由 JSON 的输入边界，没有新增模板版本历史、模板渲染引擎或模板母版设计能力。
+2. content 上限采用 64KB；若后续模板需要携带大型示例正文或附件，应通过知识文档/文件资产引用，而不是直接塞入模板 JSON。
