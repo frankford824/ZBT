@@ -1368,7 +1368,7 @@ export function BidWizardPage() {
                                   {
                                     title: '可信度',
                                     width: 100,
-                                    render: (_, row) => parseFieldConfidenceTag(row.confidence, row.needsReview),
+                                    render: (_, row) => parseFieldConfidenceTag(row.confidence, row.needsReview, row.reviewStatus),
                                   },
                                   {
                                     title: '来源',
@@ -2223,6 +2223,8 @@ function applyParseConfirmDraft(
     invalid_clause_risks: invalidClauseRisks,
   })
   syncParseConfirmRequirementItems(next, originalDraft, draft)
+  applyParseFieldReviews(next, fieldReviewDraft)
+  refreshParseFieldReviewQualityGate(next, fieldReviewDraft)
   next.parse_metadata = {
     ...(objectRecord(next.parse_metadata) ?? {}),
     field_reviews: fieldReviewDraft,
@@ -2257,6 +2259,112 @@ function parseFieldReviewDraftFromStructuredResult(
 function normalizeParseFieldReviewStatus(value: unknown): ParseFieldReviewStatus | null {
   if (value === 'confirmed' || value === 'needs_update' || value === 'not_applicable') return value
   return null
+}
+
+function applyParseFieldReviews(result: Record<string, unknown>, fieldReviewDraft: Record<string, ParseFieldReviewStatus>) {
+  if (!Object.keys(fieldReviewDraft).length) return
+  const directEvidence = arrayValue(result.field_evidence)
+  if (directEvidence.length) {
+    result.field_evidence = applyParseFieldReviewsToEvidenceList(directEvidence, fieldReviewDraft, 0).items
+    return
+  }
+
+  const modules = { ...(objectRecord(result.modules) ?? {}) }
+  let evidenceIndex = 0
+  for (const moduleKey of orderedParseModuleKeys(modules)) {
+    const currentModule = objectRecord(modules[moduleKey])
+    if (!currentModule) continue
+    const evidence = arrayValue(currentModule.evidence)
+    if (!evidence.length) continue
+    const applied = applyParseFieldReviewsToEvidenceList(evidence, fieldReviewDraft, evidenceIndex)
+    modules[moduleKey] = { ...currentModule, evidence: applied.items }
+    evidenceIndex = applied.nextIndex
+  }
+  result.modules = modules
+}
+
+function applyParseFieldReviewsToEvidenceList(
+  evidence: unknown[],
+  fieldReviewDraft: Record<string, ParseFieldReviewStatus>,
+  startIndex: number,
+) {
+  let nextIndex = startIndex
+  const items = evidence.map((item) => {
+    const record = objectRecord(item)
+    if (!record) {
+      nextIndex += 1
+      return item
+    }
+    const field = String(record.field || '').trim()
+    const reviewStatus = normalizeParseFieldReviewStatus(fieldReviewDraft[`${field}-${nextIndex}`])
+    nextIndex += 1
+    if (!field || !reviewStatus) return item
+    return applyParseFieldReviewToRecord(record, reviewStatus)
+  })
+  return { items, nextIndex }
+}
+
+function applyParseFieldReviewToRecord(record: Record<string, unknown>, reviewStatus: ParseFieldReviewStatus) {
+  const next: Record<string, unknown> = { ...record, review_status: reviewStatus, reviewed_by_human: true }
+  if (reviewStatus === 'confirmed') {
+    next.needs_review = false
+    next.confidence = Math.max(parseEvidenceConfidence(record.confidence), 0.95)
+    delete next.not_applicable
+    return next
+  }
+  if (reviewStatus === 'not_applicable') {
+    next.needs_review = false
+    next.not_applicable = true
+    next.confidence = Math.max(parseEvidenceConfidence(record.confidence), 0.95)
+    return next
+  }
+  next.needs_review = true
+  next.not_applicable = false
+  next.confidence = Math.min(parseEvidenceConfidence(record.confidence), 0.4)
+  return next
+}
+
+function refreshParseFieldReviewQualityGate(
+  result: Record<string, unknown>,
+  fieldReviewDraft: Record<string, ParseFieldReviewStatus>,
+) {
+  const qualityGates = { ...(objectRecord(result.quality_gates) ?? {}) }
+  const interpret = { ...(objectRecord(qualityGates.interpret) ?? {}) }
+  const evidenceItems = structuredFieldEvidenceItems(result)
+  const lowConfidenceCount = evidenceItems.filter((item) => {
+    const record = objectRecord(item)
+    if (!record || parseEvidenceReviewStatus(record) === 'not_applicable') return false
+    return parseEvidenceConfidence(record.confidence) < 0.65 || Boolean(record.needs_review)
+  }).length
+  const missingSourceCount = evidenceItems.filter((item) => {
+    const record = objectRecord(item)
+    if (!record || parseEvidenceReviewStatus(record) === 'not_applicable') return false
+    return !String(record.source_text || record.excerpt || record.text || '').trim()
+  }).length
+  const ocrRequired = Boolean(interpret.ocr_required)
+  const missingModules = arrayValue(interpret.missing_modules).filter(Boolean)
+  qualityGates.interpret = {
+    ...interpret,
+    status: lowConfidenceCount || missingSourceCount || ocrRequired || missingModules.length ? 'needs_review' : 'pass',
+    low_confidence_count: lowConfidenceCount,
+    missing_source_count: missingSourceCount,
+    human_reviewed_count: Object.keys(fieldReviewDraft).length,
+  }
+  result.quality_gates = qualityGates
+  result.parse_metadata = {
+    ...(objectRecord(result.parse_metadata) ?? {}),
+    low_confidence_count: lowConfidenceCount,
+    missing_source_count: missingSourceCount,
+  }
+}
+
+function parseEvidenceConfidence(value: unknown) {
+  const confidence = Number(value)
+  return Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0
+}
+
+function parseEvidenceReviewStatus(record: Record<string, unknown>) {
+  return normalizeParseFieldReviewStatus(record.review_status)
 }
 
 const parseConfirmRequirementFields: Array<{
@@ -2635,6 +2743,7 @@ function structuredFieldEvidenceRows(result: Record<string, unknown> | undefined
         confidence: safeConfidence,
         sourceText: formatStructuredValue(record.source_text || record.excerpt || record.text).trim(),
         needsReview: Boolean(record.needs_review) || safeConfidence < 0.65,
+        reviewStatus: parseEvidenceReviewStatus(record),
         sourceRef,
       }
     })
@@ -2682,8 +2791,11 @@ function parseFieldValueFromStructuredResult(result: Record<string, unknown> | u
   return ''
 }
 
-function parseFieldConfidenceTag(confidence: number, needsReview: boolean) {
+function parseFieldConfidenceTag(confidence: number, needsReview: boolean, reviewStatus?: ParseFieldReviewStatus | null) {
   const percent = Math.round(confidence * 100)
+  if (reviewStatus === 'confirmed') return <Tag color="green">人工确认</Tag>
+  if (reviewStatus === 'needs_update') return <Tag color="gold">需要补充</Tag>
+  if (reviewStatus === 'not_applicable') return <Tag>不适用</Tag>
   if (needsReview) return <Tag color="gold">待确认 {percent}%</Tag>
   if (confidence >= 0.8) return <Tag color="green">可信 {percent}%</Tag>
   return <Tag color="blue">可参考 {percent}%</Tag>

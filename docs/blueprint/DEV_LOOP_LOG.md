@@ -3800,3 +3800,43 @@ git diff --check
 
 1. 本轮不做字段置信度手工改写，也不新增字段级 bbox 选区编辑。
 2. 复杂对象字段提供 JSON 文本编辑和类型还原，不做专用可视化表单。
+
+## Loop-70 / 字段复核置信度写回 - 2026-06-18
+
+### 本轮目标
+
+1. 修补字段依据复核只写 `parse_metadata.field_reviews`，没有改变字段证据本体的问题。
+2. 让“确认无误/需要补充/不适用”真正影响字段依据的可信度标签和解析质量门统计。
+3. 继续复用现有解析确认接口，不新增数据库表或后端路由。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 新增 `applyParseFieldReviews()`，确认解析结果时会把复核状态写回顶层 `field_evidence`；旧数据没有顶层证据时，会写回对应模块 `evidence`。
+2. 字段状态写回规则：
+   - 确认无误：`needs_review=false`，`confidence` 至少提升到 `0.95`。
+   - 不适用：`needs_review=false`，`not_applicable=true`，`confidence` 至少提升到 `0.95`。
+   - 需要补充：`needs_review=true`，`confidence` 最高收敛到 `0.4`。
+3. `refreshParseFieldReviewQualityGate()` 会按写回后的字段证据刷新 `quality_gates.interpret.low_confidence_count`、`missing_source_count`、`human_reviewed_count` 和 `parse_metadata` 计数。
+4. 字段依据表可信度标签会优先展示“人工确认 / 需要补充 / 不适用”，避免确认后仍显示旧的低可信百分比。
+5. `AI_IMPLEMENTATION_CHECKLIST.md` 同步更新字段置信度手工标记当前状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过，无空白错误。
+
+### 偏离蓝图
+
+1. 本轮仍不新增字段复核历史事件表；复核记录随解析确认版本保存在 `structured_result` 中。
+2. 缺来源字段即使人工确认，仍会进入缺来源统计；“不适用”字段不参与低置信和缺来源统计。
