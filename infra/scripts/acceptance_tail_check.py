@@ -541,13 +541,22 @@ def check_static_docs() -> None:
         "maxProjectMilestoneTitleRunes",
         "maxProjectMilestoneNoteRunes",
         "maxProjectGeneratedFilenameRunes",
+        "maxProjectKnowledgeMetadataBytes",
+        "maxProjectLogMetadataBytes",
         "normalizeProjectName",
         "normalizeMilestoneWriteRequest",
+        "marshalProjectMetadataJSON",
+        "wonCaseDocumentMetadata",
         "validateProjectTextLength",
         "boundedProjectText",
         "utf8.RuneCountInString",
     ):
         require(needle in project_store, f"Project store missing business input boundary: {needle}")
+    for forbidden in (
+        "metadataJSON, _ := json.Marshal(metadata)",
+        "chunkMetadataJSON, _ := json.Marshal(chunkMetadata)",
+    ):
+        require(forbidden not in project_store, f"Project store still ignores metadata marshal failure: {forbidden}")
     project_store_tests = (ROOT / "backend/internal/platform/project/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestProjectWriteRejectsOversizedNameBeforeDB",
@@ -555,6 +564,8 @@ def check_static_docs() -> None:
         "TestNormalizeMilestoneWriteRequestRejectsOversizedText",
         "TestNormalizeMilestoneWriteRequestAcceptsBoundedUnicodeText",
         "TestBoundedProjectTextTrimsGeneratedFallbackNames",
+        "TestMarshalProjectMetadataJSONRejectsInvalidAndOversizedValues",
+        "TestWonCaseDocumentMetadataCopiesAndOverridesSystemFields",
     ):
         require(needle in project_store_tests, f"Project store missing business input boundary regression test: {needle}")
 

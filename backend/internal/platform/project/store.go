@@ -26,6 +26,8 @@ const (
 	maxProjectMilestoneNoteRunes     = 1000
 	maxProjectGeneratedTitleRunes    = 255
 	maxProjectGeneratedFilenameRunes = 255
+	maxProjectKnowledgeMetadataBytes = 16 * 1024
+	maxProjectLogMetadataBytes       = 16 * 1024
 )
 
 type Store struct {
@@ -772,8 +774,22 @@ func (s *Store) ArchiveWonCase(ctx context.Context, tenantID, userID, projectID,
 	if err := validateUUID(fileID); err != nil {
 		return ArchivedKnowledgeCase{}, err
 	}
+	metadataJSON, err := marshalProjectMetadataJSON(wonCaseDocumentMetadata(draft.Metadata, projectID, fileID), maxProjectKnowledgeMetadataBytes)
+	if err != nil {
+		return ArchivedKnowledgeCase{}, err
+	}
+	chunkMetadataJSON, err := marshalProjectMetadataJSON(map[string]any{
+		"source":            "project_won_case",
+		"source_project_id": projectID,
+		"source_file_id":    fileID,
+		"chunk_index":       0,
+		"doc_type":          "won_case",
+	}, maxProjectKnowledgeMetadataBytes)
+	if err != nil {
+		return ArchivedKnowledgeCase{}, err
+	}
 	var result ArchivedKnowledgeCase
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var projectStatus string
 		var projectResult sql.NullString
 		if err := tx.QueryRow(ctx, `select status, result from projects where tenant_id = $1 and id = $2`, tenantID, projectID).Scan(&projectStatus, &projectResult); err != nil {
@@ -799,13 +815,6 @@ func (s *Store) ArchiveWonCase(ctx context.Context, tenantID, userID, projectID,
 		if err != nil {
 			return err
 		}
-		metadata := draft.Metadata
-		if metadata == nil {
-			metadata = map[string]any{}
-		}
-		metadata["source_project_id"] = projectID
-		metadata["source_file_id"] = fileID
-		metadataJSON, _ := json.Marshal(metadata)
 		var documentID string
 		var createdAt time.Time
 		if err := tx.QueryRow(ctx, `
@@ -841,14 +850,6 @@ func (s *Store) ArchiveWonCase(ctx context.Context, tenantID, userID, projectID,
 		if _, err := tx.Exec(ctx, `delete from knowledge_chunks where tenant_id = $1 and document_id = $2`, tenantID, documentID); err != nil {
 			return err
 		}
-		chunkMetadata := map[string]any{
-			"source":            "project_won_case",
-			"source_project_id": projectID,
-			"source_file_id":    fileID,
-			"chunk_index":       0,
-			"doc_type":          "won_case",
-		}
-		chunkMetadataJSON, _ := json.Marshal(chunkMetadata)
 		var chunkID string
 		if err := tx.QueryRow(ctx, `
 			insert into knowledge_chunks (
@@ -1224,7 +1225,7 @@ func insertProjectMember(ctx context.Context, tx pgx.Tx, tenantID, projectID, us
 }
 
 func insertLog(ctx context.Context, tx pgx.Tx, tenantID, projectID, userID, action string, metadata map[string]any) error {
-	raw, err := json.Marshal(metadata)
+	raw, err := marshalProjectMetadataJSON(metadata, maxProjectLogMetadataBytes)
 	if err != nil {
 		return err
 	}
@@ -1233,6 +1234,32 @@ func insertLog(ctx context.Context, tx pgx.Tx, tenantID, projectID, userID, acti
 		values ($1, $2, $3, $4, $5)
 	`, tenantID, projectID, nullableUserID(userID), action, raw)
 	return err
+}
+
+func wonCaseDocumentMetadata(metadata map[string]any, projectID, fileID string) map[string]any {
+	normalized := normalizeProjectMetadata(metadata)
+	normalized["source_project_id"] = projectID
+	normalized["source_file_id"] = fileID
+	return normalized
+}
+
+func normalizeProjectMetadata(value map[string]any) map[string]any {
+	normalized := map[string]any{}
+	for key, item := range value {
+		normalized[key] = item
+	}
+	return normalized
+}
+
+func marshalProjectMetadataJSON(value map[string]any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(normalizeProjectMetadata(value))
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
 }
 
 func validateUUID(value string) error {

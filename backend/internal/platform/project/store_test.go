@@ -2,6 +2,7 @@ package project
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,42 @@ func TestBoundedProjectTextTrimsGeneratedFallbackNames(t *testing.T) {
 
 	if len([]rune(got)) != maxProjectGeneratedFilenameRunes {
 		t.Fatalf("expected generated project text to be capped at %d runes, got %d", maxProjectGeneratedFilenameRunes, len([]rune(got)))
+	}
+}
+
+func TestMarshalProjectMetadataJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	for name, value := range map[string]map[string]any{
+		"invalid number": {"bad": math.NaN()},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("案", maxProjectKnowledgeMetadataBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalProjectMetadataJSON(value, maxProjectKnowledgeMetadataBytes); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid project metadata to be rejected, got %v", err)
+			}
+		})
+	}
+	if raw, err := marshalProjectMetadataJSON(nil, maxProjectKnowledgeMetadataBytes); err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil project metadata to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+}
+
+func TestWonCaseDocumentMetadataCopiesAndOverridesSystemFields(t *testing.T) {
+	original := map[string]any{
+		"source_project_id": "old-project",
+		"source_file_id":    "old-file",
+		"custom":            "keep",
+	}
+	metadata := wonCaseDocumentMetadata(original, "project-1", "file-1")
+
+	if metadata["source_project_id"] != "project-1" || metadata["source_file_id"] != "file-1" {
+		t.Fatalf("expected system fields to be overridden, got %#v", metadata)
+	}
+	if metadata["custom"] != "keep" {
+		t.Fatalf("expected custom metadata to be preserved, got %#v", metadata)
+	}
+	if original["source_project_id"] != "old-project" || original["source_file_id"] != "old-file" {
+		t.Fatalf("expected draft metadata to remain unchanged, got %#v", original)
 	}
 }
 

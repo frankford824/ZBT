@@ -6966,3 +6966,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 外部工具网关 metadata 入库可靠性，没有新增第三方 MCP Provider 或前端外部工具配置页面能力。
 2. 配置 metadata 上限为 4KB，审计 metadata 上限为 16KB；外部响应正文仍只保存结构摘要，不保存原始响应内容。
+
+## Loop-144 / 项目中标案例 metadata 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查项目模块中标案例回流知识库链路，处理知识文档 metadata 和 chunk metadata 入库前仍忽略 JSON marshal 错误的问题。
+2. 避免 `ArchiveWonCase()` 接收不可序列化、非有限数或异常放大的 draft metadata 时，静默写入空值/坏值，影响知识库案例检索与来源追踪。
+3. 将项目知识回流 metadata 和项目日志 metadata 的 JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/project/store.go` 新增 `maxProjectKnowledgeMetadataBytes` 和 `maxProjectLogMetadataBytes`。
+2. 新增 `normalizeProjectMetadata()`、`wonCaseDocumentMetadata()` 和 `marshalProjectMetadataJSON()`，统一复制 metadata、注入系统字段、处理 JSON marshal 错误和字节上限。
+3. `ArchiveWonCase()` 在进入租户事务前生成已校验的知识文档 metadata JSON 和 chunk metadata JSON，不再忽略 `json.Marshal(metadata)` / `json.Marshal(chunkMetadata)` 错误。
+4. `insertLog()` 改为使用同一 metadata JSON 边界，项目活动日志不再无限制写入 metadata。
+5. `backend/internal/platform/project/store_test.go` 新增不可 JSON 值、NaN、超预算 metadata、nil metadata 归一化，以及中标案例系统字段覆盖但不反向污染 draft metadata 的回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加项目 metadata JSON 边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/project/store.go internal/platform/project/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/project
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/project` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 项目模块中标案例回流知识库的 metadata 入库可靠性，没有新增项目归档 UI 或真实 embedding Provider。
+2. metadata 上限为 16KB，适合当前 source、project、file、chunk 等来源字段；若后续需要保存大规模案例画像，应拆为独立表或知识资产附件。
