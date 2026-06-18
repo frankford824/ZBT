@@ -21,7 +21,7 @@
 ## 当前落地进展
 
 - `ai-service/app/schemas/tender.py` 已新增 `TenderParseModuleResult`、`TenderParseFieldEvidence`、`TenderRequirementItem` 和 `TenderParseStructuredResult`。
-- `ai-service/app/pipelines/parse/tender_parser.py` 已在兼容旧字段的同时输出 `modules`、`field_evidence`、`requirement_items` 和 `quality_gates`；`quality_gates.interpret.module_quality` 和 `review_modules` 会按 6 模块记录字段数、证据数、要求项数、低置信/缺来源/待复核数量，避免只看全局通过率。模块增强 prompt 已使用 `xparse-context-router-v2`，按标题、关键词行、相邻 chunk 和 `table_blocks.md_table` 生成带 `chunk_id`、页码、`table_block_id`、路由原因的 `source_context`。
+- `ai-service/app/pipelines/parse/tender_parser.py` 已在兼容旧字段的同时输出 `modules`、`field_evidence`、`requirement_items` 和 `quality_gates`；`quality_gates.interpret.module_quality` 和 `review_modules` 会按 6 模块记录字段数、证据数、要求项数、低置信/缺来源/待复核数量，避免只看全局通过率。模块增强 prompt 已使用 `xparse-context-router-v2`，按标题、关键词行、相邻 chunk 和 `table_blocks.md_table` 生成带 `chunk_id`、页码、`table_block_id`、路由原因的 `source_context`；模型增强合并时会用同一份模块上下文反查 `source_text`，无法定位的来源引用会降级为人工复核。
 - `ai-service/app/main.py` 已按 6 个模块逐一调用 `tender_parse` 路由，每个模块独立走 provider 候选和 fallback；单模块失败时保留基础解析并标记待确认。
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
@@ -32,7 +32,7 @@
 - `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”、“模块字段”和“响应要点”视图；“模块字段”会把 6 模块 `modules.*.fields` 展开为逐项编辑表，确认时写回原 `structured_result.modules`，并在 `parse_metadata.confirm_overrides.edited_module_fields` 记录调整路径。可解析到文件 ID 或知识库文档 ID 的来源会打开前端预览页，预览页展示来源标题、页码、摘录关键词、坐标标签和复制定位入口，并继续把页码/搜索词传给内嵌文件预览器。页面不展示模型、token、schema 等技术口径。
 - `backend/internal/db/migrations/00031_bid_requirement_items.sql` 已新增 `bid_requirement_items` 独立表，按租户启用 RLS，承接 AutoRFP 式 referenceId/source attribution 思路。
 - `backend/internal/platform/bid/store.go` 已在解析回调和人工确认两条路径同步 `requirement_items`，并提供 `ListRequirementItems`。
-- `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
+- `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位或 `source_text` 无法在当前模块上下文反查时必须进入人工复核。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements` 只读接口。
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选。
 - 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。生成回调中的章节 `source_refs` 和覆盖矩阵 `source_refs` 会统一派生 `citation_id`、`reference_id` 和 `source_locator`，避免模型只返回 chunk/page 时无法通过 AutoRFP 来源引用门禁。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
@@ -88,7 +88,7 @@
    - 每个模块独立调用 `run_provider_task()` 或等价 ModelRouter 路由，允许模块级 fallback。
    - 当前已落地：`process_tender_parse` 使用 `TENDER_PARSE_MODULE_CONCURRENCY` 控制 6 模块并发，主线程按 `MODULE_ORDER` 固定顺序合并结果，单模块失败只标记该模块待复核。
    - 当前已落地：`parse_metadata.module_context` 记录每个模块命中的 chunk 数、表格块数、`chunk_ids`、`table_block_ids` 和匹配原因，供回归审计和后续前端来源定位使用。
-   - 当前已落地：`quality_gates.interpret.module_quality` 和 `parse_metadata.module_quality` 记录每个模块的字段、证据、要求项、低置信、缺来源、待复核和可追溯来源计数；`review_modules` 明确列出需要人工复核的模块。
+   - 当前已落地：`quality_gates.interpret.module_quality` 和 `parse_metadata.module_quality` 记录每个模块的字段、证据、要求项、低置信、缺来源、待复核和可追溯来源计数；`review_modules` 明确列出需要人工复核的模块。模型增强来源会按 `chunk_id`、`table_block_id`、页码或 citation 锚点反查模块上下文，伪造或错位的 `source_text` 不再被视为可追溯证据。
    - 聚合时按字段级置信度和来源证据合并，不允许模型覆盖高置信确定性字段为空值。
    - prompt 固定四条硬约束：只引用原文、JSON only、字段缺失显式 `missing_fields`、来源原子性（一个 value 对应一处连续原文）。
    - 评分表、格式表、工程量清单默认保留原始 `md_table`，不得让模型重排表格。

@@ -48,7 +48,9 @@ from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.parse.tender_parser import (
     build_tender_module_prompt,
     build_tender_structured_result,
+    merge_tender_module_result,
     merge_tender_structured_result,
+    tender_module_source_context_records,
 )
 from app.schemas.export import DocumentExportRequest, ExportAttachment, ExportChapter, ExportPart
 from app.schemas.knowledge import (
@@ -999,6 +1001,73 @@ def test_tender_module_context_routes_chunks_and_tables_with_source_anchors() ->
     assert "reason=neighbor_chunk,adjacent_page" in prompt["source_excerpt"]
     assert "[table=pdf-p3-001 source=pdf page=3" in prompt["source_excerpt"]
     assert "| 评审因素 | 分值 |" in prompt["source_excerpt"]
+
+
+def test_merge_tender_module_result_downgrades_unverified_model_source_refs() -> None:
+    payload = TenderParseRequest(
+        tenant_id="tenant-demo",
+        bid_id="bid-demo",
+        bid_title="桥梁检查劳务合作",
+        file_id="file-demo",
+        object_key="tenant/bid_tender/demo.pdf",
+        filename="demo.pdf",
+        content_type="application/pdf",
+    )
+    parsed = KnowledgeProcessResult(
+        processed_title="demo",
+        summary="summary",
+        metadata={"parser": "plain-text", "page_count": 1},
+        chunks=[
+            KnowledgeChunk(
+                title="资格审查",
+                content="项目名称：桥梁检查劳务合作\n资格要求：具备桥梁检测资质\n",
+                section_path="资格审查",
+                metadata={"chunk_id": "parse-chunk-0001"},
+            )
+        ],
+    )
+    base = build_tender_structured_result(payload, parsed)
+
+    merged = merge_tender_module_result(
+        base,
+        "qualification",
+        {
+            "module": "qualification",
+            "fields": {"qualification_requirements": ["具备桥梁施工总承包一级资质"]},
+            "requirement_items": [
+                {
+                    "id": "qualification-001",
+                    "type": "qualification",
+                    "requirement": "具备桥梁施工总承包一级资质",
+                    "priority": "high",
+                    "mandatory": True,
+                    "source_ref": {
+                        "field": "qualification_requirements",
+                        "value": "具备桥梁施工总承包一级资质",
+                        "confidence": 0.92,
+                        "source_text": "资格要求：具备桥梁施工总承包一级资质",
+                        "citation_id": "tender:file-demo:parse-chunk-0001:p0:l2",
+                        "reference_id": "tender:file-demo:parse-chunk-0001:p0:l2",
+                        "file_id": "file-demo",
+                        "filename": "demo.pdf",
+                        "chunk_id": "parse-chunk-0001",
+                    },
+                }
+            ],
+        },
+        source_context_records=tender_module_source_context_records(parsed, "qualification"),
+    )
+
+    qualification = merged["modules"]["qualification"]
+    source_ref = qualification["requirement_items"][0]["source_ref"]
+    assert source_ref["traceable"] is False
+    assert source_ref["needs_review"] is True
+    assert source_ref["confidence"] == 0.5
+    assert qualification["requirement_items"][0]["needs_review"] is True
+    assert qualification["status"] == "needs_review"
+    assert "qualification" in merged["quality_gates"]["interpret"]["review_modules"]
+    assert merged["quality_gates"]["interpret"]["module_quality"]["qualification"]["requirement_review_count"] == 1
+    assert "部分模型来源未能在解析上下文中定位" in qualification["warnings"][0]
 
 
 def test_build_tender_structured_result_joins_cover_project_title_without_bid_title() -> None:

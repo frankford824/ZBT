@@ -4690,3 +4690,43 @@ git diff --check
 ### 偏离蓝图
 
 1. 本轮只加固 URL 校验，不改变 OCR Provider 请求格式或响应归一化。
+
+## Loop-92 / 模型解析来源引用反查 - 2026-06-18
+
+### 本轮目标
+
+1. 审查招标解析模型增强链路，避免模型返回“看似带 citation/reference 的来源”但原文并不存在时仍被当作可信证据。
+2. 保持 AutoRFP 式 `Requirement -> Source` 不只校验字段形状，还要能反查到当前模块解析上下文。
+3. 修复 requirement item 已经 `needs_review=true` 时模块状态仍可能停留在 `done` 的缺陷。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/tender_parser.py` 导出 `tender_module_source_context_records()`，复用模块 prompt 的同一份 chunk/table 上下文。
+2. `merge_tender_module_result()` 增加可选 `source_context_records` 参数；模型证据归一化时按 `chunk_id`、`table_block_id`、页码或 citation 解析出的锚点筛选上下文，并确认 `source_text` 真实出现在上下文中。
+3. 未能反查到原文的模型来源会被降级：`traceable=false`、`needs_review=true`、置信度封顶 0.5，并追加人工复核提示。
+4. `_normalized_model_module_result()` 现在同时检查字段证据和 requirement item 的 `needs_review`，避免要求项已降级但模块状态仍显示完成。
+5. `ai-service/app/main.py` 在模块并发解析和最终合并时传入对应模块上下文，保证运行态回调结果也执行来源反查。
+6. `ai-service/app/tests/test_main_security.py` 新增伪造来源回归测试，覆盖 citation/chunk 看似完整但原文不存在的模型输出。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/pipelines/parse/tender_parser.py ai-service/app/main.py ai-service/app/tests/test_main_security.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py::test_merge_tender_module_result_downgrades_unverified_model_source_refs app/tests/test_main_security.py::test_process_tender_parse_uses_model_provider_and_callback app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py::test_build_tender_structured_result_extracts_business_fields app/tests/test_main_security.py::test_tender_module_context_routes_chunks_and_tables_with_source_anchors app/tests/test_main_security.py::test_process_tender_parse_runs_modules_with_configured_concurrency app/tests/test_main_security.py::test_process_tender_parse_falls_back_when_primary_provider_call_fails app/tests/test_main_security.py::test_process_tender_parse_keeps_result_when_one_module_enhancement_fails -q -s
+cd ai-service && .venv/bin/python -m ruff check app/pipelines/parse/tender_parser.py app/main.py app/tests/test_main_security.py
+```
+
+结果：
+
+1. Python 语法检查通过。
+2. 招标解析来源反查、模型 Provider 回调和解析 golden 相关测试 7 项通过。
+3. 解析结构、模块上下文、并发、fallback 和单模块失败保留结果测试 5 项通过。
+4. Ruff 检查通过。
+
+### 偏离蓝图
+
+1. 本轮验证的是模型返回 `source_text` 与解析上下文的一致性，不做 PDF canvas 可视高亮框选。
+2. 引用原文反查可以降低伪造来源风险，但仍不等价于语义正确性评测；复杂表格跨行引用仍需要更强的版面级评测或人工抽样。

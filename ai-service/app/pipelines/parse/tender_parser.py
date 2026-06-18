@@ -117,9 +117,16 @@ def module_parse_manifest() -> dict[str, object]:
 def module_context_manifest(parsed: KnowledgeProcessResult) -> dict[str, object]:
     modules: dict[str, object] = {}
     for module in MODULE_ORDER:
-        records = _module_context_records(parsed, module)
+        records = tender_module_source_context_records(parsed, module)
         modules[module] = _module_context_summary(records)
     return {"version": MODULE_CONTEXT_ROUTER_VERSION, "modules": modules}
+
+
+def tender_module_source_context_records(
+    parsed: KnowledgeProcessResult,
+    module: TenderParseModule,
+) -> list[dict[str, object]]:
+    return _module_context_records(parsed, module)
 
 
 def build_tender_structured_result(
@@ -350,7 +357,7 @@ def build_tender_module_prompt(
     module: TenderParseModule,
 ) -> str:
     module_result = _module_record(base_result, module)
-    context_records = _module_context_records(parsed, module)
+    context_records = tender_module_source_context_records(parsed, module)
     source_excerpt = "\n".join(_module_context_lines_from_records(context_records))[:10000]
     return json.dumps(
         {
@@ -435,13 +442,20 @@ def merge_tender_module_result(
     base_result: dict[str, object],
     module: TenderParseModule,
     model_result: dict[str, object],
+    *,
+    source_context_records: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     merged = dict(base_result)
     modules = merged.get("modules")
     if not isinstance(modules, dict):
         return merged
     current = _module_record(merged, module)
-    module_result = _normalized_model_module_result(module, current, model_result)
+    module_result = _normalized_model_module_result(
+        module,
+        current,
+        model_result,
+        source_context_records=source_context_records,
+    )
     modules = dict(modules)
     modules[module] = module_result
     merged["modules"] = modules
@@ -918,6 +932,8 @@ def _normalized_model_module_result(
     module: TenderParseModule,
     current: dict[str, object],
     model_result: dict[str, object],
+    *,
+    source_context_records: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     if str(model_result.get("module") or module) != module:
         model_result = {key: value for key, value in model_result.items() if key != "module"}
@@ -930,7 +946,11 @@ def _normalized_model_module_result(
     for top_level_field, (target_module, module_field) in MODEL_FIELD_MODULES.items():
         if target_module == module and _usable_model_value(model_result.get(top_level_field)):
             fields[module_field] = model_result[top_level_field]
-    evidence = _normalize_model_evidence(module, model_result.get("evidence"))
+    evidence = _normalize_model_evidence(
+        module,
+        model_result.get("evidence"),
+        source_context_records=source_context_records,
+    )
     if not evidence:
         evidence = [
             item
@@ -942,6 +962,7 @@ def _normalized_model_module_result(
         module,
         model_result.get("requirement_items"),
         evidence,
+        source_context_records=source_context_records,
     )
     if not requirement_items:
         requirement_items = [
@@ -959,10 +980,14 @@ def _normalized_model_module_result(
         for item in current.get("warnings", [])
         if str(item).strip()
     ] if isinstance(current.get("warnings"), list) else []
+    if _has_unverified_source_refs(evidence, requirement_items):
+        warnings.append("部分模型来源未能在解析上下文中定位，已降级为人工复核。")
     status = str(model_result.get("status") or current.get("status") or "done")
     if status not in {"done", "needs_review", "empty"}:
         status = "needs_review"
-    if any(bool(item.get("needs_review")) for item in evidence if isinstance(item, dict)):
+    if any(bool(item.get("needs_review")) for item in evidence if isinstance(item, dict)) or any(
+        bool(item.get("needs_review")) for item in requirement_items if isinstance(item, dict)
+    ):
         status = "needs_review"
     return {
         "module": module,
@@ -975,7 +1000,12 @@ def _normalized_model_module_result(
     }
 
 
-def _normalize_model_evidence(module: TenderParseModule, raw: object) -> list[dict[str, object]]:
+def _normalize_model_evidence(
+    module: TenderParseModule,
+    raw: object,
+    *,
+    source_context_records: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     if not isinstance(raw, list):
         return []
     evidence: list[dict[str, object]] = []
@@ -1000,12 +1030,29 @@ def _normalize_model_evidence(module: TenderParseModule, raw: object) -> list[di
         document_id = str(item.get("document_id") or item.get("source_document_id") or "").strip() or None
         file_id = str(item.get("file_id") or "").strip() or None
         filename = str(item.get("filename") or "").strip() or None
-        traceable = bool(source_text and (citation_id or reference_id or chunk_id or page_start or document_id or file_id))
+        source_supported = _source_ref_supported_by_context(
+            item,
+            source_text,
+            citation_id=citation_id,
+            reference_id=reference_id,
+            chunk_id=chunk_id,
+            page_start=page_start,
+            page_end=page_end,
+            source_context_records=source_context_records,
+        )
+        traceable = bool(
+            source_text
+            and source_supported
+            and (citation_id or reference_id or chunk_id or page_start or document_id or file_id)
+        )
+        confidence = _confidence(item.get("confidence"), 0.62 if source_text else 0.45)
+        if source_context_records is not None and not source_supported:
+            confidence = min(confidence, 0.5)
         evidence.append(
             {
                 "field": field,
                 "value": item.get("value"),
-                "confidence": _confidence(item.get("confidence"), 0.62 if source_text else 0.45),
+                "confidence": confidence,
                 "source_text": source_text,
                 "citation_id": citation_id,
                 "reference_id": reference_id,
@@ -1044,6 +1091,8 @@ def _normalize_model_requirement_items(
     module: TenderParseModule,
     raw: object,
     evidence: list[dict[str, object]],
+    *,
+    source_context_records: list[dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     if not isinstance(raw, list):
         return []
@@ -1060,7 +1109,15 @@ def _normalize_model_requirement_items(
         if not requirement:
             continue
         raw_ref = item.get("source_ref")
-        source_ref = _normalize_model_evidence(module, [raw_ref])[0] if isinstance(raw_ref, dict) else None
+        source_ref = (
+            _normalize_model_evidence(
+                module,
+                [raw_ref],
+                source_context_records=source_context_records,
+            )[0]
+            if isinstance(raw_ref, dict)
+            else None
+        )
         if source_ref is None:
             source_ref = evidence_by_field.get(str(item.get("type") or "")) or _model_override_evidence("requirement", requirement)
         score = item.get("score")
@@ -1082,6 +1139,147 @@ def _normalize_model_requirement_items(
             }
         )
     return items
+
+
+def _has_unverified_source_refs(
+    evidence: list[dict[str, object]],
+    requirement_items: list[dict[str, object]],
+) -> bool:
+    for item in evidence:
+        if (
+            isinstance(item, dict)
+            and str(item.get("source_text") or "").strip()
+            and not bool(item.get("traceable"))
+        ):
+            return True
+    for item in requirement_items:
+        if not isinstance(item, dict):
+            continue
+        source_ref = item.get("source_ref")
+        if (
+            isinstance(source_ref, dict)
+            and str(source_ref.get("source_text") or "").strip()
+            and not bool(source_ref.get("traceable"))
+        ):
+            return True
+    return False
+
+
+def _source_ref_supported_by_context(
+    raw_ref: dict[str, object],
+    source_text: str,
+    *,
+    citation_id: str | None,
+    reference_id: str | None,
+    chunk_id: str | None,
+    page_start: int | None,
+    page_end: int | None,
+    source_context_records: list[dict[str, object]] | None,
+) -> bool:
+    if source_context_records is None:
+        return True
+    normalized_source = _source_match_text(source_text)
+    if len(normalized_source) < 4:
+        return False
+    anchored_records = _source_anchor_records(
+        raw_ref,
+        citation_id=citation_id,
+        reference_id=reference_id,
+        chunk_id=chunk_id,
+        page_start=page_start,
+        page_end=page_end,
+        records=source_context_records,
+    )
+    if anchored_records is None:
+        records = source_context_records
+    elif not anchored_records:
+        return False
+    else:
+        records = anchored_records
+    return any(_source_text_in_context(normalized_source, record) for record in records)
+
+
+def _source_anchor_records(
+    raw_ref: dict[str, object],
+    *,
+    citation_id: str | None,
+    reference_id: str | None,
+    chunk_id: str | None,
+    page_start: int | None,
+    page_end: int | None,
+    records: list[dict[str, object]],
+) -> list[dict[str, object]] | None:
+    anchor_chunk_id = chunk_id
+    anchor_page_start = page_start
+    anchor_page_end = page_end
+    if not anchor_chunk_id or anchor_page_start is None:
+        citation_anchor = _citation_anchor(citation_id) or _citation_anchor(reference_id)
+        if citation_anchor:
+            anchor_chunk_id = anchor_chunk_id or citation_anchor[0]
+            anchor_page_start = anchor_page_start if anchor_page_start is not None else citation_anchor[1]
+    table_block_id = str(raw_ref.get("table_block_id") or raw_ref.get("table_id") or "").strip() or None
+    has_anchor = bool(table_block_id or anchor_chunk_id or anchor_page_start is not None or anchor_page_end is not None)
+    if not has_anchor:
+        return None
+    matched: list[dict[str, object]] = []
+    for record in records:
+        if table_block_id and str(record.get("table_block_id") or "") == table_block_id:
+            matched.append(record)
+            continue
+        if anchor_chunk_id and str(record.get("chunk_id") or "") == anchor_chunk_id:
+            matched.append(record)
+            continue
+        record_start = _object_int(record.get("page_start"))
+        record_end = _object_int(record.get("page_end")) or record_start
+        if _page_ranges_overlap(anchor_page_start, anchor_page_end, record_start, record_end):
+            matched.append(record)
+    return matched
+
+
+def _citation_anchor(value: str | None) -> tuple[str, int | None] | None:
+    if not value:
+        return None
+    match = re.search(r":([^:]+):p(\d+):l\d+\s*$", value)
+    if not match:
+        return None
+    page = int(match.group(2))
+    return match.group(1), page if page > 0 else None
+
+
+def _page_ranges_overlap(
+    left_start: int | None,
+    left_end: int | None,
+    right_start: int | None,
+    right_end: int | None,
+) -> bool:
+    if left_start is None and left_end is None:
+        return False
+    if right_start is None and right_end is None:
+        return False
+    left_start = left_start if left_start is not None else left_end
+    left_end = left_end if left_end is not None else left_start
+    right_start = right_start if right_start is not None else right_end
+    right_end = right_end if right_end is not None else right_start
+    if left_start is None or left_end is None or right_start is None or right_end is None:
+        return False
+    return max(left_start, right_start) <= min(left_end, right_end)
+
+
+def _source_text_in_context(normalized_source: str, record: dict[str, object]) -> bool:
+    parts: list[str] = []
+    for key in ("title", "title_path", "sheet"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    lines = record.get("lines")
+    if isinstance(lines, list):
+        parts.extend(str(line) for line in lines if str(line).strip())
+    context_text = _source_match_text("\n".join(parts))
+    return normalized_source in context_text
+
+
+def _source_match_text(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip()
 
 
 def _apply_module_to_compatible_fields(

@@ -30,6 +30,7 @@ from app.pipelines.parse.tender_parser import (
     build_tender_structured_result,
     mark_tender_module_enhancement_failed,
     merge_tender_module_result,
+    tender_module_source_context_records,
 )
 from app.schemas.common import HealthResponse, TaskAccepted
 from app.schemas.cost import CostAdviceRequest
@@ -307,7 +308,12 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                     }
                 )
                 continue
-            structured = merge_tender_module_result(structured, module, model_result)
+            structured = merge_tender_module_result(
+                structured,
+                module,
+                model_result,
+                source_context_records=tender_module_source_context_records(parsed, module),
+            )
             module_input_tokens = int(module_result.get("input_tokens") or 0)
             module_output_tokens = int(module_result.get("output_tokens") or 0)
             module_estimated_cost = float(module_result.get("estimated_cost") or 0)
@@ -381,7 +387,12 @@ def run_tender_parse_module(
     def generate(route: RouteTarget, provider: object) -> tuple[dict[str, object], int, int]:
         schema_name = route.schema_name or "TenderParseModuleResult"
         model_result = provider.generate_json(prompt, schema_name)
-        next_structured = merge_tender_module_result(base_structured, module, model_result)
+        next_structured = merge_tender_module_result(
+            base_structured,
+            module,
+            model_result,
+            source_context_records=tender_module_source_context_records(parsed, module),
+        )
         modules = next_structured.get("modules")
         module_output = modules.get(module) if isinstance(modules, dict) else model_result
         output_text = json.dumps(module_output, ensure_ascii=False)
