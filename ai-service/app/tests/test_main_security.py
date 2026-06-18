@@ -926,6 +926,14 @@ def test_tender_module_context_routes_chunks_and_tables_with_source_anchors() ->
                 content="评分标准：技术方案完整性、项目团队能力和服务承诺。",
             ),
             KnowledgeChunk(
+                title="人员安排",
+                section_path="第三章/评审办法/人员安排",
+                page_start=4,
+                page_end=4,
+                metadata={"chunk_id": "chunk-evaluation-neighbor"},
+                content="项目经理须组织桥梁检查班组，按采购人要求完成现场协调、资料整理和交付验收。",
+            ),
+            KnowledgeChunk(
                 title="响应文件格式",
                 section_path="第六章/附件格式",
                 page_start=5,
@@ -939,8 +947,10 @@ def test_tender_module_context_routes_chunks_and_tables_with_source_anchors() ->
     structured = build_tender_structured_result(payload, parsed)
     module_context = structured["parse_metadata"]["module_context"]["modules"]
 
-    assert structured["parse_metadata"]["module_context_router_version"] == "xparse-context-router-v1"
+    assert structured["parse_metadata"]["module_context_router_version"] == "xparse-context-router-v2"
     assert "chunk-evaluation" in module_context["evaluation"]["chunk_ids"]
+    assert "chunk-evaluation-neighbor" in module_context["evaluation"]["chunk_ids"]
+    assert "neighbor_chunk" in module_context["evaluation"]["reasons"]
     assert module_context["evaluation"]["table_block_count"] == 1
     assert module_context["evaluation"]["table_block_ids"] == ["pdf-p3-001"]
     assert "chunk-annex" in module_context["annex"]["chunk_ids"]
@@ -948,10 +958,13 @@ def test_tender_module_context_routes_chunks_and_tables_with_source_anchors() ->
     prompt = json.loads(build_tender_module_prompt(payload, parsed, structured, "evaluation"))
     source_context = prompt["source_context"]
 
-    assert prompt["module_context_router_version"] == "xparse-context-router-v1"
+    assert prompt["module_context_router_version"] == "xparse-context-router-v2"
     assert any(record.get("chunk_id") == "chunk-evaluation" for record in source_context)
+    assert any(record.get("chunk_id") == "chunk-evaluation-neighbor" for record in source_context)
     assert any(record.get("table_block_id") == "pdf-p3-001" for record in source_context)
     assert "[chunk=chunk-evaluation page=3" in prompt["source_excerpt"]
+    assert "[chunk=chunk-evaluation-neighbor page=4" in prompt["source_excerpt"]
+    assert "reason=neighbor_chunk,adjacent_page" in prompt["source_excerpt"]
     assert "[table=pdf-p3-001 source=pdf page=3" in prompt["source_excerpt"]
     assert "| 评审因素 | 分值 |" in prompt["source_excerpt"]
 

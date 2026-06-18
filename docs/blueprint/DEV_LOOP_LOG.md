@@ -3609,3 +3609,43 @@ git diff --check
 
 1. 本轮不实现 PDF/Word 预览器内文本高亮；当前先支持页码预览、引用号/定位码复制和原文摘录展示。
 2. 字段复核状态暂存于 `structured_result.parse_metadata.field_reviews`，尚未拆独立数据库表和历史事件表。
+
+## Loop-65 / xparse 相邻上下文路由 - 2026-06-18
+
+### 本轮目标
+
+1. 修补六模块模块增强只取命中 chunk 和表格块，容易漏掉标题下相邻段落的问题。
+2. 保持上下文扩展可审计、可回溯，不把整份招标文件直接塞入模块 prompt。
+3. 将上下文路由版本从 `xparse-context-router-v1` 升级到 `xparse-context-router-v2`。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/tender_parser.py` 新增 `MODULE_CONTEXT_NEIGHBOR_WINDOW=1` 和 `_neighbor_module_context_records()`，对每个命中 chunk 扩展前后相邻 chunk。
+2. 相邻记录保留 `chunk_id/title_path/page_start/page_end/lines`，并以 `neighbor_chunk`、`adjacent_page` 标记原因，score 降为 1，避免覆盖真正命中上下文。
+3. `source_context` 和 `parse_metadata.module_context` 均会包含相邻 chunk 的路由原因和 chunk id。
+4. `ai-service/app/tests/test_main_security.py` 增加无关键词相邻人员安排段落，验证 evaluation 模块 prompt 和 metadata 都带入相邻 chunk。
+5. `AI_IMPLEMENTATION_CHECKLIST.md` 更新当前 xparse 上下文路由版本和相邻上下文落地状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m pytest -s app/tests/test_main_security.py::test_tender_module_context_routes_chunks_and_tables_with_source_anchors
+PYTHONPATH=. ./.venv/bin/python -m pytest -s app/tests/test_tender_parse_eval.py
+./.venv/bin/python -m ruff check app/pipelines/parse/tender_parser.py app/tests/test_main_security.py
+git diff --check
+```
+
+结果：
+
+1. xparse 模块上下文路由测试通过。
+2. 招标解析 golden 评测 4 项通过。
+3. Python ruff 检查通过。
+4. `git diff --check` 通过。
+5. 测试确认 `xparse-context-router-v2` 输出命中 chunk、相邻 chunk 和表格块来源锚点。
+
+### 偏离蓝图
+
+1. 本轮只做相邻 chunk / 相邻页一阶扩展，不做跨章节长距离召回，避免把弱相关上下文误标为确定来源。
+2. 复杂表头层级推断、单元格级 bbox 和预览器文本高亮仍需后续样本驱动推进。

@@ -21,7 +21,7 @@
 ## 当前落地进展
 
 - `ai-service/app/schemas/tender.py` 已新增 `TenderParseModuleResult`、`TenderParseFieldEvidence`、`TenderRequirementItem` 和 `TenderParseStructuredResult`。
-- `ai-service/app/pipelines/parse/tender_parser.py` 已在兼容旧字段的同时输出 `modules`、`field_evidence`、`requirement_items` 和 `quality_gates`；模块增强 prompt 已使用 `xparse-context-router-v1`，按标题、关键词行和 `table_blocks.md_table` 生成带 `chunk_id`、页码、`table_block_id` 的 `source_context`。
+- `ai-service/app/pipelines/parse/tender_parser.py` 已在兼容旧字段的同时输出 `modules`、`field_evidence`、`requirement_items` 和 `quality_gates`；模块增强 prompt 已使用 `xparse-context-router-v2`，按标题、关键词行、相邻 chunk 和 `table_blocks.md_table` 生成带 `chunk_id`、页码、`table_block_id`、路由原因的 `source_context`。
 - `ai-service/app/main.py` 已按 6 个模块逐一调用 `tender_parse` 路由，每个模块独立走 provider 候选和 fallback；单模块失败时保留基础解析并标记待确认。
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
@@ -72,7 +72,7 @@
    - 保留当前 Python 后端统一编排，不把切块放回前端。
    - 按标题层级、页码、表格块、关键词构造模块上下文：`chunk_id`、`title_path`、`content`、`page_start`、`page_end`、`table_block_ids`、`quality_flags`。
    - 借鉴 xparse 的“标题优先，正文前 200 字辅助”的路由规则，但增加多模块命中：评分表可同时进入 `evaluation` 和 `submission`，废标条款可同时进入 `invalid_risk` 和 `qualification`。
-   - 当前已落地：模块上下文只发送命中 chunk 和命中表格块，`source_context` 保留 `chunk_id/page/table_block_id/reasons`，避免全量截断；相邻页/相邻 chunk 扩展仍需继续增强。
+   - 当前已落地：模块上下文只发送命中 chunk、相邻 chunk 和命中表格块，`source_context` 保留 `chunk_id/page/table_block_id/reasons`，避免全量截断；相邻上下文以 `neighbor_chunk/adjacent_page` 标记并降低排序权重。
 
 2. Python 新增模块契约：`ai-service/app/schemas/tender.py`
    - 新增 `TenderParseModuleResult`、`TenderParseFieldEvidence`、`TenderRequirementItem`、`TenderParseStructuredResult`。

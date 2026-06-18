@@ -54,8 +54,9 @@ MODULE_CONTEXT_KEYWORDS: dict[TenderParseModule, tuple[str, ...]] = {
 }
 
 MODULE_CHECKLIST_VERSION = "xparse-six-module-v1"
-MODULE_CONTEXT_ROUTER_VERSION = "xparse-context-router-v1"
+MODULE_CONTEXT_ROUTER_VERSION = "xparse-context-router-v2"
 MODULE_CONTEXT_RECORD_LIMIT = 24
+MODULE_CONTEXT_NEIGHBOR_WINDOW = 1
 MODULE_CHECKLISTS: dict[TenderParseModule, dict[str, object]] = {
     "basic": {
         "required_fields": ("project_name", "purchaser", "project_code", "budget", "deadline", "opening_time"),
@@ -532,7 +533,9 @@ def _module_context_lines(parsed: KnowledgeProcessResult, module: TenderParseMod
 def _module_context_records(parsed: KnowledgeProcessResult, module: TenderParseModule) -> list[dict[str, object]]:
     keywords = MODULE_CONTEXT_KEYWORDS[module]
     records: list[dict[str, object]] = []
-    for chunk_index, chunk in enumerate(parsed.chunks, start=1):
+    matched_chunk_indexes: list[int] = []
+    for chunk_offset, chunk in enumerate(parsed.chunks):
+        chunk_index = chunk_offset + 1
         title_path = _chunk_title_path(chunk)
         title_text = f"{chunk.title} {title_path}".strip()
         keyword_lines = _keyword_context_lines(chunk.content, keywords, limit=24)
@@ -546,6 +549,7 @@ def _module_context_records(parsed: KnowledgeProcessResult, module: TenderParseM
             score += min(len(keyword_lines), 10)
         if not reasons:
             continue
+        matched_chunk_indexes.append(chunk_offset)
         lines = keyword_lines
         if "title_path" in reasons:
             lines = _dedupe_context_lines([*keyword_lines, *_leading_context_lines(chunk.content, limit=8)])
@@ -562,10 +566,61 @@ def _module_context_records(parsed: KnowledgeProcessResult, module: TenderParseM
                 "lines": lines[:18],
             }
         )
+    records.extend(_neighbor_module_context_records(parsed, matched_chunk_indexes, records))
     records.extend(_module_table_context_records(parsed, module))
     if not records:
         records = _fallback_module_context_records(parsed)
     return sorted(records, key=_module_context_sort_key)[:MODULE_CONTEXT_RECORD_LIMIT]
+
+
+def _neighbor_module_context_records(
+    parsed: KnowledgeProcessResult,
+    matched_chunk_indexes: list[int],
+    existing_records: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if not matched_chunk_indexes:
+        return []
+    existing_chunk_ids = {
+        str(record.get("chunk_id"))
+        for record in existing_records
+        if record.get("kind") == "chunk" and str(record.get("chunk_id") or "").strip()
+    }
+    records: list[dict[str, object]] = []
+    seen_offsets: set[int] = set()
+    for matched_offset in matched_chunk_indexes:
+        matched_chunk = parsed.chunks[matched_offset]
+        for offset in range(
+            max(0, matched_offset - MODULE_CONTEXT_NEIGHBOR_WINDOW),
+            min(len(parsed.chunks), matched_offset + MODULE_CONTEXT_NEIGHBOR_WINDOW + 1),
+        ):
+            if offset == matched_offset or offset in seen_offsets:
+                continue
+            chunk = parsed.chunks[offset]
+            chunk_id = _chunk_id(chunk, offset + 1)
+            if chunk_id in existing_chunk_ids:
+                continue
+            lines = _neighbor_context_lines(chunk.content, matched_chunk.content, limit=8)
+            if not lines:
+                continue
+            seen_offsets.add(offset)
+            page_distance = _chunk_page_distance(matched_chunk, chunk)
+            reasons = ["neighbor_chunk"]
+            if page_distance is not None and page_distance <= 1:
+                reasons.append("adjacent_page")
+            records.append(
+                {
+                    "kind": "chunk",
+                    "chunk_id": chunk_id,
+                    "title": chunk.title,
+                    "title_path": _chunk_title_path(chunk),
+                    "page_start": chunk.page_start,
+                    "page_end": chunk.page_end,
+                    "reasons": reasons,
+                    "score": 1,
+                    "lines": lines,
+                }
+            )
+    return records
 
 
 def _module_table_context_records(
@@ -754,6 +809,17 @@ def _leading_context_lines(content: str, *, limit: int) -> list[str]:
     return lines
 
 
+def _neighbor_context_lines(content: str, matched_content: str, *, limit: int) -> list[str]:
+    lines = _leading_context_lines(content, limit=limit)
+    if lines:
+        return lines
+    normalized = re.sub(r"\s+", " ", content).strip()
+    if normalized:
+        return [normalized[:360]]
+    matched_summary = re.sub(r"\s+", " ", matched_content).strip()
+    return [f"相邻上下文为空，参考相邻命中段落：{matched_summary[:180]}"] if matched_summary else []
+
+
 def _dedupe_context_lines(lines: list[str]) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
@@ -783,6 +849,20 @@ def _chunk_title_path(chunk: object) -> str:
     section_path = str(getattr(chunk, "section_path", "") or "").strip()
     title = str(getattr(chunk, "title", "") or "").strip()
     return section_path or title
+
+
+def _chunk_page_distance(left: object, right: object) -> int | None:
+    left_start = _object_int(getattr(left, "page_start", None))
+    left_end = _object_int(getattr(left, "page_end", None)) or left_start
+    right_start = _object_int(getattr(right, "page_start", None))
+    right_end = _object_int(getattr(right, "page_end", None)) or right_start
+    if left_start is None or left_end is None or right_start is None or right_end is None:
+        return None
+    if right_start > left_end:
+        return right_start - left_end
+    if left_start > right_end:
+        return left_start - right_end
+    return 0
 
 
 def _table_block_id(table: dict[str, object], table_index: int) -> str:
