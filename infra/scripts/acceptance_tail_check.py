@@ -278,6 +278,12 @@ def check_static_docs() -> None:
     for needle in ("parseModuleObjectSummary", "parseModuleFieldItemSummary"):
         require(needle in bid_page, f"Bid parse confirmation UI missing readable formatter: {needle}")
 
+    compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
+    for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
+        require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")
+    for needle in ("createComplianceRuleCode", "可选，选择需要检查的标书"):
+        require(needle in compliance_page, f"Compliance UI missing user-facing workflow guard: {needle}")
+
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
     for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):

@@ -4995,3 +4995,42 @@ cd frontend && pnpm build
 
 1. 本轮修复的是标书解析确认页的复杂字段展示，不等同于完成全站所有页面的逐像素 UI 验收。
 2. 未运行浏览器截图检查；本轮使用源码静态防漂移、lint、build 和总检验证。
+
+## Loop-100 / 合规规则 UI 编号字段收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查合规页面用户可见字段，移除规则编码和标书编号等内部标识录入。
+2. 让租户管理员通过业务名称选择标书、创建规则，避免暴露后端唯一键或对象 ID。
+3. 将合规页面技术字段防漂移纳入静态验收脚本。
+
+### 代码交付
+
+1. `frontend/src/features/compliance/index.tsx` 创建规则弹窗移除“规则编号”字段，提交时基于层级、分类、规则名称自动生成内部 `code`。
+2. 规则列表不再展示“编码”列，改为展示用户可理解的“说明”列。
+3. 发起合规检查时，关联标书从手填编号改为通过 `fetchBids()` 获取标书并以下拉选择呈现。
+4. `acceptance_tail_check.py --static-docs` 新增合规页面检查，禁止“规则编号”“填写标书编号”和编码列回流，并要求保留自动编码与标书选择入口。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 静态防漂移检查通过，最新交付日志识别为 Loop-100。
+2. 前端 ESLint 和生产构建通过。
+3. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest、工程1三项黄金样本回归均通过。
+4. Docker 中 AI 服务容器未运行时，容器内 pytest 仍按既有逻辑跳过。
+
+### 偏离蓝图
+
+1. 后端仍保留 `code` 作为合规规则唯一键；本轮只把它从用户录入界面收口为前端自动生成。
+2. 未新增浏览器截图验收；本轮先用静态防漂移、lint、build 和总检验证。

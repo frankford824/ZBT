@@ -38,6 +38,7 @@ import {
   createComplianceReport,
   createComplianceRule,
   deleteComplianceRule,
+  fetchBids,
   fetchComplianceCheck,
   fetchComplianceChecks,
   fetchComplianceIssues,
@@ -45,6 +46,7 @@ import {
   getApiErrorMessage,
   ignoreComplianceIssue,
   updateComplianceRule,
+  type BidDocumentDTO,
   type ComplianceCheckDTO,
   type ComplianceIssueDTO,
   type ComplianceRuleDTO,
@@ -109,6 +111,19 @@ function formatTime(value?: string | null) {
   return formatDateTime(value)
 }
 
+function bidOptionLabel(bid: BidDocumentDTO) {
+  return `${bid.title || bid.project_name} · ${bid.project_name || '未关联项目'}`
+}
+
+function createComplianceRuleCode(values: Pick<ComplianceRuleDTO, 'name' | 'category' | 'level'>) {
+  const seed = `${values.level}-${values.category}-${values.name}`
+  let hash = 0
+  for (const char of seed) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  }
+  return `custom_${values.level.toLowerCase()}_${hash.toString(36)}_${Date.now().toString(36)}`
+}
+
 function issueCounts(checks: ComplianceCheckDTO[]) {
   return checks.reduce(
     (acc, check) => {
@@ -154,7 +169,6 @@ export function CompliancePage() {
   const canWrite = useCanAccess('compliance', 'full')
   const [checkForm] = Form.useForm<{ name: string; bid_document_id?: string; levels: string[] }>()
   const [ruleForm] = Form.useForm<{
-    code: string
     name: string
     category: string
     level: ComplianceRuleDTO['level']
@@ -165,6 +179,7 @@ export function CompliancePage() {
 
   const checks = useQuery({ queryKey: ['compliance-checks'], queryFn: fetchComplianceChecks })
   const rules = useQuery({ queryKey: ['compliance-rules'], queryFn: fetchComplianceRules })
+  const bids = useQuery({ queryKey: ['compliance-bids'], queryFn: fetchBids })
   const counts = issueCounts(checks.data || [])
 
   const createCheckMutation = useMutation({
@@ -302,11 +317,11 @@ export function CompliancePage() {
                         dataSource={rules.data}
                         scroll={{ x: 820 }}
                         columns={[
-                          { title: '编码', dataIndex: 'code', width: 170 },
                           { title: '名称', dataIndex: 'name', width: 180 },
                           { title: '分类', dataIndex: 'category', width: 130 },
                           { title: '层级', dataIndex: 'level', width: 80, render: (value) => <Tag>{value}</Tag> },
                           { title: '严重度', dataIndex: 'severity', width: 120, render: severityTag },
+                          { title: '说明', dataIndex: 'description', ellipsis: true, render: (value) => value || '-' },
                           {
                             title: '启用',
                             dataIndex: 'enabled',
@@ -358,7 +373,17 @@ export function CompliancePage() {
             <Input />
           </Form.Item>
           <Form.Item name="bid_document_id" label="关联标书">
-            <Input placeholder="可选，填写标书编号；留空则执行独立检查" />
+            <Select
+              allowClear
+              showSearch
+              loading={bids.isLoading}
+              placeholder="可选，选择需要检查的标书"
+              optionFilterProp="label"
+              options={(bids.data ?? []).map((bid) => ({
+                value: bid.id,
+                label: bidOptionLabel(bid),
+              }))}
+            />
           </Form.Item>
           <Form.Item name="levels" label="检查层级">
             <Checkbox.Group options={levelOptions} />
@@ -376,11 +401,14 @@ export function CompliancePage() {
           form={ruleForm}
           layout="vertical"
           initialValues={{ level: 'L1', severity: 'warn', enabled: true }}
-          onFinish={(values) => createRuleMutation.mutate({ ...values, metadata: {} })}
+          onFinish={(values) =>
+            createRuleMutation.mutate({
+              ...values,
+              code: createComplianceRuleCode(values),
+              metadata: {},
+            })
+          }
         >
-          <Form.Item name="code" label="规则编号" rules={[{ required: true, message: '规则编号必填' }]}>
-            <Input placeholder="例如：交付时间要求" />
-          </Form.Item>
           <Form.Item name="name" label="规则名称" rules={[{ required: true, message: '规则名称必填' }]}>
             <Input />
           </Form.Item>
