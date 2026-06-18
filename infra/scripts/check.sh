@@ -14,9 +14,13 @@ cd "$ROOT/backend"
 GOTOOLCHAIN=local go test ./...
 
 cd "$ROOT/ai-service"
-python3 -m compileall app
-if python3 -m pytest --version >/dev/null 2>&1; then
-  python3 -m pytest app/tests
+AI_PYTHON="python3"
+if [ -x "$ROOT/ai-service/.venv/bin/python" ]; then
+  AI_PYTHON="$ROOT/ai-service/.venv/bin/python"
+fi
+"$AI_PYTHON" -m compileall app
+if "$AI_PYTHON" -m pytest --version >/dev/null 2>&1; then
+  "$AI_PYTHON" -m pytest app/tests -q -s
 else
   echo "local pytest unavailable; skipping local ai-service pytest"
 fi

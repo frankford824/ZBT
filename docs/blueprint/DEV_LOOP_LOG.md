@@ -4730,3 +4730,40 @@ cd ai-service && .venv/bin/python -m ruff check app/pipelines/parse/tender_parse
 
 1. 本轮验证的是模型返回 `source_text` 与解析上下文的一致性，不做 PDF canvas 可视高亮框选。
 2. 引用原文反查可以降低伪造来源风险，但仍不等价于语义正确性评测；复杂表格跨行引用仍需要更强的版面级评测或人工抽样。
+
+## Loop-93 / 总检脚本 AI pytest 覆盖修复 - 2026-06-18
+
+### 本轮目标
+
+1. 审查全工程验证入口，修复 `infra/scripts/check.sh` 在系统 Python 缺少 pytest 时跳过 AI 服务测试但仍输出 `all checks passed` 的盲区。
+2. 让本地总检优先使用 `ai-service/.venv`，与日常 AI 服务测试环境一致。
+3. 规避当前 WSL/Windows 路径环境下 pytest 默认 capture 偶发 `FileNotFoundError`，确保总检能稳定跑完整 AI 测试集。
+
+### 代码交付
+
+1. `infra/scripts/check.sh` 在 AI 服务阶段新增 `AI_PYTHON` 选择：
+   - 若 `ai-service/.venv/bin/python` 可执行，优先使用虚拟环境 Python。
+   - 否则回退系统 `python3`。
+2. `compileall` 和 pytest 均使用同一个 `AI_PYTHON`，避免编译和测试环境不一致。
+3. AI 服务 pytest 改为 `-q -s`，禁用 capture 并保留简洁输出，避免本机捕获临时文件问题导致总检失败。
+
+### 检查结果
+
+已运行：
+
+```bash
+./infra/scripts/check.sh
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd frontend && pnpm lint
+```
+
+结果：
+
+1. 总检通过：前端 production build 通过，后端 `go test ./...` 通过，AI 服务 compileall 通过。
+2. 总检已真实执行 AI 服务测试，输出 `237 passed`，不再跳过本地 pytest。
+3. 独立 AI 服务完整测试 237 项通过。
+4. 前端 ESLint 通过。
+
+### 偏离蓝图
+
+1. Docker 中的 AI 服务容器未运行，因此总检仍按既有逻辑跳过容器内 pytest；本轮修复的是本地 AI 服务 pytest 盲区。
