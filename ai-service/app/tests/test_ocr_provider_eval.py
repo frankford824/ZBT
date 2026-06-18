@@ -92,7 +92,43 @@ def test_ocr_provider_eval_passes_against_mineru_http_response(monkeypatch, tmp_
     assert captured["authorization"] == "Bearer secret-token"
     assert captured["body"]["provider"] == "mineru"
     assert result["metadata"]["ocr"]["provider_profile"]["endpoint_env"] == "MINERU_HTTP_ENDPOINT"
+    assert result["metadata"]["ocr"]["provider_profile"]["api_key_env"] == "MINERU_API_KEY"
+    profile_checks = {check["name"]: check for check in result["checks"]}
+    assert profile_checks["ocr.provider_profile.endpoint_env"]["passed"] is True
+    assert profile_checks["ocr.provider_profile.api_key_env"]["passed"] is True
     assert result["passed_checks"] == result["total_checks"]
+
+
+def test_ocr_provider_eval_accepts_generic_fallback_env_profile(monkeypatch, tmp_path: Path) -> None:
+    sample = tmp_path / "scan.png"
+    sample.write_bytes(b"image-bytes")
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["authorization"] = req.get_header("Authorization")
+        return _FakeHTTPResponse(b'{"status":"done","text":"Generic OCR text from shared endpoint"}')
+
+    monkeypatch.delenv("MINERU_HTTP_ENDPOINT", raising=False)
+    monkeypatch.delenv("MINERU_API_KEY", raising=False)
+    monkeypatch.delenv("MINERU_POLL_ENDPOINT", raising=False)
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/generic")
+    monkeypatch.setenv("OCR_API_KEY", "generic-token")
+    monkeypatch.setenv("OCR_POLL_ENDPOINT", "https://ocr.example.test/tasks/{task_id}")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = evaluate_ocr_provider("mineru", sample, min_text_chars=8)
+
+    assert result["status"] == "passed"
+    assert captured["url"] == "https://ocr.example.test/generic"
+    assert captured["authorization"] == "Bearer generic-token"
+    checks = {check["name"]: check for check in result["checks"]}
+    assert checks["ocr.provider_profile.endpoint_env"]["actual"] == "OCR_HTTP_ENDPOINT"
+    assert checks["ocr.provider_profile.api_key_env"]["actual"] == "OCR_API_KEY"
+    assert checks["ocr.provider_profile.poll_endpoint_env"]["actual"] == "OCR_POLL_ENDPOINT"
+    assert result["metadata"]["ocr"]["provider_profile"]["endpoint_env"] == "OCR_HTTP_ENDPOINT"
+    assert result["metadata"]["ocr"]["provider_profile"]["api_key_env"] == "OCR_API_KEY"
+    assert result["metadata"]["ocr"]["provider_profile"]["poll_endpoint_env"] == "OCR_POLL_ENDPOINT"
 
 
 def test_ocr_provider_eval_fails_when_required_table_is_missing(monkeypatch, tmp_path: Path) -> None:

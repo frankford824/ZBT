@@ -4248,3 +4248,45 @@ cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden .
 
 1. 本轮是解析质量门禁增强，不接真实 MinerU/PaddleOCR endpoint。
 2. 模块质量摘要用于定位和复核，不替代人工对真实招标文件准确率的抽样核对。
+
+## Loop-82 / OCR Provider env 验收实化 - 2026-06-18
+
+### 本轮目标
+
+1. 修正 OCR Provider 真实 endpoint 验收脚本与文档口径不一致的问题。
+2. `ocr_provider_eval.py` 不应只检查 `endpoint_env`，还应在配置 key 或 poll endpoint 时检查 `api_key_env` / `poll_endpoint_env`。
+3. MinerU/PaddleOCR 使用通用 OCR endpoint/key/poll 兜底时，验收必须接受实际生效 env，而不是误判为必须使用 Provider 专属 env。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/ocr_provider_eval.py` 的 `ocr.provider_profile.endpoint_env` 检查改为匹配实际生效 env：Provider 专属 endpoint 优先，否则接受 `OCR_HTTP_ENDPOINT` 兜底。
+2. 新增 `ocr.provider_profile.api_key_env` 检查：仅当 Provider 专属 key 或通用 `OCR_API_KEY` 已配置时启用，避免无 key 环境误失败。
+3. 新增 `ocr.provider_profile.poll_endpoint_env` 检查：仅当 Provider 专属 poll endpoint 或通用 `OCR_POLL_ENDPOINT` 已配置时启用。
+4. `provider.endpoint_configured` 的 expected 文案改为“Provider 专属 endpoint 或通用 OCR endpoint”，让 skipped/failed 输出更准确。
+5. `test_ocr_provider_eval.py` 增加通用 OCR endpoint/key/poll 兜底验收用例，并补 Provider 专属 key env 断言。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录 OCR eval 已检查 endpoint/key/poll 实际生效 env。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_ocr_provider_eval.py -q -s
+python3 -m py_compile ai-service/app/evaluation/ocr_provider_eval.py ai-service/app/tests/test_ocr_provider_eval.py
+cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval --provider mineru --allow-skip
+cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval --provider paddleocr --allow-skip
+git diff --check
+```
+
+结果：
+
+1. OCR Provider eval 单测 5 项通过。
+2. OCR eval 脚本与测试语法检查通过。
+3. 当前本地未配置 MinerU endpoint，工程1 OCR Provider 验收输出 `skipped provider=mineru passed=1/2`，没有伪装通过。
+4. 当前本地未配置 PaddleOCR endpoint，工程1 OCR Provider 验收输出 `skipped provider=paddleocr passed=1/2`，没有伪装通过。
+5. diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮增强真实 Provider 验收逻辑，不提供真实 MinerU/PaddleOCR endpoint 或 API Key。
+2. `api_key_env` 和 `poll_endpoint_env` 只有在对应 env 已配置时才作为硬检查；无 key 或无轮询地址的同步 OCR Provider 不因此失败。

@@ -42,9 +42,15 @@ def evaluate_ocr_provider(
 
     endpoint = _provider_endpoint(provider)
     if not endpoint:
-        _add_check(checks, "provider.endpoint_configured", False, _provider_endpoint_env(provider), "")
+        _add_check(checks, "provider.endpoint_configured", False, _endpoint_config_expected(provider), "")
         return _result(provider, sample, "skipped", checks)
-    _add_check(checks, "provider.endpoint_configured", True, _provider_endpoint_env(provider), _configured_endpoint_source(provider))
+    _add_check(
+        checks,
+        "provider.endpoint_configured",
+        True,
+        _endpoint_config_expected(provider),
+        _configured_endpoint_source(provider),
+    )
     _add_check(checks, "sample.exists", sample.is_file(), True, str(sample))
     if not sample.is_file():
         return _result(provider, sample, "failed", checks)
@@ -102,13 +108,32 @@ def _evaluate_parsed_result(
     _add_check(checks, "ocr.chunk_count", len(parsed.chunks) > 0, ">0", len(parsed.chunks))
     profile = ocr_record.get("provider_profile")
     profile_record = profile if isinstance(profile, dict) else {}
+    expected_endpoint_env = _configured_endpoint_source(provider) or _provider_endpoint_env(provider)
     _add_check(
         checks,
         "ocr.provider_profile.endpoint_env",
-        profile_record.get("endpoint_env") == _provider_endpoint_env(provider),
-        _provider_endpoint_env(provider),
+        profile_record.get("endpoint_env") == expected_endpoint_env,
+        expected_endpoint_env,
         profile_record.get("endpoint_env"),
     )
+    expected_api_key_env = _configured_api_key_source(provider)
+    if expected_api_key_env:
+        _add_check(
+            checks,
+            "ocr.provider_profile.api_key_env",
+            profile_record.get("api_key_env") == expected_api_key_env,
+            expected_api_key_env,
+            profile_record.get("api_key_env"),
+        )
+    expected_poll_endpoint_env = _configured_poll_endpoint_source(provider)
+    if expected_poll_endpoint_env:
+        _add_check(
+            checks,
+            "ocr.provider_profile.poll_endpoint_env",
+            profile_record.get("poll_endpoint_env") == expected_poll_endpoint_env,
+            expected_poll_endpoint_env,
+            profile_record.get("poll_endpoint_env"),
+        )
     if min_table_blocks > 0:
         actual = _int_value(metadata.get("table_block_count"), 0)
         _add_check(checks, "ocr.table_blocks", actual >= min_table_blocks, f">={min_table_blocks}", actual)
@@ -184,12 +209,51 @@ def _configured_endpoint_source(provider: str) -> str:
     return ""
 
 
+def _endpoint_config_expected(provider: str) -> str:
+    endpoint_env = _provider_endpoint_env(provider)
+    if endpoint_env == "OCR_HTTP_ENDPOINT":
+        return endpoint_env
+    return f"{endpoint_env} or OCR_HTTP_ENDPOINT"
+
+
+def _configured_api_key_source(provider: str) -> str:
+    if os.getenv(_provider_api_key_env(provider), "").strip():
+        return _provider_api_key_env(provider)
+    if os.getenv("OCR_API_KEY", "").strip():
+        return "OCR_API_KEY"
+    return ""
+
+
+def _configured_poll_endpoint_source(provider: str) -> str:
+    if os.getenv(_provider_poll_endpoint_env(provider), "").strip():
+        return _provider_poll_endpoint_env(provider)
+    if os.getenv("OCR_POLL_ENDPOINT", "").strip():
+        return "OCR_POLL_ENDPOINT"
+    return ""
+
+
 def _provider_endpoint_env(provider: str) -> str:
     if provider == "mineru":
         return "MINERU_HTTP_ENDPOINT"
     if provider == "paddleocr":
         return "PADDLEOCR_HTTP_ENDPOINT"
     return "OCR_HTTP_ENDPOINT"
+
+
+def _provider_api_key_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_API_KEY"
+    if provider == "paddleocr":
+        return "PADDLEOCR_API_KEY"
+    return "OCR_API_KEY"
+
+
+def _provider_poll_endpoint_env(provider: str) -> str:
+    if provider == "mineru":
+        return "MINERU_POLL_ENDPOINT"
+    if provider == "paddleocr":
+        return "PADDLEOCR_POLL_ENDPOINT"
+    return "OCR_POLL_ENDPOINT"
 
 
 def _safe_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
