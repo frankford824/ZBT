@@ -1,8 +1,10 @@
 package externaltool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -130,6 +132,47 @@ func TestCostPerCallIgnoresInvalidStoredMetadata(t *testing.T) {
 	}
 	if got := costPerCall(map[string]any{"cost_per_call": "0.123456"}); got != 0.1235 {
 		t.Fatalf("expected valid stored cost metadata to be rounded, got %.8f", got)
+	}
+}
+
+func TestNormalizeInvokeRequestRejectsOversizedAndNonJSONArguments(t *testing.T) {
+	normalized, err := normalizeInvokeRequest(InvokeRequest{
+		ToolName:     " bid_search ",
+		Arguments:    map[string]any{"keyword": "智慧交通"},
+		ResourceType: " bid ",
+	})
+	if err != nil {
+		t.Fatalf("normalize invoke request: %v", err)
+	}
+	if normalized.ToolName != "bid_search" || normalized.ResourceType != "bid" {
+		t.Fatalf("expected trimmed invoke request, got %+v", normalized)
+	}
+	if normalized.Arguments["keyword"] != "智慧交通" {
+		t.Fatalf("expected arguments to be preserved, got %#v", normalized.Arguments)
+	}
+	for name, req := range map[string]InvokeRequest{
+		"oversized arguments": {
+			ToolName:  "bid_search",
+			Arguments: map[string]any{"payload": strings.Repeat("招", maxExternalToolArgumentsJSONBytes)},
+		},
+		"non json arguments": {
+			ToolName:  "bid_search",
+			Arguments: map[string]any{"bad": func() {}},
+		},
+		"invalid number arguments": {
+			ToolName:  "bid_search",
+			Arguments: map[string]any{"bad": math.Inf(1)},
+		},
+		"oversized resource type": {
+			ToolName:     "bid_search",
+			ResourceType: strings.Repeat("类", maxExternalToolResourceTypeRunes+1),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := normalizeInvokeRequest(req); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("expected invalid request, got %v", err)
+			}
+		})
 	}
 }
 
@@ -309,6 +352,57 @@ func TestCallStreamableHTTPUsesMCPToolsCallEnvelope(t *testing.T) {
 	items := resultMap["items"].([]any)
 	if len(items) != 1 {
 		t.Fatalf("expected result payload, got %#v", result)
+	}
+}
+
+func TestCallStreamableHTTPRejectsNonJSONArgumentsBeforeOutboundRequest(t *testing.T) {
+	var received atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Store(true)
+		_, _ = w.Write([]byte(`{"result":{}}`))
+	}))
+	defer server.Close()
+
+	store := &Store{client: server.Client()}
+	_, _, err := store.callStreamableHTTP(context.Background(), Config{
+		ProviderKey: "bad-json",
+		Endpoint:    server.URL,
+		TimeoutMS:   2000,
+	}, InvokeRequest{ToolName: "bid_search", Arguments: map[string]any{"bad": func() {}}})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request, got %v", err)
+	}
+	if received.Load() {
+		t.Fatal("non-json arguments should be rejected before outbound request")
+	}
+}
+
+func TestCallStreamableHTTPRejectsOversizedResponseWithoutLeakingBody(t *testing.T) {
+	secretFragment := []byte("secret external tool response body")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat(secretFragment, maxExternalToolResponseBytes/len(secretFragment)+1))
+	}))
+	defer server.Close()
+
+	store := &Store{client: server.Client()}
+	_, metadata, err := store.callStreamableHTTP(context.Background(), Config{
+		ProviderKey: "oversized-response",
+		Endpoint:    server.URL,
+		TimeoutMS:   2000,
+	}, InvokeRequest{ToolName: "bid_search", Arguments: map[string]any{}})
+	if err == nil {
+		t.Fatal("expected oversized response error")
+	}
+	if metadata["http_status"] != 200 {
+		t.Fatalf("expected http status metadata, got %#v", metadata)
+	}
+	message := err.Error()
+	if strings.Contains(message, string(secretFragment)) {
+		t.Fatalf("oversized response error leaked body fragment: %s", message)
+	}
+	if !strings.Contains(message, "too large") {
+		t.Fatalf("expected controlled oversized response error, got %s", message)
 	}
 }
 

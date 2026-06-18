@@ -45,6 +45,10 @@ const (
 	maxTimeoutMS     = 60000
 	maxSummaryRunes  = 1000
 
+	maxExternalToolArgumentsJSONBytes = 64 * 1024
+	maxExternalToolResponseBytes      = 2 * 1024 * 1024
+	maxExternalToolResourceTypeRunes  = 64
+
 	maxExternalToolMonthlyBudget = 10000000
 	maxExternalToolCostPerCall   = 100000
 )
@@ -354,7 +358,7 @@ func (s *Store) callStreamableHTTP(ctx context.Context, config Config, req Invok
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	requestID := uuid.NewString()
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      requestID,
 		"method":  "tools/call",
@@ -363,6 +367,9 @@ func (s *Store) callStreamableHTTP(ctx context.Context, config Config, req Invok
 			"arguments": req.Arguments,
 		},
 	})
+	if err != nil {
+		return nil, map[string]any{"request_id": requestID}, ErrInvalidRequest
+	}
 	httpReq, err := http.NewRequestWithContext(callCtx, http.MethodPost, config.Endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, map[string]any{"request_id": requestID}, err
@@ -376,7 +383,7 @@ func (s *Store) callStreamableHTTP(ctx context.Context, config Config, req Invok
 		return nil, map[string]any{"request_id": requestID}, err
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+	responseBody, err := readExternalToolResponseBody(resp.Body)
 	if err != nil {
 		return nil, map[string]any{"request_id": requestID, "http_status": resp.StatusCode}, err
 	}
@@ -524,7 +531,15 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 
 func normalizeInvokeRequest(req InvokeRequest) (InvokeRequest, error) {
 	toolName := strings.TrimSpace(req.ToolName)
-	if toolName == "" || len(toolName) > 128 {
+	if toolName == "" || len([]rune(toolName)) > 128 {
+		return InvokeRequest{}, ErrInvalidRequest
+	}
+	arguments, err := normalizeExternalToolArguments(req.Arguments)
+	if err != nil {
+		return InvokeRequest{}, err
+	}
+	resourceType := strings.TrimSpace(req.ResourceType)
+	if len([]rune(resourceType)) > maxExternalToolResourceTypeRunes {
 		return InvokeRequest{}, ErrInvalidRequest
 	}
 	resourceID := strings.TrimSpace(req.ResourceID)
@@ -535,8 +550,8 @@ func normalizeInvokeRequest(req InvokeRequest) (InvokeRequest, error) {
 	}
 	return InvokeRequest{
 		ToolName:     toolName,
-		Arguments:    normalizeMetadata(req.Arguments),
-		ResourceType: strings.TrimSpace(req.ResourceType),
+		Arguments:    arguments,
+		ResourceType: resourceType,
 		ResourceID:   resourceID,
 	}, nil
 }
@@ -570,6 +585,17 @@ func normalizeMetadata(value map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return value
+}
+
+func normalizeExternalToolArguments(arguments map[string]any) (map[string]any, error) {
+	if arguments == nil {
+		return map[string]any{}, nil
+	}
+	raw, err := json.Marshal(arguments)
+	if err != nil || len(raw) > maxExternalToolArgumentsJSONBytes {
+		return nil, ErrInvalidRequest
+	}
+	return arguments, nil
 }
 
 func normalizeExternalToolMetadata(value map[string]any) (map[string]any, error) {
@@ -855,6 +881,17 @@ func truncateSummary(value string) string {
 		return string(runes)
 	}
 	return string(runes[:maxSummaryRunes])
+}
+
+func readExternalToolResponseBody(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxExternalToolResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxExternalToolResponseBytes {
+		return nil, errors.New("external tool response is too large")
+	}
+	return raw, nil
 }
 
 func safeError(err error) string {

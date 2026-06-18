@@ -6551,3 +6551,50 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是标讯来源身份字段和 URL 长度边界，没有新增来源检测策略、抓取调度或平台认证能力。
 2. URL 上限采用 2048 字符的通用边界；若后续接入特定平台长查询参数，应改为服务端配置引用或请求体参数，而不是保存超长 URL。
+
+## Loop-135 / 外部工具调用载荷边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查外部 MCP/工具网关，处理 `InvokeRequest.arguments` 和 `resource_type` 缺少写前边界的问题。
+2. 避免异常调用参数在 hash、摘要、HTTP body 和审计写入链路中造成内存放大或序列化失败。
+3. 将第三方工具超大响应从“被截断后 JSON 解析失败”改为明确的受控错误，并避免响应体片段进入错误信息。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/store.go` 新增调用参数 JSON 64KB、响应体 2MB、资源类型 64 字符边界常量。
+2. `normalizeInvokeRequest()` 新增 `normalizeExternalToolArguments()`，在调用前拒绝不可 JSON 序列化、NaN/Inf 或超出字节预算的 `arguments`。
+3. `normalizeInvokeRequest()` 对 `resource_type` 做 trim 和长度校验，并将工具名长度判断统一为 rune 计数。
+4. `callStreamableHTTP()` 不再忽略 JSON marshal 错误；不可序列化参数会在出站请求前返回 `ErrInvalidRequest`。
+5. `readExternalToolResponseBody()` 使用 `maxExternalToolResponseBytes + 1` 检测溢出，第三方响应过大时返回固定错误，不泄露原始响应体。
+6. `backend/internal/platform/externaltool/store_test.go` 新增调用参数边界、出站前拒绝不可序列化参数、超大响应不泄露正文三组回归测试。
+7. `infra/scripts/acceptance_tail_check.py --static-docs` 增加外部工具调用载荷边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/externaltool/store.go internal/platform/externaltool/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/externaltool
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/externaltool` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是外部工具网关调用载荷安全边界，没有新增具体行业 MCP Provider 的真实授权、账号绑定或工具编排。
+2. `arguments` 上限采用 64KB，符合“只传查询条件/结构化摘要、不上传完整招标正文”的网关定位；如后续工具确需大文件，应通过文件对象或受控存储引用传递。
