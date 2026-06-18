@@ -129,6 +129,10 @@ export function getApiErrorMessage(error: unknown, fallback = '操作失败'): s
   return fallback
 }
 
+export function getUserFacingErrorMessage(message: string | null | undefined, fallback = '操作失败'): string {
+  return userFacingMessageOrFallback(message ?? '', fallback)
+}
+
 function userFacingMessageOrFallback(message: string, fallback: string): string {
   const text = message.trim()
   if (!text) {

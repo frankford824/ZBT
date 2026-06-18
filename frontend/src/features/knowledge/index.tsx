@@ -33,6 +33,7 @@ import {
   fetchKnowledgeTags,
   fetchKnowledgeTemplates,
   processKnowledgeDocument,
+  getUserFacingErrorMessage,
   searchKnowledge,
   updateKnowledgeCategory,
   updateKnowledgeDocument,
@@ -1193,5 +1194,5 @@ function documentStatusCell(document: KnowledgeDocumentDTO) {
 
 function documentFailureMessage(document: KnowledgeDocumentDTO) {
   if (document.parse_status !== 'failed') return ''
-  return document.error_message?.trim() || '文档整理失败，请重新整理'
+  return getUserFacingErrorMessage(document.error_message, '文档整理失败，请重新整理')
 }

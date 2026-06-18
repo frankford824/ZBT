@@ -5275,3 +5275,46 @@ cd frontend && pnpm build
 
 1. 后端审计仍保留原始 `error_message` 供排查，本轮只调整前端展示口径。
 2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。
+
+## Loop-107 / AI 任务失败文案收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书、知识库、成本页的 AI 任务失败展示，处理 `error_message` 直接透出的问题。
+2. 防止 provider、HTTP、callback、timeout、connection 等技术错误进入用户界面。
+3. 将 AI 任务失败文案的共享过滤和防回退检查纳入静态验收。
+
+### 代码交付
+
+1. `frontend/src/shared/api/client.ts` 导出 `getUserFacingErrorMessage()`，复用既有“中文业务文案可展示，非中文技术错误回退默认文案”的策略。
+2. `frontend/src/features/bid/index.tsx` 的文件解读、正文生成、导出、章节重生成失败展示改走共享过滤；取消状态固定展示“任务已取消”。
+3. `frontend/src/features/knowledge/index.tsx` 的文档整理失败展示改走共享过滤。
+4. `frontend/src/features/cost/index.tsx` 的智能建议失败展示改走共享过滤；取消状态固定展示“建议生成已取消”。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 新增防退化检查，禁止上述页面回退到 `.error_message.trim()` 直出。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新记录识别为 Loop-107。
+2. `cd frontend && pnpm lint` 通过。
+3. `cd frontend && pnpm build` 通过。
+4. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+5. AI pytest 通过：`237 passed`。
+6. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+7. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 后端和 AI 服务仍保留原始 `error_message` 供排查，本轮只调整前端展示口径。
+2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。

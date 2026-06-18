@@ -77,6 +77,7 @@ import {
   fetchChapterDiff,
   fetchChapterVersions,
   getApiErrorMessage,
+  getUserFacingErrorMessage,
   generateBid,
   generateBidOutline,
   cancelBidGenerationJob,
@@ -1138,7 +1139,7 @@ export function BidWizardPage() {
   const isRequirementUpdating = requirementCoverageMutation.isPending || requirementBatchCoverageMutation.isPending
   const parseFailureMessage =
     parseResult.data?.status === 'failed'
-      ? parseResult.data.error_message?.trim() || '文件解读失败，请重新上传或重新解读'
+      ? getUserFacingErrorMessage(parseResult.data.error_message, '文件解读失败，请重新上传或重新解读')
       : ''
   const setOutlineDraft = (partId: string, rowIndex: number, patch: Partial<OutlineDraftChapter>) => {
     setOutlineDrafts((current) => ({
@@ -2129,8 +2130,8 @@ function taskFailureMessage(
   fallback: string,
 ) {
   if (!task || (task.status !== 'failed' && task.status !== 'cancelled')) return ''
-  if (task.error_message?.trim()) return task.error_message.trim()
-  return task.status === 'cancelled' ? '任务已取消' : fallback
+  if (task.status === 'cancelled') return '任务已取消'
+  return getUserFacingErrorMessage(task.error_message, fallback)
 }
 
 const parseConfirmFieldLabels: Record<keyof ParseConfirmDraft, string> = {

@@ -281,15 +281,20 @@ def check_static_docs() -> None:
         require(needle in team_page, f"Team external audit UI missing provider display guard: {needle}")
 
     bid_page = (ROOT / "frontend/src/features/bid/index.tsx").read_text(encoding="utf-8")
+    api_client = (ROOT / "frontend/src/shared/api/client.ts").read_text(encoding="utf-8")
+    require("getUserFacingErrorMessage" in api_client, "API client missing shared user-facing error filter")
     require(
         "JSON.stringify(value, null, 2)" not in bid_page,
         "Bid parse confirmation UI exposes raw JSON in module field editor",
     )
+    for forbidden in ("parseResult.data.error_message?.trim()", "task.error_message?.trim()) return task.error_message.trim()"):
+        require(forbidden not in bid_page, f"Bid task UI exposes raw task error message: {forbidden}")
+    require("getUserFacingErrorMessage(parseResult.data.error_message" in bid_page, "Bid parse failure UI missing user-facing error filter")
+    require("getUserFacingErrorMessage(task.error_message" in bid_page, "Bid task failure UI missing user-facing error filter")
     require("subtitle={bid.data?.title ?? bidId}" not in bid_page, "Bid editor subtitle exposes bid UUID fallback")
     require("正在编辑标书" in bid_page, "Bid editor subtitle missing business fallback")
     for needle in ("parseModuleObjectSummary", "parseModuleFieldItemSummary"):
         require(needle in bid_page, f"Bid parse confirmation UI missing readable formatter: {needle}")
-    api_client = (ROOT / "frontend/src/shared/api/client.ts").read_text(encoding="utf-8")
     require("`响应矩阵-${bidId}" not in api_client, "Requirement export fallback filename exposes bid UUID")
     for needle in ("bidRequirementFallbackFilename", "downloadSafeFilenamePart"):
         require(needle in api_client, f"Requirement export fallback filename missing business guard: {needle}")
@@ -310,6 +315,12 @@ def check_static_docs() -> None:
     for needle in ("原文位置：已定位", "sanitizePreviewLocatorText"):
         require(needle in knowledge_page, f"File preview source UI missing business locator guard: {needle}")
     require("normalizePreviewLocatorParam" in knowledge_page, "File preview source UI missing line-preserving locator normalization")
+    require("document.error_message?.trim()" not in knowledge_page, "Knowledge document UI exposes raw task error message")
+    require("getUserFacingErrorMessage(document.error_message" in knowledge_page, "Knowledge document UI missing user-facing error filter")
+
+    cost_page = (ROOT / "frontend/src/features/cost/index.tsx").read_text(encoding="utf-8")
+    require("if (errorMessage?.trim()) return errorMessage.trim()" not in cost_page, "Cost advice UI exposes raw task error message")
+    require("getUserFacingErrorMessage(errorMessage" in cost_page, "Cost advice UI missing user-facing error filter")
 
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):

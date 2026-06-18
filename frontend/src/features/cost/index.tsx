@@ -30,6 +30,7 @@ import {
   fetchCostProject,
   fetchCostProjects,
   getApiErrorMessage,
+  getUserFacingErrorMessage,
   type CostItemPayload,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
@@ -400,8 +401,8 @@ function adviceSummary(result: Record<string, unknown> | undefined) {
 }
 
 function adviceFailureMessage(status: string | undefined, errorMessage: string | null | undefined) {
-  if (errorMessage?.trim()) return errorMessage.trim()
-  return status === 'cancelled' ? '建议生成已取消' : '生成建议失败'
+  if (status === 'cancelled') return '建议生成已取消'
+  return getUserFacingErrorMessage(errorMessage, '生成建议失败')
 }
 
 function adviceStatusTag(status: string) {
