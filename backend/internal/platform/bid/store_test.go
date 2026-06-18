@@ -91,6 +91,37 @@ func TestMarshalPipelineGateMetadataJSONRejectsInvalidAndOversizedValues(t *test
 	}
 }
 
+func TestMarshalRequirementItemJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	sourceRaw, metadataRaw, err := marshalRequirementItemJSON(RequirementItem{})
+	if err != nil || string(sourceRaw) != "{}" || string(metadataRaw) != "{}" {
+		t.Fatalf("expected nil requirement item JSON fields to normalize to empty objects, source=%q metadata=%q err=%v", sourceRaw, metadataRaw, err)
+	}
+	for name, item := range map[string]RequirementItem{
+		"invalid source ref number": {
+			SourceRef: map[string]any{"bad": math.NaN()},
+			Metadata:  map[string]any{"source": "tender_parse"},
+		},
+		"unsupported metadata": {
+			SourceRef: map[string]any{"page_start": 1},
+			Metadata:  map[string]any{"bad": func() {}},
+		},
+		"oversized source ref": {
+			SourceRef: map[string]any{"source_text": strings.Repeat("源", maxBidRequirementItemSourceRefJSONBytes)},
+			Metadata:  map[string]any{"source": "tender_parse"},
+		},
+		"oversized metadata": {
+			SourceRef: map[string]any{"page_start": 1},
+			Metadata:  map[string]any{"payload": strings.Repeat("项", maxBidRequirementItemMetadataJSONBytes)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := marshalRequirementItemJSON(item); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid requirement item JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
 func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	bidID := "00000000-0000-4000-8000-000000000001"
 	otherBidID := "00000000-0000-4000-8000-000000000002"

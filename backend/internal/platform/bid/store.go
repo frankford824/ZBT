@@ -55,10 +55,12 @@ const (
 	maxBidTaskRouteJSONBytes       = 16 * 1024
 	maxBidParseStructuredJSONBytes = 8 * 1024 * 1024
 
-	maxBidRequirementCoverageJSONBytes     = 512 * 1024
-	maxBidRequirementCoverageRefsJSONBytes = 512 * 1024
-	maxBidMaterialSelectionJSONBytes       = 2 * 1024 * 1024
-	maxBidPipelineGateMetadataJSONBytes    = 256 * 1024
+	maxBidRequirementCoverageJSONBytes      = 512 * 1024
+	maxBidRequirementCoverageRefsJSONBytes  = 512 * 1024
+	maxBidMaterialSelectionJSONBytes        = 2 * 1024 * 1024
+	maxBidPipelineGateMetadataJSONBytes     = 256 * 1024
+	maxBidRequirementItemSourceRefJSONBytes = 256 * 1024
+	maxBidRequirementItemMetadataJSONBytes  = 256 * 1024
 
 	maxBidChapterContentJSONBytes         = 8 * 1024 * 1024
 	maxBidChapterSourceRefsJSONBytes      = 512 * 1024
@@ -4939,8 +4941,10 @@ func syncBidRequirementItems(
 	externalIDs := make([]string, 0, len(items))
 	for index, item := range items {
 		externalIDs = append(externalIDs, item.ExternalID)
-		sourceRaw, _ := json.Marshal(item.SourceRef)
-		metadataRaw, _ := json.Marshal(item.Metadata)
+		sourceRaw, metadataRaw, err := marshalRequirementItemJSON(item)
+		if err != nil {
+			return err
+		}
 		var scoreValue any
 		if item.Score != nil {
 			scoreValue = *item.Score
@@ -6876,6 +6880,26 @@ func marshalPipelineGateMetadataJSON(metadata map[string]any) ([]byte, error) {
 		metadata = map[string]any{}
 	}
 	return marshalBidBusinessJSON(metadata, maxBidPipelineGateMetadataJSONBytes)
+}
+
+func marshalRequirementItemJSON(item RequirementItem) ([]byte, []byte, error) {
+	sourceRef := item.SourceRef
+	if sourceRef == nil {
+		sourceRef = map[string]any{}
+	}
+	sourceRaw, err := marshalBidBusinessJSON(sourceRef, maxBidRequirementItemSourceRefJSONBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	metadata := item.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataRaw, err := marshalBidBusinessJSON(metadata, maxBidRequirementItemMetadataJSONBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sourceRaw, metadataRaw, nil
 }
 
 func marshalChapterGenerationJSON(generation chapterGenerateResponse) ([]byte, []byte, []byte, chapterGenerateResponse, error) {

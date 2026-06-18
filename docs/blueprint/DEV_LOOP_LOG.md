@@ -7193,3 +7193,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书阶段闸门 metadata 入库可靠性，没有新增审批 UI、工作流编排能力或语义质量判断模型。
 2. 闸门 metadata 上限为 256KB，适合当前阶段、原因、来源、统计和解析摘要字段；若后续需要保存大规模质检明细，应拆成独立闸门事件或检查明细表。
+
+## Loop-149 / 标书需求矩阵 source_ref 与 metadata JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书解析结果同步需求矩阵链路，处理 `bid_requirement_items.source_ref` 和 `metadata` 在 upsert 前仍忽略 JSON marshal 错误的问题。
+2. 避免解析出的需求来源引用或需求项 metadata 携带不可序列化、非有限数或异常放大的值时，静默写入空值/坏值，影响需求矩阵、覆盖状态和章节生成来源追踪。
+3. 将需求项 source_ref/metadata JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `maxBidRequirementItemSourceRefJSONBytes` 和 `maxBidRequirementItemMetadataJSONBytes`。
+2. 新增 `marshalRequirementItemJSON()`，统一将 nil source_ref/metadata 归一化为 `{}`，并处理 JSON marshal 错误和 256KB 上限。
+3. `syncBidRequirementItems()` 改为使用受控 JSON marshal，不再忽略 `json.Marshal(item.SourceRef)` 或 `json.Marshal(item.Metadata)` 错误。
+4. `backend/internal/platform/bid/store_test.go` 新增需求项 source_ref/metadata 非法值、不可序列化值、超预算值和 nil 归一化的回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加需求项 source_ref/metadata JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书需求矩阵入库可靠性，没有新增解析规则、OCR/表格抽取或需求矩阵 UI。
+2. 需求项 source_ref 和 metadata 上限均为 256KB，适合当前页码、引用、来源文本和系统字段；若后续需要保存大段原文证据，应拆到证据明细或文件资产引用。
