@@ -4173,3 +4173,39 @@ git diff --check
 
 1. 本轮修复配置审计准确性，不提供真实 MinerU/PaddleOCR endpoint 或 API Key。
 2. Provider 专属 timeout/mode 仍按 Provider 语义读取；本轮只修正 endpoint、key 和 poll endpoint 的实际来源记录。
+
+## Loop-80 / 路由与外部工具文档防漂移 - 2026-06-18
+
+### 本轮目标
+
+1. 修正蓝图文档与当前前端/后端能力不一致的问题。
+2. 把外部 MCP 业务入口、知识库文档预览路由和 OCR 生效 env 审计口径写入静态验收。
+3. 保持外部 MCP 只读、租户显式启用和不外发文件原文的边界。
+
+### 代码交付
+
+1. `PAGE_ROUTE_MAP.md` 补齐标讯大厅“外部标讯”页签、团队管理 `external-tools` 页签和 `/knowledge/documents/:documentId/preview` 前端预览路由，并注明后端仍按 knowledge read 权限校验。
+2. `AI_PIPELINE.md` 修正“尚未接业务入口”的过期表述，明确 `/tenders` 外部标讯页签已通过 Handaas 预设执行只读检索并保存为 `external_mcp` 标讯来源。
+3. `README.md`、`AI_PIPELINE.md`、`SAMPLE_DOCS_EVALUATION.md` 同步 OCR `provider_profile.endpoint_env` / `api_key_env` / `poll_endpoint_env` 的实际生效 env 审计口径。
+4. `acceptance_tail_check.py` 增加静态防漂移检查：模型路由必须包含 `document_ocr`，README/AI_PIPELINE/SAMPLE_DOCS_EVALUATION 必须记录 OCR profile env，PAGE_ROUTE_MAP 必须记录知识库预览和外部工具页签。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+git diff --check
+rg -n "/knowledge/documents/:documentId/preview|external-tools|外部标讯|provider_profile\.endpoint_env|api_key_env|poll_endpoint_env|尚未接业务入口" README.md docs/blueprint/PAGE_ROUTE_MAP.md docs/blueprint/AI_PIPELINE.md docs/blueprint/SAMPLE_DOCS_EVALUATION.md infra/scripts/acceptance_tail_check.py
+```
+
+结果：
+
+1. 尾部验收脚本语法检查通过。
+2. diff 空白检查通过。
+3. 关键路由、外部工具页签和 OCR profile env 文档锚点均可检索；`AI_PIPELINE.md` 已不再声明外部 MCP 尚未接业务入口。
+
+### 偏离蓝图
+
+1. 本轮是文档和验收防漂移，不新增外部 MCP Provider，也不配置真实 Handaas/MinerU/PaddleOCR 凭证。
+2. 未运行完整 Docker 运行态验收；本轮未改业务运行时代码。

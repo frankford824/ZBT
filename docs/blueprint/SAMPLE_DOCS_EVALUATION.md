@@ -97,7 +97,7 @@ cd ai-service
   --allow-skip
 ```
 
-OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 provider_profile 的 endpoint_env。`model_routing.yaml` 同时声明 `document_ocr` 本地路由，用于把 OCR Provider 纳入模型网关配置审计。需要表格、版面块或坐标级版面证据验收时可加 `--min-table-blocks`、`--min-layout-blocks`、`--min-page-confidence`、`--min-layout-bbox-count`、`--min-table-bbox-count`、`--min-cell-bbox-count`。
+OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 `provider_profile.endpoint_env`；`provider_profile.api_key_env` / `poll_endpoint_env` 会记录 key 与轮询地址实际生效的 env 名，便于区分 Provider 专属配置和通用 OCR 兜底。`model_routing.yaml` 同时声明 `document_ocr` 本地路由，用于把 OCR Provider 纳入模型网关配置审计。需要表格、版面块或坐标级版面证据验收时可加 `--min-table-blocks`、`--min-layout-blocks`、`--min-page-confidence`、`--min-layout-bbox-count`、`--min-table-bbox-count`、`--min-cell-bbox-count`。
 
 验收覆盖：
 

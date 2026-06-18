@@ -234,14 +234,27 @@ def check_model_router_and_docs() -> None:
 
     routing = (ROOT / "ai-service/app/config/model_routing.yaml").read_text(encoding="utf-8")
     require("providers:" in routing and "mock:" in routing, "model_routing.yaml missing mock provider")
-    for route in ("knowledge_embedding", "knowledge_rerank", "chapter_generate", "cost_advice", "document_export"):
+    for route in ("knowledge_embedding", "knowledge_rerank", "chapter_generate", "cost_advice", "document_export", "document_ocr"):
         require(route in routing, f"model_routing.yaml missing route {route}")
     ok("47 model routing file controls model routes", "ai-service/app/config/model_routing.yaml")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    for needle in ("docker compose up -d --build", "./infra/scripts/check.sh", "MODEL_ROUTING_FILE", "MockProvider", "demo-password"):
+    for needle in ("docker compose up -d --build", "./infra/scripts/check.sh", "MODEL_ROUTING_FILE", "MockProvider", "demo-password", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):
         require(needle in readme, f"README.md missing startup guidance: {needle}")
     ok("49 README startup guidance", "README.md")
+
+    page_routes = (ROOT / "docs/blueprint/PAGE_ROUTE_MAP.md").read_text(encoding="utf-8")
+    for needle in ("/knowledge/documents/:documentId/preview", "external-tools", "外部标讯"):
+        require(needle in page_routes, f"PAGE_ROUTE_MAP.md missing route/page tab: {needle}")
+
+    ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
+    require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
+    for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):
+        require(needle in ai_pipeline, f"AI_PIPELINE.md missing current capability note: {needle}")
+
+    sample_eval = (ROOT / "docs/blueprint/SAMPLE_DOCS_EVALUATION.md").read_text(encoding="utf-8")
+    for needle in ("provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):
+        require(needle in sample_eval, f"SAMPLE_DOCS_EVALUATION.md missing OCR profile audit note: {needle}")
 
     loop_log = (ROOT / "docs/blueprint/DEV_LOOP_LOG.md").read_text(encoding="utf-8")
     require("Loop-26 / x.md 尾部验收脚本" in loop_log, "DEV_LOOP_LOG.md missing latest loop record")
