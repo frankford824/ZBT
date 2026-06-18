@@ -373,6 +373,19 @@ def check_static_docs() -> None:
     api_routes = (ROOT / "backend/internal/api/routes.go").read_text(encoding="utf-8")
     for needle in ("bidRequirementExportFilename(document.Title", "downloadSafeFilenamePart"):
         require(needle in api_routes, f"Requirement export response filename missing business guard: {needle}")
+    for needle in (
+        "boundedQueryLimit(c, 50, 200)",
+        "boundedQueryLimit(c, 50, 100)",
+        "func boundedQueryLimit",
+        "respondBadRequest(c)",
+    ):
+        require(needle in api_routes, f"API list endpoint missing bounded query limit guard: {needle}")
+    api_routes_tests = (ROOT / "backend/internal/api/routes_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestBoundedQueryLimitDefaultsAndAcceptsRange",
+        "TestBoundedQueryLimitRejectsInvalidValues",
+    ):
+        require(needle in api_routes_tests, f"API list endpoint missing bounded query limit regression test: {needle}")
     for forbidden in ("label: '引用号'", "label: '定位码'", "label: '坐标'"):
         require(forbidden not in bid_page, f"Bid requirement source UI exposes technical locator field: {forbidden}")
     require("label: '原文位置'" in bid_page, "Bid requirement source UI missing business locator fallback")

@@ -6370,3 +6370,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 SaaS 账号、成员、角色和通知输入边界，没有新增 SSO、账号生命周期策略或登录风控。
 2. 密码按 bcrypt 72 字节上限收敛，保持现有登录方式不变；后续如切换 Argon2 或外部身份源，应同步调整该边界。
+
+## Loop-131 / API 日志列表查询边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查公共 API 输入边界，处理日志列表接口 `limit` 查询参数在路由层忽略解析错误的问题。
+2. 避免客户端传入空值、负数、非数字或超上限 `limit` 时被静默纠正成默认值，造成调用方误判请求已按预期执行。
+3. 保留 store 层默认兜底不变，在 API 边界提前给出明确 400 响应。
+
+### 代码交付
+
+1. `backend/internal/api/routes.go` 新增 `boundedQueryLimit()`，统一处理缺省值、上下限和非法参数响应。
+2. `/external-tools/audit` 使用 `boundedQueryLimit(c, 50, 200)`，与外部工具审计 store 的最大查询量保持一致。
+3. `/ai-call-logs` 使用 `boundedQueryLimit(c, 50, 100)`，与 AI 调用日志 store 的最大查询量保持一致。
+4. `backend/internal/api/routes_test.go` 新增默认值、合法边界、空值、负数、超上限和非数字查询参数回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 API 日志列表查询边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/api/routes.go internal/api/routes_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/api
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/api` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 API 查询参数输入边界，没有新增分页游标、筛选条件或审计检索能力。
+2. 仍保留 store 层兜底，作为内部调用的第二道保护；HTTP 调用方现在会在参数错误时收到明确业务错误。

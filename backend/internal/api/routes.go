@@ -303,6 +303,23 @@ func maxRequestBodyBytes() int64 {
 	return value
 }
 
+func boundedQueryLimit(c *gin.Context, defaultLimit, maxLimit int) (int, bool) {
+	if defaultLimit <= 0 || maxLimit < defaultLimit {
+		defaultLimit = 50
+		maxLimit = 50
+	}
+	raw, exists := c.GetQuery("limit")
+	if !exists {
+		return defaultLimit, true
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value <= 0 || value > maxLimit {
+		respondBadRequest(c)
+		return 0, false
+	}
+	return value, true
+}
+
 func limitRequestBody(maxBytes int64) gin.HandlerFunc {
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxRequestBodyBytes
@@ -1442,7 +1459,10 @@ func (s *server) invokeExternalTool(c *gin.Context) {
 }
 
 func (s *server) listExternalToolAuditLogs(c *gin.Context) {
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, ok := boundedQueryLimit(c, 50, 200)
+	if !ok {
+		return
+	}
 	result, err := s.externalToolStore.ListAuditLogs(c.Request.Context(), tenant.FromContext(c.Request.Context()), limit)
 	respond(c, gin.H{"items": result}, err)
 }
@@ -1682,7 +1702,10 @@ func (s *server) searchKnowledge(c *gin.Context) {
 }
 
 func (s *server) listAICallLogs(c *gin.Context) {
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	limit, ok := boundedQueryLimit(c, 50, 100)
+	if !ok {
+		return
+	}
 	result, err := s.aiCallStore.List(c.Request.Context(), tenant.FromContext(c.Request.Context()), limit)
 	respond(c, gin.H{"items": result}, err)
 }

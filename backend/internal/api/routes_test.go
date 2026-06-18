@@ -432,6 +432,70 @@ func TestLimitRequestBodyAllowsSmallBody(t *testing.T) {
 	}
 }
 
+func TestBoundedQueryLimitDefaultsAndAcceptsRange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/logs", func(c *gin.Context) {
+		limit, ok := boundedQueryLimit(c, 50, 100)
+		if !ok {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"limit": limit})
+	})
+
+	for _, tc := range []struct {
+		path string
+		want float64
+	}{
+		{path: "/logs", want: 50},
+		{path: "/logs?limit=1", want: 1},
+		{path: "/logs?limit=100", want: 100},
+		{path: "/logs?limit=%2010%20", want: 10},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected %s to be accepted, got %d", tc.path, recorder.Code)
+		}
+		var body map[string]float64
+		if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode limit response: %v", err)
+		}
+		if body["limit"] != tc.want {
+			t.Fatalf("expected %s to use limit %.0f, got %.0f", tc.path, tc.want, body["limit"])
+		}
+	}
+}
+
+func TestBoundedQueryLimitRejectsInvalidValues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/logs", func(c *gin.Context) {
+		if _, ok := boundedQueryLimit(c, 50, 100); !ok {
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	for _, path := range []string{
+		"/logs?limit=",
+		"/logs?limit=0",
+		"/logs?limit=-1",
+		"/logs?limit=101",
+		"/logs?limit=abc",
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected %s to be rejected, got %d", path, recorder.Code)
+		}
+	}
+}
+
 func TestBindJSONMapsUnknownLengthOversizedBodyToPayloadTooLarge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
