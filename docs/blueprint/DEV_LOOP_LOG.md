@@ -7058,3 +7058,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书业务 JSON 入库可靠性，没有新增响应矩阵 UI 或真实语义覆盖判定模型。
 2. 覆盖 metadata/source_refs 上限为 512KB，素材选择 selected_refs 上限为 2MB；后续若素材引用规模继续扩大，应拆为明细表或文件资产引用。
+
+## Loop-146 / 标书章节生成与版本快照 JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书章节生成、人工编辑和版本快照链路，处理正文 content、source_refs、needs_human_input、model_metadata/token_usage 入库前仍忽略 JSON marshal 错误的问题。
+2. 避免 AI 生成结果或人工编辑内容携带不可序列化、非有限数或异常放大的 JSON 时，静默写入空值/坏值，影响章节正文、版本回滚、来源引用和人工复核提示。
+3. 将章节生成与版本快照 JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增章节正文、来源引用、人工输入提示、模型元数据、token usage 和知识引用 metadata 的 JSON 字节上限。
+2. 新增 `marshalChapterGenerationJSON()` 和 `marshalChapterVersionJSON()`，统一处理章节生成落库与版本快照落库前的 JSON marshal 错误和大小限制。
+3. `UpdateChapterContent()`、`applyChapterGeneration()`、`insertChapterVersion()` 和 `replaceKnowledgeReferences()` 改为使用受控 JSON marshal，不再忽略 `json.Marshal` 错误。
+4. `backend/internal/platform/bid/store_test.go` 新增章节生成非法/超预算 JSON、章节版本非法/超预算 JSON，以及自检来源引用增强结果在 JSON guard 后仍保留的回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加章节生成与版本快照 JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书章节数据入库可靠性，没有新增章节编辑器 UI、智能排版能力或真实生成模型。
+2. 章节 content 上限为 8MB，source_refs/model_metadata/知识引用 metadata 上限为 512KB，needs_human_input 上限为 256KB，token_usage 上限为 64KB；若后续单章内容或引用规模继续扩大，应拆分章节内容块或引用明细表。

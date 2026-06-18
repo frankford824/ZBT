@@ -210,6 +210,122 @@ func TestBatchRequirementCoverageRejectsOversizedMetadataBeforeDB(t *testing.T) 
 	}
 }
 
+func TestMarshalChapterGenerationJSONRejectsInvalidAndOversizedState(t *testing.T) {
+	base := chapterGenerateResponse{
+		TraceID:    "trace-1",
+		TiptapJSON: map[string]any{"type": "doc", "content": []any{}},
+	}
+	for name, generation := range map[string]chapterGenerateResponse{
+		"missing content": {
+			TraceID: "trace-1",
+		},
+		"invalid content": {
+			TraceID:    "trace-1",
+			TiptapJSON: map[string]any{"bad": math.NaN()},
+		},
+		"oversized content": {
+			TraceID:    "trace-1",
+			TiptapJSON: map[string]any{"type": "doc", "text": strings.Repeat("章", maxBidChapterContentJSONBytes)},
+		},
+		"oversized source refs": {
+			TraceID:    base.TraceID,
+			TiptapJSON: base.TiptapJSON,
+			SourceRefs: []sourceRef{{
+				ChunkID: strings.Repeat("c", maxBidChapterSourceRefsJSONBytes),
+			}},
+		},
+		"oversized needs human input": {
+			TraceID:         base.TraceID,
+			TiptapJSON:      base.TiptapJSON,
+			NeedsHumanInput: []string{strings.Repeat("n", maxBidChapterNeedsHumanInputJSONBytes)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, _, err := marshalChapterGenerationJSON(generation); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid chapter generation JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestMarshalChapterGenerationJSONCarriesEnrichedSelfCheck(t *testing.T) {
+	pageStart := 3
+	_, _, _, generation, err := marshalChapterGenerationJSON(chapterGenerateResponse{
+		TraceID:    "trace-1",
+		TiptapJSON: map[string]any{"type": "doc", "content": []any{}},
+		SourceRefs: []sourceRef{{
+			ChunkID:   "chunk-1",
+			Title:     "评分办法",
+			PageStart: &pageStart,
+		}},
+		SelfCheck: map[string]any{
+			"requirement_coverage": []any{
+				map[string]any{
+					"requirement_id": "evaluation-1",
+					"source_refs": []any{
+						map[string]any{"chunk_id": "chunk-1"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected chapter generation JSON to be accepted, got %v", err)
+	}
+	coverage := anySlice(generation.SelfCheck["requirement_coverage"])
+	if len(coverage) != 1 {
+		t.Fatalf("expected enriched coverage, got %#v", generation.SelfCheck)
+	}
+	row := mapFromAny(coverage[0])
+	refs := anySlice(row["source_refs"])
+	if len(refs) != 1 {
+		t.Fatalf("expected enriched source refs, got %#v", row)
+	}
+	ref := mapFromAny(refs[0])
+	if ref["source_locator"] == "" || ref["page_start"] != pageStart {
+		t.Fatalf("expected source locator and page to survive JSON guard, got %#v", ref)
+	}
+}
+
+func TestMarshalChapterVersionJSONRejectsInvalidAndOversizedState(t *testing.T) {
+	chapter := Chapter{
+		Content:         map[string]any{"type": "doc", "content": []any{}},
+		SourceRefs:      []any{},
+		NeedsHumanInput: []string{},
+	}
+	for name, tc := range map[string]struct {
+		chapter       Chapter
+		modelMetadata map[string]any
+	}{
+		"invalid content": {
+			chapter: Chapter{
+				Content: map[string]any{"bad": math.NaN()},
+			},
+		},
+		"oversized source refs": {
+			chapter: Chapter{
+				Content:         chapter.Content,
+				SourceRefs:      []any{map[string]any{"chunk_id": strings.Repeat("c", maxBidChapterSourceRefsJSONBytes)}},
+				NeedsHumanInput: []string{},
+			},
+		},
+		"invalid model metadata": {
+			chapter:       chapter,
+			modelMetadata: map[string]any{"bad": func() {}},
+		},
+		"oversized model metadata": {
+			chapter:       chapter,
+			modelMetadata: map[string]any{"notes": strings.Repeat("m", maxBidChapterModelMetadataJSONBytes)},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, _, _, err := marshalChapterVersionJSON(tc.chapter, tc.modelMetadata, nil); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid chapter version JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
 func TestNormalizeBidCallbackBoundsErrorMessage(t *testing.T) {
 	_, _, err := normalizeBidCallbackPayload(CallbackPayload{
 		TenantID:     "tenant-id",

@@ -844,8 +844,16 @@ def check_static_docs() -> None:
         "maxBidRequirementCoverageJSONBytes",
         "maxBidRequirementCoverageRefsJSONBytes",
         "maxBidMaterialSelectionJSONBytes",
+        "maxBidChapterContentJSONBytes",
+        "maxBidChapterSourceRefsJSONBytes",
+        "maxBidChapterNeedsHumanInputJSONBytes",
+        "maxBidChapterModelMetadataJSONBytes",
+        "maxBidChapterTokenUsageJSONBytes",
+        "maxBidKnowledgeReferenceMetadataBytes",
         "marshalBidTaskJSON",
         "marshalBidBusinessJSON",
+        "marshalChapterGenerationJSON",
+        "marshalChapterVersionJSON",
         "normalizeBidCallbackPayload",
         "validateBidTaskTextLength",
     ):
@@ -858,6 +866,15 @@ def check_static_docs() -> None:
         "sourceRefsRaw, _ := json.Marshal(sourceRefs)",
         "metadataRaw, _ := json.Marshal(coverageMetadata)",
         "body, _ := json.Marshal(selectedRefs)",
+        "contentJSON, _ := json.Marshal(generation.TiptapJSON)",
+        "contentJSON, _ := json.Marshal(content)",
+        "sourceRefsJSON, _ := json.Marshal(sourceRefs)",
+        "needsHumanInputJSON, _ := json.Marshal(generation.NeedsHumanInput)",
+        "contentJSON, _ := json.Marshal(chapter.Content)",
+        "sourceRefsJSON, _ := json.Marshal(chapter.SourceRefs)",
+        "needsHumanInputJSON, _ := json.Marshal(chapter.NeedsHumanInput)",
+        "modelMetadataJSON, _ := json.Marshal(modelMetadata)",
+        "tokenUsageJSON, _ := json.Marshal(tokenUsage)",
     ):
         require(forbidden not in bid_store, f"Bid store still ignores guarded JSON marshal failure: {forbidden}")
     bid_store_tests = (ROOT / "backend/internal/platform/bid/store_test.go").read_text(encoding="utf-8")
@@ -868,6 +885,9 @@ def check_static_docs() -> None:
         "TestMarshalBidBusinessJSONRejectsInvalidAndOversizedValues",
         "TestManualRequirementCoverageRejectsInvalidSourceRefsBeforeDB",
         "TestBatchRequirementCoverageRejectsOversizedMetadataBeforeDB",
+        "TestMarshalChapterGenerationJSONRejectsInvalidAndOversizedState",
+        "TestMarshalChapterGenerationJSONCarriesEnrichedSelfCheck",
+        "TestMarshalChapterVersionJSONRejectsInvalidAndOversizedState",
         "TestNormalizeBidCallbackBoundsErrorMessage",
         "TestBindAcceptedTaskRejectsInvalidPayloadBeforeDB",
     ):

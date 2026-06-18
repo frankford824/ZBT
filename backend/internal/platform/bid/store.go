@@ -57,6 +57,13 @@ const (
 	maxBidRequirementCoverageJSONBytes     = 512 * 1024
 	maxBidRequirementCoverageRefsJSONBytes = 512 * 1024
 	maxBidMaterialSelectionJSONBytes       = 2 * 1024 * 1024
+
+	maxBidChapterContentJSONBytes         = 8 * 1024 * 1024
+	maxBidChapterSourceRefsJSONBytes      = 512 * 1024
+	maxBidChapterNeedsHumanInputJSONBytes = 256 * 1024
+	maxBidChapterModelMetadataJSONBytes   = 512 * 1024
+	maxBidChapterTokenUsageJSONBytes      = 64 * 1024
+	maxBidKnowledgeReferenceMetadataBytes = 512 * 1024
 )
 
 type Store struct {
@@ -2230,13 +2237,16 @@ func (s *Store) UpdateChapterContent(ctx context.Context, tenantID, userID, chap
 		if plainText == "" {
 			return ErrInvalidRequest
 		}
-		contentJSON, _ := json.Marshal(content)
+		contentJSON, err := marshalBidBusinessJSON(content, maxBidChapterContentJSONBytes)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			update bid_chapters
 			set title = $3,
-				content = $4,
-				plain_text = $5,
-				status = 'edited',
+					content = $4,
+					plain_text = $5,
+					status = 'edited',
 				updated_at = now()
 			where tenant_id = $1 and id = $2
 		`, tenantID, chapterID, title, contentJSON, plainText); err != nil {
@@ -3040,20 +3050,19 @@ func tenderStructuredResultFromCallback(result map[string]any) (map[string]any, 
 }
 
 func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID string, generation chapterGenerateResponse, changeReason string) error {
+	contentJSON, sourceRefsJSON, needsHumanInputJSON, generation, err := marshalChapterGenerationJSON(generation)
+	if err != nil {
+		return err
+	}
 	chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
 	if err != nil {
 		return err
 	}
-	sourceRefs := sourceRefsAsAny(generation.SourceRefs)
-	generation.SelfCheck = enrichSelfCheckSourceRefs(generation.SelfCheck, sourceRefs)
 	content := generation.TiptapJSON
 	plainText := plainTextFromTiptap(content)
 	if plainText == "" {
 		plainText = chapter.PlainText
 	}
-	contentJSON, _ := json.Marshal(content)
-	sourceRefsJSON, _ := json.Marshal(sourceRefs)
-	needsHumanInputJSON, _ := json.Marshal(generation.NeedsHumanInput)
 	if _, err := tx.Exec(ctx, `
 		update bid_chapters
 		set content = $3,
@@ -5680,11 +5689,10 @@ func insertChapterVersion(
 	if tokenUsage == nil {
 		tokenUsage = map[string]int{}
 	}
-	contentJSON, _ := json.Marshal(chapter.Content)
-	sourceRefsJSON, _ := json.Marshal(chapter.SourceRefs)
-	needsHumanInputJSON, _ := json.Marshal(chapter.NeedsHumanInput)
-	modelMetadataJSON, _ := json.Marshal(modelMetadata)
-	tokenUsageJSON, _ := json.Marshal(tokenUsage)
+	contentJSON, sourceRefsJSON, needsHumanInputJSON, modelMetadataJSON, tokenUsageJSON, err := marshalChapterVersionJSON(chapter, modelMetadata, tokenUsage)
+	if err != nil {
+		return ChapterVersion{}, err
+	}
 	return scanChapterVersion(tx.QueryRow(ctx, `
 		insert into bid_chapter_versions (
 			tenant_id, chapter_id, bid_document_id, bid_part_id, version_no,
@@ -5760,7 +5768,10 @@ func replaceKnowledgeReferences(ctx context.Context, tx pgx.Tx, tenantID string,
 		if title == "" {
 			title = "知识库引用"
 		}
-		metadataJSON, _ := json.Marshal(metadata)
+		metadataJSON, err := marshalBidBusinessJSON(metadata, maxBidKnowledgeReferenceMetadataBytes)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			insert into knowledge_references (
 				tenant_id, source_document_id, bid_document_id, chapter_id, chunk_id, title, metadata
@@ -6840,6 +6851,51 @@ func marshalBidBusinessJSON(value any, maxBytes int) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func marshalChapterGenerationJSON(generation chapterGenerateResponse) ([]byte, []byte, []byte, chapterGenerateResponse, error) {
+	if generation.TiptapJSON == nil {
+		return nil, nil, nil, chapterGenerateResponse{}, ErrInvalidRequest
+	}
+	sourceRefs := sourceRefsAsAny(generation.SourceRefs)
+	generation.SelfCheck = enrichSelfCheckSourceRefs(generation.SelfCheck, sourceRefs)
+	contentJSON, err := marshalBidBusinessJSON(generation.TiptapJSON, maxBidChapterContentJSONBytes)
+	if err != nil {
+		return nil, nil, nil, chapterGenerateResponse{}, err
+	}
+	sourceRefsJSON, err := marshalBidBusinessJSON(sourceRefs, maxBidChapterSourceRefsJSONBytes)
+	if err != nil {
+		return nil, nil, nil, chapterGenerateResponse{}, err
+	}
+	needsHumanInputJSON, err := marshalBidBusinessJSON(generation.NeedsHumanInput, maxBidChapterNeedsHumanInputJSONBytes)
+	if err != nil {
+		return nil, nil, nil, chapterGenerateResponse{}, err
+	}
+	return contentJSON, sourceRefsJSON, needsHumanInputJSON, generation, nil
+}
+
+func marshalChapterVersionJSON(chapter Chapter, modelMetadata map[string]any, tokenUsage map[string]int) ([]byte, []byte, []byte, []byte, []byte, error) {
+	contentJSON, err := marshalBidBusinessJSON(chapter.Content, maxBidChapterContentJSONBytes)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	sourceRefsJSON, err := marshalBidBusinessJSON(chapter.SourceRefs, maxBidChapterSourceRefsJSONBytes)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	needsHumanInputJSON, err := marshalBidBusinessJSON(chapter.NeedsHumanInput, maxBidChapterNeedsHumanInputJSONBytes)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	modelMetadataJSON, err := marshalBidBusinessJSON(modelMetadata, maxBidChapterModelMetadataJSONBytes)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	tokenUsageJSON, err := marshalBidBusinessJSON(tokenUsage, maxBidChapterTokenUsageJSONBytes)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	return contentJSON, sourceRefsJSON, needsHumanInputJSON, modelMetadataJSON, tokenUsageJSON, nil
 }
 
 func normalizeBidCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {
