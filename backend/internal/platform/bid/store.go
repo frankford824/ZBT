@@ -53,6 +53,10 @@ const (
 	maxBidTaskPayloadJSONBytes  = 96 * 1024 * 1024
 	maxBidTaskResultJSONBytes   = 2 * 1024 * 1024
 	maxBidTaskRouteJSONBytes    = 16 * 1024
+
+	maxBidRequirementCoverageJSONBytes     = 512 * 1024
+	maxBidRequirementCoverageRefsJSONBytes = 512 * 1024
+	maxBidMaterialSelectionJSONBytes       = 2 * 1024 * 1024
 )
 
 type Store struct {
@@ -1259,7 +1263,10 @@ func updateRequirementCoverageItem(
 	needsReview bool,
 	coverageMetadata map[string]any,
 ) (RequirementItem, error) {
-	metadataJSON, _ := json.Marshal(coverageMetadata)
+	metadataJSON, err := marshalBidBusinessJSON(coverageMetadata, maxBidRequirementCoverageJSONBytes)
+	if err != nil {
+		return RequirementItem{}, err
+	}
 	item, err := scanRequirementItem(tx.QueryRow(ctx, `
 		update bid_requirement_items
 		set coverage_status = $4,
@@ -4624,6 +4631,9 @@ func manualRequirementCoverageMetadata(requirementID, userID string, req UpdateR
 	if req.SourceRefs != nil {
 		metadata["source_refs"] = req.SourceRefs
 	}
+	if _, err := marshalBidBusinessJSON(metadata, maxBidRequirementCoverageJSONBytes); err != nil {
+		return "", false, nil, err
+	}
 	return status, needsReview, metadata, nil
 }
 
@@ -4678,6 +4688,9 @@ func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementC
 		metadata["evidence_filter"] = normalizeRequirementBatchEvidenceFilter(req.EvidenceFilter)
 	} else {
 		metadata["batch_scope"] = "selected"
+	}
+	if _, err := marshalBidBusinessJSON(metadata, maxBidRequirementCoverageJSONBytes); err != nil {
+		return "", false, nil, err
 	}
 	return status, needsReview, metadata, nil
 }
@@ -4783,9 +4796,15 @@ func insertRequirementCoverageEvent(
 ) error {
 	evidence := strings.TrimSpace(asString(coverageMetadata["evidence"]))
 	sourceRefs := anySlice(coverageMetadata["source_refs"])
-	sourceRefsRaw, _ := json.Marshal(sourceRefs)
-	metadataRaw, _ := json.Marshal(coverageMetadata)
-	_, err := tx.Exec(ctx, `
+	sourceRefsRaw, err := marshalBidBusinessJSON(sourceRefs, maxBidRequirementCoverageRefsJSONBytes)
+	if err != nil {
+		return err
+	}
+	metadataRaw, err := marshalBidBusinessJSON(coverageMetadata, maxBidRequirementCoverageJSONBytes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		insert into bid_requirement_coverage_events (
 			tenant_id, bid_document_id, requirement_item_id, requirement_external_id,
 			chapter_id, actor_user_id, source, coverage_status, needs_review,
@@ -4865,8 +4884,11 @@ func ensureMaterialSelection(
 	if selectedRefs == nil {
 		selectedRefs = []any{}
 	}
-	body, _ := json.Marshal(selectedRefs)
-	_, err := tx.Exec(ctx, `
+	body, err := marshalBidBusinessJSON(selectedRefs, maxBidMaterialSelectionJSONBytes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		insert into bid_material_selections (tenant_id, bid_document_id, selected_refs, notes, updated_by)
 		values ($1, $2, $3, $4, nullif($5, '')::uuid)
 		on conflict (tenant_id, bid_document_id) do update
@@ -6799,6 +6821,17 @@ func normalizeChapterAction(value string) string {
 }
 
 func marshalBidTaskJSON(value any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func marshalBidBusinessJSON(value any, maxBytes int) ([]byte, error) {
 	if maxBytes <= 0 {
 		return nil, ErrInvalidRequest
 	}

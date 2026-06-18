@@ -176,6 +176,40 @@ func TestBidCallbackRejectsOversizedResultBeforeDB(t *testing.T) {
 	}
 }
 
+func TestMarshalBidBusinessJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	for name, value := range map[string]any{
+		"invalid number": map[string]any{"bad": math.NaN()},
+		"unsupported":    map[string]any{"bad": func() {}},
+		"oversized":      []any{strings.Repeat("素", maxBidMaterialSelectionJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalBidBusinessJSON(value, maxBidMaterialSelectionJSONBytes); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid bid business JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestManualRequirementCoverageRejectsInvalidSourceRefsBeforeDB(t *testing.T) {
+	_, _, _, err := manualRequirementCoverageMetadata("requirement-1", "user-1", UpdateRequirementCoverageRequest{
+		CoverageStatus: "covered",
+		SourceRefs:     []any{map[string]any{"bad": math.NaN()}},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid requirement coverage source refs to be rejected before DB, got %v", err)
+	}
+}
+
+func TestBatchRequirementCoverageRejectsOversizedMetadataBeforeDB(t *testing.T) {
+	_, _, _, err := batchRequirementCoverageMetadata("user-1", BatchUpdateRequirementCoverageRequest{
+		CoverageStatus: "covered",
+		Evidence:       strings.Repeat("证", maxBidRequirementCoverageJSONBytes),
+	}, 1)
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized batch coverage metadata to be rejected before DB, got %v", err)
+	}
+}
+
 func TestNormalizeBidCallbackBoundsErrorMessage(t *testing.T) {
 	_, _, err := normalizeBidCallbackPayload(CallbackPayload{
 		TenantID:     "tenant-id",

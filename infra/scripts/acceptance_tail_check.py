@@ -841,7 +841,11 @@ def check_static_docs() -> None:
         "maxBidTaskPayloadJSONBytes",
         "maxBidTaskResultJSONBytes",
         "maxBidTaskRouteJSONBytes",
+        "maxBidRequirementCoverageJSONBytes",
+        "maxBidRequirementCoverageRefsJSONBytes",
+        "maxBidMaterialSelectionJSONBytes",
         "marshalBidTaskJSON",
+        "marshalBidBusinessJSON",
         "normalizeBidCallbackPayload",
         "validateBidTaskTextLength",
     ):
@@ -851,13 +855,19 @@ def check_static_docs() -> None:
         "payloadJSON, _ := json.Marshal(payload)",
         "resultJSON, _ := json.Marshal(payload.Result)",
         "routeJSON, _ := json.Marshal(accepted.Route)",
+        "sourceRefsRaw, _ := json.Marshal(sourceRefs)",
+        "metadataRaw, _ := json.Marshal(coverageMetadata)",
+        "body, _ := json.Marshal(selectedRefs)",
     ):
-        require(forbidden not in bid_store, f"Bid store still ignores AI task JSON marshal failure: {forbidden}")
+        require(forbidden not in bid_store, f"Bid store still ignores guarded JSON marshal failure: {forbidden}")
     bid_store_tests = (ROOT / "backend/internal/platform/bid/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestNormalizeAcceptedTaskRejectsOversizedRoute",
         "TestBidCallbackRejectsInvalidResultBeforeDB",
         "TestBidCallbackRejectsOversizedResultBeforeDB",
+        "TestMarshalBidBusinessJSONRejectsInvalidAndOversizedValues",
+        "TestManualRequirementCoverageRejectsInvalidSourceRefsBeforeDB",
+        "TestBatchRequirementCoverageRejectsOversizedMetadataBeforeDB",
         "TestNormalizeBidCallbackBoundsErrorMessage",
         "TestBindAcceptedTaskRejectsInvalidPayloadBeforeDB",
     ):

@@ -7012,3 +7012,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 项目模块中标案例回流知识库的 metadata 入库可靠性，没有新增项目归档 UI 或真实 embedding Provider。
 2. metadata 上限为 16KB，适合当前 source、project、file、chunk 等来源字段；若后续需要保存大规模案例画像，应拆为独立表或知识资产附件。
+
+## Loop-145 / 标书需求覆盖与素材选择 JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书响应矩阵与素材选择链路，处理需求覆盖 metadata、覆盖历史 source_refs/metadata 和素材选择 selected_refs 入库前仍忽略 JSON marshal 错误的问题。
+2. 避免人工覆盖、批量覆盖或模型覆盖结果携带不可序列化、非有限数或异常放大的值时，静默写入空值/坏值，影响响应矩阵、覆盖历史和素材来源追踪。
+3. 将标书业务 JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `maxBidRequirementCoverageJSONBytes`、`maxBidRequirementCoverageRefsJSONBytes` 和 `maxBidMaterialSelectionJSONBytes`。
+2. 新增 `marshalBidBusinessJSON()`，和 AI task payload/result/route 的 `marshalBidTaskJSON()` 分离，用于标书业务状态 JSON。
+3. `manualRequirementCoverageMetadata()`、`batchRequirementCoverageMetadata()` 在进入事务前验证 metadata JSON。
+4. `updateRequirementCoverageItem()`、`insertRequirementCoverageEvent()` 和 `ensureMaterialSelection()` 改为使用已校验 JSON，不再忽略 `json.Marshal(coverageMetadata)`、`json.Marshal(sourceRefs)` 或 `json.Marshal(selectedRefs)` 错误。
+5. `backend/internal/platform/bid/store_test.go` 新增非法/超预算业务 JSON、非法 source_refs 和超预算批量覆盖 metadata 的回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加标书业务 JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书业务 JSON 入库可靠性，没有新增响应矩阵 UI 或真实语义覆盖判定模型。
+2. 覆盖 metadata/source_refs 上限为 512KB，素材选择 selected_refs 上限为 2MB；后续若素材引用规模继续扩大，应拆为明细表或文件资产引用。
