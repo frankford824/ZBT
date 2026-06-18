@@ -497,18 +497,32 @@ def check_static_docs() -> None:
         "maxCostShortTextRunes",
         "maxCostNoteRunes",
         "maxCostAmount",
+        "maxCostExternalTaskIDRunes",
+        "maxCostTaskResultJSONBytes",
+        "maxCostTaskRouteJSONBytes",
         "validateCostTextLength",
         "boundedCostText",
+        "marshalCostTaskJSON",
+        "normalizeCostAdviceCallbackPayload",
+        "normalizeAcceptedTask",
         "utf8.RuneCountInString",
         "value > maxCostAmount",
     ):
         require(needle in cost_store, f"Cost store missing business input boundary: {needle}")
+    for forbidden in (
+        "resultJSON, _ := json.Marshal(payload.Result)",
+        "routeJSON, _ := json.Marshal(accepted.Route)",
+    ):
+        require(forbidden not in cost_store, f"Cost store still ignores AI task JSON marshal failure: {forbidden}")
     cost_store_tests = (ROOT / "backend/internal/platform/cost/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestCostProjectWriteRejectsOversizedNameBeforeDB",
         "TestBoundedCostTextTrimsGeneratedFallbackNames",
         "TestNormalizeItemRequestRejectsOversizedTextFields",
         "TestNormalizeItemRequestAcceptsBoundedUnicodeText",
+        "TestCostAdviceCallbackRejectsInvalidResultBeforeDB",
+        "TestCostAdviceCallbackRejectsOversizedResultBeforeDB",
+        "TestNormalizeAcceptedTaskRejectsOversizedRoute",
     ):
         require(needle in cost_store_tests, f"Cost store missing business input boundary regression test: {needle}")
 

@@ -6692,3 +6692,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是知识库基础 CRUD 输入边界和同租户引用校验，没有新增知识库检索算法、模板渲染或文档解析能力。
 2. 分类/标签仍是轻量字典表；若后续需要层级分类编辑、标签合并或颜色主题配置，应单独建业务流程，而不是放宽自由输入。
+
+## Loop-138 / 成本 AI 任务回调边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查成本模块的外部 AI 服务交互，处理任务 payload、AI accepted route 和 callback result 直接 JSON 入库且忽略 marshal 错误的问题。
+2. 避免 AI 服务响应或回调携带不可序列化值、超大 result/route/error_message 时污染 `ai_tasks` 和 `cost_projects.metadata`。
+3. 将成本 AI 任务的外部输入边界固化进静态验收，防止后续回退到无限制自由 JSON。
+
+### 代码交付
+
+1. `backend/internal/platform/cost/store.go` 新增成本 AI 任务边界常量，覆盖外部 task id、回调错误文本、任务 payload、callback result、accepted route 和报告 metadata 的 JSON 字节预算。
+2. 新增 `marshalCostTaskJSON()`、`normalizeCostAdviceCallbackPayload()` 和 `normalizeAcceptedTask()`，统一处理 trim、状态归一化、默认空对象、长度检查、JSON marshal 错误和字节上限。
+3. `Advice()`、`ApplyAdviceCallback()`、`CreateReport()`、`submitCostAdvice()` 和 `applyAcceptedTask()` 改为使用已校验 JSON，不再忽略 `json.Marshal` 错误。
+4. `ApplyAdviceCallback()` 在回调进入租户事务前先校验 result JSON；写入 `cost_projects.metadata` 前再次校验派生 metadata，避免大结果间接放大项目 metadata。
+5. `backend/internal/platform/cost/store_test.go` 新增非法 callback result、超大 result、超长 error_message 和超大 accepted route 的写库前拒绝回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加成本 AI 任务 JSON 边界防回退检查，并禁止回退到忽略 result/route marshal 错误。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/cost/store.go internal/platform/cost/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/cost
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/cost` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是成本 AI 任务回调与外部响应的后端写入边界，没有新增真实成本模型 Provider 或成本优化算法。
+2. JSON 上限按当前任务规模保守设置；若未来成本建议需要返回大型表格或附件，应改为文件/知识库引用，而不是扩大 `ai_tasks.result`。

@@ -226,3 +226,61 @@ func TestNormalizeItemRequestAcceptsBoundedUnicodeText(t *testing.T) {
 		t.Fatalf("expected bounded unicode text to be preserved, got %+v", normalized)
 	}
 }
+
+func TestCostAdviceCallbackRejectsInvalidResultBeforeDB(t *testing.T) {
+	store := NewStore(config.Config{}, nil)
+
+	_, err := store.ApplyAdviceCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-cost-advice-00000000-0000-4000-8000-000000000001",
+		Status:   "done",
+		Result: map[string]any{
+			"invalid": math.NaN(),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid callback result JSON to be rejected before DB, got %v", err)
+	}
+}
+
+func TestCostAdviceCallbackRejectsOversizedResultBeforeDB(t *testing.T) {
+	store := NewStore(config.Config{}, nil)
+
+	_, err := store.ApplyAdviceCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-cost-advice-00000000-0000-4000-8000-000000000001",
+		Status:   "done",
+		Result: map[string]any{
+			"payload": strings.Repeat("结", maxCostTaskResultJSONBytes),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized callback result to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeCostAdviceCallbackBoundsErrorMessage(t *testing.T) {
+	_, _, err := normalizeCostAdviceCallbackPayload(CallbackPayload{
+		TenantID:     "tenant-id",
+		TaskID:       "task-cost-advice-00000000-0000-4000-8000-000000000001",
+		Status:       "failed",
+		ErrorMessage: strings.Repeat("错", maxCostTaskErrorMessageRunes+1),
+		Result:       map[string]any{},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized callback error message to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeAcceptedTaskRejectsOversizedRoute(t *testing.T) {
+	_, _, err := normalizeAcceptedTask(aiTaskAccepted{
+		TaskID: "task-cost-advice-00000000-0000-4000-8000-000000000001",
+		Status: "running",
+		Route: map[string]any{
+			"payload": strings.Repeat("路", maxCostTaskRouteJSONBytes),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized accepted route to be rejected, got %v", err)
+	}
+}

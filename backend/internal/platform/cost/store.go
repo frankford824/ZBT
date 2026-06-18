@@ -32,6 +32,12 @@ const (
 	maxCostShortTextRunes          = 128
 	maxCostNoteRunes               = 1000
 	maxCostAmount                  = 999_999_999_999.99
+	maxCostExternalTaskIDRunes     = 128
+	maxCostTaskErrorMessageRunes   = 1000
+	maxCostTaskPayloadJSONBytes    = 256 * 1024
+	maxCostTaskResultJSONBytes     = 128 * 1024
+	maxCostTaskRouteJSONBytes      = 16 * 1024
+	maxCostReportMetadataJSONBytes = 16 * 1024
 )
 
 type Store struct {
@@ -523,7 +529,10 @@ func (s *Store) Advice(ctx context.Context, tenantID, userID, projectID string) 
 		"recommendations":   analysis.Recommendations,
 		"callback_url":      s.cfg.AICallbackURL,
 	}
-	payloadJSON, _ := json.Marshal(payload)
+	payloadJSON, err := marshalCostTaskJSON(payload, maxCostTaskPayloadJSONBytes)
+	if err != nil {
+		return Task{}, err
+	}
 	var task Task
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		created, err := scanTask(tx.QueryRow(ctx, `
@@ -582,21 +591,20 @@ func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (Task, err
 }
 
 func (s *Store) ApplyAdviceCallback(ctx context.Context, payload CallbackPayload) (Task, error) {
-	status := normalizeTaskStatus(payload.Status)
-	if status == "" || payload.TenantID == "" || payload.TaskID == "" {
-		return Task{}, ErrInvalidRequest
+	payload, resultJSON, err := normalizeCostAdviceCallbackPayload(payload)
+	if err != nil {
+		return Task{}, err
 	}
 	var task Task
-	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
 		current, err := lockAdviceTaskByExternalID(ctx, tx, payload.TenantID, payload.TaskID)
 		if err != nil {
 			return err
 		}
 		task = current
-		if !taskstatus.ShouldApplyCallback(current.Status, status) {
+		if !taskstatus.ShouldApplyCallback(current.Status, payload.Status) {
 			return nil
 		}
-		resultJSON, _ := json.Marshal(payload.Result)
 		updated, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
 			set status = $3,
@@ -609,16 +617,19 @@ func (s *Store) ApplyAdviceCallback(ctx context.Context, payload CallbackPayload
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, payload.TenantID, current.ID, status, resultJSON, payload.ErrorMessage))
+		`, payload.TenantID, current.ID, payload.Status, resultJSON, payload.ErrorMessage))
 		if err != nil {
 			return err
 		}
 		task = updated
-		if status == "done" {
-			metadataJSON, _ := json.Marshal(map[string]any{
+		if payload.Status == "done" {
+			metadataJSON, err := marshalCostTaskJSON(map[string]any{
 				"last_ai_advice_task_id": task.ID,
 				"last_ai_advice":         payload.Result,
-			})
+			}, maxCostTaskResultJSONBytes+1024)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `
 				update cost_projects
 				set metadata = metadata || $3::jsonb,
@@ -641,12 +652,15 @@ func (s *Store) CreateReport(ctx context.Context, tenantID, projectID string) (R
 	if err != nil {
 		return Report{}, err
 	}
-	metadata, _ := json.Marshal(map[string]any{
+	metadata, err := marshalCostTaskJSON(map[string]any{
 		"total_budget": analysis.Project.TotalBudget,
 		"total_actual": analysis.Project.TotalActual,
 		"margin_rate":  analysis.Project.MarginRate,
 		"overruns":     len(analysis.OverrunItems),
-	})
+	}, maxCostReportMetadataJSONBytes)
+	if err != nil {
+		return Report{}, err
+	}
 	summary := "总预算 " + formatAmount(analysis.Project.TotalBudget) + "，实际成本 " + formatAmount(analysis.Project.TotalActual)
 	var report Report
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -693,24 +707,18 @@ func (s *Store) submitCostAdvice(ctx context.Context, payload map[string]any) (a
 	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
-	if accepted.TaskID == "" {
-		return aiTaskAccepted{}, ErrInvalidRequest
+	normalized, _, err := normalizeAcceptedTask(accepted)
+	if err != nil {
+		return aiTaskAccepted{}, err
 	}
-	if accepted.Status == "" {
-		accepted.Status = "queued"
-	}
-	if accepted.Route == nil {
-		accepted.Route = map[string]any{}
-	}
-	return accepted, nil
+	return normalized, nil
 }
 
 func (s *Store) applyAcceptedTask(ctx context.Context, tenantID, taskID string, accepted aiTaskAccepted) error {
-	status := normalizeTaskStatus(accepted.Status)
-	if status == "" {
-		status = "queued"
+	accepted, routeJSON, err := normalizeAcceptedTask(accepted)
+	if err != nil {
+		return err
 	}
-	routeJSON, _ := json.Marshal(accepted.Route)
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			update ai_tasks
@@ -720,7 +728,7 @@ func (s *Store) applyAcceptedTask(ctx context.Context, tenantID, taskID string, 
 				started_at = coalesce(started_at, now()),
 				updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, taskID, status, accepted.TaskID, routeJSON)
+		`, tenantID, taskID, accepted.Status, accepted.TaskID, routeJSON)
 		if err != nil {
 			return err
 		}
@@ -1024,6 +1032,63 @@ func validateCostTextLength(value string, maxRunes int) error {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func marshalCostTaskJSON(value any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func normalizeCostAdviceCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {
+	payload.TenantID = strings.TrimSpace(payload.TenantID)
+	payload.TaskID = strings.TrimSpace(payload.TaskID)
+	payload.Status = normalizeTaskStatus(payload.Status)
+	payload.ErrorMessage = strings.TrimSpace(payload.ErrorMessage)
+	if payload.Result == nil {
+		payload.Result = map[string]any{}
+	}
+	if payload.TenantID == "" || payload.TaskID == "" || payload.Status == "" {
+		return payload, nil, ErrInvalidRequest
+	}
+	if err := validateCostTextLength(payload.TaskID, maxCostExternalTaskIDRunes); err != nil {
+		return payload, nil, err
+	}
+	if err := validateCostTextLength(payload.ErrorMessage, maxCostTaskErrorMessageRunes); err != nil {
+		return payload, nil, err
+	}
+	resultJSON, err := marshalCostTaskJSON(payload.Result, maxCostTaskResultJSONBytes)
+	if err != nil {
+		return payload, nil, err
+	}
+	return payload, resultJSON, nil
+}
+
+func normalizeAcceptedTask(accepted aiTaskAccepted) (aiTaskAccepted, []byte, error) {
+	accepted.TaskID = strings.TrimSpace(accepted.TaskID)
+	accepted.Status = normalizeTaskStatus(accepted.Status)
+	if accepted.Status == "" {
+		accepted.Status = "queued"
+	}
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	if accepted.TaskID == "" {
+		return accepted, nil, ErrInvalidRequest
+	}
+	if err := validateCostTextLength(accepted.TaskID, maxCostExternalTaskIDRunes); err != nil {
+		return accepted, nil, err
+	}
+	routeJSON, err := marshalCostTaskJSON(accepted.Route, maxCostTaskRouteJSONBytes)
+	if err != nil {
+		return accepted, nil, err
+	}
+	return accepted, routeJSON, nil
 }
 
 func boundedCostText(value string, maxRunes int) string {
