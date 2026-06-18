@@ -281,6 +281,8 @@ def check_static_docs() -> None:
         "JSON.stringify(value, null, 2)" not in bid_page,
         "Bid parse confirmation UI exposes raw JSON in module field editor",
     )
+    require("subtitle={bid.data?.title ?? bidId}" not in bid_page, "Bid editor subtitle exposes bid UUID fallback")
+    require("正在编辑标书" in bid_page, "Bid editor subtitle missing business fallback")
     for needle in ("parseModuleObjectSummary", "parseModuleFieldItemSummary"):
         require(needle in bid_page, f"Bid parse confirmation UI missing readable formatter: {needle}")
     api_client = (ROOT / "frontend/src/shared/api/client.ts").read_text(encoding="utf-8")

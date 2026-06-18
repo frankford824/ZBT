@@ -5115,3 +5115,41 @@ cd frontend && pnpm build
 
 1. 本轮只处理响应矩阵 CSV/XLSX 的下载文件名，不改动 DOCX/PDF/ZIP 正式标书导出物的命名策略。
 2. 未新增浏览器下载行为截图验收；本轮以单测、静态防漂移、lint、build 和总检验证。
+
+## Loop-103 / 标书编辑器副标题 ID 收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书编辑器页面标题区，处理副标题兜底展示 URL 中 `bidId` 的问题。
+2. 避免用户在主工作区看到 UUID 类内部标识。
+3. 将该副标题防退化约束纳入静态验收。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的标书编辑器 `PageFrame` 副标题从 `bid.data?.title ?? bidId` 改为 `bid.data?.title || '正在编辑标书'`。
+2. `acceptance_tail_check.py --static-docs` 新增检查，禁止编辑器副标题回退到 `bidId`，并要求保留业务兜底文案。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `acceptance_tail_check.py --static-docs` 通过，且识别最新交付循环为 Loop-103。
+2. 前端 `pnpm lint` 与 `pnpm build` 通过。
+3. 总检 `./infra/scripts/check.sh` 通过：前端构建/lint、后端 Go test/vet、AI 服务 compileall/ruff/pytest 均通过。
+4. 工程1 三段黄金样例回归通过：解析评分 `passed=109/109`、来源引用 `passed=9/9`、导出回归 `passed=23/23`。
+5. 本地未运行中的 `ai-service` 容器测试按脚本规则跳过：`ai-service container is not running; skipping container pytest`。
+
+### 偏离蓝图
+
+1. 本轮只处理标书编辑器标题区的 ID 兜底，不等同于全站所有详情页的可见 ID 审计完成。
+2. 未新增浏览器截图验收；本轮先用静态防漂移、lint、build 和总检验证。

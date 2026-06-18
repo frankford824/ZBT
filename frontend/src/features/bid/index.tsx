@@ -3795,7 +3795,7 @@ export function BidEditorPage() {
     <PageFrame
       module="标书生成"
       title="标书编辑器"
-      subtitle={bid.data?.title ?? bidId}
+      subtitle={bid.data?.title || '正在编辑标书'}
       tags={['在线编辑', '章节协同']}
       bare
       actions={[
