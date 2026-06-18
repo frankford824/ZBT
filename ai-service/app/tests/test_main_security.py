@@ -1118,6 +1118,9 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
             assert tenant_id == "tenant-demo"
             return FakeProvider()
 
+        def log_call(self, **_kwargs: object) -> dict[str, object]:
+            return {"estimated_cost": 0.01, "usage": {"used": 0.01, "currency": "CNY"}}
+
     monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
     monkeypatch.setattr("app.main.router", FakeRouter())
     monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
@@ -1162,6 +1165,9 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert result["model_metadata"]["model"] == "fake-model"
     assert result["model_metadata"]["module_call_count"] == 6
     assert len(result["model_metadata"]["module_calls"]) == 6
+    assert result["model_metadata"]["estimated_cost"] == 0.06
+    assert result["estimated_cost"] == 0.06
+    assert all(call["estimated_cost"] == 0.01 for call in result["model_metadata"]["module_calls"])
     assert result["token_usage"]["input_tokens"] > 0
 
 

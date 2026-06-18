@@ -4520,3 +4520,49 @@ git diff --check
 
 1. 本轮没有启动完整 Docker 栈跑端到端 acceptance；只加严脚本契约并做静态/函数级验证。
 2. 脚本仍不替代 `generation_coverage_eval.py` 的完整离线评测，acceptance 只覆盖运行态关键结构。
+
+## Loop-88 / AI 调用费用回调闭环 - 2026-06-18
+
+### 本轮目标
+
+1. 修补 Python AI 服务只在内存 Router 里支持 `log_call()`，但业务回调不主动携带 `estimated_cost` 的断层。
+2. 让 tender_parse 六模块、knowledge embedding、chapter_generate、chapter_action 和 cost_advice 成功调用后都进入同一套费用估算和 quota 记录。
+3. 继续保持 Go 后端价格表兜底，避免 AI 服务与后端任一侧缺配置时审计链路直接断开。
+
+### 代码交付
+
+1. `ai-service/app/gateway/model_router.py` 新增 `estimate_cost()` 和价格表匹配逻辑，支持 `AI_MODEL_PRICING_JSON` 或配置内 `pricing`，匹配顺序与 Go 后端一致：`provider/model`、`model`、`provider/*`、`*`，并支持 `input_per_1k/output_per_1k` 与 `input_per_1m/output_per_1m`。
+2. `ModelRouter.log_call()` 在调用方未显式传入正数 `estimated_cost` 时，会按 provider/model/token 用量估算费用并写入租户运行期 quota usage；内存账本使用可重入锁保护，适配 tender_parse 六模块并发调用。
+3. `ai-service/app/main.py` 新增 `ai_call_accounting()` 和 `enrich_ai_response_accounting()`：
+   - 六模块 tender_parse 每个模块单独记录费用，回调的 `model_metadata.module_calls[]`、`model_metadata.estimated_cost` 和顶层 `estimated_cost` 都带出费用。
+   - knowledge embedding 回调 `model_metadata` 和顶层结果携带费用与 quota 快照。
+   - chapter_generate、chapter_action、cost_advice 在 Pydantic 响应回调前补齐 `model_metadata.estimated_cost` 和 `quota_usage`。
+4. `ai-service/app/tests/test_model_router.py` 增加价格表派生费用和配置内 per-million 计价测试。
+5. `ai-service/app/tests/test_main_security.py` 增加招标解析回调费用断言，确认六模块费用会汇总到回调结果。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 和 `MODEL_GATEWAY.md` 同步记录 AI 服务回调已主动携带费用估算，Go 后端仍保留落库兜底。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/gateway/model_router.py ai-service/app/main.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_model_router.py -q -s
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/gateway/model_router.py app/main.py app/tests/test_model_router.py app/tests/test_main_security.py
+cd backend && go test ./internal/platform/aicall
+git diff --check
+```
+
+结果：
+
+1. Python 语法检查通过。
+2. ModelRouter 单测 48 项通过，覆盖价格表估算费用、quota 累计和 fallback 策略。
+3. AI 服务安全/任务回调单测 62 项通过，覆盖招标解析六模块回调费用汇总。
+4. 后端 AI 调用审计包测试通过，价格表落库兜底仍然有效。
+5. Ruff 和 diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮没有接入真实厂商账单 API；费用仍按配置价格表和 token 估算。
+2. Python 侧 quota 是进程内运行期账本，重启后不作为持久化限额依据；持久化审计仍以 Go 后端 `ai_call_logs` 为准。

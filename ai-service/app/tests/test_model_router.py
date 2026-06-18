@@ -28,6 +28,7 @@ def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
         "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
         "CLOUDFLARE_AI_GATEWAY_TOKEN",
         "CLOUDFLARE_AI_GATEWAY_HEADERS",
+        "AI_MODEL_PRICING_JSON",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -534,6 +535,57 @@ def test_router_log_call_tracks_estimated_cost_by_tenant() -> None:
     assert result["usage"]["remaining"] == 0.75
     assert router.enforce_quota("tenant-a") is True
     assert router.call_log_snapshot()[0]["provider"] == "deepseek"
+
+
+def test_router_log_call_derives_estimated_cost_from_token_pricing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "AI_MODEL_PRICING_JSON",
+        '{"deepseek/deepseek-chat": {"input_per_1k": 0.001, "output_per_1k": 0.002}}',
+    )
+    router = ModelRouter(
+        {
+            "providers": {},
+            "routes": {},
+            "quotas": {"default_tenant_monthly_budget": 1.0, "currency": "CNY"},
+        }
+    )
+
+    result = router.log_call(
+        tenant_id="tenant-a",
+        task_type="chapter_generate",
+        provider="DeepSeek",
+        model="DeepSeek-Chat",
+        input_tokens=1000,
+        output_tokens=500,
+    )
+
+    assert result["estimated_cost"] == 0.002
+    assert result["usage"]["used"] == 0.002
+
+
+def test_router_log_call_supports_configured_per_million_pricing() -> None:
+    router = ModelRouter(
+        {
+            "providers": {},
+            "routes": {},
+            "pricing": {
+                "openai_compatible_primary/*": {
+                    "input_per_1m": 2,
+                    "output_per_1m": 8,
+                }
+            },
+        }
+    )
+
+    result = router.log_call(
+        tenant_id="tenant-a",
+        provider="openai_compatible_primary",
+        model="custom-model",
+        input_tokens=1000,
+        output_tokens=1000,
+    )
+
+    assert result["estimated_cost"] == 0.01
 
 
 def test_router_quota_supports_per_tenant_budget() -> None:

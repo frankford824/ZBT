@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
+import json
 import os
 from copy import deepcopy
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import yaml
@@ -83,6 +85,7 @@ class ModelRouter:
         self.providers = self._build_providers(self.config.get("providers", {}))
         self._tenant_usage: dict[str, float] = {}
         self._call_log: list[dict[str, object]] = []
+        self._lock = RLock()
 
     @classmethod
     def from_yaml(cls, path: Path) -> "ModelRouter":
@@ -139,10 +142,13 @@ class ModelRouter:
     def log_call(self, **kwargs: object) -> dict[str, object]:
         tenant_id = self._tenant_key(kwargs.get("tenant_id", ""))
         estimated_cost = self._cost_from_call(kwargs)
-        self._tenant_usage[tenant_id] = self._round_money(self._tenant_usage.get(tenant_id, 0.0) + estimated_cost)
-        usage = self.quota_status(tenant_id)
-        event = self._call_event(tenant_id, estimated_cost, usage, kwargs)
-        self._call_log.append(event)
+        with self._lock:
+            self._tenant_usage[tenant_id] = self._round_money(
+                self._tenant_usage.get(tenant_id, 0.0) + estimated_cost
+            )
+            usage = self.quota_status(tenant_id)
+            event = self._call_event(tenant_id, estimated_cost, usage, kwargs)
+            self._call_log.append(event)
         return {"logged": True, **event, "usage": usage}
 
     def enforce_quota(self, tenant_id: str) -> bool:
@@ -150,7 +156,8 @@ class ModelRouter:
 
     def quota_status(self, tenant_id: str) -> dict[str, object]:
         tenant_key = self._tenant_key(tenant_id)
-        used = self._round_money(self._tenant_usage.get(tenant_key, 0.0))
+        with self._lock:
+            used = self._round_money(self._tenant_usage.get(tenant_key, 0.0))
         budget = self._tenant_budget(tenant_key)
         remaining = None if budget is None else self._round_money(max(0.0, budget - used))
         return {
@@ -164,7 +171,8 @@ class ModelRouter:
         }
 
     def call_log_snapshot(self) -> list[dict[str, object]]:
-        return deepcopy(self._call_log)
+        with self._lock:
+            return deepcopy(self._call_log)
 
     def health_check(self) -> dict[str, bool]:
         return {name: provider.health_check() for name, provider in self.providers.items()}
@@ -355,8 +363,81 @@ class ModelRouter:
                 amount = self._finite_float(source["estimated_cost"])
                 if amount is not None and amount > 0:
                     return self._round_money(amount)
-                return 0.0
-        return 0.0
+        provider = str(payload.get("provider") or "").strip()
+        model = str(payload.get("model") or "").strip()
+        input_tokens = self._positive_int(payload.get("input_tokens"))
+        output_tokens = self._positive_int(payload.get("output_tokens"))
+        return self.estimate_cost(provider, model, input_tokens, output_tokens)
+
+    def estimate_cost(self, provider: str, model: str, input_tokens: int, output_tokens: int) -> float:
+        if input_tokens <= 0 and output_tokens <= 0:
+            return 0.0
+        rate = self._pricing_for(provider, model)
+        if not rate:
+            return 0.0
+        input_per_1k = self._positive_rate(rate.get("input_per_1k"))
+        output_per_1k = self._positive_rate(rate.get("output_per_1k"))
+        if input_per_1k == 0 and self._positive_rate(rate.get("input_per_1m")) > 0:
+            input_per_1k = self._positive_rate(rate.get("input_per_1m")) / 1000
+        if output_per_1k == 0 and self._positive_rate(rate.get("output_per_1m")) > 0:
+            output_per_1k = self._positive_rate(rate.get("output_per_1m")) / 1000
+        return self._round_money((input_tokens * input_per_1k + output_tokens * output_per_1k) / 1000)
+
+    def _pricing_for(self, provider: str, model: str) -> dict[str, object] | None:
+        pricing = self._pricing_config()
+        for key in self._pricing_lookup_keys(provider, model):
+            rate = pricing.get(key)
+            if isinstance(rate, dict):
+                return rate
+        return None
+
+    def _pricing_config(self) -> dict[str, object]:
+        configured = self.config.get("pricing")
+        if isinstance(configured, dict):
+            return configured
+        raw = os.getenv("AI_MODEL_PRICING_JSON", "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _pricing_lookup_keys(self, provider: str, model: str) -> list[str]:
+        provider = provider.strip()
+        model = model.strip()
+        candidates = [
+            f"{provider}/{model}",
+            model,
+            f"{provider}/*",
+            "*",
+            f"{provider.lower()}/{model.lower()}",
+            model.lower(),
+            f"{provider.lower()}/*",
+        ]
+        keys: list[str] = []
+        seen: set[str] = set()
+        for key in candidates:
+            if key not in seen:
+                keys.append(key)
+                seen.add(key)
+        return keys
+
+    def _positive_rate(self, value: object) -> float:
+        amount = self._finite_float(value)
+        if amount is None or amount <= 0:
+            return 0.0
+        return amount
+
+    def _positive_int(self, value: object) -> int:
+        if value is None or isinstance(value, bool):
+            return 0
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return number if number > 0 else 0
 
     def _finite_float(self, value: object) -> float | None:
         if value is None or isinstance(value, bool):

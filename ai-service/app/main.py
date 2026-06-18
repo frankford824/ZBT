@@ -257,6 +257,7 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
         module_calls: list[dict[str, object]] = []
         input_tokens = 0
         output_tokens = 0
+        estimated_cost = 0.0
         module_concurrency = tender_parse_module_concurrency()
         module_results: dict[str, dict[str, object]] = {}
         with ThreadPoolExecutor(max_workers=module_concurrency) as executor:
@@ -309,8 +310,10 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
             structured = merge_tender_module_result(structured, module, model_result)
             module_input_tokens = int(module_result.get("input_tokens") or 0)
             module_output_tokens = int(module_result.get("output_tokens") or 0)
+            module_estimated_cost = float(module_result.get("estimated_cost") or 0)
             input_tokens += module_input_tokens
             output_tokens += module_output_tokens
+            estimated_cost = round(estimated_cost + module_estimated_cost, 10)
             module_calls.append(
                 {
                     "module": module,
@@ -320,6 +323,7 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                     "fallback_from": module_result.get("fallback_from"),
                     "input_tokens": module_input_tokens,
                     "output_tokens": module_output_tokens,
+                    "estimated_cost": module_estimated_cost,
                 }
             )
         first_successful_module = next(
@@ -346,11 +350,13 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                     "module_concurrency": module_concurrency,
                     "module_calls": module_calls,
                     "parser": parsed.metadata.get("parser"),
+                    "estimated_cost": estimated_cost,
                 },
                 "token_usage": {
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                 },
+                "estimated_cost": estimated_cost,
             },
         }
     except Exception:  # pragma: no cover - defensive task boundary
@@ -393,15 +399,28 @@ def run_tender_parse_module(
 
     route, provider, generated = run_llm_task("tender_parse", payload.tenant_id, generate)
     model_result, input_tokens, output_tokens = generated
+    provider_label = provider_name(provider, route)
+    accounting = ai_call_accounting(
+        task_type="tender_parse",
+        tenant_id=payload.tenant_id,
+        route=route,
+        provider=provider,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        status="done",
+        trace_id=f"{payload.bid_id or payload.file_id}:{module}",
+    )
     return {
         "module": module,
         "status": "done",
-        "provider": provider_name(provider, route),
+        "provider": provider_label,
         "model": route.model,
         "fallback_from": route.fallback_from,
         "model_result": model_result,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "estimated_cost": accounting["estimated_cost"],
+        "quota_usage": accounting["quota_usage"],
     }
 
 
@@ -506,6 +525,16 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
             raise RuntimeError(f"embedding count mismatch: got {len(embeddings)} want {len(parsed.chunks)}")
         embedding_provider_name = provider_name(embedding_provider, embedding_route)
         embedding_dimensions = provider_dimensions(embedding_provider, embedding_route, embeddings)
+        accounting = ai_call_accounting(
+            task_type="knowledge_embedding",
+            tenant_id=payload.tenant_id,
+            route=embedding_route,
+            provider=embedding_provider,
+            input_tokens=input_tokens,
+            output_tokens=0,
+            status="done",
+            trace_id=task_id,
+        )
         for chunk, embedding in zip(parsed.chunks, embeddings, strict=True):
             chunk.embedding = embedding
             chunk.metadata["embedding_model"] = embedding_route.model
@@ -530,11 +559,14 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
                     "model": embedding_route.model,
                     "embedding_dimensions": embedding_dimensions,
                     "fallback_from": embedding_route.fallback_from,
+                    "estimated_cost": accounting["estimated_cost"],
+                    "quota_usage": accounting["quota_usage"],
                 },
                 "token_usage": {
                     "input_tokens": input_tokens,
                     "output_tokens": 0,
                 },
+                "estimated_cost": accounting["estimated_cost"],
             },
         }
     except Exception:  # pragma: no cover - defensive task boundary
@@ -792,6 +824,80 @@ def provider_dimensions(provider: object, route: RouteTarget, embeddings: list[l
     return 0
 
 
+def ai_call_accounting(
+    *,
+    task_type: str,
+    tenant_id: str,
+    route: RouteTarget,
+    provider: object,
+    input_tokens: int,
+    output_tokens: int,
+    status: str,
+    trace_id: str = "",
+) -> dict[str, object]:
+    if not hasattr(router, "log_call"):
+        return {"estimated_cost": 0.0, "quota_usage": {}}
+    event = router.log_call(
+        tenant_id=tenant_id,
+        task_type=task_type,
+        provider=provider_name(provider, route),
+        model=route.model,
+        input_tokens=max(input_tokens, 0),
+        output_tokens=max(output_tokens, 0),
+        status=status,
+        trace_id=trace_id,
+        fallback_from=route.fallback_from,
+    )
+    return {
+        "estimated_cost": float(event.get("estimated_cost") or 0),
+        "quota_usage": event.get("usage") if isinstance(event.get("usage"), dict) else {},
+    }
+
+
+def enrich_ai_response_accounting(
+    response: object,
+    *,
+    task_type: str,
+    tenant_id: str,
+    route: RouteTarget,
+    provider: object,
+    trace_id: str,
+) -> dict[str, object]:
+    token_usage = getattr(response, "token_usage", {})
+    if not isinstance(token_usage, dict):
+        token_usage = {}
+    accounting = ai_call_accounting(
+        task_type=task_type,
+        tenant_id=tenant_id,
+        route=route,
+        provider=provider,
+        input_tokens=positive_int_value(token_usage.get("input_tokens")),
+        output_tokens=positive_int_value(token_usage.get("output_tokens")),
+        status="done",
+        trace_id=trace_id,
+    )
+    metadata = getattr(response, "model_metadata", {})
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata.setdefault("provider", provider_name(provider, route))
+    metadata.setdefault("model", route.model)
+    if route.fallback_from:
+        metadata["fallback_from"] = route.fallback_from
+    metadata["estimated_cost"] = accounting["estimated_cost"]
+    metadata["quota_usage"] = accounting["quota_usage"]
+    setattr(response, "model_metadata", metadata)
+    return accounting
+
+
+def positive_int_value(value: object) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
+
+
 def run_provider_task(
     task_type: str,
     tenant_id: str,
@@ -841,7 +947,15 @@ def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> N
             payload.model_hint = route.model
             return provider.generate_chapter(payload)
 
-        _, _, generation = run_llm_task("chapter_generate", payload.tenant_id, generate)
+        route, provider, generation = run_llm_task("chapter_generate", payload.tenant_id, generate)
+        enrich_ai_response_accounting(
+            generation,
+            task_type="chapter_generate",
+            tenant_id=payload.tenant_id,
+            route=route,
+            provider=provider,
+            trace_id=generation.trace_id,
+        )
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -881,7 +995,15 @@ def process_chapter_action(task_id: str, payload: ChapterActionRequest, route_na
             payload.model_hint = route.model
             return provider.chapter_action(payload)
 
-        _, _, generation = run_llm_task(route_name, payload.tenant_id, generate)
+        route, provider, generation = run_llm_task(route_name, payload.tenant_id, generate)
+        enrich_ai_response_accounting(
+            generation,
+            task_type=route_name,
+            tenant_id=payload.tenant_id,
+            route=route,
+            provider=provider,
+            trace_id=generation.trace_id,
+        )
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -919,7 +1041,15 @@ def process_cost_advice(task_id: str, payload: CostAdviceRequest, model_hint: st
             payload.model_hint = route.model
             return provider.cost_advice(payload)
 
-        _, _, result = run_llm_task("cost_advice", payload.tenant_id, generate)
+        route, provider, result = run_llm_task("cost_advice", payload.tenant_id, generate)
+        enrich_ai_response_accounting(
+            result,
+            task_type="cost_advice",
+            tenant_id=payload.tenant_id,
+            route=route,
+            provider=provider,
+            trace_id=result.trace_id,
+        )
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
