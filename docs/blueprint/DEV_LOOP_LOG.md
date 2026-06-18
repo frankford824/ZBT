@@ -7238,3 +7238,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书需求矩阵入库可靠性，没有新增解析规则、OCR/表格抽取或需求矩阵 UI。
 2. 需求项 source_ref 和 metadata 上限均为 256KB，适合当前页码、引用、来源文本和系统字段；若后续需要保存大段原文证据，应拆到证据明细或文件资产引用。
+
+## Loop-150 / 标书需求覆盖 metadata JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书生成后的需求覆盖回写链路，处理模型覆盖结果同步 `latest_coverage` 时仍忽略 `coverageMetadata` JSON marshal 错误的问题。
+2. 避免模型返回的覆盖证据、source_refs 或异常放大的覆盖 metadata 静默写入空值/坏值，影响需求矩阵覆盖状态和覆盖事件审计。
+3. 将需求覆盖 metadata 的受控 JSON marshal 固化进静态验收，防止后续回退到裸 `json.Marshal`。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `marshalRequirementCoverageMetadataJSON()`，统一将 nil coverage metadata 归一化为 `{}`，并复用 512KB 上限和非法 JSON 值校验。
+2. `syncRequirementCoverageStatuses()` 改为使用受控 JSON marshal，不再忽略 `json.Marshal(coverageMetadata)` 错误。
+3. `updateRequirementCoverageItem()`、`manualRequirementCoverageMetadata()`、`batchRequirementCoverageMetadata()` 和 `insertRequirementCoverageEvent()` 统一复用 `marshalRequirementCoverageMetadataJSON()`，让手工、批量和模型覆盖路径共用同一边界。
+4. `backend/internal/platform/bid/store_test.go` 新增需求覆盖 metadata 非法值、不可序列化值、超预算值和 nil 归一化的回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加需求覆盖 metadata JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书需求覆盖 metadata 入库可靠性，没有新增合规语义模型、OCR/表格抽取或覆盖评估算法。
+2. 需求覆盖 metadata 上限沿用 512KB，适合覆盖状态、证据、source_refs 和人工/模型审计字段；若后续需要保存大段原文或多轮覆盖明细，应拆到覆盖事件或文件资产引用。

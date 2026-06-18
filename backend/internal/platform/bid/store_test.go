@@ -122,6 +122,23 @@ func TestMarshalRequirementItemJSONRejectsInvalidAndOversizedValues(t *testing.T
 	}
 }
 
+func TestMarshalRequirementCoverageMetadataJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	if raw, err := marshalRequirementCoverageMetadataJSON(nil); err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil requirement coverage metadata to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+	for name, metadata := range map[string]map[string]any{
+		"invalid number": {"bad": math.Inf(-1)},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("覆", maxBidRequirementCoverageJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalRequirementCoverageMetadataJSON(metadata); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid requirement coverage metadata JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
 func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	bidID := "00000000-0000-4000-8000-000000000001"
 	otherBidID := "00000000-0000-4000-8000-000000000002"

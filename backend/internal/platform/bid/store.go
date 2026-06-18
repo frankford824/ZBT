@@ -1274,7 +1274,7 @@ func updateRequirementCoverageItem(
 	needsReview bool,
 	coverageMetadata map[string]any,
 ) (RequirementItem, error) {
-	metadataJSON, err := marshalBidBusinessJSON(coverageMetadata, maxBidRequirementCoverageJSONBytes)
+	metadataJSON, err := marshalRequirementCoverageMetadataJSON(coverageMetadata)
 	if err != nil {
 		return RequirementItem{}, err
 	}
@@ -4566,7 +4566,10 @@ func syncRequirementCoverageStatuses(
 		} else if sourceRef, ok := item["source_ref"].(map[string]any); ok && len(sourceRef) > 0 {
 			coverageMetadata["source_refs"] = []any{sourceRef}
 		}
-		metadataJSON, _ := json.Marshal(coverageMetadata)
+		metadataJSON, err := marshalRequirementCoverageMetadataJSON(coverageMetadata)
+		if err != nil {
+			return err
+		}
 		var requirementItemID, requirementExternalID string
 		if err := tx.QueryRow(ctx, `
 			update bid_requirement_items
@@ -4653,7 +4656,7 @@ func manualRequirementCoverageMetadata(requirementID, userID string, req UpdateR
 	if req.SourceRefs != nil {
 		metadata["source_refs"] = req.SourceRefs
 	}
-	if _, err := marshalBidBusinessJSON(metadata, maxBidRequirementCoverageJSONBytes); err != nil {
+	if _, err := marshalRequirementCoverageMetadataJSON(metadata); err != nil {
 		return "", false, nil, err
 	}
 	return status, needsReview, metadata, nil
@@ -4711,7 +4714,7 @@ func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementC
 	} else {
 		metadata["batch_scope"] = "selected"
 	}
-	if _, err := marshalBidBusinessJSON(metadata, maxBidRequirementCoverageJSONBytes); err != nil {
+	if _, err := marshalRequirementCoverageMetadataJSON(metadata); err != nil {
 		return "", false, nil, err
 	}
 	return status, needsReview, metadata, nil
@@ -4822,7 +4825,7 @@ func insertRequirementCoverageEvent(
 	if err != nil {
 		return err
 	}
-	metadataRaw, err := marshalBidBusinessJSON(coverageMetadata, maxBidRequirementCoverageJSONBytes)
+	metadataRaw, err := marshalRequirementCoverageMetadataJSON(coverageMetadata)
 	if err != nil {
 		return err
 	}
@@ -6900,6 +6903,13 @@ func marshalRequirementItemJSON(item RequirementItem) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	return sourceRaw, metadataRaw, nil
+}
+
+func marshalRequirementCoverageMetadataJSON(metadata map[string]any) ([]byte, error) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	return marshalBidBusinessJSON(metadata, maxBidRequirementCoverageJSONBytes)
 }
 
 func marshalChapterGenerationJSON(generation chapterGenerateResponse) ([]byte, []byte, []byte, chapterGenerateResponse, error) {
