@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -31,6 +32,15 @@ const (
 	maxSourceConfigEntries         = 50
 	maxSourceConfigKeyRunes        = 128
 	maxSourceConfigJSONBytes       = 16 * 1024
+	maxTenderTitleRunes            = 255
+	maxTenderShortTextRunes        = 255
+	maxTenderSummaryRunes          = 2000
+	maxTenderListItems             = 50
+	maxTenderListItemRunes         = 500
+	maxTenderMetadataEntries       = 50
+	maxTenderMetadataKeyRunes      = 128
+	maxTenderMetadataJSONBytes     = 16 * 1024
+	maxTenderBudgetAmount          = 999_999_999_999.99
 )
 
 type Store struct {
@@ -713,8 +723,8 @@ func formatOptionalDate(value *time.Time) string {
 }
 
 func normalizeTenderWriteRequest(req CreateTenderRequest) (normalizedTenderWriteRequest, error) {
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
+	title, err := normalizeTenderRequiredText(req.Title, maxTenderTitleRunes)
+	if err != nil {
 		return normalizedTenderWriteRequest{}, ErrInvalidRequest
 	}
 	status, err := normalizeTenderStatus(req.Status)
@@ -740,24 +750,51 @@ func normalizeTenderWriteRequest(req CreateTenderRequest) (normalizedTenderWrite
 	if err != nil {
 		return normalizedTenderWriteRequest{}, err
 	}
-	metadata, err := json.Marshal(normalizeMetadata(req.Metadata))
+	if err := validateOptionalTenderAmount(req.BudgetAmount); err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	purchaser, err := normalizeTenderOptionalText(req.Purchaser, maxTenderShortTextRunes)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	region, err := normalizeTenderOptionalText(req.Region, maxTenderShortTextRunes)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	budgetText, err := normalizeTenderOptionalText(req.BudgetText, maxTenderShortTextRunes)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	summary, err := normalizeTenderOptionalText(req.Summary, maxTenderSummaryRunes)
 	if err != nil {
 		return normalizedTenderWriteRequest{}, ErrInvalidRequest
+	}
+	requirements, err := normalizeTenderTextList(req.Requirements)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	riskFlags, err := normalizeTenderTextList(req.RiskFlags)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
+	}
+	metadata, err := normalizeTenderMetadata(req.Metadata)
+	if err != nil {
+		return normalizedTenderWriteRequest{}, err
 	}
 	return normalizedTenderWriteRequest{
 		SourceID:     sourceID,
 		Title:        title,
-		Purchaser:    strings.TrimSpace(req.Purchaser),
-		Region:       strings.TrimSpace(req.Region),
+		Purchaser:    purchaser,
+		Region:       region,
 		BudgetAmount: req.BudgetAmount,
-		BudgetText:   strings.TrimSpace(req.BudgetText),
+		BudgetText:   budgetText,
 		PublishDate:  publishDate,
 		Deadline:     deadline,
 		Status:       status,
 		MatchScore:   clampScore(req.MatchScore),
-		Summary:      strings.TrimSpace(req.Summary),
-		Requirements: req.Requirements,
-		RiskFlags:    req.RiskFlags,
+		Summary:      summary,
+		Requirements: requirements,
+		RiskFlags:    riskFlags,
 		SourceURL:    sourceURL,
 		Metadata:     metadata,
 	}, nil
@@ -885,11 +922,84 @@ func parseOptionalDate(value string) (any, error) {
 	return parsed, nil
 }
 
-func normalizeMetadata(value any) map[string]any {
-	if typed, ok := value.(map[string]any); ok && typed != nil {
-		return typed
+func normalizeTenderRequiredText(value string, maxRunes int) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ErrInvalidRequest
 	}
-	return map[string]any{}
+	return value, validateTenderTextLength(value, maxRunes)
+}
+
+func normalizeTenderOptionalText(value string, maxRunes int) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	return value, validateTenderTextLength(value, maxRunes)
+}
+
+func validateTenderTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 || len([]rune(strings.TrimSpace(value))) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func normalizeTenderTextList(values []string) ([]string, error) {
+	if len(values) > maxTenderListItems {
+		return nil, ErrInvalidRequest
+	}
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if err := validateTenderTextLength(value, maxTenderListItemRunes); err != nil {
+			return nil, err
+		}
+		normalized = append(normalized, value)
+	}
+	return normalized, nil
+}
+
+func normalizeTenderMetadata(value any) ([]byte, error) {
+	if value == nil {
+		return []byte("{}"), nil
+	}
+	typed, ok := value.(map[string]any)
+	if !ok {
+		return nil, ErrInvalidRequest
+	}
+	if len(typed) == 0 {
+		return []byte("{}"), nil
+	}
+	if len(typed) > maxTenderMetadataEntries {
+		return nil, ErrInvalidRequest
+	}
+	normalized := make(map[string]any, len(typed))
+	for key, item := range typed {
+		key = strings.TrimSpace(key)
+		if key == "" || len([]rune(key)) > maxTenderMetadataKeyRunes {
+			return nil, ErrInvalidRequest
+		}
+		normalized[key] = item
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil || len(raw) > maxTenderMetadataJSONBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func validateOptionalTenderAmount(value *float64) error {
+	if value == nil {
+		return nil
+	}
+	if *value < 0 || *value > maxTenderBudgetAmount || math.IsNaN(*value) || math.IsInf(*value, 0) {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func normalizeSourceConfig(value map[string]any) ([]byte, error) {

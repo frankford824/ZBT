@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -134,6 +135,104 @@ func TestNormalizeTenderWriteRequestValidatesOptionalSourceURL(t *testing.T) {
 		req.SourceURL = value
 		if _, err := normalizeTenderWriteRequest(req); !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("expected source URL %q to be rejected, got %v", value, err)
+		}
+	}
+}
+
+func TestNormalizeTenderWriteRequestTrimsBusinessFieldsAndLists(t *testing.T) {
+	amount := 1200.0
+	normalized, err := normalizeTenderWriteRequest(CreateTenderRequest{
+		Title:        " 智慧交通项目 ",
+		Purchaser:    " 采购单位 ",
+		Region:       " 浙江 ",
+		BudgetAmount: &amount,
+		BudgetText:   " 1200 万 ",
+		Summary:      " 项目摘要 ",
+		Requirements: []string{" 资质要求 ", " ", "业绩要求"},
+		RiskFlags:    []string{" 废标风险 ", "\t"},
+		Metadata:     map[string]any{" source ": "manual"},
+	})
+	if err != nil {
+		t.Fatalf("expected bounded tender request to normalize: %v", err)
+	}
+	if normalized.Title != "智慧交通项目" || normalized.Purchaser != "采购单位" || normalized.Region != "浙江" {
+		t.Fatalf("expected tender business fields to be trimmed, got %+v", normalized)
+	}
+	if normalized.BudgetText != "1200 万" || normalized.Summary != "项目摘要" {
+		t.Fatalf("expected budget text and summary to be trimmed, got %+v", normalized)
+	}
+	if len(normalized.Requirements) != 2 || normalized.Requirements[0] != "资质要求" || normalized.Requirements[1] != "业绩要求" {
+		t.Fatalf("expected requirements to be trimmed and blank values removed, got %v", normalized.Requirements)
+	}
+	if len(normalized.RiskFlags) != 1 || normalized.RiskFlags[0] != "废标风险" {
+		t.Fatalf("expected risk flags to be trimmed and blank values removed, got %v", normalized.RiskFlags)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(normalized.Metadata, &metadata); err != nil {
+		t.Fatalf("decode normalized metadata: %v", err)
+	}
+	if metadata["source"] != "manual" {
+		t.Fatalf("expected metadata key to be trimmed, got %#v", metadata)
+	}
+}
+
+func TestCreateTenderRejectsOversizedBusinessFieldsBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	_, err := store.Create(context.Background(), "tenant-id", "user-id", CreateTenderRequest{
+		Title:   "测试标讯",
+		Summary: strings.Repeat("摘", maxTenderSummaryRunes+1),
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected oversized tender summary to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeTenderWriteRequestRejectsOversizedBusinessFields(t *testing.T) {
+	base := CreateTenderRequest{Title: "测试标讯"}
+	tooManyListItems := make([]string, maxTenderListItems+1)
+	for i := range tooManyListItems {
+		tooManyListItems[i] = "要求"
+	}
+	for _, req := range []CreateTenderRequest{
+		{Title: strings.Repeat("标", maxTenderTitleRunes+1)},
+		{Title: base.Title, Purchaser: strings.Repeat("采", maxTenderShortTextRunes+1)},
+		{Title: base.Title, Region: strings.Repeat("区", maxTenderShortTextRunes+1)},
+		{Title: base.Title, BudgetText: strings.Repeat("预", maxTenderShortTextRunes+1)},
+		{Title: base.Title, Summary: strings.Repeat("摘", maxTenderSummaryRunes+1)},
+		{Title: base.Title, Requirements: tooManyListItems},
+		{Title: base.Title, Requirements: []string{strings.Repeat("要", maxTenderListItemRunes+1)}},
+		{Title: base.Title, RiskFlags: tooManyListItems},
+		{Title: base.Title, RiskFlags: []string{strings.Repeat("险", maxTenderListItemRunes+1)}},
+	} {
+		if _, err := normalizeTenderWriteRequest(req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected oversized tender request to be rejected, got %v for %+v", err, req)
+		}
+	}
+}
+
+func TestNormalizeTenderWriteRequestRejectsInvalidMetadataAndBudget(t *testing.T) {
+	tooManyMetadata := make(map[string]any, maxTenderMetadataEntries+1)
+	for i := 0; i <= maxTenderMetadataEntries; i++ {
+		tooManyMetadata[fmt.Sprintf("key-%d", i)] = i
+	}
+	negative := -1.0
+	tooHigh := maxTenderBudgetAmount + 1
+	nan := math.NaN()
+	inf := math.Inf(1)
+	for _, req := range []CreateTenderRequest{
+		{Title: "测试标讯", Metadata: "bad metadata"},
+		{Title: "测试标讯", Metadata: map[string]any{" ": "blank key"}},
+		{Title: "测试标讯", Metadata: map[string]any{strings.Repeat("键", maxTenderMetadataKeyRunes+1): "long key"}},
+		{Title: "测试标讯", Metadata: map[string]any{"payload": strings.Repeat("元", maxTenderMetadataJSONBytes)}},
+		{Title: "测试标讯", Metadata: map[string]any{"bad": func() {}}},
+		{Title: "测试标讯", Metadata: tooManyMetadata},
+		{Title: "测试标讯", BudgetAmount: &negative},
+		{Title: "测试标讯", BudgetAmount: &tooHigh},
+		{Title: "测试标讯", BudgetAmount: &nan},
+		{Title: "测试标讯", BudgetAmount: &inf},
+	} {
+		if _, err := normalizeTenderWriteRequest(req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected invalid tender metadata or budget to be rejected, got %v for %+v", err, req)
 		}
 	}
 }

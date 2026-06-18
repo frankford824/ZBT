@@ -437,6 +437,28 @@ def check_static_docs() -> None:
         "TestNormalizeSourceConfigRejectsInvalidShape",
     ):
         require(needle in tender_store_tests, f"Tender source config missing regression test: {needle}")
+    for needle in (
+        "maxTenderTitleRunes",
+        "maxTenderShortTextRunes",
+        "maxTenderSummaryRunes",
+        "maxTenderListItems",
+        "maxTenderMetadataJSONBytes",
+        "maxTenderBudgetAmount",
+        "normalizeTenderRequiredText",
+        "normalizeTenderOptionalText",
+        "normalizeTenderTextList",
+        "normalizeTenderMetadata",
+        "validateOptionalTenderAmount",
+        "math.IsNaN",
+    ):
+        require(needle in tender_store, f"Tender write request missing business input boundary: {needle}")
+    for needle in (
+        "TestNormalizeTenderWriteRequestTrimsBusinessFieldsAndLists",
+        "TestCreateTenderRejectsOversizedBusinessFieldsBeforeDB",
+        "TestNormalizeTenderWriteRequestRejectsOversizedBusinessFields",
+        "TestNormalizeTenderWriteRequestRejectsInvalidMetadataAndBudget",
+    ):
+        require(needle in tender_store_tests, f"Tender write request missing business input boundary regression test: {needle}")
 
     knowledge_page = (ROOT / "frontend/src/features/knowledge/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("<Tag>坐标：", "`坐标: ${bboxText}`"):

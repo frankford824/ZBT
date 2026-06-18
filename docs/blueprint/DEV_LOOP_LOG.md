@@ -6460,3 +6460,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是标讯来源配置输入边界，没有新增来源抓取调度、平台适配器或字段映射能力。
 2. 配置仍保留自由 JSON 结构；若后续需要复杂平台参数，应优先抽象为版本化 schema，而不是扩大自由 JSON。
+
+## Loop-133 / 标讯本体写入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 Tender 标讯写入链路，处理标题、采购人、区域、预算文本、摘要、需求列表、风险列表、metadata 和预算金额缺少统一边界的问题。
+2. 避免超长标讯字段或异常 metadata 写入 `tenders` 后扩散到列表检索、项目创建、标书创建和前端展示。
+3. 将 metadata 非对象被静默丢弃的行为改成明确拒绝，避免调用方误以为结构化来源信息已保存。
+
+### 代码交付
+
+1. `backend/internal/platform/tender/store.go` 新增标讯本体边界常量：标题 255 字符、短文本 255 字符、摘要 2000 字符、列表最多 50 项、列表项 500 字符、metadata 最多 50 项且 JSON 不超过 16KB、预算金额不超过 `999999999999.99`。
+2. 新增 `normalizeTenderRequiredText()`、`normalizeTenderOptionalText()`、`normalizeTenderTextList()`、`normalizeTenderMetadata()` 和 `validateOptionalTenderAmount()`，统一在写库前校验并归一化标讯字段。
+3. `normalizeTenderWriteRequest()` 改为对采购人、区域、预算文本、摘要做长度校验，对需求/风险列表做 trim 和空项剔除，对 metadata 做对象形态与字节预算校验。
+4. 预算金额新增非负、非 NaN/Inf 和上限校验，避免异常浮点值进入数据库。
+5. `backend/internal/platform/tender/store_test.go` 新增标讯字段 trim、列表清理、写库前拒绝超长摘要、字段超界、metadata 形态和预算金额边界回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加标讯本体写入边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/tender/store.go internal/platform/tender/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是手工/外部来源标讯写入边界，没有新增招标文件解析能力、OCR 或外部标讯抓取适配器。
+2. requirements/risk_flags 仍按字符串数组保存；后续若需要评分项级结构，应迁移为明确 schema，而不是扩大数组自由文本。
