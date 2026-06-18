@@ -363,6 +363,13 @@ def check_static_docs() -> None:
     require("`响应矩阵-${bidId}" not in api_client, "Requirement export fallback filename exposes bid UUID")
     for needle in ("bidRequirementFallbackFilename", "downloadSafeFilenamePart"):
         require(needle in api_client, f"Requirement export fallback filename missing business guard: {needle}")
+    for needle in ("safeDownloadFilename", "WINDOWS_RESERVED_DOWNLOAD_NAMES", "MAX_DOWNLOAD_FILENAME_LENGTH"):
+        require(needle in api_client, f"Requirement export response filename missing client download guard: {needle}")
+    require(
+        "filename: safeDownloadFilename(filenameFromContentDisposition(response.headers['content-disposition']), fallbackFilename)"
+        in api_client,
+        "Requirement export filename must sanitize Content-Disposition before browser download",
+    )
     api_routes = (ROOT / "backend/internal/api/routes.go").read_text(encoding="utf-8")
     for needle in ("bidRequirementExportFilename(document.Title", "downloadSafeFilenamePart"):
         require(needle in api_routes, f"Requirement export response filename missing business guard: {needle}")

@@ -5620,3 +5620,46 @@ python3 infra/scripts/acceptance_tail_check.py --static-docs
 
 1. 本轮治理的是 AI 成本审计边界和文档口径，没有新增真实模型、OCR 或导出版式能力。
 2. `estimated_cost` 仍依赖 provider 回调或 `AI_MODEL_PRICING_JSON` 配置估算；未接入第三方真实账单回传。
+
+## Loop-115 / 前端下载文件名边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查前后端文件下载链路，处理响应头文件名在浏览器下载层的二次防护缺口。
+2. 避免异常 `Content-Disposition` 文件名携带路径片段、控制字符、Windows 保留名或超长名称，影响用户下载体验。
+3. 将该客户端边界固化进尾部静态验收，防止后续导出功能回退为直接透传响应头文件名。
+
+### 代码交付
+
+1. `frontend/src/shared/api/client.ts` 在标书需求导出接口中新增 `safeDownloadFilename()` 调用，响应头文件名必须先清洗，再进入 `link.download`。
+2. 同文件新增下载文件名规范化逻辑：取路径最后一段、复用非法字符清洗、处理 Windows 保留名，并限制最大长度为 120 字符且尽量保留扩展名。
+3. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求导出响应头文件名经过 `safeDownloadFilename`，并要求保留 Windows 保留名与长度上限守卫。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd frontend && pnpm lint
+cd frontend && pnpm build
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd frontend && pnpm lint` 通过。
+2. `cd frontend && pnpm build` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `git diff --check` 通过。
+5. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+6. AI pytest 通过：`240 passed`。
+7. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+8. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是文件导出体验和浏览器下载边界，没有新增新的导出格式或 Word/PDF 母版能力。
+2. 前端目前仍没有独立单元测试框架；本轮以 lint/build、全量验收和静态防回退脚本覆盖。

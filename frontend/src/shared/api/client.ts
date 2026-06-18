@@ -1825,11 +1825,10 @@ export async function exportBidRequirements(
     params: format === 'xlsx' ? { format: 'xlsx' } : undefined,
     responseType: 'blob',
   })
+  const fallbackFilename = bidRequirementFallbackFilename(fallbackTitle, format)
   return {
     blob: response.data,
-    filename:
-      filenameFromContentDisposition(response.headers['content-disposition']) ||
-      bidRequirementFallbackFilename(fallbackTitle, format),
+    filename: safeDownloadFilename(filenameFromContentDisposition(response.headers['content-disposition']), fallbackFilename),
   }
 }
 
@@ -1890,6 +1889,33 @@ function filenameFromContentDisposition(value: unknown): string {
   }
   const filenameMatch = text.match(/filename="?([^";]+)"?/i)
   return filenameMatch?.[1] ?? ''
+}
+
+const MAX_DOWNLOAD_FILENAME_LENGTH = 120
+const WINDOWS_RESERVED_DOWNLOAD_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+
+function safeDownloadFilename(value: string | undefined, fallback: string) {
+  const fallbackFilename = normalizeDownloadFilename(fallback, 'download')
+  return normalizeDownloadFilename(value, fallbackFilename)
+}
+
+function normalizeDownloadFilename(value: string | undefined, fallback: string) {
+  const pathParts = String(value || '')
+    .split(/[\\/]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const filename = pathParts[pathParts.length - 1] ?? ''
+  const cleaned = downloadSafeFilenamePart(filename, fallback)
+  const reservedSafe = WINDOWS_RESERVED_DOWNLOAD_NAMES.test(cleaned) ? `_${cleaned}` : cleaned
+  return truncateDownloadFilename(reservedSafe || fallback)
+}
+
+function truncateDownloadFilename(value: string) {
+  if (value.length <= MAX_DOWNLOAD_FILENAME_LENGTH) return value
+  const dotIndex = value.lastIndexOf('.')
+  const ext = dotIndex > 0 && value.length - dotIndex <= 16 ? value.slice(dotIndex) : ''
+  const stemLength = Math.max(1, MAX_DOWNLOAD_FILENAME_LENGTH - ext.length)
+  return `${value.slice(0, stemLength).trim().replace(/\.+$/g, '')}${ext}`
 }
 
 function bidRequirementFallbackFilename(title: string | undefined, format: BidRequirementExportFormat) {
