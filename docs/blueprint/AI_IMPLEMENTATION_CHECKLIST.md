@@ -128,7 +128,7 @@
    - 当前已落地：OCR `provider_profile` 记录实际生效的 endpoint/key/poll env；Provider 专属配置为空但通用 OCR 配置生效时，不会误报为使用了专属 env。
    - 当前网关路由：`model_routing.yaml` 的 `document_ocr` 使用 `local` provider 和 `configurable-ocr-provider-pipeline`，实际厂商通过上述环境变量切换，避免把客户文件外发给未显式配置的模型路由。
    - Provider 不可用时不伪装成功，必须返回 `provider_not_configured` 或 `failed`。
-   - 当前已落地异步轮询：初始响应为 202 或 `pending/running/processing` 时，使用响应 `status_url` / `poll_url`、`OCR_POLL_ENDPOINT`、`MINERU_POLL_ENDPOINT` 或 `PADDLEOCR_POLL_ENDPOINT` 轮询；未提供轮询地址时默认请求 `endpoint/{task_id}`。轮询结果归一到 `pages`、`blocks`、`tables`、`markdown`、`layout_blocks`，超时和失败只保存安全摘要。
+   - 当前已落地异步轮询：初始响应为 202 或 `pending/running/processing` 时，使用响应 `status_url` / `poll_url`、`OCR_POLL_ENDPOINT`、`MINERU_POLL_ENDPOINT` 或 `PADDLEOCR_POLL_ENDPOINT` 轮询；响应内轮询地址只能是提交 endpoint 同源或相对路径，跨域轮询必须通过租户部署侧显式配置的 `*_POLL_ENDPOINT`；未提供轮询地址时默认请求 `endpoint/{task_id}`。轮询结果归一到 `pages`、`blocks`、`tables`、`markdown`、`layout_blocks`，超时和失败只保存安全摘要。
    - 当前已落地真实 endpoint 验收命令：`python -m app.evaluation.ocr_provider_eval --provider mineru|paddleocr`，可设置最小文本、表格块和版面块门槛，并检查 endpoint/key/poll 实际生效 env；无 endpoint 时返回 skipped。
    - OCR Provider 只作为可替换插件，不进入主业务 schema 的厂商字段。
 

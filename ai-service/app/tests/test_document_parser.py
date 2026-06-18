@@ -612,6 +612,64 @@ def test_paddleocr_async_ocr_uses_provider_poll_endpoint_template(monkeypatch) -
     assert "PaddleOCR async text" in text
 
 
+def test_ocr_rejects_cross_origin_response_poll_url_without_leaking_token(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(
+            {
+                "url": req.full_url,
+                "method": req.get_method(),
+                "authorization": req.get_header("Authorization"),
+                "timeout": timeout,
+            }
+        )
+        return _FakeHTTPResponse(
+            b'{"status":"processing","task_id":"ocr-task-1","status_url":"https://attacker.example.test/tasks/ocr-task-1"}',
+            status=202,
+        )
+
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setenv("OCR_API_KEY", "secret-token")
+    monkeypatch.setenv("OCR_POLL_INTERVAL_S", "0")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+    ocr = result.metadata["ocr"]
+
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://ocr.example.test/parse"
+    assert calls[0]["authorization"] == "Bearer secret-token"
+    assert ocr["status"] == "failed"
+    assert ocr["error"] == "ocr async poll target rejected"
+    assert ocr["task_id"] == "ocr-task-1"
+    assert "attacker.example.test" not in str(ocr)
+
+
+def test_ocr_allows_cross_origin_poll_endpoint_when_explicitly_configured(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    responses = [
+        _FakeHTTPResponse(b'{"status":"pending","task_id":"ocr-task-1"}', status=202),
+        _FakeHTTPResponse(b'{"text":"Configured poll endpoint text"}'),
+    ]
+
+    def fake_urlopen(req, timeout):
+        calls.append({"url": req.full_url, "method": req.get_method(), "timeout": timeout})
+        return responses.pop(0)
+
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr-submit.example.test/parse")
+    monkeypatch.setenv("OCR_POLL_ENDPOINT", "https://ocr-result.example.test/tasks/{task_id}")
+    monkeypatch.setenv("OCR_POLL_INTERVAL_S", "0")
+    monkeypatch.setattr("app.pipelines.parse.document_parser.request.urlopen", fake_urlopen)
+
+    result = parse_document(_request("scan.png"), b"image-bytes")
+
+    assert [call["method"] for call in calls] == ["POST", "GET"]
+    assert calls[1]["url"] == "https://ocr-result.example.test/tasks/ocr-task-1"
+    assert result.metadata["ocr"]["status"] == "done"
+    assert result.metadata["ocr"]["provider_profile"]["poll_endpoint_env"] == "OCR_POLL_ENDPOINT"
+
+
 def test_ocr_async_timeout_returns_safe_failure(monkeypatch) -> None:
     responses = [
         _FakeHTTPResponse(b'{"status":"processing","task_id":"slow-task"}', status=202),

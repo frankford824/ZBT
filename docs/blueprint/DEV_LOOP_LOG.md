@@ -4612,3 +4612,47 @@ git diff --check
 
 1. 本轮仍未接真实厂商账单 API；费用来源仍为 token 用量乘配置价格表。
 2. 同步响应新增字段为兼容扩展，旧前端和旧 Go 客户端可忽略这些字段。
+
+## Loop-90 / OCR 异步轮询 SSRF 边界加固 - 2026-06-18
+
+### 本轮目标
+
+1. 审查 MinerU/PaddleOCR/通用 HTTP OCR 异步轮询路径，避免 Provider 响应中的 `status_url` / `poll_url` 把服务端带到非预期地址。
+2. 防止 OCR API Key 被转发给响应体指定的任意跨域轮询地址。
+3. 保留真实 Provider 常见的跨域结果服务能力，但必须由部署侧显式配置 `*_POLL_ENDPOINT`。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/document_parser.py` 收紧 `_ocr_poll_endpoint()`：
+   - 响应体里的 `status_url` / `poll_url` / `result_url` 只允许提交 endpoint 同源或相对路径。
+   - 显式配置的 `OCR_POLL_ENDPOINT` / `MINERU_POLL_ENDPOINT` / `PADDLEOCR_POLL_ENDPOINT` 可跨域，但仍走既有 URL 安全校验。
+   - 被拒绝的响应轮询地址返回安全失败 `ocr async poll target rejected`，不暴露恶意 URL。
+2. 新增 `_same_origin_endpoint()` / `_url_port()`，按 scheme、hostname 和默认端口判断同源。
+3. `ai-service/app/tests/test_document_parser.py` 新增测试：
+   - 响应体返回跨域 `status_url` 时只发起提交请求，不继续 GET，也不泄露 Authorization。
+   - 显式配置跨域 `OCR_POLL_ENDPOINT` 时仍允许轮询并正常归一化结果。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 和 `AI_PIPELINE.md` 同步记录异步 OCR 轮询边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/pipelines/parse/document_parser.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_document_parser.py -q -s
+cd ai-service && .venv/bin/python -m pytest app/tests/test_ocr_provider_eval.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/pipelines/parse/document_parser.py app/tests/test_document_parser.py
+git diff --check
+```
+
+结果：
+
+1. Python 语法检查通过。
+2. 文档解析测试 49 项通过，覆盖 OCR 异步轮询、响应过大、错误摘要和 URL/header 安全。
+3. OCR Provider 评测测试 5 项通过。
+4. Ruff 和 diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮是安全边界加固，不接真实 MinerU/PaddleOCR endpoint。
+2. 若某真实 OCR 厂商必须使用跨域响应轮询地址，需要通过部署环境显式配置 `*_POLL_ENDPOINT`，不能信任响应体直接指定跨域目标。

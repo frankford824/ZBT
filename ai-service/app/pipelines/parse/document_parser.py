@@ -1020,7 +1020,12 @@ def _try_http_ocr(payload: KnowledgeProcessRequest, content: bytes) -> dict[str,
                 "provider": config.provider,
                 "error": "ocr response invalid",
             }
-        if result.get("status") in {"async_poll_failed", "async_poll_timeout", "async_poll_missing_target"}:
+        if result.get("status") in {
+            "async_poll_failed",
+            "async_poll_timeout",
+            "async_poll_missing_target",
+            "async_poll_rejected_target",
+        }:
             return {
                 "status": "failed",
                 "provider": config.provider,
@@ -1067,7 +1072,15 @@ def _resolve_async_ocr_result(
     if not _is_async_ocr_pending(result, status_code):
         return result
     task_id = _ocr_task_id(result)
-    poll_endpoint = _ocr_poll_endpoint(config, submit_endpoint, result, task_id)
+    try:
+        poll_endpoint = _ocr_poll_endpoint(config, submit_endpoint, result, task_id)
+    except RuntimeError:
+        return {
+            "status": "async_poll_rejected_target",
+            "provider": config.provider,
+            "task_id": task_id,
+            "error": "ocr async poll target rejected",
+        }
     if not poll_endpoint:
         return {
             "status": "async_poll_missing_target",
@@ -1138,28 +1151,54 @@ def _ocr_poll_endpoint(
 ) -> str:
     payload = _unwrap_ocr_payload(result)
     poll_target = _first_text(payload, ("status_url", "statusUrl", "poll_url", "pollUrl", "result_url", "resultUrl"))
-    if not poll_target:
-        poll_target = config.poll_endpoint
     if poll_target:
         if task_id:
             poll_target = poll_target.replace("{task_id}", parse.quote(task_id, safe=""))
-        return _safe_joined_ocr_endpoint(submit_endpoint, poll_target)
+        return _safe_joined_ocr_endpoint(submit_endpoint, poll_target, allow_cross_origin=False)
+    if config.poll_endpoint:
+        poll_target = config.poll_endpoint
+        if task_id:
+            poll_target = poll_target.replace("{task_id}", parse.quote(task_id, safe=""))
+        return _safe_joined_ocr_endpoint(submit_endpoint, poll_target, allow_cross_origin=True)
     if not task_id:
         return ""
-    return _safe_joined_ocr_endpoint(submit_endpoint, parse.quote(task_id, safe=""))
+    return _safe_joined_ocr_endpoint(submit_endpoint, parse.quote(task_id, safe=""), allow_cross_origin=False)
 
 
-def _safe_joined_ocr_endpoint(base_endpoint: str, value: str) -> str:
+def _safe_joined_ocr_endpoint(base_endpoint: str, value: str, *, allow_cross_origin: bool) -> str:
     if _contains_unsafe_url_character(value):
         raise RuntimeError("OCR poll endpoint is invalid")
     parsed = parse.urlparse(value)
     if parsed.scheme or parsed.netloc:
-        return _safe_ocr_endpoint(value)
+        endpoint = _safe_ocr_endpoint(value)
+        if not allow_cross_origin and not _same_origin_endpoint(base_endpoint, endpoint):
+            raise RuntimeError("OCR poll endpoint origin is not allowed")
+        return endpoint
     if value.startswith("/"):
         base = parse.urlparse(base_endpoint)
         return _safe_ocr_endpoint(parse.urlunparse((base.scheme, base.netloc, value, "", "", "")))
     base_path = base_endpoint.rstrip("/") + "/"
     return _safe_ocr_endpoint(parse.urljoin(base_path, value))
+
+
+def _same_origin_endpoint(left: str, right: str) -> bool:
+    left_parsed = parse.urlparse(left)
+    right_parsed = parse.urlparse(right)
+    return (
+        left_parsed.scheme.lower() == right_parsed.scheme.lower()
+        and left_parsed.hostname == right_parsed.hostname
+        and _url_port(left_parsed) == _url_port(right_parsed)
+    )
+
+
+def _url_port(parsed: parse.ParseResult) -> int | None:
+    if parsed.port is not None:
+        return parsed.port
+    if parsed.scheme == "https":
+        return 443
+    if parsed.scheme == "http":
+        return 80
+    return None
 
 
 def _poll_ocr_task(config: OCRProviderConfig, endpoint: str) -> dict[str, object]:
