@@ -1,57 +1,135 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import json
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from app.schemas.common import SourceRef
 
+MAX_GENERATION_ID_LENGTH = 128
+MAX_GENERATION_SHORT_TEXT_LENGTH = 128
+MAX_GENERATION_TITLE_LENGTH = 255
+MAX_TENDER_REQUIREMENT_LENGTH = 1000
+MAX_TENDER_REQUIREMENTS = 50
+MAX_REQUIREMENT_REFS = 50
+MAX_SELECTED_KNOWLEDGE_REFS = 50
+MAX_RETRIEVED_KNOWLEDGE_REFS = 20
+MAX_RETRIEVED_KNOWLEDGE_CONTENT_LENGTH = 2400
+MAX_REQUIREMENT_SOURCE_TEXT_LENGTH = 1200
+MAX_REQUIREMENT_EXPECTED_RESPONSE_LENGTH = 1000
+MAX_GENERATION_CALLBACK_URL_LENGTH = 2048
+MAX_CHAPTER_ACTION_INSTRUCTION_LENGTH = 2000
+MAX_CHAPTER_ACTION_PLAIN_TEXT_LENGTH = 30000
+MAX_CHAPTER_ACTION_TIPTAP_JSON_BYTES = 256 * 1024
+
+GenerationID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_GENERATION_ID_LENGTH),
+]
+GenerationOptionalID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_GENERATION_ID_LENGTH),
+]
+GenerationShortText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_GENERATION_SHORT_TEXT_LENGTH),
+]
+GenerationRequiredShortText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_GENERATION_SHORT_TEXT_LENGTH),
+]
+GenerationTitle = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_GENERATION_TITLE_LENGTH),
+]
+TenderRequirementText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_REQUIREMENT_LENGTH),
+]
+TenderRequirementOptionalText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_REQUIREMENT_EXPECTED_RESPONSE_LENGTH),
+]
+GenerationReferenceContent = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_RETRIEVED_KNOWLEDGE_CONTENT_LENGTH),
+]
+GenerationRequirementSourceText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_REQUIREMENT_SOURCE_TEXT_LENGTH),
+]
+ChapterActionInstruction = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_CHAPTER_ACTION_INSTRUCTION_LENGTH),
+]
+ChapterActionPlainText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_CHAPTER_ACTION_PLAIN_TEXT_LENGTH),
+]
+GenerationCallbackURL = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_GENERATION_CALLBACK_URL_LENGTH),
+]
+ChapterActionType = Literal["optimize", "expand", "shorten", "add_detail", "self_check"]
+RequirementPriority = Literal["high", "medium", "low"]
+
 
 class RetrievedKnowledgeRef(BaseModel):
-    chunk_id: str
-    document_id: str
-    title: str
-    section_path: str = ""
-    content: str = ""
+    chunk_id: GenerationID
+    document_id: GenerationID
+    title: GenerationTitle
+    section_path: GenerationShortText = ""
+    content: GenerationReferenceContent = ""
     page_start: int | None = None
     page_end: int | None = None
-    score: float = 0
+    score: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
 
 
 class TenderRequirementRef(BaseModel):
-    id: str
-    module: str = ""
-    type: str = ""
-    requirement: str
-    priority: str = "medium"
+    id: GenerationID
+    module: GenerationShortText = ""
+    type: GenerationShortText = ""
+    requirement: TenderRequirementText
+    priority: RequirementPriority = "medium"
     mandatory: bool = False
-    score: float | None = None
-    expected_response: str = ""
-    status: str = ""
-    source_text: str = ""
+    score: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    expected_response: TenderRequirementOptionalText = ""
+    status: GenerationShortText = ""
+    source_text: GenerationRequirementSourceText = ""
     page_start: int | None = None
     page_end: int | None = None
     needs_review: bool = False
 
 
 class ChapterGenerateRequest(BaseModel):
-    task_id: str | None = None
-    tenant_id: str
-    bid_document_id: str
-    bid_part_id: str
-    chapter_id: str
-    chapter_title: str
-    tender_requirements: list[str] = Field(default_factory=list)
-    requirement_refs: list[TenderRequirementRef] = Field(default_factory=list)
-    selected_knowledge_refs: list[str] = Field(default_factory=list)
-    retrieved_knowledge_refs: list[RetrievedKnowledgeRef] = Field(default_factory=list)
-    callback_url: str | None = None
-    model_hint: str | None = None
+    task_id: GenerationOptionalID | None = None
+    tenant_id: GenerationID
+    bid_document_id: GenerationID
+    bid_part_id: GenerationID
+    chapter_id: GenerationID
+    chapter_title: GenerationTitle
+    tender_requirements: list[TenderRequirementText] = Field(default_factory=list, max_length=MAX_TENDER_REQUIREMENTS)
+    requirement_refs: list[TenderRequirementRef] = Field(default_factory=list, max_length=MAX_REQUIREMENT_REFS)
+    selected_knowledge_refs: list[GenerationID] = Field(default_factory=list, max_length=MAX_SELECTED_KNOWLEDGE_REFS)
+    retrieved_knowledge_refs: list[RetrievedKnowledgeRef] = Field(default_factory=list, max_length=MAX_RETRIEVED_KNOWLEDGE_REFS)
+    callback_url: GenerationCallbackURL | None = None
+    model_hint: GenerationShortText | None = None
 
 
 class ChapterActionRequest(ChapterGenerateRequest):
-    action: str = "optimize"
-    instruction: str = ""
-    current_plain_text: str = ""
+    action: ChapterActionType = "optimize"
+    instruction: ChapterActionInstruction = ""
+    current_plain_text: ChapterActionPlainText = ""
     current_tiptap_json: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("current_tiptap_json")
+    @classmethod
+    def current_tiptap_json_must_be_bounded(cls, value: dict[str, object]) -> dict[str, object]:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > MAX_CHAPTER_ACTION_TIPTAP_JSON_BYTES:
+            raise ValueError("current_tiptap_json is too large")
+        return value
 
 
 class ChapterGenerateResponse(BaseModel):

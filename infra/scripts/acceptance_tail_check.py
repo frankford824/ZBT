@@ -458,6 +458,28 @@ def check_static_docs() -> None:
         "Knowledge search query size guard missing regression test",
     )
 
+    generation_schema = (ROOT / "ai-service/app/schemas/generation.py").read_text(encoding="utf-8")
+    for needle in (
+        "MAX_TENDER_REQUIREMENTS",
+        "MAX_REQUIREMENT_REFS",
+        "MAX_RETRIEVED_KNOWLEDGE_REFS",
+        "MAX_CHAPTER_ACTION_PLAIN_TEXT_LENGTH",
+        "MAX_CHAPTER_ACTION_TIPTAP_JSON_BYTES",
+        "ChapterActionType",
+        "StringConstraints(strip_whitespace=True",
+        "current_tiptap_json_must_be_bounded",
+    ):
+        require(needle in generation_schema, f"Chapter generation schema missing request size guard: {needle}")
+    generation_schema_tests = (ROOT / "ai-service/app/tests/test_generation_schema.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_chapter_generate_request_rejects_oversized_lists",
+        "test_chapter_generate_request_rejects_oversized_text_fields",
+        "test_chapter_action_request_rejects_invalid_action_and_oversized_body",
+        "test_chapter_action_request_rejects_oversized_tiptap_json",
+        "test_chapter_requests_strip_bounded_text_fields",
+    ):
+        require(needle in generation_schema_tests, f"Chapter generation schema missing regression test: {needle}")
+
     cost_schema = (ROOT / "ai-service/app/schemas/cost.py").read_text(encoding="utf-8")
     for needle in (
         "MAX_COST_CATEGORY_TOTALS",

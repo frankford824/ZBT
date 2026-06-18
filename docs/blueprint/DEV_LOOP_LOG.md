@@ -5753,3 +5753,47 @@ cd ai-service && .venv/bin/python -m pytest app/tests -q -s
 
 1. 本轮治理的是成本建议输入边界，没有新增真实成本优化模型或新的成本分析算法。
 2. 对异常成本请求采取 schema 拒绝策略；后端正常生成的成本建议 payload 已与这些约束对齐。
+
+## Loop-118 / 章节生成 AI 输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 服务 signed 任务入口，处理章节生成/改写请求中无界需求、知识引用、正文和 Tiptap JSON 的问题。
+2. 避免超长章节正文、超大引用列表或异常 action 直接进入 provider prompt，造成模型成本、内存和输出契约风险。
+3. 将章节生成 schema 的字段边界与后端当前生成 payload 的实际规模对齐，并保留足够业务余量。
+
+### 代码交付
+
+1. `ai-service/app/schemas/generation.py` 新增章节生成请求边界常量和 Pydantic 约束，覆盖 tenant/task/bid/chapter id、章节标题、招标需求文本、需求引用、知识引用、callback_url 和 model_hint。
+2. 同文件为 `tender_requirements`、`requirement_refs`、`selected_knowledge_refs`、`retrieved_knowledge_refs` 增加列表数量上限，并限制知识引用正文、需求来源原文和期望响应长度。
+3. `ChapterActionRequest` 将 action 收敛为 `optimize/expand/shorten/add_detail/self_check`，限制 instruction、current_plain_text，并对 `current_tiptap_json` 增加 256KB 序列化体积上限。
+4. `ai-service/app/tests/test_generation_schema.py` 新增章节生成 schema 回归测试，覆盖超长列表、超长文本、非法 score/priority/action、超长正文、超大 Tiptap JSON 和首尾空白清理。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求章节生成 schema 的列表上限、正文/Tiptap JSON 上限、action 枚举和对应回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/schemas/generation.py app/tests/test_generation_schema.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_schema.py -q -s` 通过：`6 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/schemas/generation.py app/tests/test_generation_schema.py` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd backend && go test ./...` 通过。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`257 passed`。
+
+### 偏离蓝图
+
+1. 本轮治理的是章节生成/改写输入边界，没有新增真实章节生成模型或新的生成策略。
+2. 对异常章节生成请求采取 schema 拒绝策略；后端正常章节生成 payload 已与这些约束对齐。
