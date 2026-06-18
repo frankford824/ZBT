@@ -14,7 +14,7 @@
 
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测；前端已补核心字段编辑确认、六模块字段逐项编辑、字段依据复核、字段置信度手工标记、来源摘录高亮和预览搜索定位，仍需继续补内嵌预览选区定位。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标、统一 `table_blocks` 和 `document_ocr` 网关路由；仍缺少真实 OCR Provider 配置和样本回归评测。
-3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览并复制页码/引用号/定位码/摘录，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；当前已补当前筛选条件下的跨页服务端批处理，预览入口会携带页码和摘录搜索参数，响应来源弹窗和字段依据列已高亮来源摘录。
+3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览并复制页码/引用号/定位码/摘录，单条要求可查看模型/人工覆盖历史，历史来源也可打开原文和复制定位，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；当前已补当前筛选条件下的跨页服务端批处理，预览入口会携带页码和摘录搜索参数，响应来源弹窗、响应历史和字段依据列已高亮来源摘录。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考。后端 P0 外部工具网关已提供租户级配置、Provider 预设目录、默认工具白名单、摘要审计、预算阻断和 JSON-RPC `tools/call` 入口，前端团队管理页已提供外部数据源配置和审计入口；标讯大厅已提供 Handaas 外部标讯检索和保存入口，仍需继续补生产凭证验证、企业画像和外部应答库业务入口。
 
@@ -177,7 +177,7 @@
    - 任一生成章节能追溯到对应 requirement_items。
    - 无引用的事实性段落进入 `needs_human_input`。
    - 前端能按“未覆盖/部分覆盖/已覆盖”过滤招标要求。
-   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选，并在响应要点表展示响应证据和来源数量；`PATCH /bids/:id/requirements/:requirementId` 可人工调整覆盖状态、证据和响应来源；`PATCH /bids/:id/requirements` 可批量标记覆盖状态、批量补充响应证据和批量编辑响应来源，并支持 `apply_all/filter/evidence_filter` 按当前筛选条件服务端批处理；`GET /bids/:id/requirements/:requirementId/history` 可读取单条要求覆盖历史；`GET /bids/:id/requirements/export` 可下载评审响应矩阵 CSV 和带历史工作表的 xlsx。
+   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选，并在响应要点表展示响应证据和来源数量；`PATCH /bids/:id/requirements/:requirementId` 可人工调整覆盖状态、证据和响应来源；`PATCH /bids/:id/requirements` 可批量标记覆盖状态、批量补充响应证据和批量编辑响应来源，并支持 `apply_all/filter/evidence_filter` 按当前筛选条件服务端批处理；`GET /bids/:id/requirements/:requirementId/history` 可读取单条要求覆盖历史，前端历史弹窗可从历史来源打开原文和复制定位；`GET /bids/:id/requirements/export` 可下载评审响应矩阵 CSV 和带历史工作表的 xlsx。
 
 ## P1：Skill Pipeline 和阶段闸门
 

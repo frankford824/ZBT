@@ -2002,7 +2002,10 @@ export function BidWizardPage() {
               <Timeline
                 items={requirementHistoryMutation.data.map((event) => ({
                   color: requirementCoverageTimelineColor(event.coverage_status),
-                  children: requirementHistoryTimelineItem(event),
+                  children: requirementHistoryTimelineItem(event, {
+                    onOpenSource: (sourceRef) => void openRequirementSourcePreview(sourceRef),
+                    onCopySource: (sourceRef) => void copyRequirementSourceLocator(sourceRef),
+                  }),
                 }))}
               />
             ) : (
@@ -2987,9 +2990,11 @@ function requirementCoverageTimelineColor(value: BidRequirementItemDTO['coverage
   return 'gray'
 }
 
-function requirementHistoryTimelineItem(event: BidRequirementCoverageEventDTO) {
+function requirementHistoryTimelineItem(
+  event: BidRequirementCoverageEventDTO,
+  actions: { onOpenSource: (sourceRef: unknown) => void; onCopySource: (sourceRef: unknown) => void },
+) {
   const sourceRefs = arrayValue(event.source_refs)
-  const sourceSummary = requirementSourceRefsSummary(sourceRefs)
   return (
     <Space direction="vertical" size={4} className="full-width">
       <Space size={6} wrap>
@@ -3004,9 +3009,45 @@ function requirementHistoryTimelineItem(event: BidRequirementCoverageEventDTO) {
         <Typography.Text type="secondary">未填写响应证据</Typography.Text>
       )}
       {sourceRefs.length ? (
-        <Typography.Text type="secondary">
-          来源 {sourceRefs.length} 处{sourceSummary ? `：${sourceSummary}` : ''}
-        </Typography.Text>
+        <div className="requirement-history-source-list">
+          {sourceRefs.map((sourceRef, index) => {
+            const excerpt = requirementSourceExcerpt(sourceRef)
+            const canPreview = Boolean(requirementSourcePreviewTarget(sourceRef))
+            const canCopy = Boolean(requirementSourceLocatorText(sourceRef))
+            return (
+              <div className="requirement-history-source-row" key={index}>
+                <div className="requirement-history-source-main">
+                  <Typography.Text strong>{requirementSourceTitle(sourceRef)}</Typography.Text>
+                  {excerpt ? (
+                    <Typography.Paragraph className="requirement-history-source-excerpt">
+                      <HighlightedSourceText text={excerpt} query={excerpt} />
+                    </Typography.Paragraph>
+                  ) : null}
+                  <div className="requirement-source-locator">
+                    {requirementSourceLocatorParts(sourceRef).map((part) => (
+                      <Tag key={`${index}-${part.label}-${part.value}`}>
+                        {part.label}：{part.value}
+                      </Tag>
+                    ))}
+                  </div>
+                </div>
+                <Space size={6} wrap={false}>
+                  <Button size="small" disabled={!canPreview} onClick={() => actions.onOpenSource(sourceRef)}>
+                    查看原文
+                  </Button>
+                  <Tooltip title="复制来源定位">
+                    <Button
+                      size="small"
+                      icon={<CopyOutlined />}
+                      disabled={!canCopy}
+                      onClick={() => actions.onCopySource(sourceRef)}
+                    />
+                  </Tooltip>
+                </Space>
+              </div>
+            )
+          })}
+        </div>
       ) : (
         <Typography.Text type="secondary">未关联响应来源</Typography.Text>
       )}
@@ -3018,23 +3059,6 @@ function requirementEventSourceLabel(value: BidRequirementCoverageEventDTO['sour
   if (value === 'manual') return '人工调整'
   if (value === 'model') return '自动生成'
   return '系统记录'
-}
-
-function requirementSourceRefsSummary(sourceRefs: unknown[]) {
-  return sourceRefs
-    .map((ref) => {
-      const record = objectRecord(ref)
-      if (!record) return ''
-      const title = String(record.title || record.filename || record.document_title || '响应来源')
-      const page = String(record.page || record.page_start || '').trim()
-      const excerpt = requirementSourceExcerpt(ref)
-      const locator = firstSourceRefString(record, ['reference_id', 'referenceId', 'citation_id', 'citationId', 'chunk_id', 'chunkId'])
-      return [title, page ? `第${page}页` : '', locator ? `定位：${locator}` : '', excerpt ? `摘录：${excerpt}` : '']
-        .filter(Boolean)
-        .join('，')
-    })
-    .filter(Boolean)
-    .join('；')
 }
 
 function requirementSourceTitle(sourceRef: unknown) {

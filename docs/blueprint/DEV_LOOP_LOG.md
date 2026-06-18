@@ -3875,3 +3875,40 @@ git diff --check
 ### 偏离蓝图
 
 1. 多个模块存在同名字段时，当前按字段名同步相同复核结果；后续若需要区分同名字段不同来源，可把字段依据 row id 扩展为模块级路径。
+
+## Loop-72 / 响应历史来源可追溯操作 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐 Loop-49 留下的历史项来源只能看摘要，不能直接打开原文或复制定位的问题。
+2. 保持覆盖历史仍使用业务口径，不暴露模型、token、provider、schema 等技术字段。
+3. 复用现有响应来源预览、页码/搜索定位和复制定位能力，不新增后端接口。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的响应历史时间线向 `requirementHistoryTimelineItem()` 注入来源打开和复制定位动作。
+2. 历史项中的 `source_refs` 改为逐条来源列表，展示来源标题、页码/章节/引用号/定位码、摘录高亮，以及“查看原文”和“复制来源定位”操作。
+3. 删除不再使用的历史来源摘要 helper，避免维护两套来源展示逻辑。
+4. `frontend/src/index.css` 新增响应历史来源列表样式和移动端单列布局，避免时间线弹窗窄屏错行。
+5. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录覆盖历史来源已可打开原文和复制定位。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过，无空白错误。
+
+### 偏离蓝图
+
+1. 历史来源继续依赖已有 `source_refs` 中的文件或文档 ID；人工录入且缺少文件/文档 ID 的来源只能复制定位，不能伪装成可打开原文。
+2. 预览仍使用浏览器/PDF 查看器的页码和搜索参数，不自建 PDF canvas 选区层。

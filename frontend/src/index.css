@@ -1198,6 +1198,34 @@ a {
   white-space: pre-wrap;
 }
 
+.requirement-history-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.requirement-history-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.requirement-history-source-main {
+  min-width: 0;
+}
+
+.requirement-history-source-excerpt {
+  margin: 4px 0 0 !important;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
 .requirement-source-editor {
   display: flex;
   flex-direction: column;
@@ -1283,6 +1311,10 @@ a {
   }
 
   .parse-field-source-cell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .requirement-history-source-row {
     grid-template-columns: minmax(0, 1fr);
   }
 
