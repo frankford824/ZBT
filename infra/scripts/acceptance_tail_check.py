@@ -629,6 +629,7 @@ def check_static_docs() -> None:
         "maxApprovalStepsJSONBytes",
         "maxApprovalDecisionCommentRunes",
         "marshalApprovalSteps",
+        "unmarshalApprovalSteps",
         "normalizeDecisionComment",
         "validateChainStepActors",
         "validateApprovalTextLength",
@@ -636,6 +637,11 @@ def check_static_docs() -> None:
         "utf8.RuneCountInString",
     ):
         require(needle in approval_store, f"Approval store missing business input boundary: {needle}")
+    for forbidden in (
+        "_ = json.Unmarshal(raw, &chain.Steps)",
+        "_ = json.Unmarshal(raw, &instance.Snapshot)",
+    ):
+        require(forbidden not in approval_store, f"Approval store still ignores stored workflow JSON failure: {forbidden}")
     approval_store_tests = (ROOT / "backend/internal/platform/approval/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestCreateChainRejectsOversizedConfigBeforeDB",
@@ -643,6 +649,9 @@ def check_static_docs() -> None:
         "TestNormalizeChainAcceptsBoundedUnicodeText",
         "TestNormalizeDecisionCommentBoundsAndTrims",
         "TestMarshalApprovalStepsRejectsOversizedSnapshot",
+        "TestScanChainRejectsInvalidStoredStepsJSON",
+        "TestScanInstanceRejectsInvalidStoredSnapshotJSON",
+        "TestScanApprovalRowsNormalizeEmptyStoredStepsJSON",
         "TestBoundedApprovalTextTrimsGeneratedValues",
     ):
         require(needle in approval_store_tests, f"Approval store missing business input boundary regression test: {needle}")

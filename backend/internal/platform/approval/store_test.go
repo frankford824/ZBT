@@ -2,8 +2,10 @@ package approval
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCurrentApprovalStepUsesOneBasedActiveStep(t *testing.T) {
@@ -170,6 +172,53 @@ func TestMarshalApprovalStepsRejectsOversizedSnapshot(t *testing.T) {
 	}
 }
 
+func TestScanChainRejectsInvalidStoredStepsJSON(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid shape": []byte(`{"bad":"shape"}`),
+		"invalid json":  []byte(`[{"name":`),
+		"oversized":     []byte(`[` + strings.Repeat(`{"name":"审批级","role_code":"company_admin"},`, maxApprovalSteps) + `{"name":"审批级","role_code":"company_admin"}]`),
+		"bad field":     []byte(`[{"name":"` + strings.Repeat("级", maxApprovalStepNameRunes+1) + `","role_code":"company_admin"}]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := scanChain(approvalChainScanRow{stepsRaw: raw}); err == nil {
+				t.Fatal("expected invalid stored approval steps JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestScanInstanceRejectsInvalidStoredSnapshotJSON(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid shape": []byte(`{"bad":"shape"}`),
+		"invalid json":  []byte(`[{"name":`),
+		"bad field":     []byte(`[{"name":"审批级","role_code":"` + strings.Repeat("r", maxApprovalStepRoleCodeRunes+1) + `"}]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := scanInstance(approvalInstanceScanRow{snapshotRaw: raw}); err == nil {
+				t.Fatal("expected invalid stored approval snapshot JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestScanApprovalRowsNormalizeEmptyStoredStepsJSON(t *testing.T) {
+	chain, err := scanChain(approvalChainScanRow{stepsRaw: nil})
+	if err != nil {
+		t.Fatalf("expected empty chain steps to normalize, got %v", err)
+	}
+	if chain.Steps == nil || len(chain.Steps) != 0 {
+		t.Fatalf("expected empty chain steps, got %#v", chain.Steps)
+	}
+
+	instance, err := scanInstance(approvalInstanceScanRow{snapshotRaw: []byte(`null`)})
+	if err != nil {
+		t.Fatalf("expected null instance snapshot to normalize, got %v", err)
+	}
+	if instance.Snapshot == nil || len(instance.Snapshot) != 0 {
+		t.Fatalf("expected empty instance snapshot, got %#v", instance.Snapshot)
+	}
+}
+
 func TestBoundedApprovalTextTrimsGeneratedValues(t *testing.T) {
 	raw := " " + strings.Repeat("标", maxApprovalInstanceTitleRunes+10) + " "
 	got := boundedApprovalText(raw, maxApprovalInstanceTitleRunes)
@@ -199,4 +248,45 @@ func TestNormalizeInstanceStatusFilterRejectsUnsupportedValues(t *testing.T) {
 	if _, err := normalizeInstanceStatusFilter("unknown"); err != ErrInvalidRequest {
 		t.Fatalf("expected unsupported approval status filter to be rejected, got %v", err)
 	}
+}
+
+type approvalChainScanRow struct {
+	stepsRaw []byte
+}
+
+func (row approvalChainScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "chain-1"
+	*(dest[1].(*string)) = "审批链"
+	*(dest[2].(*string)) = ""
+	*(dest[3].(*string)) = "bid"
+	*(dest[4].(*[]byte)) = row.stepsRaw
+	*(dest[5].(*bool)) = true
+	*(dest[6].(*time.Time)) = now
+	*(dest[7].(*time.Time)) = now
+	return nil
+}
+
+type approvalInstanceScanRow struct {
+	snapshotRaw []byte
+}
+
+func (row approvalInstanceScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "instance-1"
+	*(dest[1].(*sql.NullString)) = sql.NullString{}
+	*(dest[2].(*sql.NullString)) = sql.NullString{}
+	*(dest[3].(*string)) = "投标文件"
+	*(dest[4].(*string)) = "投标文件审批"
+	*(dest[5].(*string)) = "pending"
+	*(dest[6].(*int)) = 1
+	*(dest[7].(*sql.NullString)) = sql.NullString{}
+	*(dest[8].(*string)) = ""
+	*(dest[9].(*[]byte)) = row.snapshotRaw
+	*(dest[10].(*int)) = 0
+	*(dest[11].(*time.Time)) = now
+	*(dest[12].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[13].(*time.Time)) = now
+	*(dest[14].(*time.Time)) = now
+	return nil
 }

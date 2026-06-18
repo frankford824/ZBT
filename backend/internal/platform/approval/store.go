@@ -1,6 +1,7 @@
 package approval
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -516,9 +517,14 @@ func scanChain(row scanner) (Chain, error) {
 	var chain Chain
 	var raw []byte
 	err := row.Scan(&chain.ID, &chain.Name, &chain.Description, &chain.ResourceType, &raw, &chain.Enabled, &chain.CreatedAt, &chain.UpdatedAt)
-	chain.Steps = []Step{}
-	_ = json.Unmarshal(raw, &chain.Steps)
-	return chain, err
+	if err != nil {
+		return Chain{}, err
+	}
+	chain.Steps, err = unmarshalApprovalSteps(raw)
+	if err != nil {
+		return Chain{}, err
+	}
+	return chain, nil
 }
 
 func instanceSelectSQL() string {
@@ -560,9 +566,11 @@ func scanInstance(row scanner) (Instance, error) {
 	if completedAt.Valid {
 		instance.CompletedAt = &completedAt.Time
 	}
-	instance.Snapshot = []Step{}
-	_ = json.Unmarshal(raw, &instance.Snapshot)
-	return instance, err
+	instance.Snapshot, err = unmarshalApprovalSteps(raw)
+	if err != nil {
+		return Instance{}, err
+	}
+	return instance, nil
 }
 
 func listActions(ctx context.Context, tx pgx.Tx, tenantID, instanceID string) ([]Action, error) {
@@ -880,6 +888,27 @@ func marshalApprovalSteps(steps []Step) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func unmarshalApprovalSteps(raw []byte) ([]Step, error) {
+	steps := []Step{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return steps, nil
+	}
+	if len(trimmed) > maxApprovalStepsJSONBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &steps); err != nil {
+		return nil, err
+	}
+	if steps == nil {
+		steps = []Step{}
+	}
+	if _, err := marshalApprovalSteps(steps); err != nil {
+		return nil, err
+	}
+	return steps, nil
 }
 
 func normalizeApprovalNotification(title, body string) (string, string) {

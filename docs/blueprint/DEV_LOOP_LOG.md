@@ -7595,3 +7595,47 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go AI 调用审计读取可靠性，没有新增 AI Provider、模型路由策略或前端审计视图。
 2. 通用审计读取侧的 result 预算取当前业务任务最大结果规模；如果后续任务结果继续膨胀，应改为资产或明细表引用，而不是依赖审计表承载完整大对象。
+
+## Loop-158 / 审批步骤 JSON 读取边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查审批状态机读取链路，处理 `scanChain()` 和 `scanInstance()` 读取 `steps`、`snapshot` 时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算审批步骤 JSON 静默变成空步骤，影响提交审批、当前步骤定位、审批/驳回流转和审计排查。
+3. 将审批步骤 JSON 读取边界固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/approval/store.go` 新增 `unmarshalApprovalSteps()`，空值和 `null` 归一化为空步骤，并按既有步骤数量、字段长度和 JSON 字节预算校验读取侧数据。
+2. `scanChain()`、`scanInstance()` 改为显式处理 steps/snapshot 解析错误，不再忽略 `json.Unmarshal` 失败。
+3. `backend/internal/platform/approval/store_test.go` 覆盖坏 steps/snapshot 被拒绝，以及空/null 存储值归一化为空步骤。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 增加审批步骤 JSON 读取边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/approval/store.go internal/platform/approval/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/approval
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/approval` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 审批步骤读取可靠性，没有新增审批策略、审批前端视图或通知通道。
+2. 读取侧沿用既有写入侧步骤预算；如果后续需要更复杂审批条件，应拆成结构化条件表或规则引用，而不是扩大步骤 JSON。
