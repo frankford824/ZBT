@@ -5573,3 +5573,50 @@ cd frontend && pnpm build
 
 1. 本轮只治理外部工具预算和单次成本的配置边界，没有新增真实第三方 MCP 调用。
 2. 成本金额目前按配置值估算，仍不是第三方真实 token/调用账单回传。
+
+## Loop-114 / AI 成本审计边界与认证文档收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 调用审计和模型路由成本口径，处理 `estimated_cost` 可被超大有限值污染的问题。
+2. 避免异常 provider 回调或错误定价配置导致 `ai_call_logs.estimated_cost numeric(12,4)` 写入失败，或 ModelRouter 内存 quota 被异常成本值拖垮。
+3. 同步修正 API 文档中 logout 和 AI 服务验签的陈旧描述。
+
+### 代码交付
+
+1. `backend/internal/platform/aicall/store.go` 新增 `maxAIEstimatedCost`，`sanitizeCost()` 同时过滤负数、NaN、Inf 和超大有限值，并按 4 位小数对齐数据库审计精度。
+2. `backend/internal/platform/aicall/pricing_test.go` 新增超大显式成本回退定价、成本四位小数规范化、超大定价结果忽略三组回归测试。
+3. `ai-service/app/gateway/model_router.py` 新增 `MAX_AI_ESTIMATED_COST` 和 `_estimated_cost_or_zero()`，在显式成本、定价估算和内存 quota 累计前统一过滤超大值，并按 4 位小数记账。
+4. `ai-service/app/tests/test_model_router.py` 新增超大成本忽略、审计精度四舍五入、超大定价结果忽略三组回归测试。
+5. `docs/blueprint/API_SPEC.md` 更新认证说明：logout 会写 `session_revoked_at`，refresh 和受保护 API 会拒绝撤销前签发的 token；AI 服务除健康检查外均强制 HMAC 验签，生产必须使用非开发密钥。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，覆盖 API 文档口径、Go AI 审计成本边界、Python ModelRouter quota 成本边界和对应回归测试。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && go test ./internal/platform/aicall
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && go test ./internal/platform/aicall` 通过。
+2. `cd backend && go test ./...` 通过。
+3. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+4. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`240 passed`。
+5. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+6. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+7. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+8. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 AI 成本审计边界和文档口径，没有新增真实模型、OCR 或导出版式能力。
+2. `estimated_cost` 仍依赖 provider 回调或 `AI_MODEL_PRICING_JSON` 配置估算；未接入第三方真实账单回传。

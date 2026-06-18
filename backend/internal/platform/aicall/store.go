@@ -19,7 +19,10 @@ import (
 
 var ErrInvalidRequest = errors.New("invalid ai call log request")
 
-const maxExactJSONInteger = int64(1<<53 - 1)
+const (
+	maxExactJSONInteger = int64(1<<53 - 1)
+	maxAIEstimatedCost  = 100000.0
+)
 
 type Store struct {
 	pool *pgxpool.Pool
@@ -356,10 +359,10 @@ func normalizeRecord(input RecordInput) RecordInput {
 }
 
 func sanitizeCost(value float64) float64 {
-	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+	if value < 0 || value > maxAIEstimatedCost || math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0
 	}
-	return value
+	return math.Round(value*10000) / 10000
 }
 
 func shouldUpdateExistingLog(currentStatus, nextStatus string) bool {

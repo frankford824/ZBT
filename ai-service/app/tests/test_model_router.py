@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from app.gateway.model_router import ModelRouter
+from app.gateway.model_router import MAX_AI_ESTIMATED_COST, ModelRouter
 from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef, TenderRequirementRef
 
 
@@ -624,6 +624,50 @@ def test_router_log_call_ignores_invalid_estimated_cost(value: object) -> None:
     assert result["estimated_cost"] == 0
     assert result["usage"]["used"] == 0
     assert router.enforce_quota("tenant-a") is True
+
+
+def test_router_log_call_ignores_oversized_estimated_cost() -> None:
+    router = ModelRouter(
+        {
+            "providers": {},
+            "routes": {},
+            "quotas": {"default_tenant_monthly_budget": 0.1},
+        }
+    )
+
+    result = router.log_call(tenant_id="tenant-a", estimated_cost=MAX_AI_ESTIMATED_COST + 0.0001)
+
+    assert result["estimated_cost"] == 0
+    assert result["usage"]["used"] == 0
+    assert router.enforce_quota("tenant-a") is True
+
+
+def test_router_log_call_rounds_estimated_cost_to_audit_scale() -> None:
+    router = ModelRouter({"providers": {}, "routes": {}})
+
+    result = router.log_call(tenant_id="tenant-a", estimated_cost="0.123456")
+
+    assert result["estimated_cost"] == 0.1235
+    assert result["usage"]["used"] == 0.1235
+
+
+def test_router_pricing_ignores_oversized_computed_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "AI_MODEL_PRICING_JSON",
+        '{"deepseek/deepseek-chat": {"input_per_1m": 1000000000, "output_per_1m": 1000000000}}',
+    )
+    router = ModelRouter({"providers": {}, "routes": {}})
+
+    result = router.log_call(
+        tenant_id="tenant-a",
+        provider="deepseek",
+        model="deepseek-chat",
+        input_tokens=1000000,
+        output_tokens=1000000,
+    )
+
+    assert result["estimated_cost"] == 0
+    assert result["usage"]["used"] == 0
 
 
 def test_router_quota_downgrades_to_zero_cost_fallback_after_budget_exhausted() -> None:

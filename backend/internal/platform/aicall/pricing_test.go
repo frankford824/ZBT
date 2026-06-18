@@ -85,6 +85,52 @@ func TestNormalizeRecordSanitizesInvalidExplicitCostAndFallsBackToPricing(t *tes
 	}
 }
 
+func TestNormalizeRecordSanitizesOversizedExplicitCostAndFallsBackToPricing(t *testing.T) {
+	t.Setenv("AI_MODEL_PRICING_JSON", `{
+		"deepseek/deepseek-chat": {"input_per_1k": 0.001, "output_per_1k": 0.002}
+	}`)
+
+	input := normalizeRecord(RecordInput{
+		TraceID:       "trace-1",
+		TaskType:      "chapter_generate",
+		Provider:      "deepseek",
+		Model:         "deepseek-chat",
+		InputTokens:   1000,
+		OutputTokens:  500,
+		EstimatedCost: maxAIEstimatedCost + 0.0001,
+		Status:        "done",
+	})
+
+	if input.EstimatedCost != 0.002 {
+		t.Fatalf("expected oversized explicit cost to fall back to pricing, got %.6f", input.EstimatedCost)
+	}
+}
+
+func TestNormalizeRecordRoundsEstimatedCostToDatabaseScale(t *testing.T) {
+	input := normalizeRecord(RecordInput{
+		TraceID:       "trace-1",
+		TaskType:      "chapter_generate",
+		Provider:      "deepseek",
+		Model:         "deepseek-chat",
+		EstimatedCost: 0.123456,
+		Status:        "done",
+	})
+
+	if input.EstimatedCost != 0.1235 {
+		t.Fatalf("expected estimated cost to be rounded to database scale, got %.8f", input.EstimatedCost)
+	}
+}
+
+func TestEstimateCostRejectsOversizedComputedCost(t *testing.T) {
+	t.Setenv("AI_MODEL_PRICING_JSON", `{
+		"deepseek/deepseek-chat": {"input_per_1m": 1000000000, "output_per_1m": 1000000000}
+	}`)
+
+	if cost := estimateCost("deepseek", "deepseek-chat", 1000000, 1000000); cost != 0 {
+		t.Fatalf("expected oversized computed pricing cost to be ignored, got %.6f", cost)
+	}
+}
+
 func TestRecordFromTaskUsesModelMetadataFallbackAndPricing(t *testing.T) {
 	t.Setenv("AI_MODEL_PRICING_JSON", `{
 		"mock/fallback-json-model": {"input_per_1k": 0.001, "output_per_1k": 0.002}

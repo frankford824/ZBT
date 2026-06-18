@@ -397,6 +397,32 @@ def check_static_docs() -> None:
     for needle in ("complianceLevelLabels", "complianceLevelLabel", "基础完整性", "响应一致性", "废标条款", "评分优化"):
         require(needle in compliance_page, f"Compliance UI missing business level label: {needle}")
 
+    api_spec = (ROOT / "docs/blueprint/API_SPEC.md").read_text(encoding="utf-8")
+    require("stateless JWT" not in api_spec, "API_SPEC.md still describes logout as stateless JWT")
+    for needle in ("session_revoked_at", "未被撤销", "除 `/healthz` 和 `/models/health` 外均强制验签"):
+        require(needle in api_spec, f"API_SPEC.md missing current auth/HMAC behavior: {needle}")
+
+    ai_call_store = (ROOT / "backend/internal/platform/aicall/store.go").read_text(encoding="utf-8")
+    for needle in ("maxAIEstimatedCost", "math.Round(value*10000) / 10000", "value > maxAIEstimatedCost"):
+        require(needle in ai_call_store, f"AI call cost normalization missing DB-safe guard: {needle}")
+    ai_call_tests = (ROOT / "backend/internal/platform/aicall/pricing_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestNormalizeRecordSanitizesOversizedExplicitCostAndFallsBackToPricing",
+        "TestNormalizeRecordRoundsEstimatedCostToDatabaseScale",
+        "TestEstimateCostRejectsOversizedComputedCost",
+    ):
+        require(needle in ai_call_tests, f"AI call cost normalization missing regression test: {needle}")
+    model_router = (ROOT / "ai-service/app/gateway/model_router.py").read_text(encoding="utf-8")
+    for needle in ("MAX_AI_ESTIMATED_COST", "_estimated_cost_or_zero", "round(value, 4)"):
+        require(needle in model_router, f"ModelRouter cost normalization missing quota guard: {needle}")
+    model_router_tests = (ROOT / "ai-service/app/tests/test_model_router.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_router_log_call_ignores_oversized_estimated_cost",
+        "test_router_log_call_rounds_estimated_cost_to_audit_scale",
+        "test_router_pricing_ignores_oversized_computed_cost",
+    ):
+        require(needle in model_router_tests, f"ModelRouter cost normalization missing regression test: {needle}")
+
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
     for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):

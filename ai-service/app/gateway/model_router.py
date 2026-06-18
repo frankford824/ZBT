@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import math
 import json
+import math
 import os
 from copy import deepcopy
 from pathlib import Path
@@ -13,6 +13,8 @@ from pydantic import BaseModel, field_validator
 
 from app.gateway.mock_provider import MockProvider
 from app.gateway.openai_compatible_provider import CloudflareAIGatewayProvider, OpenAICompatibleProvider
+
+MAX_AI_ESTIMATED_COST = 100000.0
 
 
 class LocalPipelineProvider:
@@ -360,9 +362,9 @@ class ModelRouter:
     def _cost_from_call(self, payload: dict[str, object]) -> float:
         for source in (payload, payload.get("model_metadata"), payload.get("result")):
             if isinstance(source, dict) and "estimated_cost" in source:
-                amount = self._finite_float(source["estimated_cost"])
-                if amount is not None and amount > 0:
-                    return self._round_money(amount)
+                amount = self._estimated_cost_or_zero(source["estimated_cost"])
+                if amount > 0:
+                    return amount
         provider = str(payload.get("provider") or "").strip()
         model = str(payload.get("model") or "").strip()
         input_tokens = self._positive_int(payload.get("input_tokens"))
@@ -381,7 +383,9 @@ class ModelRouter:
             input_per_1k = self._positive_rate(rate.get("input_per_1m")) / 1000
         if output_per_1k == 0 and self._positive_rate(rate.get("output_per_1m")) > 0:
             output_per_1k = self._positive_rate(rate.get("output_per_1m")) / 1000
-        return self._round_money((input_tokens * input_per_1k + output_tokens * output_per_1k) / 1000)
+        return self._estimated_cost_or_zero(
+            (input_tokens * input_per_1k + output_tokens * output_per_1k) / 1000
+        )
 
     def _pricing_for(self, provider: str, model: str) -> dict[str, object] | None:
         pricing = self._pricing_config()
@@ -430,6 +434,12 @@ class ModelRouter:
             return 0.0
         return amount
 
+    def _estimated_cost_or_zero(self, value: object) -> float:
+        amount = self._finite_float(value)
+        if amount is None or amount <= 0 or amount > MAX_AI_ESTIMATED_COST:
+            return 0.0
+        return self._round_money(amount)
+
     def _positive_int(self, value: object) -> int:
         if value is None or isinstance(value, bool):
             return 0
@@ -451,7 +461,7 @@ class ModelRouter:
         return amount
 
     def _round_money(self, value: float) -> float:
-        return round(value, 10)
+        return round(value, 4)
 
     def _call_event(
         self,
