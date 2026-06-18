@@ -292,6 +292,15 @@ def check_static_docs() -> None:
     api_routes = (ROOT / "backend/internal/api/routes.go").read_text(encoding="utf-8")
     for needle in ("bidRequirementExportFilename(document.Title", "downloadSafeFilenamePart"):
         require(needle in api_routes, f"Requirement export response filename missing business guard: {needle}")
+    for forbidden in ("label: '引用号'", "label: '定位码'", "label: '坐标'"):
+        require(forbidden not in bid_page, f"Bid requirement source UI exposes technical locator field: {forbidden}")
+    require("label: '原文位置'" in bid_page, "Bid requirement source UI missing business locator fallback")
+
+    knowledge_page = (ROOT / "frontend/src/features/knowledge/index.tsx").read_text(encoding="utf-8")
+    for forbidden in ("<Tag>坐标：", "`坐标: ${bboxText}`"):
+        require(forbidden not in knowledge_page, f"File preview source UI exposes raw OCR coordinates: {forbidden}")
+    for needle in ("原文位置：已定位", "sanitizePreviewLocatorText"):
+        require(needle in knowledge_page, f"File preview source UI missing business locator guard: {needle}")
 
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):

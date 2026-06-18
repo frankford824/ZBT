@@ -3178,17 +3178,9 @@ function requirementSourceLocatorParts(sourceRef: unknown) {
   if (section) {
     parts.push({ label: '章节', value: section })
   }
-  const referenceID = firstSourceRefString(record, ['reference_id', 'referenceId', 'citation_id', 'citationId'])
-  if (referenceID) {
-    parts.push({ label: '引用号', value: referenceID })
-  }
-  const chunkID = firstSourceRefString(record, ['chunk_id', 'chunkId'])
-  if (chunkID) {
-    parts.push({ label: '定位码', value: chunkID })
-  }
   const bbox = requirementSourceBBoxText(sourceRef)
   if (bbox) {
-    parts.push({ label: '坐标', value: bbox })
+    parts.push({ label: '原文位置', value: '已定位' })
   }
   return parts
 }

@@ -1022,7 +1022,7 @@ export function FilePreviewPage({ sourceType = 'file' }: { sourceType?: FilePrev
                   <FileSearchOutlined className="file-preview-source-icon" />
                   <Typography.Text strong>{sourceLocator.title || '定位来源'}</Typography.Text>
                   {sourceLocator.page ? <Tag>页码：{sourceLocator.page}</Tag> : null}
-                  {sourceLocator.bboxText ? <Tag>坐标：{sourceLocator.bboxText}</Tag> : null}
+                  {sourceLocator.hasPrecisePosition ? <Tag>原文位置：已定位</Tag> : null}
                 </Space>
                 {sourceLocator.searchText ? (
                   <Typography.Paragraph className="file-preview-source-excerpt">
@@ -1052,15 +1052,17 @@ function filePreviewSourceLocator(searchParams: URLSearchParams) {
   const page = positiveIntegerParam(searchParams.get('page'))
   const searchText = normalizePreviewParam(searchParams.get('search'), 120)
   const title = normalizePreviewParam(searchParams.get('source_title'), 120)
-  const locatorText = normalizePreviewParam(searchParams.get('source_locator'), 800)
+  const locatorText = sanitizePreviewLocatorText(normalizePreviewParam(searchParams.get('source_locator'), 800))
   const bboxText = normalizePreviewParam(searchParams.get('source_bbox'), 120)
-  const copyText = locatorText || filePreviewLocatorCopyText({ title, page, searchText, bboxText })
+  const hasPrecisePosition = Boolean(bboxText)
+  const copyText = locatorText || filePreviewLocatorCopyText({ title, page, searchText, hasPrecisePosition })
   return {
     page,
     searchText,
     title,
     locatorText,
     bboxText,
+    hasPrecisePosition,
     copyText,
     hasLocator: Boolean(page || searchText || title || locatorText || bboxText),
   }
@@ -1070,19 +1072,27 @@ function filePreviewLocatorCopyText({
   title,
   page,
   searchText,
-  bboxText,
+  hasPrecisePosition,
 }: {
   title: string
   page: number | null
   searchText: string
-  bboxText: string
+  hasPrecisePosition: boolean
 }) {
   return [
     title,
     page ? `页码: ${page}` : '',
-    bboxText ? `坐标: ${bboxText}` : '',
+    hasPrecisePosition ? '原文位置: 已定位' : '',
     searchText ? `摘录: ${searchText}` : '',
   ].filter(Boolean).join('\n')
+}
+
+function sanitizePreviewLocatorText(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(引用号|定位码|坐标)\s*[:：]/.test(line))
+    .join('\n')
 }
 
 function positiveIntegerParam(value: string | null) {

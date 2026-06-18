@@ -5153,3 +5153,43 @@ cd frontend && pnpm build
 
 1. 本轮只处理标书编辑器标题区的 ID 兜底，不等同于全站所有详情页的可见 ID 审计完成。
 2. 未新增浏览器截图验收；本轮先用静态防漂移、lint、build 和总检验证。
+
+## Loop-104 / 来源定位技术字段收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查响应来源与文件预览页，收口仍会露出的 OCR/引用定位技术字段。
+2. 用户侧只展示页码、章节、原文位置和摘录，不展示引用号、chunk 定位码或 bbox 坐标值。
+3. 将该 UI 口径加入静态验收，防止后续回退。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的响应来源定位 Tag 移除引用号、定位码和坐标值，仅保留业务定位信息；存在 bbox 时展示“原文位置：已定位”。
+2. `frontend/src/features/knowledge/index.tsx` 的文件预览定位条不再展示原始坐标；复制定位时也不再输出坐标值，并清洗历史链接中的旧定位行。
+3. `infra/scripts/acceptance_tail_check.py --static-docs` 新增来源定位防退化检查，禁止响应来源回到技术定位字段展示。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 静态验收通过，最新交付循环识别为 Loop-104。
+2. 前端 `pnpm lint` 与 `pnpm build` 通过。
+3. 总检 `./infra/scripts/check.sh` 通过：前端构建/lint、后端 Go test/vet、AI 服务 compileall/ruff/pytest 均通过。
+4. AI 服务 pytest 结果为 `237 passed`。
+5. 工程1三段黄金样例回归通过：解析评分 `passed=109/109`、来源引用 `passed=9/9`、导出回归 `passed=23/23`。
+6. 本地未运行中的 `ai-service` 容器测试按脚本规则跳过：`ai-service container is not running; skipping container pytest`。
+
+### 偏离蓝图
+
+1. 本轮不改变 source_refs、source_bbox、chunk_id 等后端数据结构，也不改变预览 URL 的定位能力，只处理用户可见文案和复制文本。
+2. 未新增浏览器截图验收；本轮先使用静态防漂移、lint、build 和总检验证。
