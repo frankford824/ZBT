@@ -4453,3 +4453,70 @@ git diff --check
 
 1. 本轮派生的是稳定定位码，不要求模型自然语言输出自带同名字段。
 2. 核心验收脚本仍依赖运行中的服务版本；若服务未重建，旧运行态仍会按新脚本失败。
+
+## Loop-87 / generation coverage 运行态验收加严 - 2026-06-18
+
+### 本轮目标
+
+1. 核心验收不能只检查生成章节顶层 `source_refs`，还要检查 `GET /bids/:id/generation-coverage` 导出的 AutoRFP 响应矩阵契约。
+2. 运行态导出必须包含要求项、覆盖矩阵行，以及覆盖矩阵行上的可追溯响应来源。
+3. 保持验收脚本轻量，不在 acceptance 中额外依赖 Python venv 或离线评测器执行环境。
+
+### 代码交付
+
+1. `infra/scripts/acceptance_core_check.py` 新增 `coverage_rows_from_generation_spec()`，可从章节顶层、`model_metadata.requirement_coverage` 或 `model_metadata.self_check.requirement_coverage` 提取覆盖矩阵。
+2. 新增 `row_source_refs()` 和 `require_generation_coverage_contract()`：
+   - 检查 `thresholds.min_source_ref_reference_id_ratio=1`。
+   - 检查 `thresholds.min_source_ref_location_ratio=1`。
+   - 检查 `requirements` 非空。
+   - 检查 `requirement_coverage` 行非空。
+   - 检查每行 `source_refs` 具备引用号/定位码和页码、chunk、文件或文档定位。
+3. 生成章节验收输出新增 `coverage.requirements` 和 `coverage.coverage_rows`，便于定位 acceptance 失败点。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录核心验收脚本已覆盖运行态 generation coverage 契约。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_core_check.py
+python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+path = Path('infra/scripts/acceptance_core_check.py')
+spec = importlib.util.spec_from_file_location('acceptance_core_check', path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+coverage = mod.require_generation_coverage_contract({
+    'thresholds': {
+        'min_source_ref_reference_id_ratio': 1,
+        'min_source_ref_location_ratio': 1,
+    },
+    'requirements': [{'id': 'req-1'}],
+    'chapters': [{
+        'requirement_coverage': [{
+            'requirement_id': 'req-1',
+            'source_refs': [{
+                'chunk_id': 'chunk-1',
+                'document_id': 'doc-1',
+                'citation_id': 'SRC-1',
+                'page_start': 1,
+            }],
+        }],
+    }],
+})
+print(coverage)
+PY
+git diff --check
+```
+
+结果：
+
+1. 核心验收脚本语法检查通过。
+2. generation coverage contract helper 冒烟通过，输出 `{'requirements': 1, 'coverage_rows': 1}`。
+3. diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮没有启动完整 Docker 栈跑端到端 acceptance；只加严脚本契约并做静态/函数级验证。
+2. 脚本仍不替代 `generation_coverage_eval.py` 的完整离线评测，acceptance 只覆盖运行态关键结构。

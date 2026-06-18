@@ -153,6 +153,52 @@ def require_traceable_source_refs(refs: object, context: str) -> list[dict[str, 
     return dict_refs
 
 
+def coverage_rows_from_generation_spec(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    chapters = spec.get("chapters")
+    if not isinstance(chapters, list):
+        return rows
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        coverage = chapter.get("requirement_coverage")
+        if not isinstance(coverage, list):
+            metadata = chapter.get("model_metadata")
+            if isinstance(metadata, dict):
+                coverage = metadata.get("requirement_coverage")
+                if not isinstance(coverage, list):
+                    self_check = metadata.get("self_check")
+                    if isinstance(self_check, dict):
+                        coverage = self_check.get("requirement_coverage")
+        if isinstance(coverage, list):
+            rows.extend(row for row in coverage if isinstance(row, dict))
+    return rows
+
+
+def row_source_refs(row: dict[str, Any]) -> list[dict[str, Any]]:
+    refs = row.get("source_refs")
+    if isinstance(refs, list):
+        return [ref for ref in refs if isinstance(ref, dict)]
+    ref = row.get("source_ref")
+    return [ref] if isinstance(ref, dict) else []
+
+
+def require_generation_coverage_contract(spec: object) -> dict[str, Any]:
+    require(isinstance(spec, dict), "generation coverage export is not an object")
+    thresholds = spec.get("thresholds")
+    require(isinstance(thresholds, dict), "generation coverage export missing thresholds")
+    require(thresholds.get("min_source_ref_reference_id_ratio") == 1, "generation coverage export missing reference id threshold")
+    require(thresholds.get("min_source_ref_location_ratio") == 1, "generation coverage export missing location threshold")
+    requirements = spec.get("requirements")
+    require(isinstance(requirements, list) and requirements, "generation coverage export missing requirements")
+    coverage_rows = coverage_rows_from_generation_spec(spec)
+    require(coverage_rows, "generation coverage export missing requirement coverage rows")
+    for index, row in enumerate(coverage_rows):
+        refs = row_source_refs(row)
+        require_traceable_source_refs(refs, f"generation coverage row {index}")
+    return {"requirements": len(requirements), "coverage_rows": len(coverage_rows)}
+
+
 def login(email: str = ADMIN_EMAIL, tenant_id: str = TENANT_ID) -> tuple[str, dict[str, Any]]:
     result = api("POST", "/auth/login", payload={"tenant_id": tenant_id, "email": email, "password": PASSWORD})
     require(isinstance(result, dict), "login response is not an object")
@@ -528,12 +574,9 @@ def check_knowledge_and_generation(token: str, stamp: str, combined: dict[str, A
     require(chapter.get("status") == "generated", f"chapter status after generation is {chapter.get('status')}")
     generated_source_refs = require_traceable_source_refs(chapter.get("source_refs"), "generated chapter")
     coverage_spec = api("GET", f"/bids/{combined['id']}/generation-coverage", token=token)
-    thresholds = coverage_spec.get("thresholds") if isinstance(coverage_spec, dict) else None
-    require(isinstance(thresholds, dict), "generation coverage export missing thresholds")
-    require(thresholds.get("min_source_ref_reference_id_ratio") == 1, "generation coverage export missing reference id threshold")
-    require(thresholds.get("min_source_ref_location_ratio") == 1, "generation coverage export missing location threshold")
+    coverage_contract = require_generation_coverage_contract(coverage_spec)
     require(len(chapter.get("needs_human_input", [])) > 0, "generated chapter missing needs_human_input")
-    ok("26,29,30 generate chapters with source refs and human input flags", {"chapter": chapter_id, "source_refs": len(generated_source_refs), "needs_human_input": len(chapter["needs_human_input"])})
+    ok("26,29,30 generate chapters with source refs and human input flags", {"chapter": chapter_id, "source_refs": len(generated_source_refs), "needs_human_input": len(chapter["needs_human_input"]), "coverage": coverage_contract})
 
     accepted = api("POST", f"/chapters/{chapter_id}/accept", token=token)
     require(isinstance(accepted, dict) and accepted.get("status") == "accepted", "accept chapter did not mark accepted")
