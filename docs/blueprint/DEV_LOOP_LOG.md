@@ -6415,3 +6415,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 API 查询参数输入边界，没有新增分页游标、筛选条件或审计检索能力。
 2. 仍保留 store 层兜底，作为内部调用的第二道保护；HTTP 调用方现在会在参数错误时收到明确业务错误。
+
+## Loop-132 / 标讯来源配置边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 Tender 来源写入链路，处理 `tender_sources.config` 自由 JSON 缺少数量和大小边界的问题。
+2. 修复来源配置保存时忽略 `json.Marshal` 错误的隐患，避免不可序列化配置被静默写成空值或异常值。
+3. 保持来源创建、更新、URL 安全校验和状态归一化语义不变，只补写库前配置校验。
+
+### 代码交付
+
+1. `backend/internal/platform/tender/store.go` 新增来源配置边界常量：最多 50 个配置项、配置 key 最多 128 字符、配置 JSON 不超过 16KB。
+2. 新增 `normalizeSourceConfig()`，对 nil/空配置归一化为 `{}`，对 key 做 trim，并拒绝空 key、超长 key、超大 JSON 和不可 JSON 序列化值。
+3. `normalizeSourceWriteRequest()` 改用 `normalizeSourceConfig()`，不再忽略 `json.Marshal` 错误。
+4. `backend/internal/platform/tender/store_test.go` 新增创建来源写库前拒绝超大配置、配置 key 归一化、nil 配置兜底和非法配置形态回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 Tender 来源配置边界防回退检查，并禁止回退到 `config, _ := json.Marshal(req.Config)`。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/tender/store.go internal/platform/tender/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是标讯来源配置输入边界，没有新增来源抓取调度、平台适配器或字段映射能力。
+2. 配置仍保留自由 JSON 结构；若后续需要复杂平台参数，应优先抽象为版本化 schema，而不是扩大自由 JSON。

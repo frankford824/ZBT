@@ -1,9 +1,13 @@
 package tender
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -268,6 +272,63 @@ func TestMergeSourceUpdateRequestRejectsInvalidProvidedURL(t *testing.T) {
 	}, UpdateSourceRequest{URL: &url})
 	if _, err := normalizeSourceWriteRequest(merged); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("expected invalid provided url to be rejected, got %v", err)
+	}
+}
+
+func TestCreateSourceRejectsOversizedConfigBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	req := CreateSourceRequest{
+		Name:       "全国招标来源",
+		SourceType: "招标平台",
+		URL:        "https://example.com/source",
+		Status:     "active",
+		Config:     map[string]any{"payload": strings.Repeat("配", maxSourceConfigJSONBytes)},
+	}
+	if _, err := store.CreateSource(context.Background(), "tenant-id", req); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected oversized source config to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeSourceConfigTrimsKeysAndBoundsJSON(t *testing.T) {
+	raw, err := normalizeSourceConfig(map[string]any{
+		" region ": "浙江",
+		"enabled":  true,
+	})
+	if err != nil {
+		t.Fatalf("expected bounded source config to normalize: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode normalized config: %v", err)
+	}
+	if decoded["region"] != "浙江" || decoded["enabled"] != true {
+		t.Fatalf("expected normalized config keys and values, got %#v", decoded)
+	}
+
+	raw, err = normalizeSourceConfig(nil)
+	if err != nil {
+		t.Fatalf("expected nil source config to normalize: %v", err)
+	}
+	if string(raw) != "{}" {
+		t.Fatalf("expected nil source config to normalize to {}, got %s", raw)
+	}
+}
+
+func TestNormalizeSourceConfigRejectsInvalidShape(t *testing.T) {
+	tooMany := make(map[string]any, maxSourceConfigEntries+1)
+	for i := 0; i <= maxSourceConfigEntries; i++ {
+		tooMany[fmt.Sprintf("key-%d", i)] = i
+	}
+	for _, config := range []map[string]any{
+		{" ": "blank key"},
+		{strings.Repeat("键", maxSourceConfigKeyRunes+1): "long key"},
+		{"payload": strings.Repeat("配", maxSourceConfigJSONBytes)},
+		{"bad": func() {}},
+		tooMany,
+	} {
+		if _, err := normalizeSourceConfig(config); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected invalid source config to be rejected, got %v", err)
+		}
 	}
 }
 

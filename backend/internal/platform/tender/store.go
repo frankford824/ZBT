@@ -28,6 +28,9 @@ const (
 	sourceVerifySuccessMessage     = "检测通过"
 	sourceVerifyUnavailableMessage = "来源暂时无法访问，请稍后重试"
 	sourceVerifyFailedMessage      = "来源响应异常，请稍后重试"
+	maxSourceConfigEntries         = 50
+	maxSourceConfigKeyRunes        = 128
+	maxSourceConfigJSONBytes       = 16 * 1024
 )
 
 type Store struct {
@@ -800,7 +803,10 @@ func normalizeSourceWriteRequest(req CreateSourceRequest) (normalizedSourceWrite
 	if err != nil {
 		return normalizedSourceWriteRequest{}, err
 	}
-	config, _ := json.Marshal(req.Config)
+	config, err := normalizeSourceConfig(req.Config)
+	if err != nil {
+		return normalizedSourceWriteRequest{}, err
+	}
 	return normalizedSourceWriteRequest{
 		Name:       name,
 		SourceType: defaultString(req.SourceType, "其他"),
@@ -884,6 +890,28 @@ func normalizeMetadata(value any) map[string]any {
 		return typed
 	}
 	return map[string]any{}
+}
+
+func normalizeSourceConfig(value map[string]any) ([]byte, error) {
+	if len(value) == 0 {
+		return []byte("{}"), nil
+	}
+	if len(value) > maxSourceConfigEntries {
+		return nil, ErrInvalidRequest
+	}
+	normalized := make(map[string]any, len(value))
+	for key, item := range value {
+		key = strings.TrimSpace(key)
+		if key == "" || len([]rune(key)) > maxSourceConfigKeyRunes {
+			return nil, ErrInvalidRequest
+		}
+		normalized[key] = item
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil || len(raw) > maxSourceConfigJSONBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
 }
 
 func clampScore(value int) int {

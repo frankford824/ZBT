@@ -416,6 +416,28 @@ def check_static_docs() -> None:
     ):
         require(needle in bid_store_tests, f"Bid export filename missing boundary regression test: {needle}")
 
+    tender_store = (ROOT / "backend/internal/platform/tender/store.go").read_text(encoding="utf-8")
+    require(
+        "config, _ := json.Marshal(req.Config)" not in tender_store,
+        "Tender source config still ignores JSON marshal errors",
+    )
+    for needle in (
+        "maxSourceConfigEntries",
+        "maxSourceConfigKeyRunes",
+        "maxSourceConfigJSONBytes",
+        "normalizeSourceConfig",
+        "config, err := normalizeSourceConfig(req.Config)",
+        "len(raw) > maxSourceConfigJSONBytes",
+    ):
+        require(needle in tender_store, f"Tender source config missing input boundary: {needle}")
+    tender_store_tests = (ROOT / "backend/internal/platform/tender/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestCreateSourceRejectsOversizedConfigBeforeDB",
+        "TestNormalizeSourceConfigTrimsKeysAndBoundsJSON",
+        "TestNormalizeSourceConfigRejectsInvalidShape",
+    ):
+        require(needle in tender_store_tests, f"Tender source config missing regression test: {needle}")
+
     knowledge_page = (ROOT / "frontend/src/features/knowledge/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("<Tag>坐标：", "`坐标: ${bboxText}`"):
         require(forbidden not in knowledge_page, f"File preview source UI exposes raw OCR coordinates: {forbidden}")
