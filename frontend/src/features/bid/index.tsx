@@ -2638,20 +2638,105 @@ function parseModuleFieldValueText(value: unknown): string {
     if (value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
       return value.map((item) => String(item ?? '')).join('\n')
     }
-    return JSON.stringify(value, null, 2)
+    return value
+      .map((item, index) => parseModuleFieldItemSummary(item, index))
+      .filter(Boolean)
+      .join('\n')
   }
-  if (value && typeof value === 'object') return JSON.stringify(value, null, 2)
+  if (value && typeof value === 'object') return parseModuleObjectSummary(value as Record<string, unknown>)
   return value === null || value === undefined ? '' : String(value)
+}
+
+const parseModuleTechnicalFieldKeys = new Set([
+  'id',
+  'module',
+  'type',
+  'status',
+  'priority',
+  'mandatory',
+  'needs_review',
+  'confidence',
+  'metadata',
+  'source_ref',
+  'source_refs',
+])
+
+const parseModuleSummaryFieldLabels: Record<string, string> = {
+  ...parseEvidenceFieldLabels,
+  description: '说明',
+  expected_response: '响应建议',
+  excerpt: '原文摘录',
+  field: '字段',
+  name: '名称',
+  page: '页码',
+  requirement: '要求',
+  source_text: '原文摘录',
+  summary: '摘要',
+  text: '内容',
+  title: '标题',
+  value: '内容',
+}
+
+function parseModuleFieldItemSummary(value: unknown, index: number) {
+  const record = objectRecord(value)
+  const text = record ? parseModuleObjectSummary(record) : parseModuleNestedValueText(value)
+  return text ? `第 ${index + 1} 项：${text}` : ''
+}
+
+function parseModuleObjectSummary(record: Record<string, unknown>) {
+  const preferredKeys = [
+    'title',
+    'name',
+    'requirement',
+    'value',
+    'text',
+    'summary',
+    'description',
+    'expected_response',
+    'source_text',
+    'excerpt',
+    'page',
+  ]
+  const entries = Object.entries(record).filter(
+    ([key, value]) => !parseModuleTechnicalFieldKeys.has(key) && parseModuleNestedValueText(value),
+  )
+  const preferred = preferredKeys
+    .map((key) => entries.find(([entryKey]) => entryKey === key))
+    .filter((entry): entry is [string, unknown] => Boolean(entry))
+  const rest = entries.filter(([key]) => !preferredKeys.includes(key))
+  const parts = [...preferred, ...rest].slice(0, 4).map(([key, value]) => {
+    return `${parseModuleFieldDisplayLabel(key)}：${parseModuleNestedValueText(value)}`
+  })
+  return parts.join('；')
+}
+
+function parseModuleNestedValueText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => parseModuleNestedValueText(item))
+      .filter(Boolean)
+      .join('、')
+  }
+  const record = objectRecord(value)
+  if (record) {
+    return Object.entries(record)
+      .filter(([key]) => !parseModuleTechnicalFieldKeys.has(key))
+      .map(([, item]) => parseModuleNestedValueText(item))
+      .filter(Boolean)
+      .join('、')
+  }
+  return value === null || value === undefined ? '' : String(value).trim()
+}
+
+function parseModuleFieldDisplayLabel(key: string) {
+  return parseModuleSummaryFieldLabels[key] ?? '信息'
 }
 
 function parseModuleFieldDraftValue(value: string, originalValue: unknown): unknown {
   const text = value.trim()
+  if (text === parseModuleFieldValueText(originalValue).trim()) return originalValue
   if (Array.isArray(originalValue)) {
     if (!text) return []
-    if (originalValue.some((item) => item && typeof item === 'object')) {
-      const parsed = tryParseJSON(text)
-      if (Array.isArray(parsed)) return parsed
-    }
     return parseConfirmTextList(value)
   }
   if (typeof originalValue === 'number') {
@@ -2664,20 +2749,7 @@ function parseModuleFieldDraftValue(value: string, originalValue: unknown): unkn
     if (['false', '0', 'no', 'n', '否', '无'].includes(normalized)) return false
     return text
   }
-  if (originalValue && typeof originalValue === 'object') {
-    const parsed = tryParseJSON(text)
-    return parsed === undefined ? text : parsed
-  }
   return text
-}
-
-function tryParseJSON(value: string) {
-  if (!value) return undefined
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return undefined
-  }
 }
 
 function parseModuleFieldsChangedPaths(

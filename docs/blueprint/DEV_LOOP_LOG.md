@@ -4955,3 +4955,43 @@ cd frontend && pnpm lint
 
 1. 本轮只处理团队页外部数据源配置和调用记录的可见技术口径；其它页面仍需继续逐页审查。
 2. 未运行完整浏览器截图回归；本轮通过 TypeScript build、ESLint 和总检验证渲染代码可构建。
+
+## Loop-99 / 标书解析确认复杂字段去 JSON 化 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书编制流程的用户可见技术口径，处理解析确认页模块字段直接展示 JSON 的问题。
+2. 让复杂数组/对象字段以中文摘要呈现，避免用户在文本框里看到原始结构、括号和技术键名。
+3. 保持未编辑复杂字段保存时仍保留原始结构，避免“打开确认页再保存”造成数据降级。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的模块字段展示从 `JSON.stringify(value, null, 2)` 改为 `parseModuleObjectSummary()` / `parseModuleFieldItemSummary()` 生成中文摘要。
+2. 新增复杂字段摘要标签映射，过滤 `id`、`metadata`、`source_refs`、`confidence` 等内部字段。
+3. `parseModuleFieldDraftValue()` 在文本未变化时返回原始值；人工编辑复杂字段时再按可读文本写回。
+4. 删除模块字段编辑链路中的 JSON 解析要求，用户不需要编辑 JSON 才能保存。
+5. `acceptance_tail_check.py --static-docs` 增加标书页防漂移检查，禁止重新使用 `JSON.stringify(value, null, 2)` 作为字段展示。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 静态防漂移检查通过。
+2. 前端 ESLint 通过。
+3. 前端生产构建通过。
+4. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest、工程1三项黄金样本回归均通过。
+
+### 偏离蓝图
+
+1. 本轮修复的是标书解析确认页的复杂字段展示，不等同于完成全站所有页面的逐像素 UI 验收。
+2. 未运行浏览器截图检查；本轮使用源码静态防漂移、lint、build 和总检验证。
