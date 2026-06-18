@@ -4804,3 +4804,37 @@ cd ai-service && .venv/bin/python -m ruff check app
 
 1. 本轮不改变业务逻辑；只收紧本地/CI 可复用的质量门禁。
 2. Docker 中 AI 服务容器未运行，容器内 pytest 仍按既有逻辑跳过。
+
+## Loop-95 / AI 本地质量门禁强制执行 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查总检脚本，避免 AI 服务本地 ruff 或 pytest 缺失时仍输出 `all checks passed`。
+2. 保证 `./infra/scripts/check.sh` 在本地/CI 环境中对 AI 服务质量门禁给出强失败，而不是静默跳过。
+3. 让容器内 pytest 与本地 pytest 使用一致的 `-q -s` 参数，减少环境差异。
+
+### 代码交付
+
+1. `infra/scripts/check.sh` 中 AI 服务 ruff 和 pytest 从“可选跳过”改为“必须可用”：
+   - 缺少 ruff 时输出 `ai-service ruff unavailable; install ai-service dev dependencies` 并退出 1。
+   - 缺少 pytest 时输出 `ai-service pytest unavailable; install ai-service dev dependencies` 并退出 1。
+2. 容器内 AI 服务 pytest 改为 `python -m pytest app/tests -q -s`，与本地执行参数一致。
+
+### 检查结果
+
+已运行：
+
+```bash
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 前端 build 和 lint 通过。
+2. 后端 `go test ./...` 和 `go vet ./...` 通过。
+3. AI 服务 compileall、ruff 和 pytest 均通过，pytest 输出 `237 passed`。
+4. Docker 中 AI 服务容器未运行，容器内 pytest 按既有逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮仍只收紧工程验证入口，不改变业务功能。

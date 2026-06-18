@@ -21,23 +21,23 @@ if [ -x "$ROOT/ai-service/.venv/bin/python" ]; then
   AI_PYTHON="$ROOT/ai-service/.venv/bin/python"
 fi
 "$AI_PYTHON" -m compileall app
-if "$AI_PYTHON" -m ruff --version >/dev/null 2>&1; then
-  "$AI_PYTHON" -m ruff check app
-else
-  echo "local ruff unavailable; skipping ai-service ruff"
-fi
-if "$AI_PYTHON" -m pytest --version >/dev/null 2>&1; then
-  "$AI_PYTHON" -m pytest app/tests -q -s
-else
-  echo "local pytest unavailable; skipping local ai-service pytest"
-fi
+"$AI_PYTHON" -m ruff --version >/dev/null 2>&1 || {
+  echo "ai-service ruff unavailable; install ai-service dev dependencies" >&2
+  exit 1
+}
+"$AI_PYTHON" -m ruff check app
+"$AI_PYTHON" -m pytest --version >/dev/null 2>&1 || {
+  echo "ai-service pytest unavailable; install ai-service dev dependencies" >&2
+  exit 1
+}
+"$AI_PYTHON" -m pytest app/tests -q -s
 
 cd "$ROOT"
 if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
   docker compose config >/dev/null
   AI_CONTAINER="$(docker compose ps -q ai-service 2>/dev/null || true)"
   if [ -n "$AI_CONTAINER" ] && [ "$(docker inspect -f '{{.State.Running}}' "$AI_CONTAINER" 2>/dev/null || true)" = "true" ]; then
-    docker compose exec -T ai-service python -m pytest app/tests
+    docker compose exec -T ai-service python -m pytest app/tests -q -s
   else
     echo "ai-service container is not running; skipping container pytest"
   fi
