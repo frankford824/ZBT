@@ -51,6 +51,12 @@ const (
 	maxKnowledgeDocumentTitleRunes       = 300
 	maxKnowledgeDocumentSummaryRunes     = 4000
 	maxKnowledgeDocumentTagIDs           = 50
+
+	maxKnowledgeExternalTaskIDRunes   = 128
+	maxKnowledgeTaskErrorMessageRunes = 1000
+	maxKnowledgeTaskPayloadJSONBytes  = 128 * 1024
+	maxKnowledgeTaskResultJSONBytes   = 256 * 1024
+	maxKnowledgeTaskRouteJSONBytes    = 16 * 1024
 )
 
 type Store struct {
@@ -761,7 +767,10 @@ func (s *Store) ProcessDocument(ctx context.Context, tenantID, userID, id string
 			"content_type": doc.File.ContentType,
 			"callback_url": s.cfg.AICallbackURL,
 		}
-		payloadJSON, _ := json.Marshal(payload)
+		payloadJSON, err := marshalKnowledgeTaskJSON(payload, maxKnowledgeTaskPayloadJSONBytes)
+		if err != nil {
+			return err
+		}
 		created, err := scanTask(tx.QueryRow(ctx, `
 			insert into ai_tasks (
 				tenant_id, user_id, task_type, status, external_task_id,
@@ -847,21 +856,20 @@ func (s *Store) GetTaskByExternalID(ctx context.Context, tenantID, externalTaskI
 }
 
 func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Task, error) {
-	status := normalizeTaskStatus(payload.Status)
-	if status == "" || payload.TenantID == "" || payload.TaskID == "" {
-		return Task{}, ErrInvalidRequest
+	payload, resultJSON, err := normalizeKnowledgeCallbackPayload(payload)
+	if err != nil {
+		return Task{}, err
 	}
 	var task Task
-	err := s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, payload.TenantID, func(tx pgx.Tx) error {
 		current, err := lockTaskByExternalID(ctx, tx, payload.TenantID, payload.TaskID)
 		if err != nil {
 			return err
 		}
 		task = current
-		if !taskstatus.ShouldApplyCallback(current.Status, status) {
+		if !taskstatus.ShouldApplyCallback(current.Status, payload.Status) {
 			return nil
 		}
-		resultJSON, _ := json.Marshal(payload.Result)
 		updated, err := scanTask(tx.QueryRow(ctx, `
 			update ai_tasks
 			set status = $3,
@@ -874,23 +882,17 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 			returning id::text, task_type, status, external_task_id::text,
 				resource_type, resource_id::text, payload, route, result, error_message,
 				started_at, completed_at, created_at, updated_at
-		`, payload.TenantID, current.ID, status, resultJSON, payload.ErrorMessage))
+		`, payload.TenantID, current.ID, payload.Status, resultJSON, payload.ErrorMessage))
 		if err != nil {
 			return err
 		}
 		task = updated
 		parseStatus := "processing"
-		if status == "done" {
+		if payload.Status == "done" {
 			parseStatus = "processed"
 		}
-		if status == "failed" || status == "cancelled" {
+		if payload.Status == "failed" || payload.Status == "cancelled" {
 			parseStatus = "failed"
-		}
-		summary := payload.Summary
-		if summary == "" && payload.Result != nil {
-			if value, ok := payload.Result["summary"].(string); ok {
-				summary = value
-			}
 		}
 		if _, err := tx.Exec(ctx, `
 			update knowledge_documents
@@ -900,10 +902,10 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				processed_at = case when $3 = 'processed' then now() else processed_at end,
 				updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, payload.TenantID, task.ResourceID, parseStatus, payload.ProcessedTitle, summary); err != nil {
+		`, payload.TenantID, task.ResourceID, parseStatus, payload.ProcessedTitle, payload.Summary); err != nil {
 			return err
 		}
-		if status == "done" {
+		if payload.Status == "done" {
 			if err := replaceChunks(ctx, tx, payload.TenantID, task.ResourceID, payload.Chunks); err != nil {
 				return err
 			}
@@ -1200,24 +1202,18 @@ func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]a
 	if err := aihttp.DecodeJSON(resp.Body, &accepted); err != nil {
 		return aiTaskAccepted{}, err
 	}
-	if accepted.TaskID == "" {
-		return aiTaskAccepted{}, ErrInvalidRequest
+	normalized, _, err := normalizeAcceptedKnowledgeTask(accepted)
+	if err != nil {
+		return aiTaskAccepted{}, err
 	}
-	if accepted.Status == "" {
-		accepted.Status = "queued"
-	}
-	if accepted.Route == nil {
-		accepted.Route = map[string]any{}
-	}
-	return accepted, nil
+	return normalized, nil
 }
 
 func (s *Store) applyAcceptedKnowledgeTask(ctx context.Context, tenantID, taskID string, accepted aiTaskAccepted) error {
-	status := normalizeTaskStatus(accepted.Status)
-	if status == "" {
-		status = "queued"
+	accepted, routeJSON, err := normalizeAcceptedKnowledgeTask(accepted)
+	if err != nil {
+		return err
 	}
-	routeJSON, _ := json.Marshal(accepted.Route)
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			update ai_tasks
@@ -1227,7 +1223,7 @@ func (s *Store) applyAcceptedKnowledgeTask(ctx context.Context, tenantID, taskID
 				started_at = coalesce(started_at, now()),
 				updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, taskID, status, accepted.TaskID, routeJSON)
+		`, tenantID, taskID, accepted.Status, accepted.TaskID, routeJSON)
 		if err != nil {
 			return err
 		}
@@ -1798,6 +1794,88 @@ func normalizeDocumentTemplateContent(content map[string]any) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return contentJSON, nil
+}
+
+func marshalKnowledgeTaskJSON(value any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func normalizeKnowledgeCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {
+	payload.TenantID = strings.TrimSpace(payload.TenantID)
+	payload.TaskID = strings.TrimSpace(payload.TaskID)
+	payload.Status = normalizeTaskStatus(payload.Status)
+	payload.ErrorMessage = strings.TrimSpace(payload.ErrorMessage)
+	payload.ProcessedTitle = strings.TrimSpace(payload.ProcessedTitle)
+	payload.Summary = strings.TrimSpace(payload.Summary)
+	if payload.Result == nil {
+		payload.Result = map[string]any{}
+	}
+	if payload.TenantID == "" || payload.TaskID == "" || payload.Status == "" {
+		return payload, nil, ErrInvalidRequest
+	}
+	if err := validateKnowledgeTextLength(payload.TaskID, maxKnowledgeExternalTaskIDRunes); err != nil {
+		return payload, nil, err
+	}
+	if err := validateKnowledgeTextLength(payload.ErrorMessage, maxKnowledgeTaskErrorMessageRunes); err != nil {
+		return payload, nil, err
+	}
+	if err := validateKnowledgeTextLength(payload.ProcessedTitle, maxKnowledgeDocumentTitleRunes); err != nil {
+		return payload, nil, err
+	}
+	if payload.Summary == "" {
+		if value, ok := payload.Result["summary"].(string); ok {
+			payload.Summary = strings.TrimSpace(value)
+		}
+	}
+	if err := validateKnowledgeTextLength(payload.Summary, maxKnowledgeDocumentSummaryRunes); err != nil {
+		return payload, nil, err
+	}
+	if payload.Status == "done" {
+		if err := validateKnowledgeChunks(payload.Chunks); err != nil {
+			return payload, nil, err
+		}
+	}
+	resultJSON, err := marshalKnowledgeTaskJSON(payload.Result, maxKnowledgeTaskResultJSONBytes)
+	if err != nil {
+		return payload, nil, err
+	}
+	return payload, resultJSON, nil
+}
+
+func normalizeAcceptedKnowledgeTask(accepted aiTaskAccepted) (aiTaskAccepted, []byte, error) {
+	accepted.TaskID = strings.TrimSpace(accepted.TaskID)
+	accepted.Status = normalizeTaskStatus(accepted.Status)
+	if accepted.Status == "" {
+		accepted.Status = "queued"
+	}
+	if accepted.Route == nil {
+		accepted.Route = map[string]any{}
+	}
+	if accepted.TaskID == "" {
+		return accepted, nil, ErrInvalidRequest
+	}
+	if err := validateKnowledgeTextLength(accepted.TaskID, maxKnowledgeExternalTaskIDRunes); err != nil {
+		return accepted, nil, err
+	}
+	routeJSON, err := marshalKnowledgeTaskJSON(accepted.Route, maxKnowledgeTaskRouteJSONBytes)
+	if err != nil {
+		return accepted, nil, err
+	}
+	return accepted, routeJSON, nil
+}
+
+func validateKnowledgeTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 || utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func vectorLiteralFromEmbedding(values []float64) (string, error) {

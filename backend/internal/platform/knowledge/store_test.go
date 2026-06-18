@@ -437,6 +437,105 @@ func TestCreateDocumentTemplateRejectsInvalidRequestBeforeDB(t *testing.T) {
 	}
 }
 
+func TestKnowledgeCallbackRejectsInvalidResultBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.ApplyCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-knowledge-00000000-0000-4000-8000-000000000001",
+		Status:   "failed",
+		Result: map[string]any{
+			"invalid": math.NaN(),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid callback result JSON to be rejected before DB, got %v", err)
+	}
+}
+
+func TestKnowledgeCallbackRejectsOversizedResultBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.ApplyCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-knowledge-00000000-0000-4000-8000-000000000001",
+		Status:   "failed",
+		Result: map[string]any{
+			"payload": strings.Repeat("结", maxKnowledgeTaskResultJSONBytes),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized callback result to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeKnowledgeCallbackBoundsDocumentFields(t *testing.T) {
+	for name, payload := range map[string]CallbackPayload{
+		"oversized processed title": {
+			TenantID:       "tenant-id",
+			TaskID:         "task-knowledge-00000000-0000-4000-8000-000000000001",
+			Status:         "failed",
+			ProcessedTitle: strings.Repeat("题", maxKnowledgeDocumentTitleRunes+1),
+		},
+		"oversized explicit summary": {
+			TenantID: "tenant-id",
+			TaskID:   "task-knowledge-00000000-0000-4000-8000-000000000001",
+			Status:   "failed",
+			Summary:  strings.Repeat("摘", maxKnowledgeDocumentSummaryRunes+1),
+		},
+		"oversized result summary": {
+			TenantID: "tenant-id",
+			TaskID:   "task-knowledge-00000000-0000-4000-8000-000000000001",
+			Status:   "failed",
+			Result: map[string]any{
+				"summary": strings.Repeat("摘", maxKnowledgeDocumentSummaryRunes+1),
+			},
+		},
+		"oversized error message": {
+			TenantID:     "tenant-id",
+			TaskID:       "task-knowledge-00000000-0000-4000-8000-000000000001",
+			Status:       "failed",
+			ErrorMessage: strings.Repeat("错", maxKnowledgeTaskErrorMessageRunes+1),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := normalizeKnowledgeCallbackPayload(payload); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid callback document fields to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestKnowledgeCallbackRejectsInvalidDoneChunksBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	_, err := store.ApplyCallback(context.Background(), CallbackPayload{
+		TenantID: "tenant-id",
+		TaskID:   "task-knowledge-00000000-0000-4000-8000-000000000001",
+		Status:   "done",
+		Result:   map[string]any{},
+		Chunks: []ChunkInput{
+			{Title: "空片段", Content: "   "},
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected invalid done chunks to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeAcceptedKnowledgeTaskRejectsOversizedRoute(t *testing.T) {
+	_, _, err := normalizeAcceptedKnowledgeTask(aiTaskAccepted{
+		TaskID: "task-knowledge-00000000-0000-4000-8000-000000000001",
+		Status: "running",
+		Route: map[string]any{
+			"payload": strings.Repeat("路", maxKnowledgeTaskRouteJSONBytes),
+		},
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized accepted route to be rejected, got %v", err)
+	}
+}
+
 func ptrString(value string) *string {
 	return &value
 }

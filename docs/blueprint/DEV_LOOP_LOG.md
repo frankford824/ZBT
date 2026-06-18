@@ -6738,3 +6738,49 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是成本 AI 任务回调与外部响应的后端写入边界，没有新增真实成本模型 Provider 或成本优化算法。
 2. JSON 上限按当前任务规模保守设置；若未来成本建议需要返回大型表格或附件，应改为文件/知识库引用，而不是扩大 `ai_tasks.result`。
+
+## Loop-139 / 知识库 AI 任务回调边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查知识库 AI 处理任务，处理 `ProcessDocument`、AI accepted route 和 callback result 仍忽略 JSON marshal 错误的问题。
+2. 修补 AI 回调绕过普通文档更新入口的标题、摘要和错误文本边界，避免超长模型输出直接写入 `knowledge_documents`。
+3. 将知识库 AI 任务 payload/result/route 的 JSON 字节预算固化到静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/knowledge/store.go` 新增知识库 AI 任务边界常量，覆盖外部 task id、回调错误文本、任务 payload、callback result 和 accepted route 的 JSON 字节预算。
+2. 新增 `marshalKnowledgeTaskJSON()`、`normalizeKnowledgeCallbackPayload()`、`normalizeAcceptedKnowledgeTask()` 和 `validateKnowledgeTextLength()`。
+3. `ProcessDocument()`、`ApplyCallback()`、`submitKnowledgeProcess()` 和 `applyAcceptedKnowledgeTask()` 改为使用已校验 JSON，不再忽略 `json.Marshal` 错误。
+4. `ApplyCallback()` 在进入租户事务前统一完成状态归一化、task id/error/title/summary 长度校验、result JSON 校验；`done` 状态还会提前校验 chunks，避免先更新任务再因 chunk 无效回滚。
+5. `backend/internal/platform/knowledge/store_test.go` 新增非法 callback result、超大 result、超长标题/摘要/error_message、无效 done chunks 和超大 accepted route 的写库前拒绝回归测试。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加知识库 AI 任务 JSON 边界防回退检查，并禁止回退到忽略 payload/result/route marshal 错误。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/platform/knowledge/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/knowledge
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/knowledge` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是知识库 AI 任务回调与外部响应的后端写入边界，没有新增 OCR、表格抽取或真实 embedding Provider。
+2. result 上限采用 256KB；若后续解析结果需要返回大型全文、表格或附件，应落到文件/知识片段表，而不是继续扩大 `ai_tasks.result`。

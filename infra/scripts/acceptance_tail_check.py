@@ -720,8 +720,21 @@ def check_static_docs() -> None:
         "normalizeKnowledgeTagInput",
         "normalizeKnowledgeDocumentUpdate",
         "validateKnowledgeDocumentReferences",
+        "maxKnowledgeExternalTaskIDRunes",
+        "maxKnowledgeTaskResultJSONBytes",
+        "maxKnowledgeTaskRouteJSONBytes",
+        "marshalKnowledgeTaskJSON",
+        "normalizeKnowledgeCallbackPayload",
+        "normalizeAcceptedKnowledgeTask",
+        "validateKnowledgeTextLength",
     ):
         require(needle in knowledge_store, f"Knowledge template missing content size guard: {needle}")
+    for forbidden in (
+        "payloadJSON, _ := json.Marshal(payload)",
+        "resultJSON, _ := json.Marshal(payload.Result)",
+        "routeJSON, _ := json.Marshal(accepted.Route)",
+    ):
+        require(forbidden not in knowledge_store, f"Knowledge store still ignores AI task JSON marshal failure: {forbidden}")
     knowledge_store_tests = (ROOT / "backend/internal/platform/knowledge/store_test.go").read_text(encoding="utf-8")
     require(
         "TestNormalizeKnowledgeSearchQueryTrimsAndCapsRunes" in knowledge_store_tests,
@@ -735,6 +748,11 @@ def check_static_docs() -> None:
         "TestNormalizeKnowledgeTagInputBoundsTextAndColor",
         "TestNormalizeKnowledgeDocumentUpdateBoundsFieldsAndIDs",
         "TestKnowledgeWriteMethodsRejectInvalidInputsBeforeDB",
+        "TestKnowledgeCallbackRejectsInvalidResultBeforeDB",
+        "TestKnowledgeCallbackRejectsOversizedResultBeforeDB",
+        "TestNormalizeKnowledgeCallbackBoundsDocumentFields",
+        "TestKnowledgeCallbackRejectsInvalidDoneChunksBeforeDB",
+        "TestNormalizeAcceptedKnowledgeTaskRejectsOversizedRoute",
     ):
         require(needle in knowledge_store_tests, f"Knowledge template missing content boundary regression test: {needle}")
 
