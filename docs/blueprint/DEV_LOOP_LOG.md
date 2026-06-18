@@ -4767,3 +4767,40 @@ cd frontend && pnpm lint
 ### 偏离蓝图
 
 1. Docker 中的 AI 服务容器未运行，因此总检仍按既有逻辑跳过容器内 pytest；本轮修复的是本地 AI 服务 pytest 盲区。
+
+## Loop-94 / 总检脚本静态检查收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查全工程验证入口，把前端 lint、Go vet 和 AI ruff 从手动补跑收口到统一总检脚本。
+2. 避免 `./infra/scripts/check.sh` 只验证构建/测试，而漏掉静态规则、vet 和 Python lint。
+3. 保持检查入口仍能在本机 WSL 环境稳定执行。
+
+### 代码交付
+
+1. `infra/scripts/check.sh` 在前端 `pnpm build` 后新增 `pnpm lint`。
+2. 后端 `go test ./...` 后新增 `GOTOOLCHAIN=local go vet ./...`。
+3. AI 服务在 `compileall` 后新增 ruff 检查；若当前 Python 环境没有 ruff，输出明确跳过提示，避免静默失败。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd frontend && pnpm lint
+cd backend && GOTOOLCHAIN=local go vet ./...
+cd ai-service && .venv/bin/python -m ruff check app
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 后端 Go vet 通过。
+3. AI 服务 ruff 通过。
+4. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest 均通过，AI pytest 输出 `237 passed`。
+
+### 偏离蓝图
+
+1. 本轮不改变业务逻辑；只收紧本地/CI 可复用的质量门禁。
+2. Docker 中 AI 服务容器未运行，容器内 pytest 仍按既有逻辑跳过。
