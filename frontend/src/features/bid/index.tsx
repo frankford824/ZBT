@@ -771,10 +771,12 @@ export function BidWizardPage() {
       requirementId: string
       coverageStatus: BidRequirementItemDTO['coverage_status']
       evidence?: string
+      sourceRefs?: unknown[]
     }) =>
       updateBidRequirementCoverage(bidId, payload.requirementId, {
         coverage_status: payload.coverageStatus,
         evidence: payload.evidence,
+        source_refs: payload.sourceRefs,
       }),
     onSuccess: async () => {
       message.success('响应状态已更新')
@@ -787,14 +789,18 @@ export function BidWizardPage() {
       requirementIds: string[]
       coverageStatus: BidRequirementItemDTO['coverage_status']
       evidence?: string
+      sourceRefs?: unknown[]
     }) =>
       batchUpdateBidRequirementCoverage(bidId, {
         requirement_ids: payload.requirementIds,
         coverage_status: payload.coverageStatus,
         evidence: payload.evidence,
+        source_refs: payload.sourceRefs,
       }),
     onSuccess: async (items, variables) => {
-      message.success(variables.evidence ? `已更新 ${items.length} 项响应证据` : `已更新 ${items.length} 项响应状态`)
+      message.success(
+        variables.evidence || variables.sourceRefs?.length ? `已更新 ${items.length} 项响应依据` : `已更新 ${items.length} 项响应状态`,
+      )
       setSelectedRequirementKeys([])
       await queryClient.invalidateQueries({ queryKey: ['bid-requirements', bidId] })
     },
@@ -824,32 +830,39 @@ export function BidWizardPage() {
   const openRequirementEvidenceModal = (row: ParseRequirementRow) => {
     if (!row.canUpdate) return
     let evidence = row.coverageEvidence
+    let sourceRefs = sourceRefDraftsFromRefs(row.coverageSourceRefs)
     Modal.confirm({
       title: '补充响应证据',
       okText: '保存',
       cancelText: '取消',
       content: (
-        <Input.TextArea
-          defaultValue={row.coverageEvidence}
-          rows={4}
-          maxLength={1000}
-          showCount
-          autoFocus
-          onChange={(event) => {
-            evidence = event.target.value
-          }}
-        />
+        <Space orientation="vertical" size={10} className="full-width">
+          <Input.TextArea
+            defaultValue={row.coverageEvidence}
+            rows={4}
+            maxLength={1000}
+            showCount
+            autoFocus
+            placeholder="填写响应证据"
+            onChange={(event) => {
+              evidence = event.target.value
+            }}
+          />
+          <RequirementSourceRefsEditor initialRefs={sourceRefs} onChange={(nextRefs) => (sourceRefs = nextRefs)} />
+        </Space>
       ),
       onOk: () => {
         const nextEvidence = evidence.trim()
-        if (!nextEvidence) {
-          message.warning('请填写响应证据')
-          return Promise.reject(new Error('empty evidence'))
+        const nextSourceRefs = sourceRefsFromDrafts(sourceRefs)
+        if (!nextEvidence && !nextSourceRefs.length) {
+          message.warning('请填写响应证据或来源')
+          return Promise.reject(new Error('empty evidence or source'))
         }
         return requirementCoverageMutation.mutateAsync({
           requirementId: row.id,
           coverageStatus: row.coverageStatus === 'unmapped' ? 'planned' : row.coverageStatus,
           evidence: nextEvidence,
+          sourceRefs: nextSourceRefs,
         })
       },
     })
@@ -858,6 +871,7 @@ export function BidWizardPage() {
     if (!selectedRequirementRows.length) return
     let coverageStatus = inferBatchCoverageStatus(selectedRequirementRows)
     let evidence = ''
+    let sourceRefs = [] as RequirementSourceRefDraft[]
     Modal.confirm({
       title: '批量补充响应证据',
       okText: '保存',
@@ -883,18 +897,21 @@ export function BidWizardPage() {
               evidence = event.target.value
             }}
           />
+          <RequirementSourceRefsEditor initialRefs={sourceRefs} onChange={(nextRefs) => (sourceRefs = nextRefs)} />
         </Space>
       ),
       onOk: () => {
         const nextEvidence = evidence.trim()
-        if (!nextEvidence) {
-          message.warning('请填写响应证据')
-          return Promise.reject(new Error('empty evidence'))
+        const nextSourceRefs = sourceRefsFromDrafts(sourceRefs)
+        if (!nextEvidence && !nextSourceRefs.length) {
+          message.warning('请填写响应证据或来源')
+          return Promise.reject(new Error('empty evidence or source'))
         }
         return requirementBatchCoverageMutation.mutateAsync({
           requirementIds: selectedRequirementRows.map((row) => row.id),
           coverageStatus,
           evidence: nextEvidence,
+          sourceRefs: nextSourceRefs,
         })
       },
     })
@@ -1714,6 +1731,7 @@ function structuredRequirementRows(result: Record<string, unknown> | undefined) 
         coverageStatus: requirementCoverageStatusValue(record.status),
         coverageEvidence: '',
         coverageSourceCount: 0,
+        coverageSourceRefs: [] as unknown[],
         canUpdate: false,
       }
     })
@@ -1724,7 +1742,7 @@ function requirementRowsFromItems(items: BidRequirementItemDTO[]) {
   return items
     .map((item) => {
       const latestCoverage = latestCoverageFromMetadata(item.metadata)
-      const sourceCount = arrayValue(latestCoverage?.source_refs).length
+      const sourceRefs = arrayValue(latestCoverage?.source_refs)
       return {
         id: item.id || item.external_id,
         module: parseModuleLabel(item.module),
@@ -1733,7 +1751,8 @@ function requirementRowsFromItems(items: BidRequirementItemDTO[]) {
         needsReview: item.needs_review || item.coverage_status === 'needs_review',
         coverageStatus: item.coverage_status,
         coverageEvidence: formatStructuredValue(latestCoverage?.evidence),
-        coverageSourceCount: sourceCount,
+        coverageSourceCount: sourceRefs.length,
+        coverageSourceRefs: sourceRefs,
         canUpdate: true,
       }
     })
@@ -1830,6 +1849,105 @@ const requirementCoverageOptions = [
   { label: '已覆盖', value: 'covered' },
   { label: '待复核', value: 'needs_review' },
 ] satisfies Array<{ label: string; value: BidRequirementItemDTO['coverage_status'] }>
+
+type RequirementSourceRefDraft = {
+  title: string
+  page: string
+  excerpt: string
+}
+
+function RequirementSourceRefsEditor({
+  initialRefs,
+  onChange,
+}: {
+  initialRefs: RequirementSourceRefDraft[]
+  onChange: (refs: RequirementSourceRefDraft[]) => void
+}) {
+  const [drafts, setDrafts] = useState<RequirementSourceRefDraft[]>(initialRefs)
+  const updateDrafts = (nextDrafts: RequirementSourceRefDraft[]) => {
+    setDrafts(nextDrafts)
+    onChange(nextDrafts)
+  }
+  const updateDraft = (index: number, patch: Partial<RequirementSourceRefDraft>) => {
+    updateDrafts(drafts.map((draft, draftIndex) => (draftIndex === index ? { ...draft, ...patch } : draft)))
+  }
+  return (
+    <div className="requirement-source-editor">
+      <Space align="center" className="full-width requirement-source-editor-head">
+        <Typography.Text strong>响应来源</Typography.Text>
+        <Button size="small" icon={<PlusOutlined />} onClick={() => updateDrafts([...drafts, { title: '', page: '', excerpt: '' }])}>
+          添加来源
+        </Button>
+      </Space>
+      {drafts.length ? (
+        <Space orientation="vertical" size={8} className="full-width">
+          {drafts.map((draft, index) => (
+            <div className="requirement-source-row" key={index}>
+              <Input
+                value={draft.title}
+                placeholder="文件或章节"
+                maxLength={120}
+                onChange={(event) => updateDraft(index, { title: event.target.value })}
+              />
+              <Input
+                value={draft.page}
+                placeholder="页码"
+                maxLength={24}
+                onChange={(event) => updateDraft(index, { page: event.target.value })}
+              />
+              <Input.TextArea
+                value={draft.excerpt}
+                placeholder="原文摘录"
+                rows={2}
+                maxLength={500}
+                onChange={(event) => updateDraft(index, { excerpt: event.target.value })}
+              />
+              <Button
+                size="small"
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => updateDrafts(drafts.filter((_, draftIndex) => draftIndex !== index))}
+              />
+            </div>
+          ))}
+        </Space>
+      ) : (
+        <Typography.Text type="secondary">可添加文件名、页码和原文摘录</Typography.Text>
+      )}
+    </div>
+  )
+}
+
+function sourceRefDraftsFromRefs(sourceRefs: unknown[]): RequirementSourceRefDraft[] {
+  return sourceRefs
+    .map((ref) => {
+      const record = objectRecord(ref)
+      if (!record) return null
+      return {
+        title: String(record.title || record.filename || record.document_title || '').trim(),
+        page: String(record.page || record.page_start || '').trim(),
+        excerpt: formatStructuredValue(record.source_text || record.excerpt || record.text).trim(),
+      }
+    })
+    .filter((draft): draft is RequirementSourceRefDraft => Boolean(draft && (draft.title || draft.page || draft.excerpt)))
+}
+
+function sourceRefsFromDrafts(drafts: RequirementSourceRefDraft[]): unknown[] {
+  const refs: Record<string, string>[] = []
+  for (const draft of drafts) {
+    const title = draft.title.trim()
+    const page = draft.page.trim()
+    const excerpt = draft.excerpt.trim()
+    if (!title && !page && !excerpt) continue
+    refs.push({
+      title: title || '响应来源',
+      ...(page ? { page } : {}),
+      ...(excerpt ? { excerpt, source_text: excerpt } : {}),
+    })
+  }
+  return refs
+}
 
 function inferBatchCoverageStatus(rows: ParseRequirementRow[]): BidRequirementItemDTO['coverage_status'] {
   if (!rows.length) return 'covered'

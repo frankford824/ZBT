@@ -3234,3 +3234,39 @@ git diff --check
 
 1. 本轮只支持批量填写共同证据文本，不做批量来源引用结构化编辑。
 2. 本轮不新增高级筛选、按条件全选或跨页服务端批处理。
+
+## Loop-55 / 响应矩阵来源编辑 - 2026-06-17
+
+### 本轮目标
+
+1. 把 AutoRFP 的 `Answer -> Source` 思路继续推进到人工审阅入口，补齐单条和批量响应来源编辑。
+2. 来源编辑必须复用现有 `source_refs`、覆盖历史和导出链路，不新增旁路字段。
+3. 前端只展示业务字段：文件或章节、页码、原文摘录；不暴露 chunk_id、schema、provider、token 等技术口径。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 为响应要点行补充 `coverageSourceRefs`，单条补证据弹窗可预填并编辑已有响应来源。
+2. 新增 `RequirementSourceRefsEditor`，支持添加、编辑和删除来源；字段固定为文件或章节、页码、原文摘录。
+3. 单条 `updateBidRequirementCoverage()` 和批量 `batchUpdateBidRequirementCoverage()` 调用均可提交 `source_refs`。
+4. 批量补证据弹窗同步支持批量编辑共同响应来源；保存成功后仍刷新要求矩阵并清空选中项。
+5. `frontend/src/index.css` 为来源编辑器新增响应式网格，桌面紧凑排列，小屏自动换行，避免输入框错位。
+6. `API_SPEC.md`、`AI_PIPELINE.md`、`AI_IMPLEMENTATION_CHECKLIST.md` 同步更新当前能力和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 TypeScript 构建和 Vite 打包通过。
+2. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮支持人工录入结构化响应来源，但不做点击跳转到原文精确选区或知识库 chunk。
+2. 本轮不新增高级筛选、按条件全选或跨页服务端批处理。

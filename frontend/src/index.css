@@ -1120,6 +1120,38 @@ a {
   white-space: pre-wrap;
 }
 
+.requirement-source-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.requirement-source-editor-head {
+  justify-content: space-between;
+}
+
+.requirement-source-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) 72px minmax(160px, 1.4fr) 32px;
+  gap: 8px;
+  align-items: start;
+}
+
+.requirement-source-row .ant-input,
+.requirement-source-row .ant-input-textarea {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .requirement-source-row {
+    grid-template-columns: minmax(0, 1fr) 72px 32px;
+  }
+
+  .requirement-source-row .ant-input-textarea {
+    grid-column: 1 / -1;
+  }
+}
+
 /* ---------- 版本对比 ---------- */
 
 .diff-grid {
