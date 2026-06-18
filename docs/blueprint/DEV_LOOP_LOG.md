@@ -6177,3 +6177,51 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是招标解析响应结构边界，没有新增解析算法、OCR 能力或模型提示策略。
 2. JSON 字节预算按 AI 服务与回调链路稳定性收敛；若后续真实模型需要返回更丰富证据，应优先分页/引用化存储，而不是放宽单次回调 payload。
+
+## Loop-127 / 项目业务输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查后端业务写入链路，处理项目名称、里程碑标题/备注、成本项目派生名称和中标案例派生文件名缺少长度边界的问题。
+2. 避免异常长中文标题在项目、成本、知识库案例和文件资产链路间放大，造成数据库字段膨胀、响应过大或后续导出/下载体验异常。
+3. 保持现有项目状态机、里程碑逻辑和中标案例回流语义不变，只补写库前校验与系统派生文本截断。
+
+### 代码交付
+
+1. `backend/internal/platform/project/store.go` 新增项目模块输入边界常量：项目名称 255 字符、里程碑标题 255 字符、里程碑备注 1000 字符、派生案例标题/文件名 255 字符。
+2. 新增 `normalizeProjectName()`、`normalizeMilestoneWriteRequest()`、`validateProjectTextLength()` 和 `boundedProjectText()`，统一按 `utf8.RuneCountInString` 做中文友好的长度校验。
+3. `Create` / `Update` 在进入事务前校验项目名称，超长或空白名称会直接返回 `ErrInvalidRequest`，避免无效请求触达数据库。
+4. `CreateMilestone` / `UpdateMilestone` 统一归一化标题和备注，保留原状态、日期和排序逻辑。
+5. `CreateCostProject` 对系统派生的成本项目名做 255 字符截断并保留业务兜底名。
+6. `BuildWonCaseDraft` 对中标案例标题和 Markdown 文件名做边界截断，避免超长项目名扩散到文件资产和知识库回流。
+7. `backend/internal/platform/project/store_test.go` 新增项目名、里程碑标题/备注、中文边界和派生文本截断回归测试。
+8. `infra/scripts/acceptance_tail_check.py --static-docs` 增加项目模块业务输入边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/project/store.go internal/platform/project/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/project
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/project` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `282 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是项目业务输入与派生文本边界，没有新增项目协同、成本分析或知识库检索能力。
+2. 派生标题/文件名采用字符数截断，优先保证中文业务名称可读；若未来需要适配特定网关响应头字节预算，可在下载响应层继续增加字节级限制。

@@ -1,6 +1,7 @@
 package project
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,33 @@ func TestNormalizeCreateStatusDefaultsOnlyBlankStatus(t *testing.T) {
 
 	if _, err := normalizeCreateStatus("unknown"); err != ErrInvalidRequest {
 		t.Fatalf("expected unsupported create status to be rejected, got %v", err)
+	}
+}
+
+func TestProjectWriteRejectsOversizedNameBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	projectID := "00000000-0000-4000-8000-000000000001"
+	oversized := strings.Repeat("项", maxProjectNameRunes+1)
+
+	_, err := store.Create(context.Background(), "tenant-id", "user-id", CreateProjectRequest{Name: oversized})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized create project name to be rejected before DB, got %v", err)
+	}
+
+	_, err = store.Update(context.Background(), "tenant-id", "user-id", projectID, UpdateProjectRequest{Name: &oversized})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized update project name to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeProjectNameAcceptsBoundedUnicodeText(t *testing.T) {
+	bounded := strings.Repeat("项", maxProjectNameRunes)
+	got, err := normalizeProjectName(" " + bounded + " ")
+	if err != nil {
+		t.Fatalf("expected bounded project name to normalize: %v", err)
+	}
+	if got != bounded {
+		t.Fatalf("expected project name to be trimmed and preserved, got %q", got)
 	}
 }
 
@@ -121,6 +149,39 @@ func TestNormalizeMilestoneStatusDefaultsOnlyBlankStatus(t *testing.T) {
 
 	if _, err := normalizeMilestoneStatus("unknown"); err != ErrInvalidRequest {
 		t.Fatalf("expected unsupported milestone status to be rejected, got %v", err)
+	}
+}
+
+func TestNormalizeMilestoneWriteRequestRejectsOversizedText(t *testing.T) {
+	for _, req := range []CreateMilestoneRequest{
+		{Title: strings.Repeat("里", maxProjectMilestoneTitleRunes+1)},
+		{Title: "初验", Note: strings.Repeat("备", maxProjectMilestoneNoteRunes+1)},
+	} {
+		if _, err := normalizeMilestoneWriteRequest(req); err != ErrInvalidRequest {
+			t.Fatalf("expected oversized milestone text in %+v to be rejected, got %v", req, err)
+		}
+	}
+}
+
+func TestNormalizeMilestoneWriteRequestAcceptsBoundedUnicodeText(t *testing.T) {
+	normalized, err := normalizeMilestoneWriteRequest(CreateMilestoneRequest{
+		Title: " " + strings.Repeat("里", maxProjectMilestoneTitleRunes) + " ",
+		Note:  " " + strings.Repeat("备", maxProjectMilestoneNoteRunes) + " ",
+	})
+	if err != nil {
+		t.Fatalf("expected bounded milestone text to normalize: %v", err)
+	}
+	if len([]rune(normalized.Title)) != maxProjectMilestoneTitleRunes || len([]rune(normalized.Note)) != maxProjectMilestoneNoteRunes {
+		t.Fatalf("expected bounded milestone text to be trimmed and preserved, got title=%d note=%d", len([]rune(normalized.Title)), len([]rune(normalized.Note)))
+	}
+}
+
+func TestBoundedProjectTextTrimsGeneratedFallbackNames(t *testing.T) {
+	raw := " " + strings.Repeat("项", maxProjectGeneratedFilenameRunes+10) + " "
+	got := boundedProjectText(raw, maxProjectGeneratedFilenameRunes)
+
+	if len([]rune(got)) != maxProjectGeneratedFilenameRunes {
+		t.Fatalf("expected generated project text to be capped at %d runes, got %d", maxProjectGeneratedFilenameRunes, len([]rune(got)))
 	}
 }
 

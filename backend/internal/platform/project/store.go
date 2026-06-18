@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,14 @@ import (
 var (
 	ErrNotFound       = errors.New("project resource not found")
 	ErrInvalidRequest = errors.New("invalid project request")
+)
+
+const (
+	maxProjectNameRunes              = 255
+	maxProjectMilestoneTitleRunes    = 255
+	maxProjectMilestoneNoteRunes     = 1000
+	maxProjectGeneratedTitleRunes    = 255
+	maxProjectGeneratedFilenameRunes = 255
 )
 
 type Store struct {
@@ -202,9 +211,9 @@ func (s *Store) Get(ctx context.Context, tenantID, id string) (Project, error) {
 }
 
 func (s *Store) Create(ctx context.Context, tenantID, userID string, req CreateProjectRequest) (Project, error) {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return Project{}, ErrInvalidRequest
+	name, err := normalizeProjectName(req.Name)
+	if err != nil {
+		return Project{}, err
 	}
 	status, err := normalizeCreateStatus(req.Status)
 	if err != nil {
@@ -238,17 +247,24 @@ func (s *Store) Update(ctx context.Context, tenantID, userID, id string, req Upd
 	if err := validateUUID(id); err != nil {
 		return Project{}, err
 	}
+	var requestedName string
+	hasRequestedName := false
+	if req.Name != nil {
+		name, err := normalizeProjectName(*req.Name)
+		if err != nil {
+			return Project{}, err
+		}
+		requestedName = name
+		hasRequestedName = true
+	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		current, err := scanProject(tx.QueryRow(ctx, projectSelectSQL()+` where p.tenant_id = $1 and p.id = $2`, tenantID, id))
 		if err != nil {
 			return err
 		}
 		name := current.Name
-		if req.Name != nil {
-			name = strings.TrimSpace(*req.Name)
-			if name == "" {
-				return ErrInvalidRequest
-			}
+		if hasRequestedName {
+			name = requestedName
 		}
 		status, err := normalizeUpdateStatus(current.Status, req.Status)
 		if err != nil {
@@ -389,15 +405,15 @@ func (s *Store) CreateMilestone(ctx context.Context, tenantID, userID, projectID
 	if err := validateUUID(projectID); err != nil {
 		return Milestone{}, err
 	}
-	title := strings.TrimSpace(req.Title)
-	if title == "" {
-		return Milestone{}, ErrInvalidRequest
-	}
-	status, err := normalizeMilestoneStatus(req.Status)
+	normalized, err := normalizeMilestoneWriteRequest(req)
 	if err != nil {
 		return Milestone{}, err
 	}
-	dueDate, err := parseOptionalDate(req.DueDate)
+	status, err := normalizeMilestoneStatus(normalized.Status)
+	if err != nil {
+		return Milestone{}, err
+	}
+	dueDate, err := parseOptionalDate(normalized.DueDate)
 	if err != nil {
 		return Milestone{}, ErrInvalidRequest
 	}
@@ -410,10 +426,10 @@ func (s *Store) CreateMilestone(ctx context.Context, tenantID, userID, projectID
 			insert into project_milestones (tenant_id, project_id, title, status, due_date, completed_at, sort_order, note)
 			values ($1, $2, $3, $4, $5, case when $4 = 'done' then now() else null end, $6, $7)
 			returning id::text
-		`, tenantID, projectID, title, status, dueDate, req.SortOrder, strings.TrimSpace(req.Note)).Scan(&id); err != nil {
+		`, tenantID, projectID, normalized.Title, status, dueDate, normalized.SortOrder, normalized.Note).Scan(&id); err != nil {
 			return err
 		}
-		return insertLog(ctx, tx, tenantID, projectID, userID, "project.milestone_created", map[string]any{"title": title})
+		return insertLog(ctx, tx, tenantID, projectID, userID, "project.milestone_created", map[string]any{"title": normalized.Title})
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Milestone{}, ErrNotFound
@@ -442,15 +458,15 @@ func (s *Store) UpdateMilestone(ctx context.Context, tenantID, userID, projectID
 			return err
 		}
 		merged := mergeMilestoneUpdateRequest(current, req)
-		title := strings.TrimSpace(merged.Title)
-		if title == "" {
-			return ErrInvalidRequest
-		}
-		status, err := normalizeMilestoneStatus(merged.Status)
+		normalized, err := normalizeMilestoneWriteRequest(merged)
 		if err != nil {
 			return err
 		}
-		dueDate, err := parseOptionalDate(merged.DueDate)
+		status, err := normalizeMilestoneStatus(normalized.Status)
+		if err != nil {
+			return err
+		}
+		dueDate, err := parseOptionalDate(normalized.DueDate)
 		if err != nil {
 			return ErrInvalidRequest
 		}
@@ -460,14 +476,14 @@ func (s *Store) UpdateMilestone(ctx context.Context, tenantID, userID, projectID
 				completed_at = case when $5 = 'done' and completed_at is null then now() when $5 = 'pending' then null else completed_at end,
 				sort_order = $7, note = $8, updated_at = now()
 			where tenant_id = $1 and project_id = $2 and id = $3
-		`, tenantID, projectID, milestoneID, title, status, dueDate, merged.SortOrder, strings.TrimSpace(merged.Note))
+		`, tenantID, projectID, milestoneID, normalized.Title, status, dueDate, normalized.SortOrder, normalized.Note)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return pgx.ErrNoRows
 		}
-		return insertLog(ctx, tx, tenantID, projectID, userID, "project.milestone_updated", map[string]any{"title": title, "status": status})
+		return insertLog(ctx, tx, tenantID, projectID, userID, "project.milestone_updated", map[string]any{"title": normalized.Title, "status": status})
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Milestone{}, ErrNotFound
@@ -667,13 +683,17 @@ func (s *Store) CreateCostProject(ctx context.Context, tenantID, userID, project
 		if status != "closed" || !result.Valid || result.String != "won" {
 			return ErrInvalidRequest
 		}
+		costName := boundedProjectText(name+"成本项目", maxProjectNameRunes)
+		if costName == "" {
+			costName = "成本项目"
+		}
 		if err := tx.QueryRow(ctx, `
 			insert into cost_projects (tenant_id, project_id, name, status, metadata)
 			values ($1, $2, $3, 'draft', '{"source":"project"}')
 			on conflict (tenant_id, project_id)
 			do update set updated_at = now()
 			returning id::text, project_id::text, name, status, budget_amount::float8, metadata, created_at, updated_at
-		`, tenantID, projectID, name+"成本项目").Scan(&cost.ID, &cost.ProjectID, &cost.Name, &cost.Status, &cost.BudgetAmount, &cost.Metadata, &cost.CreatedAt, &cost.UpdatedAt); err != nil {
+		`, tenantID, projectID, costName).Scan(&cost.ID, &cost.ProjectID, &cost.Name, &cost.Status, &cost.BudgetAmount, &cost.Metadata, &cost.CreatedAt, &cost.UpdatedAt); err != nil {
 			return err
 		}
 		return insertLog(ctx, tx, tenantID, projectID, userID, "project.cost_project_created", map[string]any{"cost_project_id": cost.ID})
@@ -714,10 +734,18 @@ func (s *Store) BuildWonCaseDraft(ctx context.Context, tenantID, projectID strin
 			summary += " " + cost
 		}
 		content := buildWonCaseContent(project, bids, milestones, cost)
+		title := boundedProjectText(project.Name+"中标案例", maxProjectGeneratedTitleRunes)
+		if title == "" {
+			title = "中标案例"
+		}
+		filename := boundedProjectText(project.Name+"-中标案例.md", maxProjectGeneratedFilenameRunes)
+		if filename == "" {
+			filename = "中标案例.md"
+		}
 		draft = WonCaseDraft{
 			ProjectID: project.ID,
-			Title:     project.Name + "中标案例",
-			Filename:  project.Name + "-中标案例.md",
+			Title:     title,
+			Filename:  filename,
 			Summary:   summary,
 			Content:   content,
 			Metadata: map[string]any{
@@ -1212,6 +1240,54 @@ func validateUUID(value string) error {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func normalizeProjectName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ErrInvalidRequest
+	}
+	if err := validateProjectTextLength(value, maxProjectNameRunes); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func normalizeMilestoneWriteRequest(req CreateMilestoneRequest) (CreateMilestoneRequest, error) {
+	req.Title = strings.TrimSpace(req.Title)
+	if req.Title == "" {
+		return CreateMilestoneRequest{}, ErrInvalidRequest
+	}
+	if err := validateProjectTextLength(req.Title, maxProjectMilestoneTitleRunes); err != nil {
+		return CreateMilestoneRequest{}, err
+	}
+	req.Note = strings.TrimSpace(req.Note)
+	if err := validateProjectTextLength(req.Note, maxProjectMilestoneNoteRunes); err != nil {
+		return CreateMilestoneRequest{}, err
+	}
+	return req, nil
+}
+
+func validateProjectTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 {
+		return ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func boundedProjectText(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxRunes]))
 }
 
 func nullableUserID(value string) any {

@@ -441,6 +441,29 @@ def check_static_docs() -> None:
     ):
         require(needle in cost_store_tests, f"Cost store missing business input boundary regression test: {needle}")
 
+    project_store = (ROOT / "backend/internal/platform/project/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxProjectNameRunes",
+        "maxProjectMilestoneTitleRunes",
+        "maxProjectMilestoneNoteRunes",
+        "maxProjectGeneratedFilenameRunes",
+        "normalizeProjectName",
+        "normalizeMilestoneWriteRequest",
+        "validateProjectTextLength",
+        "boundedProjectText",
+        "utf8.RuneCountInString",
+    ):
+        require(needle in project_store, f"Project store missing business input boundary: {needle}")
+    project_store_tests = (ROOT / "backend/internal/platform/project/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestProjectWriteRejectsOversizedNameBeforeDB",
+        "TestNormalizeProjectNameAcceptsBoundedUnicodeText",
+        "TestNormalizeMilestoneWriteRequestRejectsOversizedText",
+        "TestNormalizeMilestoneWriteRequestAcceptsBoundedUnicodeText",
+        "TestBoundedProjectTextTrimsGeneratedFallbackNames",
+    ):
+        require(needle in project_store_tests, f"Project store missing business input boundary regression test: {needle}")
+
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
         require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")
