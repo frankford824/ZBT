@@ -138,6 +138,7 @@ type DraftState<T> = {
 
 type RequirementFilter = 'all' | 'mandatory' | 'review' | 'covered'
 type RequirementEvidenceFilter = 'all' | 'missing_evidence' | 'missing_source' | 'complete'
+type ParseFieldReviewStatus = 'confirmed' | 'needs_update' | 'not_applicable'
 
 type ParseConfirmDraft = {
   projectName: string
@@ -511,6 +512,9 @@ export function BidWizardPage() {
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
   const [parseConfirmDraftState, setParseConfirmDraftState] = useState<DraftState<ParseConfirmDraft> | null>(null)
+  const [parseFieldReviewDraftState, setParseFieldReviewDraftState] = useState<
+    DraftState<Record<string, ParseFieldReviewStatus>> | null
+  >(null)
   const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>('all')
   const [requirementEvidenceFilter, setRequirementEvidenceFilter] = useState<RequirementEvidenceFilter>('all')
   const [selectedRequirementKeys, setSelectedRequirementKeys] = useState<string[]>([])
@@ -553,11 +557,26 @@ export function BidWizardPage() {
   const parseConfirmEditedFields = parseConfirmChangedFieldLabels(parseConfirmServerDraft, parseConfirmDraft)
   const canEditParseConfirm =
     canWrite && Boolean(parseResult.data) && ['ready', 'confirmed'].includes(parseResult.data?.status ?? 'queued')
+  const parseFieldReviewServerDraft = useMemo(
+    () => parseFieldReviewDraftFromStructuredResult(parseResult.data?.structured_result),
+    [parseResult.data?.structured_result],
+  )
+  const parseFieldReviewDraft =
+    parseFieldReviewDraftState?.sourceKey === parseConfirmSourceKey
+      ? parseFieldReviewDraftState.value
+      : parseFieldReviewServerDraft
   const setParseConfirmDraftField = (field: keyof ParseConfirmDraft, value: ParseConfirmDraft[keyof ParseConfirmDraft]) => {
     setParseConfirmDraftState((currentDraft) => {
       const currentValue =
         currentDraft?.sourceKey === parseConfirmSourceKey ? currentDraft.value : parseConfirmServerDraft
       return { sourceKey: parseConfirmSourceKey, value: { ...currentValue, [field]: value } }
+    })
+  }
+  const setParseFieldReviewStatus = (rowId: string, status: ParseFieldReviewStatus) => {
+    setParseFieldReviewDraftState((currentDraft) => {
+      const currentValue =
+        currentDraft?.sourceKey === parseConfirmSourceKey ? currentDraft.value : parseFieldReviewServerDraft
+      return { sourceKey: parseConfirmSourceKey, value: { ...currentValue, [rowId]: status } }
     })
   }
   const bidRequirements = useQuery({
@@ -692,6 +711,7 @@ export function BidWizardPage() {
         parseResult.data?.structured_result,
         parseConfirmServerDraft,
         parseConfirmDraft,
+        parseFieldReviewDraft,
       )
       return confirmBidParseResult(bidId, { structured_result: structuredResult })
     },
@@ -1039,6 +1059,7 @@ export function BidWizardPage() {
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
+  const parseFieldEvidenceRows = structuredFieldEvidenceRows(parseResult.data?.structured_result)
   const parseModuleRows = structuredModuleRows(parseResult.data?.structured_result)
   const syncedRequirementRows = requirementRowsFromItems(bidRequirements.data ?? [])
   const parseRequirementRows = syncedRequirementRows.length
@@ -1239,10 +1260,89 @@ export function BidWizardPage() {
                   { title: '文件信息', dataIndex: 'value' },
                 ]}
               />
-              {parseModuleRows.length || parseRequirementRows.length ? (
+              {parseFieldEvidenceRows.length || parseModuleRows.length || parseRequirementRows.length ? (
                 <Tabs
                   size="small"
                   items={[
+                    ...(parseFieldEvidenceRows.length
+                      ? [
+                          {
+                            key: 'field-evidence',
+                            label: '字段依据',
+                            children: (
+                              <Table
+                                size="small"
+                                pagination={{ pageSize: 6, size: 'small' }}
+                                rowKey="id"
+                                dataSource={parseFieldEvidenceRows}
+                                columns={[
+                                  { title: '字段', dataIndex: 'label', width: 120 },
+                                  {
+                                    title: '结果',
+                                    dataIndex: 'value',
+                                    width: 180,
+                                    ellipsis: true,
+                                  },
+                                  {
+                                    title: '可信度',
+                                    width: 100,
+                                    render: (_, row) => parseFieldConfidenceTag(row.confidence, row.needsReview),
+                                  },
+                                  {
+                                    title: '来源',
+                                    render: (_, row) => (
+                                      <div className="parse-field-source-cell">
+                                        <Typography.Paragraph className="parse-field-source-text">
+                                          {row.sourceText || '待补充原文依据'}
+                                        </Typography.Paragraph>
+                                        <div className="requirement-source-locator">
+                                          {requirementSourceLocatorParts(row.sourceRef).map((part) => (
+                                            <Tag key={`${row.id}-${part.label}-${part.value}`}>
+                                              {part.label}：{part.value}
+                                            </Tag>
+                                          ))}
+                                        </div>
+                                        <Space size={6} wrap>
+                                          <Button
+                                            size="small"
+                                            disabled={!requirementSourcePreviewTarget(row.sourceRef)}
+                                            onClick={() => void openRequirementSourcePreview(row.sourceRef)}
+                                          >
+                                            查看原文
+                                          </Button>
+                                          <Tooltip title="复制来源定位">
+                                            <Button
+                                              size="small"
+                                              icon={<CopyOutlined />}
+                                              disabled={!requirementSourceLocatorText(row.sourceRef)}
+                                              onClick={() => void copyRequirementSourceLocator(row.sourceRef)}
+                                            />
+                                          </Tooltip>
+                                        </Space>
+                                      </div>
+                                    ),
+                                  },
+                                  {
+                                    title: '复核',
+                                    width: 130,
+                                    render: (_, row) => (
+                                      <Select
+                                        size="small"
+                                        className="parse-field-review-select"
+                                        placeholder="待确认"
+                                        value={parseFieldReviewDraft[row.id]}
+                                        disabled={!canEditParseConfirm}
+                                        onChange={(value) => setParseFieldReviewStatus(row.id, value)}
+                                        options={parseFieldReviewOptions}
+                                      />
+                                    ),
+                                  },
+                                ]}
+                              />
+                            ),
+                          },
+                        ]
+                      : []),
                     {
                       key: 'groups',
                       label: '信息分组',
@@ -1887,6 +1987,28 @@ const parseConfirmFieldLabels: Record<keyof ParseConfirmDraft, string> = {
   invalidClauseRisks: '否决风险',
 }
 
+const parseEvidenceFieldLabels: Record<string, string> = {
+  project_name: '项目名称',
+  deadline: '投标截止',
+  bid_type: '标书类型',
+  purchaser: '招标单位',
+  project_code: '项目编号',
+  budget: '项目预算',
+  location: '履约地点',
+  opening_time: '开标时间',
+  qualification_requirements: '资格要求',
+  scoring_points: '评分要点',
+  invalid_clause_risks: '否决风险',
+  submission_requirements: '递交要求',
+  annex_items: '附件格式',
+}
+
+const parseFieldReviewOptions = [
+  { label: '确认无误', value: 'confirmed' },
+  { label: '需要补充', value: 'needs_update' },
+  { label: '不适用', value: 'not_applicable' },
+] satisfies Array<{ label: string; value: ParseFieldReviewStatus }>
+
 function parseConfirmDraftFromStructuredResult(result: Record<string, unknown> | undefined): ParseConfirmDraft {
   const modules = objectRecord(result?.modules)
   const basicFields = parseModuleFields(modules, 'basic')
@@ -1909,6 +2031,7 @@ function applyParseConfirmDraft(
   structuredResult: Record<string, unknown> | undefined,
   originalDraft: ParseConfirmDraft,
   draft: ParseConfirmDraft,
+  fieldReviewDraft: Record<string, ParseFieldReviewStatus>,
 ): Record<string, unknown> {
   const next = cloneStructuredResult(structuredResult)
   const qualificationRequirements = parseConfirmTextList(draft.qualificationRequirements)
@@ -1937,13 +2060,32 @@ function applyParseConfirmDraft(
   syncParseConfirmRequirementItems(next, originalDraft, draft)
   next.parse_metadata = {
     ...(objectRecord(next.parse_metadata) ?? {}),
+    field_reviews: fieldReviewDraft,
     confirm_overrides: {
       version: 'parse-confirm-draft-v1',
       edited_fields: parseConfirmChangedFields(originalDraft, draft),
+      reviewed_fields: Object.keys(fieldReviewDraft),
       confirmed_at: new Date().toISOString(),
     },
   }
   return next
+}
+
+function parseFieldReviewDraftFromStructuredResult(
+  result: Record<string, unknown> | undefined,
+): Record<string, ParseFieldReviewStatus> {
+  const reviews = objectRecord(objectRecord(result?.parse_metadata)?.field_reviews)
+  const next: Record<string, ParseFieldReviewStatus> = {}
+  for (const [key, value] of Object.entries(reviews ?? {})) {
+    const status = normalizeParseFieldReviewStatus(value)
+    if (status) next[key] = status
+  }
+  return next
+}
+
+function normalizeParseFieldReviewStatus(value: unknown): ParseFieldReviewStatus | null {
+  if (value === 'confirmed' || value === 'needs_update' || value === 'not_applicable') return value
+  return null
 }
 
 const parseConfirmRequirementFields: Array<{
@@ -2133,6 +2275,78 @@ function normalizeParseConfirmBidType(value: unknown): BidFormValues['bidType'] 
   if (text.includes('综合')) return 'combined'
   if (text.includes('分离') || text.includes('分册')) return 'separated'
   return 'custom'
+}
+
+function structuredFieldEvidenceRows(result: Record<string, unknown> | undefined) {
+  const evidenceItems = structuredFieldEvidenceItems(result)
+  return evidenceItems
+    .map((record, index) => {
+      const field = String(record.field || '').trim()
+      if (!field) return null
+      const value = formatStructuredValue(record.value || parseFieldValueFromStructuredResult(result, field))
+      const sourceRef = normalizeFieldEvidenceSourceRef(record, result)
+      const confidence = Number(record.confidence)
+      const safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0
+      return {
+        id: `${field}-${index}`,
+        field,
+        label: parseEvidenceFieldLabels[field] ?? field,
+        value: value || '-',
+        confidence: safeConfidence,
+        sourceText: formatStructuredValue(record.source_text || record.excerpt || record.text).trim(),
+        needsReview: Boolean(record.needs_review) || safeConfidence < 0.65,
+        sourceRef,
+      }
+    })
+    .filter((row): row is NonNullable<typeof row> => Boolean(row))
+}
+
+function structuredFieldEvidenceItems(result: Record<string, unknown> | undefined) {
+  const direct = arrayValue(result?.field_evidence)
+    .map(objectRecord)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+  if (direct.length) return direct
+  const modules = objectRecord(result?.modules)
+  return Object.values(modules ?? {}).flatMap((module) =>
+    arrayValue(objectRecord(module)?.evidence)
+      .map(objectRecord)
+      .filter((item): item is Record<string, unknown> => Boolean(item)),
+  )
+}
+
+function normalizeFieldEvidenceSourceRef(
+  record: Record<string, unknown>,
+  result: Record<string, unknown> | undefined,
+) {
+  const sourceFile = objectRecord(result?.source_file)
+  const fileID = firstSourceRefString(record, ['file_id', 'fileId', 'file_asset_id', 'fileAssetId'])
+    || firstSourceRefString(sourceFile ?? {}, ['file_id', 'fileId', 'file_asset_id', 'fileAssetId'])
+  const filename = firstSourceRefString(record, ['filename', 'file_name', 'fileName'])
+    || firstSourceRefString(sourceFile ?? {}, ['filename', 'file_name', 'fileName'])
+  return {
+    ...record,
+    ...(fileID ? { file_id: fileID, file_asset_id: fileID } : {}),
+    ...(filename ? { filename, title: filename } : {}),
+    excerpt: formatStructuredValue(record.source_text || record.excerpt || record.text).trim(),
+  }
+}
+
+function parseFieldValueFromStructuredResult(result: Record<string, unknown> | undefined, field: string): unknown {
+  if (!result) return ''
+  if (result[field] !== undefined) return result[field]
+  const modules = objectRecord(result.modules)
+  for (const module of Object.values(modules ?? {})) {
+    const fields = objectRecord(objectRecord(module)?.fields)
+    if (fields && fields[field] !== undefined) return fields[field]
+  }
+  return ''
+}
+
+function parseFieldConfidenceTag(confidence: number, needsReview: boolean) {
+  const percent = Math.round(confidence * 100)
+  if (needsReview) return <Tag color="gold">待确认 {percent}%</Tag>
+  if (confidence >= 0.8) return <Tag color="green">可信 {percent}%</Tag>
+  return <Tag color="blue">可参考 {percent}%</Tag>
 }
 
 function structuredResultRows(result: Record<string, unknown> | undefined) {

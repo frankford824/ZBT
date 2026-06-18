@@ -3571,3 +3571,41 @@ pnpm --dir frontend build
 
 1. 本轮先补核心字段确认编辑，不实现所有六模块字段的逐项编辑、字段置信度手动标记和页内原文高亮。
 2. 本轮未启动完整 docker 栈做运行态端到端验收。
+
+## Loop-64 / 字段依据复核与来源跳转 - 2026-06-18
+
+### 本轮目标
+
+1. 把 `structured_result.field_evidence` 和模块 `evidence` 从后端 JSON 变成解析确认页可复核的业务信息。
+2. 字段级复核必须展示可信度、原文摘录、页码/引用号/定位码，并支持复制和打开原文页。
+3. 复核操作继续走确认提交，不新增后端协议，避免引入未验证的状态写接口。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 新增“字段依据”Tab，按字段展示结果、可信度、来源摘录、定位标签和原文操作。
+2. 字段依据优先读取 `field_evidence`；旧数据或兜底结果缺少顶层证据时，会从六模块 `evidence` 汇总。
+3. 来源操作复用现有预览和复制能力：支持 `file_id/file_asset_id`、`document_id`、`page_start`、`citation_id/reference_id`、`chunk_id`。
+4. 字段可标记“确认无误/需要补充/不适用”，确认时写入 `parse_metadata.field_reviews`，并在 `confirm_overrides.reviewed_fields` 留审计记录。
+5. `frontend/src/index.css` 新增字段来源单元布局，长摘录、定位标签和操作按钮在窄屏下不撑裂。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 更新 P1 解析结果页当前落地状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮不实现 PDF/Word 预览器内文本高亮；当前先支持页码预览、引用号/定位码复制和原文摘录展示。
+2. 字段复核状态暂存于 `structured_result.parse_metadata.field_reviews`，尚未拆独立数据库表和历史事件表。

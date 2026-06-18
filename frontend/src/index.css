@@ -1146,6 +1146,24 @@ a {
   grid-column: span 1;
 }
 
+.parse-field-source-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  align-items: start;
+}
+
+.parse-field-source-text {
+  grid-column: 1 / -1;
+  margin-bottom: 0 !important;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.parse-field-review-select {
+  width: 112px;
+}
+
 .requirement-evidence-cell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1253,6 +1271,10 @@ a {
   .parse-confirm-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .parse-field-source-cell {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .requirement-source-row {
