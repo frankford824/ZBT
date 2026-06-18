@@ -445,6 +445,7 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 	if providerKey == "" {
 		return Config{}, ErrInvalidRequest
 	}
+	preset, hasPreset := ProviderPresetByKey(providerKey)
 	transport := strings.TrimSpace(req.Transport)
 	if transport == "" {
 		transport = TransportStreamableHTTP
@@ -461,17 +462,27 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		name = providerKey
+		if hasPreset {
+			name = preset.Name
+		} else {
+			name = providerKey
+		}
 	}
 	enabled := false
 	if req.Enabled != nil {
 		enabled = *req.Enabled
+	}
+	if enabled && endpoint == "" {
+		return Config{}, ErrInvalidRequest
 	}
 	redactionPolicy := strings.TrimSpace(req.RedactionPolicy)
 	if redactionPolicy == "" {
 		redactionPolicy = "summary_only"
 	}
 	if redactionPolicy != "summary_only" && redactionPolicy != "no_sensitive" && redactionPolicy != "disabled" {
+		return Config{}, ErrInvalidRequest
+	}
+	if hasPreset && redactionPolicy == "disabled" {
 		return Config{}, ErrInvalidRequest
 	}
 	timeoutMS := req.TimeoutMS
@@ -481,6 +492,13 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 	if timeoutMS < minTimeoutMS || timeoutMS > maxTimeoutMS || req.MonthlyBudget < 0 {
 		return Config{}, ErrInvalidRequest
 	}
+	allowedTools := normalizeAllowedTools(req.AllowedTools)
+	if len(allowedTools) == 0 && hasPreset {
+		allowedTools = append([]string(nil), preset.DefaultAllowedTools...)
+	}
+	if hasPreset && preset.StrictAllowedTools && !allowedToolsWithin(allowedTools, preset.DefaultAllowedTools) {
+		return Config{}, ErrInvalidRequest
+	}
 	return Config{
 		ProviderKey:     providerKey,
 		Name:            name,
@@ -488,7 +506,7 @@ func normalizeConfig(providerKey string, req UpsertConfigRequest) (Config, error
 		Endpoint:        endpoint,
 		Command:         strings.TrimSpace(req.Command),
 		Enabled:         enabled,
-		AllowedTools:    normalizeAllowedTools(req.AllowedTools),
+		AllowedTools:    allowedTools,
 		TimeoutMS:       timeoutMS,
 		MonthlyBudget:   req.MonthlyBudget,
 		RedactionPolicy: redactionPolicy,
@@ -553,6 +571,19 @@ func toolAllowed(allowed []string, tool string) bool {
 		}
 	}
 	return false
+}
+
+func allowedToolsWithin(values []string, allowed []string) bool {
+	allowedSet := map[string]bool{}
+	for _, tool := range allowed {
+		allowedSet[tool] = true
+	}
+	for _, tool := range values {
+		if !allowedSet[tool] {
+			return false
+		}
+	}
+	return true
 }
 
 func requestHash(arguments map[string]any) string {
@@ -636,8 +667,11 @@ func costPerCall(metadata map[string]any) float64 {
 }
 
 func externalToolToken(providerKey string) string {
-	envName := "EXTERNAL_TOOL_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(providerKey)) + "_TOKEN"
-	return strings.TrimSpace(os.Getenv(envName))
+	return strings.TrimSpace(os.Getenv(externalToolTokenEnvName(providerKey)))
+}
+
+func externalToolTokenEnvName(providerKey string) string {
+	return "EXTERNAL_TOOL_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(providerKey)) + "_TOKEN"
 }
 
 func scanConfig(row pgx.Row) (Config, error) {

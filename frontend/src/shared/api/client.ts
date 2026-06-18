@@ -163,6 +163,40 @@ export type NotificationDTO = {
   created_at: string
 }
 
+export type ExternalToolProviderPresetDTO = {
+  provider_key: string
+  name: string
+  category: string
+  description: string
+  transport: 'streamable_http'
+  endpoint_hint: string
+  token_env: string
+  requires_token: boolean
+  read_only: boolean
+  strict_allowed_tools: boolean
+  default_allowed_tools: string[]
+  recommended_use: string[]
+  data_boundary: string[]
+  source_url: string
+}
+
+export type ExternalToolConfigDTO = {
+  id: string
+  provider_key: string
+  name: string
+  transport: 'streamable_http'
+  endpoint: string
+  command: string
+  enabled: boolean
+  allowed_tools: string[]
+  timeout_ms: number
+  monthly_budget: number
+  redaction_policy: 'summary_only' | 'no_sensitive' | 'disabled'
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
 export type ApprovalStepDTO = {
   order: number
   name: string
@@ -1076,6 +1110,16 @@ export async function deleteMember(memberId: string): Promise<void> {
 
 export async function fetchRoles(): Promise<RoleDTO[]> {
   const { data } = await apiClient.get<{ items: RoleDTO[] }>('/roles')
+  return data.items
+}
+
+export async function fetchExternalToolCatalog(): Promise<ExternalToolProviderPresetDTO[]> {
+  const { data } = await apiClient.get<{ items: ExternalToolProviderPresetDTO[] }>('/external-tools/catalog')
+  return data.items
+}
+
+export async function fetchExternalTools(): Promise<ExternalToolConfigDTO[]> {
+  const { data } = await apiClient.get<{ items: ExternalToolConfigDTO[] }>('/external-tools')
   return data.items
 }
 

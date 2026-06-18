@@ -1,6 +1,6 @@
 # 外部 MCP / Skills 雷达
 
-更新时间：2026-06-17
+更新时间：2026-06-18
 
 本文件记录招投标、采购、RFP 方向可参考或可接入的外部 MCP / Skills。它们只作为数据源、工具边界和方法论参考；未经明确评估，不复制代码，不把客户招标文件或投标文件默认发送给第三方服务。
 
@@ -18,6 +18,9 @@
 | --- | --- | --- | --- |
 | [handaas/bidding-mcp-server](https://github.com/handaas/bidding-mcp-server) | 中国招投标数据 MCP | 招投标信息搜索、中标/招标/采购统计、拟建项目查询，支持 streamable-http、stdio、sse | 可作为 P0 商机发现和竞品/业绩分析数据源；需要评估账号、价格、限流和数据授权 |
 | [handaas/mcp-server](https://github.com/handaas/mcp-server) | 中国企业大数据 MCP 集合 | 企业工商、风险、资质、经营洞察、招投标、专利、商标等 | 可作为企业画像、供应商/竞争对手尽调和资质辅助校验数据源；应按工具白名单拆分接入 |
+| [AutoRFP.ai MCP](https://autorfp.ai/blog/autorfp-mcp-server-launch) | RFP / DDQ 响应库 MCP | 只读查询项目、需求、内容库、标签和复用分析，强调来源引用与 Trust Score | 可借鉴响应库治理、来源引用和答案复用分析；不把客户文件默认同步到第三方平台 |
+| [getqlows/qlows-mcp](https://github.com/getqlows/qlows-mcp) | RFP deal / 公共 tender MCP | 读取 RFP/bid deal、合规项、问题路由、竞争对手分析和公开 tender corpus | 可作为外部 deal 快照、公共标讯和问题路由参考；需验证工具名、授权和数据出境边界 |
+| [dutchcode/rfp-ai-mcp](https://github.com/dutchcode/rfp-ai-mcp) | 已批准知识库问答 MCP | 从企业已批准知识库回答 RFP、DDQ 和安全问卷，并提供引用 | 可借鉴“只从批准知识库回答”的治理边界；不替代本系统知识库/RAG 主链路 |
 | [zhiqianzheng/BidMonitor-AI](https://github.com/zhiqianzheng/BidMonitor-AI) | 招标监控系统 | 中国招标网、政府采购网监控，关键词和排除词过滤，多渠道通知 | 不作为 MCP 直接接入；可借鉴监控源配置、关键词过滤和通知策略 |
 
 ## 可借鉴工具边界
@@ -25,6 +28,9 @@
 | 项目 | 类型 | 可借鉴点 | 不直接采用原因 |
 | --- | --- | --- | --- |
 | [crawde/mcp-bidcraft](https://github.com/crawde/mcp-bidcraft) | RFP 分析 / 生成 MCP | `analyze_rfp`、`generate_proposal`、`check_compliance` 三类工具边界清晰，适合映射到解析、生成、覆盖检查 | 偏英文 RFP，SaaS 黑盒能力和免费额度限制，不适合作为核心解析与生成依赖 |
+| [crawde/mcp-bidcraft-compliance-matrix](https://github.com/crawde/mcp-bidcraft-compliance-matrix) | RFP 合规矩阵 MCP | 要求抽取、章节映射、差距分析、响应提纲的工具拆分与命名边界 | 可作为智标通响应矩阵和差距分析的对照工具；仅允许脱敏摘要或要求项输入 |
+| [crawde/mcp-bidcraft-win-strategy](https://github.com/crawde/mcp-bidcraft-win-strategy) | Bid/No-Bid 策略 MCP | 中标概率评分、price-to-win、capture planning 和 bid/no-bid 决策 | 可借鉴商机评分和决策 checklist；不得接触未脱敏报价明细 |
+| [fredericboyer/loopio-mcp](https://github.com/fredericboyer/loopio-mcp) | Loopio Data API MCP | 通过企业 RFP 应答库 API 查询历史答案、项目和内容条目 | 可借鉴企业应答库集成和权限继承；不把外部答案库当作本系统事实源 |
 | [dbugom/tenderai-mcp-server](https://github.com/dbugom/tenderai-mcp-server) | Tender/RFP 管理 MCP | RFP 解析、合规矩阵、技术章节、完整技术方案 DOCX、BOM 表和伙伴协同 | 文件外发和模型调用链需审计；可借鉴功能拆分，不直接替换本工程 AI 服务 |
 | [Acquarts/A2A-MCP-Multiagent-Smart-RFP](https://github.com/Acquarts/A2A-MCP-Multiagent-Smart-RFP) | 多 agent RFP 示例 | 客户研究、RFP 分析、历史案例检索、成本估算、提案生成的 agent 分工 | 示例项目，不具备中国招投标文件和 SaaS 多租户生产边界 |
 | [sufyman/auto-rfp](https://github.com/sufyman/auto-rfp) | Hackathon RFP pipeline | 发现 RFP、PDF 抽取、schema 化、知识图谱检索、草拟、自评、发布 microsite 的端到端思路 | Hackathon 项目，适合补充流程视角，不作为生产依赖 |
@@ -64,38 +70,16 @@
 
 1. `external_tool_configs`：租户级外部工具配置，当前只允许 `streamable_http`。
 2. `external_tool_audit_logs`：记录工具名、请求哈希、请求摘要、响应摘要、耗时、状态、费用估算和业务资源引用。
-3. `GET /external-tools`、`PUT /external-tools/:providerKey`、`POST /external-tools/:providerKey/invoke`、`GET /external-tools/audit`：通过 team 权限访问。
-4. 调用入口使用 JSON-RPC `tools/call`，强制 enabled、allowed_tools、timeout_ms、monthly_budget 和摘要审计。
+3. `GET /external-tools/catalog`：返回 Handaas、AutoRFP、qlows、BidCraft 和 Loopio 等只读 Provider 预设、默认工具白名单、token env、用途和数据边界。
+4. `GET /external-tools`、`PUT /external-tools/:providerKey`、`POST /external-tools/:providerKey/invoke`、`GET /external-tools/audit`：通过 team 权限访问。
+5. 调用入口使用 JSON-RPC `tools/call`，强制 enabled、allowed_tools、timeout_ms、monthly_budget 和摘要审计。
+6. 已知 Provider 会应用预设名称和默认工具白名单；严格 Provider 不允许配置目录外工具，且不允许关闭脱敏策略。
 
 继续增强清单：
 
-1. 外部工具配置模型继续扩展：
-   - tenant_id
-   - provider_key
-   - transport：streamable_http，后续再评估 stdio
-   - endpoint 或 command
-   - enabled
-   - allowed_tools
-   - timeout_ms
-   - monthly_budget
-   - redaction_policy
-2. 外部工具审计继续扩展：
-   - tool_provider
-   - tool_name
-   - request_hash
-   - request_summary
-   - response_summary
-   - latency_ms
-   - status
-   - estimated_cost
-   - resource_type / resource_id
-3. 首批只允许商机和企业画像工具：
-   - bid search
-   - bid win stats
-   - tender stats
-   - procurement stats
-   - planned projects
-   - company fuzzy search
+1. 前端管理入口：展示 Provider 目录、数据边界、token 环境变量、启用状态、预算和审计摘要。
+2. Provider 生产验证：用真实 Handaas、AutoRFP、qlows 或 Loopio 凭证跑只读 smoke test，并记录工具名与响应结构。
+3. 业务入口：把已授权的标讯搜索、企业画像、外部应答库检索结果归一为 `external_mcp` 来源。
 4. 禁止首批工具接收完整招标文件、投标文件、报价明细和合同正文。
 
 ### P1：业务入口

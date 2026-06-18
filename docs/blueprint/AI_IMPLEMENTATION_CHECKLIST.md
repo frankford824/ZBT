@@ -16,7 +16,7 @@
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标和统一 `table_blocks`；仍缺少真实 OCR Provider 配置和样本回归评测。
 3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；仍需继续补 chunk 级高亮定位和跨页服务端批处理。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
-5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考。后端 P0 外部工具网关已提供租户级配置、白名单、摘要审计、预算阻断和 JSON-RPC `tools/call` 入口，仍需继续补前端业务入口、具体 Provider 配置模板和生产凭证验证。
+5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考。后端 P0 外部工具网关已提供租户级配置、Provider 预设目录、默认工具白名单、摘要审计、预算阻断和 JSON-RPC `tools/call` 入口，仍需继续补前端管理/业务入口和生产凭证验证。
 
 ## 当前落地进展
 
@@ -45,6 +45,7 @@
 - `backend/internal/platform/compliance/store.go` 已在创建检查、问题修复、忽略和人工确认 fail 后同步 `check` 阶段闸门；`pass` 自动通过，`warn/fail_candidate` 进入待复核，`fail` 阻断。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/pipeline-gates` 只读接口，前端 API client 已提供对应 DTO 和查询函数。
 - `backend/internal/db/migrations/00034_external_tool_gateway.sql` 已新增 `external_tool_configs` 和 `external_tool_audit_logs` RLS 表；`backend/internal/platform/externaltool/store.go` 已提供 `streamable_http` 外部工具配置、白名单校验、JSON-RPC `tools/call` 调用、摘要审计和预算阻断；`GET /external-tools`、`PUT /external-tools/:providerKey`、`POST /external-tools/:providerKey/invoke`、`GET /external-tools/audit` 已接入 team 权限。
+- `backend/internal/platform/externaltool/presets.go` 已新增 Handaas、AutoRFP、qlows、BidCraft、Loopio 只读 Provider 预设目录；`GET /external-tools/catalog` 可返回用途、默认工具白名单、token env、数据边界和来源链接；已知 Provider 会自动应用预设名称和默认白名单，严格 Provider 会拒绝目录外工具和关闭脱敏策略。
 - `ai-service/app/evaluation/generation_coverage_eval.py` 已提供离线生成覆盖评测：检查 mandatory requirement 覆盖率、已覆盖项是否带来源、`source_refs` 是否能解析到给定 `knowledge_chunks`。
 - `backend/internal/platform/bid/store.go` 已提供 `GET /bids/:id/generation-coverage` 运行态导出：从 `bid_requirement_items`、最新章节版本、章节 `source_refs` 与已解析 `knowledge_chunks` 组合出可直接交给离线评测器的 JSON。
 

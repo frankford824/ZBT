@@ -95,6 +95,7 @@ var routeSpecs = []routeSpec{
 	{"PATCH", "/roles/:id", "team", false},
 	{"DELETE", "/roles/:id", "team", false},
 	{"GET", "/external-tools", "team", false},
+	{"GET", "/external-tools/catalog", "team", false},
 	{"PUT", "/external-tools/:providerKey", "team", false},
 	{"POST", "/external-tools/:providerKey/invoke", "team", false},
 	{"GET", "/external-tools/audit", "team", false},
@@ -640,6 +641,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/roles/:id", rbac.Require("team", rbac.LevelFull), s.updateRole)
 	group.DELETE("/roles/:id", rbac.Require("team", rbac.LevelFull), s.deleteRole)
 	group.GET("/external-tools", rbac.Require("team", rbac.LevelRead), s.listExternalTools)
+	group.GET("/external-tools/catalog", rbac.Require("team", rbac.LevelRead), s.listExternalToolCatalog)
 	group.PUT("/external-tools/:providerKey", rbac.Require("team", rbac.LevelFull), s.upsertExternalTool)
 	group.POST("/external-tools/:providerKey/invoke", rbac.Require("team", rbac.LevelFull), s.invokeExternalTool)
 	group.GET("/external-tools/audit", rbac.Require("team", rbac.LevelRead), s.listExternalToolAuditLogs)
@@ -742,6 +744,7 @@ func customRouteSet() map[string]bool {
 		"PATCH /roles/:id":                                  true,
 		"DELETE /roles/:id":                                 true,
 		"GET /external-tools":                               true,
+		"GET /external-tools/catalog":                       true,
 		"PUT /external-tools/:providerKey":                  true,
 		"POST /external-tools/:providerKey/invoke":          true,
 		"GET /external-tools/audit":                         true,
@@ -1407,6 +1410,10 @@ func (s *server) deleteRole(c *gin.Context) {
 func (s *server) listExternalTools(c *gin.Context) {
 	result, err := s.externalToolStore.ListConfigs(c.Request.Context(), tenant.FromContext(c.Request.Context()))
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) listExternalToolCatalog(c *gin.Context) {
+	respond(c, gin.H{"items": externaltool.ProviderPresets()}, nil)
 }
 
 func (s *server) upsertExternalTool(c *gin.Context) {

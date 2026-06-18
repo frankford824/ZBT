@@ -3341,3 +3341,41 @@ git diff --check
 
 1. 本轮实现文件/文档级预览和页码锚点，不做 chunk 内文本高亮。
 2. 人工录入但没有文件或文档 ID 的来源只能展示详情，不能伪装成可跳转来源。
+
+## Loop-58 / 外部 MCP Provider 预设目录 - 2026-06-18
+
+### 本轮目标
+
+1. 将全网/GitHub 检索出的 Handaas、AutoRFP、qlows、BidCraft、Loopio 等候选从文档雷达推进到可治理的后端 Provider 目录。
+2. 管理员配置外部 MCP 时不能再完全依赖自由字符串；已知 Provider 应有默认工具白名单、token env、用途和数据边界。
+3. 继续保持外部 MCP 只读、租户显式启用、摘要审计和脱敏边界，不让外部工具绕过智标通主链路。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/presets.go` 新增 `ProviderPreset` 和 `ProviderPresets()`，内置 Handaas、AutoRFP、qlows、BidCraft Compliance、BidCraft Win Strategy、Loopio 只读预设。
+2. `backend/internal/platform/externaltool/store.go` 的配置归一化会为已知 Provider 应用预设名称和默认工具白名单；严格 Provider 会拒绝目录外工具；已知 Provider 不允许关闭脱敏策略；启用配置必须提供 endpoint。
+3. `backend/internal/api/routes.go` 新增 `GET /external-tools/catalog`，通过 team read 权限返回 Provider 目录，并同步 routeSpecs/customRouteSet。
+4. `frontend/src/shared/api/client.ts` 新增外部工具目录和配置 DTO，以及 `fetchExternalToolCatalog()` / `fetchExternalTools()`。
+5. `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`、`AI_IMPLEMENTATION_CHECKLIST.md`、`API_SPEC.md`、`AI_PIPELINE.md` 同步更新当前能力和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+go test ./...
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 后端全量 Go 测试通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮实现 Provider 目录和后端校验，不接真实第三方凭证。
+2. 本轮只加共享前端 API client，不实现外部工具管理页面。
+3. AutoRFP、qlows、Loopio 等 SaaS 工具名可能随服务端版本变化，预设默认白名单作为初始建议；生产接入仍需 live smoke test 后确认。
