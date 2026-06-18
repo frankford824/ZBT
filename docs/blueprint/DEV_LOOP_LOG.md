@@ -7148,3 +7148,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书解析结果入库可靠性，没有新增 OCR、表格抽取、xlsx/pptx 解析或真实语义解析模型。
 2. structured_result 上限为 8MB，适合当前采购项、资格项、评分项、风险项和大纲结构；若后续完整原文、表格矩阵或多附件结构化结果继续扩大，应拆成解析明细表或文件资产引用。
+
+## Loop-148 / 标书质量闸门 metadata JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书质量闸门链路，处理 `bid_pipeline_gates.metadata` 在 upsert 前仍忽略 JSON marshal 错误的问题。
+2. 避免解释、编写、复核、导出等阶段闸门 metadata 携带不可序列化、非有限数或异常放大的值时，静默写入空值/坏值，影响阶段状态审计和阻断原因追踪。
+3. 将质量闸门 metadata JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `maxBidPipelineGateMetadataJSONBytes`。
+2. 新增 `marshalPipelineGateMetadataJSON()`，统一将 nil metadata 归一化为 `{}`，并处理 JSON marshal 错误和 256KB 上限。
+3. `upsertPipelineGate()` 改为使用受控 JSON marshal，不再忽略 `json.Marshal(metadata)` 错误。
+4. `backend/internal/platform/bid/store_test.go` 新增质量闸门 metadata 非法值、不可序列化值、超预算值和 nil 归一化的回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加质量闸门 metadata JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书阶段闸门 metadata 入库可靠性，没有新增审批 UI、工作流编排能力或语义质量判断模型。
+2. 闸门 metadata 上限为 256KB，适合当前阶段、原因、来源、统计和解析摘要字段；若后续需要保存大规模质检明细，应拆成独立闸门事件或检查明细表。

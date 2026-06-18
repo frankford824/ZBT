@@ -74,6 +74,23 @@ func TestMarshalParseStructuredResultJSONRejectsInvalidAndOversizedValues(t *tes
 	}
 }
 
+func TestMarshalPipelineGateMetadataJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	if raw, err := marshalPipelineGateMetadataJSON(nil); err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil pipeline gate metadata to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+	for name, metadata := range map[string]map[string]any{
+		"invalid number": {"bad": math.Inf(1)},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("闸", maxBidPipelineGateMetadataJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalPipelineGateMetadataJSON(metadata); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid pipeline gate metadata JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
 func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	bidID := "00000000-0000-4000-8000-000000000001"
 	otherBidID := "00000000-0000-4000-8000-000000000002"

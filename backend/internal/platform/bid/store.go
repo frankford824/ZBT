@@ -58,6 +58,7 @@ const (
 	maxBidRequirementCoverageJSONBytes     = 512 * 1024
 	maxBidRequirementCoverageRefsJSONBytes = 512 * 1024
 	maxBidMaterialSelectionJSONBytes       = 2 * 1024 * 1024
+	maxBidPipelineGateMetadataJSONBytes    = 256 * 1024
 
 	maxBidChapterContentJSONBytes         = 8 * 1024 * 1024
 	maxBidChapterSourceRefsJSONBytes      = 512 * 1024
@@ -3980,11 +3981,11 @@ func upsertPipelineGate(
 	if stage == "" || status == "" {
 		return ErrInvalidRequest
 	}
-	if metadata == nil {
-		metadata = map[string]any{}
+	metadataJSON, err := marshalPipelineGateMetadataJSON(metadata)
+	if err != nil {
+		return err
 	}
-	metadataJSON, _ := json.Marshal(metadata)
-	_, err := tx.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		insert into bid_pipeline_gates (
 			tenant_id, bid_document_id, stage, status, reviewed_by,
 			reviewed_at, reason, metadata
@@ -6868,6 +6869,13 @@ func marshalParseStructuredResultJSON(structured map[string]any) ([]byte, error)
 		structured = map[string]any{}
 	}
 	return marshalBidBusinessJSON(structured, maxBidParseStructuredJSONBytes)
+}
+
+func marshalPipelineGateMetadataJSON(metadata map[string]any) ([]byte, error) {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	return marshalBidBusinessJSON(metadata, maxBidPipelineGateMetadataJSONBytes)
 }
 
 func marshalChapterGenerationJSON(generation chapterGenerateResponse) ([]byte, []byte, []byte, chapterGenerateResponse, error) {
