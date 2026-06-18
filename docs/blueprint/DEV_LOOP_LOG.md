@@ -7103,3 +7103,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书章节数据入库可靠性，没有新增章节编辑器 UI、智能排版能力或真实生成模型。
 2. 章节 content 上限为 8MB，source_refs/model_metadata/知识引用 metadata 上限为 512KB，needs_human_input 上限为 256KB，token_usage 上限为 64KB；若后续单章内容或引用规模继续扩大，应拆分章节内容块或引用明细表。
+
+## Loop-147 / 标书解析 structured_result JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书解析结果链路，处理 `structured_result` 在默认 upsert、AI 回调 ready、人工确认 confirmed 三个入口入库前仍忽略 JSON marshal 错误的问题。
+2. 避免解析结果携带不可序列化、非有限数或异常放大的结构化内容时，静默写入空值/坏值，影响解析确认、素材选择、需求矩阵同步和后续章节生成。
+3. 将解析 structured_result JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `maxBidParseStructuredJSONBytes`。
+2. 新增 `marshalParseStructuredResultJSON()`，统一将 nil structured_result 归一化为 `{}`，并处理 JSON marshal 错误和 8MB 上限。
+3. `ConfirmParseResult()`、`ApplyCallback()` 的 `bid_parse_result` done 分支和 `upsertParseResult()` 改为使用受控 JSON marshal，不再忽略 `json.Marshal(structured)` 错误。
+4. `backend/internal/platform/bid/store_test.go` 新增解析 structured_result 非法值、不可序列化值、超预算值和 nil 归一化的回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加解析 structured_result JSON 入库边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书解析结果入库可靠性，没有新增 OCR、表格抽取、xlsx/pptx 解析或真实语义解析模型。
+2. structured_result 上限为 8MB，适合当前采购项、资格项、评分项、风险项和大纲结构；若后续完整原文、表格矩阵或多附件结构化结果继续扩大，应拆成解析明细表或文件资产引用。

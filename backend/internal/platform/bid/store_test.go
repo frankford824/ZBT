@@ -57,6 +57,23 @@ func TestDefaultTenderStructuredResultCarriesSourceObjectKey(t *testing.T) {
 	}
 }
 
+func TestMarshalParseStructuredResultJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	if raw, err := marshalParseStructuredResultJSON(nil); err != nil || string(raw) != "{}" {
+		t.Fatalf("expected nil parse structured result to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+	for name, structured := range map[string]map[string]any{
+		"invalid number": {"bad": math.NaN()},
+		"unsupported":    {"bad": func() {}},
+		"oversized":      {"payload": strings.Repeat("解", maxBidParseStructuredJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalParseStructuredResultJSON(structured); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid parse structured result JSON to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
 func TestAttachableTenderFileAssetRestrictsBusinessDomain(t *testing.T) {
 	bidID := "00000000-0000-4000-8000-000000000001"
 	otherBidID := "00000000-0000-4000-8000-000000000002"

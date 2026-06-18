@@ -48,11 +48,12 @@ const (
 	requirementCoverageBatchLimit       = 100
 	maxExactJSONInteger                 = int64(1<<53 - 1)
 
-	maxBidExternalTaskIDRunes   = 128
-	maxBidTaskErrorMessageRunes = 1000
-	maxBidTaskPayloadJSONBytes  = 96 * 1024 * 1024
-	maxBidTaskResultJSONBytes   = 2 * 1024 * 1024
-	maxBidTaskRouteJSONBytes    = 16 * 1024
+	maxBidExternalTaskIDRunes      = 128
+	maxBidTaskErrorMessageRunes    = 1000
+	maxBidTaskPayloadJSONBytes     = 96 * 1024 * 1024
+	maxBidTaskResultJSONBytes      = 2 * 1024 * 1024
+	maxBidTaskRouteJSONBytes       = 16 * 1024
+	maxBidParseStructuredJSONBytes = 8 * 1024 * 1024
 
 	maxBidRequirementCoverageJSONBytes     = 512 * 1024
 	maxBidRequirementCoverageRefsJSONBytes = 512 * 1024
@@ -1452,7 +1453,10 @@ func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID 
 		if structured == nil {
 			structured = current.StructuredResult
 		}
-		structuredJSON, _ := json.Marshal(structured)
+		structuredJSON, err := marshalParseStructuredResultJSON(structured)
+		if err != nil {
+			return err
+		}
 		confirmed, err := scanParseResult(tx.QueryRow(ctx, `
 			update bid_parse_results
 			set status = 'confirmed',
@@ -2804,7 +2808,10 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				if !ok {
 					return ErrInvalidRequest
 				}
-				structuredJSON, _ := json.Marshal(structured)
+				structuredJSON, err := marshalParseStructuredResultJSON(structured)
+				if err != nil {
+					return err
+				}
 				var bidID string
 				if err := tx.QueryRow(ctx, `
 					update bid_parse_results
@@ -4277,7 +4284,10 @@ func upsertParseResult(
 	if status == "" {
 		status = "queued"
 	}
-	body, _ := json.Marshal(structured)
+	body, err := marshalParseStructuredResultJSON(structured)
+	if err != nil {
+		return ParseResult{}, err
+	}
 	return scanParseResult(tx.QueryRow(ctx, `
 		insert into bid_parse_results (
 			tenant_id, bid_document_id, file_asset_id, status, structured_result, error_message
@@ -6851,6 +6861,13 @@ func marshalBidBusinessJSON(value any, maxBytes int) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func marshalParseStructuredResultJSON(structured map[string]any) ([]byte, error) {
+	if structured == nil {
+		structured = map[string]any{}
+	}
+	return marshalBidBusinessJSON(structured, maxBidParseStructuredJSONBytes)
 }
 
 func marshalChapterGenerationJSON(generation chapterGenerateResponse) ([]byte, []byte, []byte, chapterGenerateResponse, error) {
