@@ -5709,3 +5709,47 @@ python3 infra/scripts/acceptance_tail_check.py --static-docs
 
 1. 本轮治理的是检索输入边界和成本保护，没有新增新的检索算法、embedding 模型或 rerank 模型。
 2. 搜索 query 过长时采取截断策略而非业务错误提示；这是为了保持搜索入口容错和现有 UI 交互稳定。
+
+## Loop-117 / 成本建议 AI 输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 服务 signed 任务入口，处理成本建议请求中无界字符串、无界列表和异常金额的问题。
+2. 避免超长成本项目、建议列表或非有限金额进入 provider prompt，造成模型成本、内存和审计口径失控。
+3. 将成本建议 schema 的字段边界与后端数据库金额约束、成本项状态/类型约束保持一致。
+
+### 代码交付
+
+1. `ai-service/app/schemas/cost.py` 新增成本建议请求边界常量和 Pydantic 约束，覆盖 tenant/task/cost project id、项目名称、分类、成本项名称、供应商、备注、建议、callback_url 和 model_hint。
+2. 同文件将金额字段统一为有限非负金额，设置最大金额；利润额允许正负但有限，利润率限制在合理范围；成本类型和状态改为枚举字面量。
+3. `CostAdviceRequest` 为 `category_totals`、`overrun_items`、`recommendations` 增加列表数量上限，避免超大任务体进入模型网关。
+4. `ai-service/app/tests/test_cost_schema.py` 新增成本建议 schema 回归测试，覆盖超长列表、非法金额、非法枚举、超长文本、空白必填字段、首尾空白清理和超长建议。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求成本建议 schema 的列表上限、金额上限、有限金额约束、字符串 trim 和回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_cost_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/schemas/cost.py app/tests/test_cost_schema.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_cost_schema.py -q -s` 通过：`6 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/schemas/cost.py app/tests/test_cost_schema.py` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd backend && go test ./...` 通过。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`251 passed`。
+
+### 偏离蓝图
+
+1. 本轮治理的是成本建议输入边界，没有新增真实成本优化模型或新的成本分析算法。
+2. 对异常成本请求采取 schema 拒绝策略；后端正常生成的成本建议 payload 已与这些约束对齐。

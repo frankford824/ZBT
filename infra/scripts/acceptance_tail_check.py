@@ -458,6 +458,27 @@ def check_static_docs() -> None:
         "Knowledge search query size guard missing regression test",
     )
 
+    cost_schema = (ROOT / "ai-service/app/schemas/cost.py").read_text(encoding="utf-8")
+    for needle in (
+        "MAX_COST_CATEGORY_TOTALS",
+        "MAX_COST_OVERRUN_ITEMS",
+        "MAX_COST_RECOMMENDATIONS",
+        "MAX_COST_AMOUNT",
+        "CostAmount",
+        "CostRecommendation",
+        "StringConstraints(strip_whitespace=True",
+        "allow_inf_nan=False",
+    ):
+        require(needle in cost_schema, f"Cost advice schema missing request size/cost guard: {needle}")
+    cost_schema_tests = (ROOT / "ai-service/app/tests/test_cost_schema.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_cost_advice_request_rejects_oversized_lists",
+        "test_cost_advice_request_rejects_invalid_money_values",
+        "test_cost_overrun_item_rejects_unbounded_text_and_invalid_enums",
+        "test_cost_advice_request_strips_bounded_text_fields",
+    ):
+        require(needle in cost_schema_tests, f"Cost advice schema missing regression test: {needle}")
+
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
     for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):

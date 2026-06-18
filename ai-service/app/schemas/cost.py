@@ -1,42 +1,105 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field, StringConstraints
+
+MAX_COST_ID_LENGTH = 128
+MAX_COST_NAME_LENGTH = 255
+MAX_COST_SHORT_TEXT_LENGTH = 128
+MAX_COST_NOTE_LENGTH = 1000
+MAX_COST_RECOMMENDATION_LENGTH = 500
+MAX_COST_CALLBACK_URL_LENGTH = 2048
+MAX_COST_CATEGORY_TOTALS = 50
+MAX_COST_OVERRUN_ITEMS = 100
+MAX_COST_RECOMMENDATIONS = 20
+MAX_COST_AMOUNT = 1_000_000_000_000
+MIN_COST_MARGIN_RATE = -1000
+MAX_COST_MARGIN_RATE = 1000
+
+CostID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_ID_LENGTH),
+]
+CostName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_NAME_LENGTH),
+]
+CostOptionalName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_COST_NAME_LENGTH),
+]
+CostShortText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_SHORT_TEXT_LENGTH),
+]
+CostOptionalShortText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_COST_SHORT_TEXT_LENGTH),
+]
+CostNote = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_COST_NOTE_LENGTH),
+]
+CostRecommendation = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_COST_RECOMMENDATION_LENGTH,
+    ),
+]
+CostCallbackURL = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_CALLBACK_URL_LENGTH),
+]
+CostAmount = Annotated[float, Field(ge=0, le=MAX_COST_AMOUNT, allow_inf_nan=False)]
+CostMarginAmount = Annotated[
+    float,
+    Field(ge=-MAX_COST_AMOUNT, le=MAX_COST_AMOUNT, allow_inf_nan=False),
+]
+CostMarginRate = Annotated[
+    float,
+    Field(ge=MIN_COST_MARGIN_RATE, le=MAX_COST_MARGIN_RATE, allow_inf_nan=False),
+]
+CostType = Literal["labor", "material", "equipment", "service", "other"]
+CostStatus = Literal["planned", "committed", "actual"]
 
 
 class CostCategoryTotal(BaseModel):
-    category: str
-    total_budget: float = 0
-    total_actual: float = 0
-    margin_amount: float = 0
+    category: CostShortText
+    total_budget: CostAmount = 0
+    total_actual: CostAmount = 0
+    margin_amount: CostMarginAmount = 0
 
 
 class CostOverrunItem(BaseModel):
-    id: str
-    category: str
-    name: str
-    cost_type: str = "other"
-    budget_amount: float = 0
-    actual_amount: float = 0
-    status: str = "planned"
-    vendor: str = ""
-    note: str = ""
+    id: CostID
+    category: CostShortText
+    name: CostName
+    cost_type: CostType = "other"
+    budget_amount: CostAmount = 0
+    actual_amount: CostAmount = 0
+    status: CostStatus = "planned"
+    vendor: CostOptionalName = ""
+    note: CostNote = ""
 
 
 class CostAdviceRequest(BaseModel):
-    task_id: str | None = None
-    tenant_id: str
-    cost_project_id: str
-    project_name: str = ""
-    cost_project_name: str = ""
-    budget_amount: float | None = None
-    total_budget: float = 0
-    total_actual: float = 0
-    margin_rate: float = 0
-    category_totals: list[CostCategoryTotal] = Field(default_factory=list)
-    overrun_items: list[CostOverrunItem] = Field(default_factory=list)
-    recommendations: list[str] = Field(default_factory=list)
-    callback_url: str | None = None
-    model_hint: str | None = None
+    task_id: CostOptionalShortText | None = None
+    tenant_id: CostID
+    cost_project_id: CostID
+    project_name: CostOptionalName = ""
+    cost_project_name: CostOptionalName = ""
+    budget_amount: CostAmount | None = None
+    total_budget: CostAmount = 0
+    total_actual: CostAmount = 0
+    margin_rate: CostMarginRate = 0
+    category_totals: list[CostCategoryTotal] = Field(default_factory=list, max_length=MAX_COST_CATEGORY_TOTALS)
+    overrun_items: list[CostOverrunItem] = Field(default_factory=list, max_length=MAX_COST_OVERRUN_ITEMS)
+    recommendations: list[CostRecommendation] = Field(default_factory=list, max_length=MAX_COST_RECOMMENDATIONS)
+    callback_url: CostCallbackURL | None = None
+    model_hint: CostOptionalShortText | None = None
 
 
 class CostAdviceResponse(BaseModel):
