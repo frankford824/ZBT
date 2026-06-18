@@ -783,9 +783,11 @@ def check_static_docs() -> None:
         "normalizeKnowledgeDocumentUpdate",
         "validateKnowledgeDocumentReferences",
         "maxKnowledgeExternalTaskIDRunes",
+        "maxKnowledgeTaskPayloadJSONBytes",
         "maxKnowledgeTaskResultJSONBytes",
         "maxKnowledgeTaskRouteJSONBytes",
         "marshalKnowledgeTaskJSON",
+        "unmarshalKnowledgeTaskJSON",
         "normalizeKnowledgeCallbackPayload",
         "normalizeAcceptedKnowledgeTask",
         "validateKnowledgeTextLength",
@@ -795,6 +797,9 @@ def check_static_docs() -> None:
         "payloadJSON, _ := json.Marshal(payload)",
         "resultJSON, _ := json.Marshal(payload.Result)",
         "routeJSON, _ := json.Marshal(accepted.Route)",
+        "_ = json.Unmarshal(payloadRaw, &task.Payload)",
+        "_ = json.Unmarshal(routeRaw, &task.Route)",
+        "_ = json.Unmarshal(resultRaw, &task.Result)",
     ):
         require(forbidden not in knowledge_store, f"Knowledge store still ignores AI task JSON marshal failure: {forbidden}")
     knowledge_store_tests = (ROOT / "backend/internal/platform/knowledge/store_test.go").read_text(encoding="utf-8")
@@ -812,6 +817,8 @@ def check_static_docs() -> None:
         "TestKnowledgeWriteMethodsRejectInvalidInputsBeforeDB",
         "TestKnowledgeCallbackRejectsInvalidResultBeforeDB",
         "TestKnowledgeCallbackRejectsOversizedResultBeforeDB",
+        "TestScanTaskRejectsInvalidStoredJSONFields",
+        "TestScanTaskNormalizesEmptyStoredJSONFields",
         "TestNormalizeKnowledgeCallbackBoundsDocumentFields",
         "TestKnowledgeCallbackRejectsInvalidDoneChunksBeforeDB",
         "TestNormalizeAcceptedKnowledgeTaskRejectsOversizedRoute",

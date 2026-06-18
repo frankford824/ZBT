@@ -2,10 +2,12 @@ package knowledge
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVectorLiteralFromEmbedding(t *testing.T) {
@@ -469,6 +471,46 @@ func TestKnowledgeCallbackRejectsOversizedResultBeforeDB(t *testing.T) {
 	}
 }
 
+func TestScanTaskRejectsInvalidStoredJSONFields(t *testing.T) {
+	for name, row := range map[string]knowledgeTaskScanRow{
+		"invalid payload object": {
+			payloadRaw: []byte(`[{"bad":"shape"}]`),
+			routeRaw:   []byte(`{}`),
+			resultRaw:  []byte(`{}`),
+		},
+		"invalid route json": {
+			payloadRaw: []byte(`{}`),
+			routeRaw:   []byte(`{"route":`),
+			resultRaw:  []byte(`{}`),
+		},
+		"oversized result": {
+			payloadRaw: []byte(`{}`),
+			routeRaw:   []byte(`{}`),
+			resultRaw:  []byte(`{"payload":"` + strings.Repeat("结", maxKnowledgeTaskResultJSONBytes) + `"}`),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := scanTask(row); err == nil {
+				t.Fatal("expected invalid stored task JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestScanTaskNormalizesEmptyStoredJSONFields(t *testing.T) {
+	task, err := scanTask(knowledgeTaskScanRow{
+		payloadRaw: nil,
+		routeRaw:   []byte(`null`),
+		resultRaw:  []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("expected empty stored task JSON fields to normalize, got %v", err)
+	}
+	if task.Payload == nil || len(task.Payload) != 0 || task.Route == nil || len(task.Route) != 0 || task.Result == nil || len(task.Result) != 0 {
+		t.Fatalf("expected empty task JSON maps, got payload=%#v route=%#v result=%#v", task.Payload, task.Route, task.Result)
+	}
+}
+
 func TestNormalizeKnowledgeCallbackBoundsDocumentFields(t *testing.T) {
 	for name, payload := range map[string]CallbackPayload{
 		"oversized processed title": {
@@ -538,4 +580,29 @@ func TestNormalizeAcceptedKnowledgeTaskRejectsOversizedRoute(t *testing.T) {
 
 func ptrString(value string) *string {
 	return &value
+}
+
+type knowledgeTaskScanRow struct {
+	payloadRaw []byte
+	routeRaw   []byte
+	resultRaw  []byte
+}
+
+func (row knowledgeTaskScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "task-1"
+	*(dest[1].(*string)) = "knowledge_process"
+	*(dest[2].(*string)) = "done"
+	*(dest[3].(*sql.NullString)) = sql.NullString{}
+	*(dest[4].(*string)) = "knowledge_document"
+	*(dest[5].(*string)) = "00000000-0000-4000-8000-000000000001"
+	*(dest[6].(*[]byte)) = row.payloadRaw
+	*(dest[7].(*[]byte)) = row.routeRaw
+	*(dest[8].(*[]byte)) = row.resultRaw
+	*(dest[9].(*sql.NullString)) = sql.NullString{}
+	*(dest[10].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[11].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[12].(*time.Time)) = now
+	*(dest[13].(*time.Time)) = now
+	return nil
 }
