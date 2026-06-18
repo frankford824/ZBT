@@ -5842,3 +5842,52 @@ cd ai-service && .venv/bin/python -m pytest app/tests -q -s
 
 1. 本轮治理的是文档解析/入库任务请求边界，没有新增 OCR、表格解析、xlsx/pptx 解析或真实语义抽取能力。
 2. 对异常文档任务请求采取 schema 拒绝策略；运行态仍继续依赖 tenant object_key 校验和 callback_url 白名单作为第二层保护。
+
+## Loop-120 / 文档导出任务请求边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 服务 signed 任务入口，处理文档导出请求中无界章节正文、布局上下文、文件名、对象 key、callback_url 和导出类型的问题。
+2. 避免超大导出 payload 在 DOCX/PDF/ZIP 生成阶段才触发内存、CPU、模板渲染或日志风险。
+3. 将导出入口从“请求体总大小保护”推进到“字段级 + 总章节预算 + 模板上下文预算”的业务边界保护。
+
+### 代码交付
+
+1. `ai-service/app/schemas/export.py` 新增导出请求边界常量和 Pydantic `StringConstraints`，覆盖 task/tenant/export/bid id、分册 code、标题、文件名、object_key、content_type、zip_path 和 callback_url。
+2. `ExportChapter` 限制章节标题和单章正文长度；`DocumentExportRequest` 增加总章节数量与总章节正文预算，避免 ZIP 多分册绕过单列表上限。
+3. `ExportLayoutOptions` 收敛 `e_bidding_structure` 为 `standard/flat`，限制模板名、页眉页脚、水印、生成时间，并为 `layout.context` 增加 key、项数、字符串值、嵌套深度和序列化字节上限。
+4. `ExportAttachment` 对文件名、分类、content_type、object_key、zip_path 和 local_path 使用统一 trim/长度约束，继续保留 local_path 禁用与单一内容来源校验。
+5. `ai-service/app/tests/test_export_schema.py` 新增导出 schema 回归测试，覆盖超长章节、超长字段、非法导出类型、空白必填字段、总章节预算、总正文预算、layout.context 约束和首尾空白清理。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求导出 schema 的章节预算、layout.context 预算、导出类型枚举、trim 约束和回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_export_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/schemas/export.py app/tests/test_export_schema.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd ai-service && .venv/bin/python -m pytest app/tests/test_export_schema.py app/tests/test_docx_exporter.py app/tests/test_main_security.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_export_schema.py -q -s` 通过：`10 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/schemas/export.py app/tests/test_export_schema.py` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd ai-service && .venv/bin/python -m pytest app/tests/test_export_schema.py app/tests/test_docx_exporter.py app/tests/test_main_security.py -q -s` 通过：`91 passed`。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`269 passed`。
+7. `cd backend && go test ./...` 通过。
+8. `./infra/scripts/check.sh` 通过；其中工程1导出验收通过：`passed=23/23 name=工程1.export`；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是导出任务请求边界和模板上下文安全预算，没有新增新的 Word/PDF 排版能力、母版模板或 LibreOffice 转换能力。
+2. `export_type` 已收敛为枚举值，但 endpoint 路径类型与 payload 类型的一致性仍由后端正常调用约束，后续可在 AI 服务入口增加显式一致性校验。

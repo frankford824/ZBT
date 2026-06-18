@@ -527,6 +527,30 @@ def check_static_docs() -> None:
     ):
         require(needle in tender_schema_tests, f"Tender parse schema missing regression test: {needle}")
 
+    export_schema = (ROOT / "ai-service/app/schemas/export.py").read_text(encoding="utf-8")
+    for needle in (
+        "MAX_EXPORT_TOTAL_CHAPTERS",
+        "MAX_EXPORT_TOTAL_CHAPTER_TEXT_LENGTH",
+        "MAX_EXPORT_LAYOUT_CONTEXT_BYTES",
+        "ExportChapterText",
+        "ExportCallbackURL",
+        "ExportType",
+        "StringConstraints(strip_whitespace=True",
+        "bounded_layout_context",
+        "validate_export_budget",
+    ):
+        require(needle in export_schema, f"Document export schema missing request size guard: {needle}")
+    export_schema_tests = (ROOT / "ai-service/app/tests/test_export_schema.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_export_chapter_rejects_oversized_fields",
+        "test_document_export_request_rejects_oversized_document_fields",
+        "test_document_export_request_rejects_blank_required_fields",
+        "test_document_export_request_rejects_oversized_chapter_budget",
+        "test_export_layout_context_rejects_oversized_or_invalid_values",
+        "test_document_export_request_strips_bounded_text_fields",
+    ):
+        require(needle in export_schema_tests, f"Document export schema missing regression test: {needle}")
+
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
     for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):
