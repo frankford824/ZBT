@@ -595,9 +595,20 @@ def check_static_docs() -> None:
         "MAX_TENDER_OBJECT_KEY_LENGTH",
         "MAX_TENDER_FILENAME_LENGTH",
         "MAX_TENDER_CALLBACK_URL_LENGTH",
+        "MAX_TENDER_RESPONSE_EVIDENCE",
+        "MAX_TENDER_RESPONSE_REQUIREMENT_ITEMS",
+        "MAX_TENDER_RESPONSE_JSON_BYTES",
+        "MAX_TENDER_RESPONSE_BBOX_POINTS",
         "TenderObjectKey",
         "TenderFilename",
         "TenderCallbackURL",
+        "TenderResponseText",
+        "TenderResponseSourceText",
+        "TenderResponseBBoxValue",
+        "enhancement_error_must_be_bounded",
+        "fields_must_be_bounded",
+        "structured_dicts_must_be_bounded",
+        "material_suggestions_must_be_bounded",
         "StringConstraints(strip_whitespace=True",
     ):
         require(needle in tender_schema, f"Tender parse schema missing document request guard: {needle}")
@@ -606,8 +617,23 @@ def check_static_docs() -> None:
         "test_tender_parse_request_rejects_oversized_document_fields",
         "test_tender_parse_request_rejects_blank_required_fields",
         "test_tender_parse_request_strips_bounded_document_fields",
+        "test_tender_parse_response_rejects_oversized_evidence_fields",
+        "test_tender_parse_module_response_rejects_oversized_collections",
+        "test_tender_parse_structured_response_rejects_oversized_requirements_and_metadata",
     ):
         require(needle in tender_schema_tests, f"Tender parse schema missing regression test: {needle}")
+    ai_main = (ROOT / "ai-service/app/main.py").read_text(encoding="utf-8")
+    for needle in (
+        "TenderParseStructuredResult",
+        "structured = tender_structured_result_for_callback(structured)",
+        "def tender_structured_result_for_callback",
+    ):
+        require(needle in ai_main, f"Tender parse callback missing final response boundary: {needle}")
+    ai_main_tests = (ROOT / "ai-service/app/tests/test_main_security.py").read_text(encoding="utf-8")
+    require(
+        "test_process_tender_parse_rejects_oversized_model_structured_result" in ai_main_tests,
+        "Tender parse callback missing final response boundary regression test",
+    )
 
     export_schema = (ROOT / "ai-service/app/schemas/export.py").read_text(encoding="utf-8")
     for needle in (

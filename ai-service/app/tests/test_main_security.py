@@ -62,7 +62,7 @@ from app.schemas.knowledge import (
     KnowledgeRerankDocument,
     KnowledgeRerankRequest,
 )
-from app.schemas.tender import TenderParseRequest
+from app.schemas.tender import MAX_TENDER_RESPONSE_FIELDS_BYTES, TenderParseRequest
 
 
 def test_safe_output_filename_keeps_task_output_in_temp_directory() -> None:
@@ -1303,6 +1303,78 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert result["estimated_cost"] == 0.06
     assert all(call["estimated_cost"] == 0.01 for call in result["model_metadata"]["module_calls"])
     assert result["token_usage"]["input_tokens"] > 0
+
+
+def test_process_tender_parse_rejects_oversized_model_structured_result(monkeypatch) -> None:
+    callbacks: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def read(self) -> bytes:
+            return "项目名称：桥梁检查服务\n资格要求：具备桥梁检测资质\n".encode()
+
+        def close(self) -> None:
+            pass
+
+        def release_conn(self) -> None:
+            pass
+
+    class FakeMinio:
+        def get_object(self, _bucket: str, _object_key: str) -> FakeResponse:
+            return FakeResponse()
+
+    class OversizedProvider:
+        name = "oversized-llm"
+
+        def generate_json(self, prompt: str, schema_name: str) -> dict[str, object]:
+            assert schema_name == "TenderParseModuleResult"
+            module = json.loads(prompt)["module"]
+            if module == "basic":
+                return {
+                    "module": "basic",
+                    "fields": {"oversized": "x" * MAX_TENDER_RESPONSE_FIELDS_BYTES},
+                }
+            return {"module": module, "fields": {}}
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
+    class FakeRouter:
+        def resolve(self, _task_type: str, tenant_id: str) -> RouteTarget:
+            assert tenant_id == "tenant-demo"
+            return RouteTarget(provider="oversized-llm", model="fake-model", schema_name="TenderParseModuleResult")
+
+        def get_llm(self, _task_type: str, tenant_id: str) -> OversizedProvider:
+            assert tenant_id == "tenant-demo"
+            return OversizedProvider()
+
+        def log_call(self, **_kwargs: object) -> dict[str, object]:
+            return {"estimated_cost": 0.01, "usage": {"used": 0.01, "currency": "CNY"}}
+
+    monkeypatch.setattr("app.main.minio_client", lambda: FakeMinio())
+    monkeypatch.setattr("app.main.router", FakeRouter())
+    monkeypatch.setattr("app.main.post_callback", lambda _url, payload: callbacks.append(payload))
+
+    process_tender_parse(
+        "task-tender-demo",
+        TenderParseRequest(
+            tenant_id="tenant-demo",
+            bid_id="bid-demo",
+            file_id="file-demo",
+            object_key="tenant-demo/bid_tender/file-demo",
+            filename="采购文件.txt",
+            content_type="text/plain",
+            callback_url="http://backend:8080/api/v1/ai/callbacks/tasks",
+        ),
+    )
+
+    assert callbacks
+    assert callbacks[0]["status"] == "failed"
+    assert callbacks[0]["error_message"] == "招标文件解读失败，请检查文件后重试"
+    assert callbacks[0]["result"] == {
+        "error": "招标文件解读失败，请检查文件后重试",
+        "bid_id": "bid-demo",
+        "file_id": "file-demo",
+    }
 
 
 def test_process_tender_parse_runs_modules_with_configured_concurrency(monkeypatch) -> None:

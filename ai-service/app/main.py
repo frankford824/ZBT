@@ -48,7 +48,7 @@ from app.schemas.knowledge import (
     KnowledgeRerankResponse,
     KnowledgeRerankResult,
 )
-from app.schemas.tender import TenderParseModule, TenderParseRequest
+from app.schemas.tender import TenderParseModule, TenderParseRequest, TenderParseStructuredResult
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +336,7 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
             (call for call in module_calls if call.get("status") == "done"),
             {},
         )
+        structured = tender_structured_result_for_callback(structured)
         callback_payload = {
             "tenant_id": payload.tenant_id,
             "task_id": task_id,
@@ -374,6 +375,10 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
         )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
+
+
+def tender_structured_result_for_callback(structured: dict[str, object]) -> dict[str, object]:
+    return TenderParseStructuredResult(**structured).model_dump(mode="json")
 
 
 def run_tender_parse_module(

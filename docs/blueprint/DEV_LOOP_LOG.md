@@ -6122,3 +6122,58 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是导出文件名稳定性和下载链路输入边界，没有新增导出格式、排版母版或文件扫描能力。
 2. 文件名上限按字符数处理，优先保证中文业务标题和后缀可读；若未来需要兼容特定网关响应头字节上限，可在下载响应层继续增加字节预算。
+
+## Loop-126 / 招标解析响应结构边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 招标解析链路，处理请求字段已有边界但响应结构仍可承载过大证据、需求项、warning、metadata 和模型字段的问题。
+2. 避免模型增强或解析器异常输出过大的 `structured_result`，撑爆 HMAC 回调、任务日志、Go 落库字段或前端解析展示。
+3. 在不改变六模块解析算法的前提下，为解析响应结果建立 schema 级数量、长度、页码、bbox 和 JSON 尺寸约束。
+
+### 代码交付
+
+1. `ai-service/app/schemas/tender.py` 新增响应侧边界常量：证据项、需求项、warning、列表项、模块数、bbox 点数、页码和 JSON 字节预算。
+2. `TenderParseFieldEvidence` 收敛字段名、来源文本、引用 ID、文件名、页码和 bbox 范围，禁止非有限 bbox 数值与越界页码。
+3. `TenderRequirementItem` 收敛需求文本、类型、预期响应和评分范围，避免模型返回异常大需求或异常分数。
+4. `TenderParseModuleResult` 与 `TenderParseStructuredResult` 对 evidence、requirement_items、warnings、modules、material_suggestions、metadata、quality_gates、enhancement_error 等结构增加数量和 JSON 字节边界。
+5. `ai-service/app/main.py` 新增 `tender_structured_result_for_callback`，在构造成功回调前用 `TenderParseStructuredResult` 对最终模型增强后的 `structured_result` 重新校验和归一化，避免模型输出绕过 schema。
+6. `ai-service/app/tests/test_tender_schema.py` 新增响应侧超长 evidence、过多集合、过大 metadata、非法 bbox/页码的回归测试。
+7. `ai-service/app/tests/test_main_security.py` 新增超大模型增强结果走失败回调的主流程回归测试。
+8. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求 tender 响应边界常量、字段校验器、最终回调校验函数和对应回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/main.py app/schemas/tender.py app/tests/test_tender_schema.py app/tests/test_main_security.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_schema.py app/tests/test_main_security.py app/tests/test_tender_parse_eval.py -q -s
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_schema.py -q -s` 通过：`6 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/main.py app/schemas/tender.py app/tests/test_tender_schema.py app/tests/test_main_security.py` 通过。
+3. `cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_schema.py app/tests/test_main_security.py app/tests/test_tender_parse_eval.py -q -s` 通过：`77 passed`。
+4. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`282 passed`。
+7. `git diff --check` 通过。
+8. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+9. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+10. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `282 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是招标解析响应结构边界，没有新增解析算法、OCR 能力或模型提示策略。
+2. JSON 字节预算按 AI 服务与回调链路稳定性收敛；若后续真实模型需要返回更丰富证据，应优先分页/引用化存储，而不是放宽单次回调 payload。
