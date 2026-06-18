@@ -847,13 +847,19 @@ export function BidWizardPage() {
   })
   const requirementBatchCoverageMutation = useMutation({
     mutationFn: (payload: {
-      requirementIds: string[]
+      requirementIds?: string[]
+      applyAll?: boolean
+      filter?: RequirementFilter
+      evidenceFilter?: RequirementEvidenceFilter
       coverageStatus: BidRequirementItemDTO['coverage_status']
       evidence?: string
       sourceRefs?: unknown[]
     }) =>
       batchUpdateBidRequirementCoverage(bidId, {
         requirement_ids: payload.requirementIds,
+        apply_all: payload.applyAll,
+        filter: payload.filter,
+        evidence_filter: payload.evidenceFilter,
         coverage_status: payload.coverageStatus,
         evidence: payload.evidence,
         source_refs: payload.sourceRefs,
@@ -876,6 +882,22 @@ export function BidWizardPage() {
     requirementBatchCoverageMutation.mutate({
       requirementIds: selectedRequirementRows.map((row) => row.id),
       coverageStatus,
+    })
+  }
+  const updateFilteredRequirementStatus = (coverageStatus: BidRequirementItemDTO['coverage_status']) => {
+    if (!filteredUpdatableRequirementRows.length || requirementBatchCoverageMutation.isPending) return
+    Modal.confirm({
+      title: '标记当前筛选全部',
+      okText: '确认更新',
+      cancelText: '取消',
+      content: `将更新当前筛选条件下 ${filteredUpdatableRequirementRows.length} 项响应要点。`,
+      onOk: () =>
+        requirementBatchCoverageMutation.mutateAsync({
+          applyAll: true,
+          filter: requirementFilter,
+          evidenceFilter: requirementEvidenceFilter,
+          coverageStatus,
+        }),
     })
   }
   const updateRequirementStatus = (row: ParseRequirementRow, coverageStatus: BidRequirementItemDTO['coverage_status']) => {
@@ -1007,18 +1029,21 @@ export function BidWizardPage() {
       },
     })
   }
-  const openBatchRequirementEvidenceModal = () => {
-    if (!selectedRequirementRows.length) return
-    let coverageStatus = inferBatchCoverageStatus(selectedRequirementRows)
+  const openBatchRequirementEvidenceModal = (scope: 'selected' | 'filtered' = 'selected') => {
+    const rows = scope === 'filtered' ? filteredUpdatableRequirementRows : selectedRequirementRows
+    if (!rows.length) return
+    let coverageStatus = inferBatchCoverageStatus(rows)
     let evidence = ''
     let sourceRefs = [] as RequirementSourceRefDraft[]
     Modal.confirm({
-      title: '批量补充响应证据',
+      title: scope === 'filtered' ? '补充当前筛选全部响应证据' : '批量补充响应证据',
       okText: '保存',
       cancelText: '取消',
       content: (
         <Space direction="vertical" size={10} className="full-width">
-          <Typography.Text type="secondary">已选 {selectedRequirementRows.length} 项</Typography.Text>
+          <Typography.Text type="secondary">
+            {scope === 'filtered' ? `当前筛选 ${rows.length} 项` : `已选 ${rows.length} 项`}
+          </Typography.Text>
           <Select
             defaultValue={coverageStatus}
             className="full-width"
@@ -1048,7 +1073,10 @@ export function BidWizardPage() {
           return Promise.reject(new Error('empty evidence or source'))
         }
         return requirementBatchCoverageMutation.mutateAsync({
-          requirementIds: selectedRequirementRows.map((row) => row.id),
+          requirementIds: scope === 'selected' ? rows.map((row) => row.id) : undefined,
+          applyAll: scope === 'filtered',
+          filter: scope === 'filtered' ? requirementFilter : undefined,
+          evidenceFilter: scope === 'filtered' ? requirementEvidenceFilter : undefined,
           coverageStatus,
           evidence: nextEvidence,
           sourceRefs: nextSourceRefs,
@@ -1066,6 +1094,7 @@ export function BidWizardPage() {
     ? syncedRequirementRows
     : structuredRequirementRows(parseResult.data?.structured_result)
   const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter, requirementEvidenceFilter)
+  const filteredUpdatableRequirementRows = visibleRequirementRows.filter((row) => row.canUpdate)
   const selectedRequirementRows = parseRequirementRows.filter((row) => row.canUpdate && selectedRequirementKeys.includes(row.id))
   const isRequirementUpdating = requirementCoverageMutation.isPending || requirementBatchCoverageMutation.isPending
   const parseFailureMessage =
@@ -1407,12 +1436,34 @@ export function BidWizardPage() {
                                   icon={<EditOutlined />}
                                   disabled={!selectedRequirementRows.length || isRequirementUpdating}
                                   loading={requirementBatchCoverageMutation.isPending}
-                                  onClick={openBatchRequirementEvidenceModal}
+                                  onClick={() => openBatchRequirementEvidenceModal('selected')}
                                 >
                                   批量补证据
                                 </Button>
+                                <Select
+                                  size="small"
+                                  className="requirement-batch-status-select"
+                                  value={undefined}
+                                  placeholder="筛选全部标记"
+                                  disabled={!filteredUpdatableRequirementRows.length || isRequirementUpdating}
+                                  loading={requirementBatchCoverageMutation.isPending}
+                                  onChange={updateFilteredRequirementStatus}
+                                  options={requirementCoverageOptions}
+                                />
+                                <Button
+                                  size="small"
+                                  icon={<EditOutlined />}
+                                  disabled={!filteredUpdatableRequirementRows.length || isRequirementUpdating}
+                                  loading={requirementBatchCoverageMutation.isPending}
+                                  onClick={() => openBatchRequirementEvidenceModal('filtered')}
+                                >
+                                  筛选全部补证据
+                                </Button>
                                 {selectedRequirementRows.length ? (
                                   <Typography.Text type="secondary">已选 {selectedRequirementRows.length} 项</Typography.Text>
+                                ) : null}
+                                {filteredUpdatableRequirementRows.length ? (
+                                  <Typography.Text type="secondary">筛选 {filteredUpdatableRequirementRows.length} 项</Typography.Text>
                                 ) : null}
                               </>
                             ) : null}

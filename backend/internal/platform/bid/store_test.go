@@ -540,14 +540,19 @@ func TestManualRequirementCoverageMetadataRejectsInvalidStatus(t *testing.T) {
 }
 
 func TestBatchRequirementCoverageMetadataDeduplicatesAndPreservesEvidence(t *testing.T) {
-	ids, status, needsReview, metadata, err := batchRequirementCoverageMetadata("user-1", BatchUpdateRequirementCoverageRequest{
+	ids, err := batchRequirementIDsFromRequest(BatchUpdateRequirementCoverageRequest{
 		RequirementIDs: []string{" evaluation-001 ", "evaluation-002", "evaluation-001", ""},
+	})
+	if err != nil {
+		t.Fatalf("batch requirement ids: %v", err)
+	}
+	status, needsReview, metadata, err := batchRequirementCoverageMetadata("user-1", BatchUpdateRequirementCoverageRequest{
 		CoverageStatus: "covered",
 		Evidence:       "已逐项补充响应依据",
 		SourceRefs: []any{
 			map[string]any{"title": "响应章节", "page": 8},
 		},
-	})
+	}, len(ids))
 	if err != nil {
 		t.Fatalf("batch coverage metadata: %v", err)
 	}
@@ -559,6 +564,9 @@ func TestBatchRequirementCoverageMetadataDeduplicatesAndPreservesEvidence(t *tes
 	}
 	if metadata["action"] != "batch_review" || metadata["batch"] != true || metadata["requirement_count"] != 2 {
 		t.Fatalf("expected batch metadata, got %#v", metadata)
+	}
+	if metadata["batch_scope"] != "selected" {
+		t.Fatalf("expected selected batch scope, got %#v", metadata)
 	}
 	if _, exists := metadata["requirement_id"]; exists {
 		t.Fatalf("expected batch metadata to defer requirement id to each item, got %#v", metadata["requirement_id"])
@@ -586,10 +594,98 @@ func TestBatchRequirementCoverageMetadataRejectsEmptyOrOversizedBatch(t *testing
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, _, _, err := batchRequirementCoverageMetadata("user-1", req); err != ErrInvalidRequest {
+			if _, err := batchRequirementIDsFromRequest(req); err != ErrInvalidRequest {
 				t.Fatalf("expected invalid batch to be rejected, got %v", err)
 			}
 		})
+	}
+}
+
+func TestBatchRequirementCoverageMetadataTracksFilteredScope(t *testing.T) {
+	req := BatchUpdateRequirementCoverageRequest{
+		ApplyAll:       true,
+		Filter:         "review",
+		EvidenceFilter: "missing_source",
+		CoverageStatus: "planned",
+	}
+	if ids, err := batchRequirementIDsFromRequest(req); err != nil || ids != nil {
+		t.Fatalf("expected filtered request to defer ids, ids=%#v err=%v", ids, err)
+	}
+	status, needsReview, metadata, err := batchRequirementCoverageMetadata("user-1", req, 12)
+	if err != nil {
+		t.Fatalf("batch coverage metadata: %v", err)
+	}
+	if status != "planned" || needsReview {
+		t.Fatalf("unexpected normalized status: status=%q needsReview=%v", status, needsReview)
+	}
+	if metadata["batch_scope"] != "filtered" || metadata["filter"] != "review" || metadata["evidence_filter"] != "missing_source" {
+		t.Fatalf("expected filtered scope metadata, got %#v", metadata)
+	}
+	if metadata["requirement_count"] != 12 {
+		t.Fatalf("expected filtered requirement count, got %#v", metadata["requirement_count"])
+	}
+}
+
+func TestBatchRequirementCoverageRejectsInvalidFilteredScope(t *testing.T) {
+	for name, req := range map[string]BatchUpdateRequirementCoverageRequest{
+		"invalid status filter": {
+			ApplyAll:       true,
+			Filter:         "everything",
+			EvidenceFilter: "all",
+		},
+		"invalid evidence filter": {
+			ApplyAll:       true,
+			Filter:         "all",
+			EvidenceFilter: "nope",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := batchRequirementIDsFromRequest(req); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid filtered scope to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRequirementIDsForBatchFiltersMatchesFrontendFilters(t *testing.T) {
+	items := []RequirementItem{
+		{
+			ID:             "req-covered-complete",
+			Mandatory:      true,
+			CoverageStatus: "covered",
+			Metadata: map[string]any{"latest_coverage": map[string]any{
+				"evidence":    "已响应",
+				"source_refs": []any{map[string]any{"title": "实施方案"}},
+			}},
+		},
+		{
+			ID:             "req-missing-evidence",
+			CoverageStatus: "covered",
+			Metadata:       map[string]any{"latest_coverage": map[string]any{"source_refs": []any{map[string]any{"title": "实施方案"}}}},
+		},
+		{
+			ID:             "req-missing-source",
+			CoverageStatus: "covered",
+			Metadata:       map[string]any{"latest_coverage": map[string]any{"evidence": "已响应"}},
+		},
+		{
+			ID:             "req-review",
+			CoverageStatus: "needs_review",
+			NeedsReview:    true,
+			Metadata:       map[string]any{},
+		},
+	}
+	if ids := requirementIDsForBatchFilters(items, "covered", "missing_evidence"); len(ids) != 1 || ids[0] != "req-missing-evidence" {
+		t.Fatalf("expected missing evidence item, got %#v", ids)
+	}
+	if ids := requirementIDsForBatchFilters(items, "covered", "missing_source"); len(ids) != 1 || ids[0] != "req-missing-source" {
+		t.Fatalf("expected missing source item, got %#v", ids)
+	}
+	if ids := requirementIDsForBatchFilters(items, "mandatory", "complete"); len(ids) != 1 || ids[0] != "req-covered-complete" {
+		t.Fatalf("expected mandatory complete item, got %#v", ids)
+	}
+	if ids := requirementIDsForBatchFilters(items, "review", "all"); len(ids) != 1 || ids[0] != "req-review" {
+		t.Fatalf("expected review item, got %#v", ids)
 	}
 }
 

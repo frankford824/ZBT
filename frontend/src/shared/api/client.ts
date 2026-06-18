@@ -1847,7 +1847,10 @@ export async function updateBidRequirementCoverage(
 export async function batchUpdateBidRequirementCoverage(
   bidId: string,
   payload: {
-    requirement_ids: string[]
+    requirement_ids?: string[]
+    apply_all?: boolean
+    filter?: 'all' | 'mandatory' | 'review' | 'covered'
+    evidence_filter?: 'all' | 'missing_evidence' | 'missing_source' | 'complete'
     coverage_status: BidRequirementItemDTO['coverage_status']
     evidence?: string
     source_refs?: unknown[]

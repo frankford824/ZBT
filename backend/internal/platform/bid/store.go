@@ -429,6 +429,9 @@ type UpdateRequirementCoverageRequest struct {
 
 type BatchUpdateRequirementCoverageRequest struct {
 	RequirementIDs []string `json:"requirement_ids"`
+	ApplyAll       bool     `json:"apply_all"`
+	Filter         string   `json:"filter"`
+	EvidenceFilter string   `json:"evidence_filter"`
 	CoverageStatus string   `json:"coverage_status"`
 	Evidence       string   `json:"evidence"`
 	SourceRefs     []any    `json:"source_refs"`
@@ -1190,13 +1193,25 @@ func (s *Store) BatchUpdateRequirementCoverage(ctx context.Context, tenantID, us
 	if _, err := uuid.Parse(bidID); err != nil {
 		return nil, ErrInvalidRequest
 	}
-	requirementIDs, status, needsReview, coverageMetadata, err := batchRequirementCoverageMetadata(userID, req)
+	requestedIDs, err := batchRequirementIDsFromRequest(req)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]RequirementItem, 0, len(requirementIDs))
+	result := make([]RequirementItem, 0, len(requestedIDs))
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		requirementIDs := requestedIDs
+		if req.ApplyAll {
+			items, err := requirementItemsForBid(ctx, tx, tenantID, bidID)
+			if err != nil {
+				return err
+			}
+			requirementIDs = requirementIDsForBatchFilters(items, req.Filter, req.EvidenceFilter)
+		}
+		status, needsReview, coverageMetadata, err := batchRequirementCoverageMetadata(userID, req, len(requirementIDs))
+		if err != nil {
 			return err
 		}
 		for _, requirementID := range requirementIDs {
@@ -4562,7 +4577,16 @@ func manualRequirementCoverageMetadata(requirementID, userID string, req UpdateR
 	return status, needsReview, metadata, nil
 }
 
-func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementCoverageRequest) ([]string, string, bool, map[string]any, error) {
+func batchRequirementIDsFromRequest(req BatchUpdateRequirementCoverageRequest) ([]string, error) {
+	if req.ApplyAll {
+		if filter := normalizeRequirementBatchFilter(req.Filter); filter == "" {
+			return nil, ErrInvalidRequest
+		}
+		if filter := normalizeRequirementBatchEvidenceFilter(req.EvidenceFilter); filter == "" {
+			return nil, ErrInvalidRequest
+		}
+		return nil, nil
+	}
 	requirementIDs := make([]string, 0, len(req.RequirementIDs))
 	seen := make(map[string]struct{}, len(req.RequirementIDs))
 	for _, value := range req.RequirementIDs {
@@ -4577,7 +4601,14 @@ func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementC
 		requirementIDs = append(requirementIDs, requirementID)
 	}
 	if len(requirementIDs) == 0 || len(requirementIDs) > requirementCoverageBatchLimit {
-		return nil, "", false, nil, ErrInvalidRequest
+		return nil, ErrInvalidRequest
+	}
+	return requirementIDs, nil
+}
+
+func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementCoverageRequest, requirementCount int) (string, bool, map[string]any, error) {
+	if requirementCount <= 0 || requirementCount > requirementCoverageBatchLimit {
+		return "", false, nil, ErrInvalidRequest
 	}
 	status, needsReview, metadata, err := manualRequirementCoverageMetadata("", userID, UpdateRequirementCoverageRequest{
 		CoverageStatus: req.CoverageStatus,
@@ -4585,13 +4616,96 @@ func batchRequirementCoverageMetadata(userID string, req BatchUpdateRequirementC
 		SourceRefs:     req.SourceRefs,
 	})
 	if err != nil {
-		return nil, "", false, nil, err
+		return "", false, nil, err
 	}
 	delete(metadata, "requirement_id")
 	metadata["action"] = "batch_review"
 	metadata["batch"] = true
-	metadata["requirement_count"] = len(requirementIDs)
-	return requirementIDs, status, needsReview, metadata, nil
+	metadata["requirement_count"] = requirementCount
+	if req.ApplyAll {
+		metadata["batch_scope"] = "filtered"
+		metadata["filter"] = normalizeRequirementBatchFilter(req.Filter)
+		metadata["evidence_filter"] = normalizeRequirementBatchEvidenceFilter(req.EvidenceFilter)
+	} else {
+		metadata["batch_scope"] = "selected"
+	}
+	return status, needsReview, metadata, nil
+}
+
+func requirementIDsForBatchFilters(items []RequirementItem, filter, evidenceFilter string) []string {
+	filter = normalizeRequirementBatchFilter(filter)
+	evidenceFilter = normalizeRequirementBatchEvidenceFilter(evidenceFilter)
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if !requirementItemMatchesBatchFilter(item, filter, evidenceFilter) {
+			continue
+		}
+		result = append(result, item.ID)
+	}
+	return result
+}
+
+func requirementItemMatchesBatchFilter(item RequirementItem, filter, evidenceFilter string) bool {
+	switch normalizeRequirementBatchFilter(filter) {
+	case "mandatory":
+		if !item.Mandatory {
+			return false
+		}
+	case "review":
+		if !item.NeedsReview && item.CoverageStatus != "needs_review" {
+			return false
+		}
+	case "covered":
+		if item.CoverageStatus != "covered" {
+			return false
+		}
+	case "all":
+	default:
+		return false
+	}
+
+	coverage := mapFromAny(item.Metadata["latest_coverage"])
+	evidence := strings.TrimSpace(asString(coverage["evidence"]))
+	sourceRefs := anySlice(coverage["source_refs"])
+	if len(sourceRefs) == 0 {
+		if single := mapFromAny(coverage["source_ref"]); len(single) > 0 {
+			sourceRefs = []any{single}
+		}
+	}
+	switch normalizeRequirementBatchEvidenceFilter(evidenceFilter) {
+	case "missing_evidence":
+		return item.CoverageStatus == "covered" && evidence == ""
+	case "missing_source":
+		return item.CoverageStatus == "covered" && len(sourceRefs) == 0
+	case "complete":
+		return item.CoverageStatus == "covered" && evidence != "" && len(sourceRefs) > 0
+	case "all":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeRequirementBatchFilter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all":
+		return "all"
+	case "mandatory", "review", "covered":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeRequirementBatchEvidenceFilter(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all":
+		return "all"
+	case "missing_evidence", "missing_source", "complete":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
 }
 
 func requirementCoverageMetadataForItem(base map[string]any, requirementID string) map[string]any {
@@ -4680,6 +4794,13 @@ func anySlice(value any) []any {
 	default:
 		return nil
 	}
+}
+
+func mapFromAny(value any) map[string]any {
+	if typed, ok := value.(map[string]any); ok && typed != nil {
+		return typed
+	}
+	return map[string]any{}
 }
 
 func ensureMaterialSelection(

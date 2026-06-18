@@ -14,7 +14,7 @@
 
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测；前端已补核心字段编辑确认和字段依据复核，仍需继续补全六模块所有字段逐项编辑和预览器文本高亮。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标、统一 `table_blocks` 和 `document_ocr` 网关路由；仍缺少真实 OCR Provider 配置和样本回归评测。
-3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览并复制页码/引用号/定位码/摘录，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；仍需继续补预览器内文本高亮和跨页服务端批处理。
+3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览并复制页码/引用号/定位码/摘录，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；当前已补当前筛选条件下的跨页服务端批处理，仍需继续补预览器内文本高亮。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考。后端 P0 外部工具网关已提供租户级配置、Provider 预设目录、默认工具白名单、摘要审计、预算阻断和 JSON-RPC `tools/call` 入口，前端团队管理页已提供外部数据源配置和审计入口；标讯大厅已提供 Handaas 外部标讯检索和保存入口，仍需继续补生产凭证验证、企业画像和外部应答库业务入口。
 
@@ -36,7 +36,7 @@
 - `frontend/src/features/bid/index.tsx` 的“响应要点”已优先读取独立要求表，并支持“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选。
 - 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
 - `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements/:requirementId`，可人工调整单条要求覆盖状态并补充响应证据；人工结果写入 `metadata.latest_coverage` 和 `metadata.manual_coverage`，不覆盖招标原文 `source_ref`。
-- `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements`，前端“响应要点”表支持勾选多条要求后批量标记覆盖状态、批量补充响应证据和批量编辑响应来源；批量操作会逐条写入覆盖历史，任一要求项不存在时整批失败。
+- `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements`，前端“响应要点”表支持勾选多条要求后批量标记覆盖状态、批量补充响应证据和批量编辑响应来源；也支持按当前覆盖/证据筛选条件对全部匹配要求做服务端批处理，批量操作会逐条写入覆盖历史，任一要求项不存在时整批失败。
 - 前端“响应要点”表的来源数量可打开响应来源列表；若来源携带 `file_id`、`file_asset_id`、`document_id` 或 `source_document_id`，可复用已有文件/知识库文档预览接口打开原文，带页码的来源会附加页码锚点；来源列表会展示并可复制页码、章节、引用号、定位码和摘录，便于人工复核传递精确定位。
 - `backend/internal/db/migrations/00033_bid_requirement_coverage_events.sql` 已新增 `bid_requirement_coverage_events` RLS 表；模型回写和人工调整都会追加覆盖历史，`GET /bids/:id/requirements/:requirementId/history` 可按单条要求读取最近历史，前端“响应要点”表提供历史弹窗。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements/export`，前端“响应要点”页可导出 UTF-8 CSV 响应矩阵；`?format=xlsx` 可导出含“响应矩阵”和“覆盖历史”两个工作表的 Excel 文件，覆盖状态、响应证据、响应来源、招标原文来源和历史记录均使用业务口径。
@@ -176,7 +176,7 @@
    - 任一生成章节能追溯到对应 requirement_items。
    - 无引用的事实性段落进入 `needs_human_input`。
    - 前端能按“未覆盖/部分覆盖/已覆盖”过滤招标要求。
-   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选，并在响应要点表展示响应证据和来源数量；`PATCH /bids/:id/requirements/:requirementId` 可人工调整覆盖状态、证据和响应来源；`PATCH /bids/:id/requirements` 可批量标记覆盖状态、批量补充响应证据和批量编辑响应来源；`GET /bids/:id/requirements/:requirementId/history` 可读取单条要求覆盖历史；`GET /bids/:id/requirements/export` 可下载评审响应矩阵 CSV 和带历史工作表的 xlsx。
+   - 当前已落地：后端和 AI 服务测试覆盖 requirement_items 到章节任务 payload、prompt 和 mock/fallback self_check 的追踪链路；前端编辑器已展示最近版本的覆盖状态；文件解读页已支持按“全部/必须/待确认/已覆盖”和“待补证据/待补来源/依据完整”筛选，并在响应要点表展示响应证据和来源数量；`PATCH /bids/:id/requirements/:requirementId` 可人工调整覆盖状态、证据和响应来源；`PATCH /bids/:id/requirements` 可批量标记覆盖状态、批量补充响应证据和批量编辑响应来源，并支持 `apply_all/filter/evidence_filter` 按当前筛选条件服务端批处理；`GET /bids/:id/requirements/:requirementId/history` 可读取单条要求覆盖历史；`GET /bids/:id/requirements/export` 可下载评审响应矩阵 CSV 和带历史工作表的 xlsx。
 
 ## P1：Skill Pipeline 和阶段闸门
 
@@ -230,7 +230,7 @@
 2. 响应矩阵页：
    - requirement_items 表格。
    - 章节覆盖状态、来源状态、合规状态。
-   - 当前已落地：响应要点表展示覆盖状态、证据摘要和来源数量，支持按覆盖、证据和来源完整性筛选，支持人工调整覆盖状态、批量标记覆盖状态、单条或批量补充证据和响应来源，并支持导出评审响应矩阵 CSV 和带历史工作表的 xlsx。
+   - 当前已落地：响应要点表展示覆盖状态、证据摘要和来源数量，支持按覆盖、证据和来源完整性筛选，支持人工调整覆盖状态、按选中项或当前筛选全部批量标记覆盖状态、单条或批量补充证据和响应来源，并支持导出评审响应矩阵 CSV 和带历史工作表的 xlsx。
 
 3. 章节编辑器：
    - 右侧来源详情不展示技术口径，不出现 provider/model/token。

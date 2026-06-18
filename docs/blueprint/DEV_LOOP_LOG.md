@@ -3686,3 +3686,41 @@ pnpm --dir frontend build
 1. 本轮未配置真实 Handaas 生产凭证，也未对真实账号做 smoke test；真实响应结构仍需在租户环境验证后继续调优映射。
 2. 本轮只接入标讯搜索入口，不接企业画像、采购统计、外部应答库检索和知识库入库。
 3. 当前保存的是公开标讯摘要和业务字段，不自动抓取或外发完整招标文件附件。
+
+## Loop-67 / 响应矩阵跨页服务端批处理 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐 AutoRFP 式响应矩阵只能对当前勾选项批量处理，不能按筛选条件跨页批处理的问题。
+2. 保持覆盖状态、响应证据和响应来源的人工调整都写入覆盖历史。
+3. 不新增路由，扩展现有 `PATCH /bids/:id/requirements` 协议，避免打断已有前端和导出链路。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 的 `BatchUpdateRequirementCoverageRequest` 新增 `apply_all`、`filter`、`evidence_filter`。
+2. 服务端可按 `all/mandatory/review/covered` 和 `all/missing_evidence/missing_source/complete` 组合筛选当前标书全部要求项，再逐条更新覆盖状态、证据、来源和覆盖历史。
+3. 批量历史 metadata 新增 `batch_scope=selected|filtered`、`filter`、`evidence_filter` 和真实 `requirement_count`，便于审计区分勾选批量和筛选批量。
+4. `frontend/src/features/bid/index.tsx` 的“响应要点”工具栏新增“筛选全部标记”和“筛选全部补证据”，操作前提示当前筛选命中数量。
+5. `frontend/src/shared/api/client.ts` 更新批量接口类型，支持 `apply_all/filter/evidence_filter`。
+6. `API_SPEC.md`、`AI_IMPLEMENTATION_CHECKLIST.md` 同步记录当前能力。
+
+### 检查结果
+
+已运行：
+
+```bash
+go test ./internal/platform/bid
+pnpm --dir frontend lint
+pnpm --dir frontend build
+```
+
+结果：
+
+1. 后端 bid 包单元测试通过，覆盖筛选批量 metadata、无效筛选拒绝和前后端筛选规则一致性。
+2. 前端 ESLint 通过。
+3. 前端 TypeScript 构建和 Vite 打包通过。
+
+### 偏离蓝图
+
+1. 本轮不实现预览器文本高亮；只补响应矩阵跨页服务端批处理。
+2. 服务端仍保留 `requirementCoverageBatchLimit`，超过限制的筛选批量会拒绝执行，避免误操作一次性覆盖过多要求项。
