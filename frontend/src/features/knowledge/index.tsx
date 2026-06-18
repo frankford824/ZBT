@@ -26,6 +26,7 @@ import {
   fetchFileURL,
   getApiErrorMessage,
   fetchKnowledgeCategories,
+  fetchKnowledgeDocumentPreview,
   fetchKnowledgeDocumentReferences,
   fetchKnowledgeDocuments,
   fetchKnowledgeStats,
@@ -945,22 +946,29 @@ export function KnowledgeTagsPage() {
   )
 }
 
-export function FilePreviewPage() {
+type FilePreviewSourceType = 'file' | 'knowledge'
+
+export function FilePreviewPage({ sourceType = 'file' }: { sourceType?: FilePreviewSourceType }) {
   const { message } = AntApp.useApp()
-  const { fileId } = useParams()
+  const { fileId, documentId } = useParams()
   const [searchParams] = useSearchParams()
+  const sourceId = sourceType === 'knowledge' ? documentId : fileId
   const sourceLocator = filePreviewSourceLocator(searchParams)
   const preview = useQuery({
-    queryKey: ['file-preview', fileId],
-    queryFn: () => fetchFileURL(fileId!, 'preview'),
-    enabled: Boolean(fileId),
+    queryKey: [sourceType === 'knowledge' ? 'knowledge-document-preview' : 'file-preview', sourceId],
+    queryFn: () =>
+      sourceType === 'knowledge'
+        ? fetchKnowledgeDocumentPreview(sourceId!)
+        : fetchFileURL(sourceId!, 'preview'),
+    enabled: Boolean(sourceId),
   })
   const openDownload = async () => {
-    if (!fileId) {
+    const downloadFileId = preview.data?.file.id ?? (sourceType === 'file' ? sourceId : null)
+    if (!downloadFileId) {
       return
     }
     try {
-      const result = await fetchFileURL(fileId, 'download')
+      const result = await fetchFileURL(downloadFileId, 'download')
       const openError = fileOpenErrorMessage(openFileUrl(result.url))
       if (openError) {
         message.error(openError)
@@ -997,7 +1005,7 @@ export function FilePreviewPage() {
       subtitle="文档预览"
       tags={['在线预览']}
       actions={[
-        <Button key="download" icon={<DownloadOutlined />} disabled={!fileId} onClick={() => void openDownload()}>
+        <Button key="download" icon={<DownloadOutlined />} disabled={!sourceId} onClick={() => void openDownload()}>
           下载
         </Button>,
       ]}

@@ -4028,3 +4028,77 @@ cd ai-service && .venv/bin/python -m app.evaluation.export_format_eval --input .
 
 1. 本轮评测器生成的是离线 golden 场景，不直接拉取运行态真实 bid；运行态可继续用 `GET /bids/:id/generation-coverage` 导出后交给同一评测器。
 2. PDF 视觉验收仍是“可打开、文本层、首屏非空”，不是逐页像素级排版对比。
+
+## Loop-76 / 知识库文档来源定位预览 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐 Loop-74 的尾部偏离：知识库 document ID 来源不应绕过前端定位预览页。
+2. 文件来源和知识库文档来源都使用同一套定位条、页码、摘录关键词和复制定位体验。
+3. 不改变后端权限模型，继续使用已有 `GET /knowledge/documents/:id/preview`。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的来源打开逻辑统一生成前端预览页 URL：文件来源走 `/files/:fileId/preview`，知识库文档来源走 `/knowledge/documents/:documentId/preview`，两者都携带 `page`、`search`、`source_title`、`source_locator`。
+2. `frontend/src/routes/router.tsx` 新增 `/knowledge/documents/:documentId/preview` 路由，复用文件预览页组件。
+3. `frontend/src/features/knowledge/index.tsx` 的 `FilePreviewPage` 增加 `sourceType`，根据文件 ID 或知识库文档 ID 调用 `fetchFileURL` / `fetchKnowledgeDocumentPreview`，并复用定位条和下载逻辑。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录文件 ID 和知识库文档 ID 来源均已进入前端预览页定位条。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+
+### 偏离蓝图
+
+1. 仍未实现 PDF canvas 选区框或 Word 文本坐标层；本轮解决的是两类来源都进入稳定业务定位条。
+2. 后端 `GET /knowledge/documents/:id/preview` 仍按 knowledge read 权限校验；若某角色只有 bid 权限而没有 knowledge 权限，前端路由可打开但预览接口会按后端权限返回错误。
+
+## Loop-77 / 解析来源引用门禁 - 2026-06-18
+
+### 本轮目标
+
+1. 把 AutoRFP 式 `Question/Requirement -> Source` 从“有字段”提高到“可验收的来源引用完整性”。
+2. 工程1 golden 不只检查 evidence 数量和 source_text，还要检查引用号和定位信息。
+3. 避免解析结果退化为只有摘要、没有 `citation_id/reference_id/chunk/file/page` 的来源说明。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/tender_parse_eval.py` 新增来源引用门禁：
+   - `requirements.require_traceable_source_refs`
+   - `requirements.require_reference_ids`
+   - `requirements.require_source_locations`
+   - `evidence.require_traceable`
+   - `evidence.require_reference_ids`
+   - `evidence.require_source_locations`
+2. `docs/sample_docs/golden/工程1.parse.json` 开启上述门禁，工程1解析检查数从 103 项提升到 109 项。
+3. `ai-service/app/tests/test_tender_parse_eval.py` 增加完整样本通过和无可追溯来源失败两个场景。
+4. `SAMPLE_DOCS_EVALUATION.md` 与 `AI_IMPLEMENTATION_CHECKLIST.md` 同步更新当前解析验收口径。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+```
+
+结果：
+
+1. `test_tender_parse_eval.py` 5 项通过。
+2. 工程1真实样本解析评测 109/109 通过。
+
+### 偏离蓝图
+
+1. 本轮校验的是来源引用结构完整性，不做来源文本与 PDF canvas bbox 的视觉框选验证。
+2. 真实 OCR Provider 的持续报告仍依赖外部 MinerU/PaddleOCR endpoint 配置，本轮没有伪造通过。

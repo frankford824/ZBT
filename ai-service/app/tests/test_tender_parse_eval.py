@@ -44,6 +44,9 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
                     ],
                     "requirements": {
                         "min_count": 5,
+                        "require_traceable_source_refs": True,
+                        "require_reference_ids": True,
+                        "require_source_locations": True,
                         "required_modules": [
                             "qualification",
                             "evaluation",
@@ -56,7 +59,13 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
                             {"module": "invalid_risk", "text": "投标有效期不足"},
                         ],
                     },
-                    "evidence": {"min_count": 5, "max_missing_source_count": 0},
+                    "evidence": {
+                        "min_count": 5,
+                        "max_missing_source_count": 0,
+                        "require_traceable": True,
+                        "require_reference_ids": True,
+                        "require_source_locations": True,
+                    },
                 },
             },
             ensure_ascii=False,
@@ -68,6 +77,46 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
 
     assert result["status"] == "passed"
     assert result["failed_checks"] == 0
+
+
+def test_evaluate_golden_fails_when_source_refs_are_not_traceable(tmp_path) -> None:
+    sample = tmp_path / "sample.txt"
+    sample.write_text("项目名称：智慧交通平台建设", encoding="utf-8")
+    golden = tmp_path / "golden.json"
+    golden.write_text(
+        json.dumps(
+            {
+                "documents": [{"id": "tender", "path": "sample.txt", "content_type": "text/plain"}],
+                "tender_parse": {
+                    "document_id": "tender",
+                    "filename": "sample.txt",
+                    "content_type": "text/plain",
+                    "requirements": {
+                        "min_count": 1,
+                        "require_traceable_source_refs": True,
+                        "require_reference_ids": True,
+                        "require_source_locations": True,
+                    },
+                    "evidence": {
+                        "min_count": 1,
+                        "require_traceable": True,
+                        "require_reference_ids": True,
+                        "require_source_locations": True,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_golden(golden, repo_root=tmp_path)
+
+    assert result["status"] == "failed"
+    failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
+    assert "tender_parse.requirements.traceable_source_refs" in failed_names
+    assert "tender_parse.requirements.source_reference_ids" in failed_names
+    assert "tender_parse.requirements.source_locations" in failed_names
 
 
 def test_evaluate_golden_checks_table_block_structure(tmp_path) -> None:

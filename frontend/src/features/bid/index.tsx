@@ -76,7 +76,6 @@ import {
   fetchBids,
   fetchChapterDiff,
   fetchChapterVersions,
-  fetchKnowledgeDocumentPreview,
   getApiErrorMessage,
   generateBid,
   generateBidOutline,
@@ -957,22 +956,7 @@ export function BidWizardPage() {
       return
     }
     try {
-      if (target.type === 'file') {
-        const openError = fileOpenErrorMessage(openFileUrl(filePreviewPageUrl(target.id, sourceRef)))
-        if (openError) {
-          message.error(openError)
-        }
-        return
-      }
-      const result = await fetchKnowledgeDocumentPreview(target.id)
-      const openError = fileOpenErrorMessage(
-        openFileUrl(
-          withPreviewSourceAnchor(result.url, {
-            page: requirementSourcePage(sourceRef),
-            searchText: requirementSourceSearchText(sourceRef),
-          }),
-        ),
-      )
+      const openError = fileOpenErrorMessage(openFileUrl(sourcePreviewPageUrl(target, sourceRef)))
       if (openError) {
         message.error(openError)
       }
@@ -3146,7 +3130,7 @@ function requirementSourceSearchText(sourceRef: unknown) {
   return normalizePreviewSearchText(requirementSourceExcerpt(sourceRef))
 }
 
-function filePreviewPageUrl(fileId: string, sourceRef: unknown) {
+function sourcePreviewPageUrl(target: { type: 'file' | 'document'; id: string }, sourceRef: unknown) {
   const params = new URLSearchParams()
   const page = requirementSourcePage(sourceRef)
   const searchText = requirementSourceSearchText(sourceRef)
@@ -3164,8 +3148,12 @@ function filePreviewPageUrl(fileId: string, sourceRef: unknown) {
   if (locator) {
     params.set('source_locator', truncatePreviewParam(locator, 800))
   }
+  const path =
+    target.type === 'file'
+      ? `/files/${encodeURIComponent(target.id)}/preview`
+      : `/knowledge/documents/${encodeURIComponent(target.id)}/preview`
   const query = params.toString()
-  return `/files/${encodeURIComponent(fileId)}/preview${query ? `?${query}` : ''}`
+  return `${path}${query ? `?${query}` : ''}`
 }
 
 function truncatePreviewParam(value: string, limit: number) {
@@ -3177,24 +3165,6 @@ function normalizePreviewSearchText(value: string) {
   const normalized = value.replace(/\s+/g, ' ').trim()
   if (!normalized) return ''
   return normalized.length > 120 ? normalized.slice(0, 120) : normalized
-}
-
-function withPreviewSourceAnchor(url: string, { page, searchText }: { page: number | null; searchText: string }) {
-  if (!page && !searchText) return url
-  try {
-    const nextURL = new URL(url, window.location.href)
-    const params = new URLSearchParams(nextURL.hash.replace(/^#/, '').replace(/^:/, ''))
-    if (page) {
-      params.set('page', String(page))
-    }
-    if (searchText) {
-      params.set('search', searchText)
-    }
-    nextURL.hash = params.toString()
-    return nextURL.toString()
-  } catch {
-    return url
-  }
 }
 
 function HighlightedSourceText({ text, query }: { text: string; query?: string }) {

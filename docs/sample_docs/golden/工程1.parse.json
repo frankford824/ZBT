@@ -175,6 +175,9 @@
     ],
     "requirements": {
       "min_count": 35,
+      "require_traceable_source_refs": true,
+      "require_reference_ids": true,
+      "require_source_locations": true,
       "required_modules": [
         "qualification",
         "evaluation",
@@ -211,7 +214,10 @@
     },
     "evidence": {
       "min_count": 20,
-      "max_missing_source_count": 0
+      "max_missing_source_count": 0,
+      "require_traceable": true,
+      "require_reference_ids": true,
+      "require_source_locations": true
     }
   }
 }

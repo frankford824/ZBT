@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -354,6 +355,45 @@ def _evaluate_requirements(
             item_spec,
             _requirements_excerpt(requirements, module),
         )
+    if requirements_spec.get("require_traceable_source_refs") is True:
+        missing = _missing_source_ref_indexes(
+            requirements,
+            lambda item: item.get("source_ref") if isinstance(item, dict) else None,
+            require_traceable=True,
+        )
+        _add_check(
+            checks,
+            "tender_parse.requirements.traceable_source_refs",
+            not missing and bool(requirements),
+            "all requirement items include traceable source_ref",
+            _source_ref_check_summary(requirements, missing),
+        )
+    if requirements_spec.get("require_reference_ids") is True:
+        missing = _missing_source_ref_indexes(
+            requirements,
+            lambda item: item.get("source_ref") if isinstance(item, dict) else None,
+            require_reference_id=True,
+        )
+        _add_check(
+            checks,
+            "tender_parse.requirements.source_reference_ids",
+            not missing and bool(requirements),
+            "all requirement source_ref values include citation_id or reference_id",
+            _source_ref_check_summary(requirements, missing),
+        )
+    if requirements_spec.get("require_source_locations") is True:
+        missing = _missing_source_ref_indexes(
+            requirements,
+            lambda item: item.get("source_ref") if isinstance(item, dict) else None,
+            require_location=True,
+        )
+        _add_check(
+            checks,
+            "tender_parse.requirements.source_locations",
+            not missing and bool(requirements),
+            "all requirement source_ref values include page, chunk, file, or document location",
+            _source_ref_check_summary(requirements, missing),
+        )
 
 
 def _evaluate_evidence(
@@ -384,6 +424,33 @@ def _evaluate_evidence(
             actual <= expected,
             f"<={expected}",
             actual,
+        )
+    if evidence_spec.get("require_traceable") is True:
+        missing = _missing_source_ref_indexes(evidence, lambda item: item, require_traceable=True)
+        _add_check(
+            checks,
+            "tender_parse.evidence.traceable",
+            not missing and bool(evidence),
+            "all evidence items are traceable",
+            _source_ref_check_summary(evidence, missing),
+        )
+    if evidence_spec.get("require_reference_ids") is True:
+        missing = _missing_source_ref_indexes(evidence, lambda item: item, require_reference_id=True)
+        _add_check(
+            checks,
+            "tender_parse.evidence.reference_ids",
+            not missing and bool(evidence),
+            "all evidence items include citation_id or reference_id",
+            _source_ref_check_summary(evidence, missing),
+        )
+    if evidence_spec.get("require_source_locations") is True:
+        missing = _missing_source_ref_indexes(evidence, lambda item: item, require_location=True)
+        _add_check(
+            checks,
+            "tender_parse.evidence.source_locations",
+            not missing and bool(evidence),
+            "all evidence items include page, chunk, file, or document location",
+            _source_ref_check_summary(evidence, missing),
         )
 
 
@@ -497,6 +564,69 @@ def _requirements_excerpt(requirements: list[Any], module: str) -> list[str]:
         if len(values) >= 8:
             break
     return values
+
+
+def _missing_source_ref_indexes(
+    items: list[Any],
+    source_ref_for: Callable[[Any], Any],
+    *,
+    require_traceable: bool = False,
+    require_reference_id: bool = False,
+    require_location: bool = False,
+) -> list[str]:
+    missing: list[str] = []
+    for index, item in enumerate(items, start=1):
+        source_ref = source_ref_for(item)
+        if not isinstance(source_ref, dict):
+            missing.append(_item_identifier(item, index))
+            continue
+        if require_traceable and not _traceable_source_ref(source_ref):
+            missing.append(_item_identifier(item, index))
+            continue
+        if require_reference_id and not _has_reference_id(source_ref):
+            missing.append(_item_identifier(item, index))
+            continue
+        if require_location and not _has_source_location(source_ref):
+            missing.append(_item_identifier(item, index))
+            continue
+    return missing
+
+
+def _traceable_source_ref(source_ref: dict[str, Any]) -> bool:
+    return bool(str(source_ref.get("source_text") or "").strip()) and (
+        bool(source_ref.get("traceable"))
+        or _has_reference_id(source_ref)
+        or _has_source_location(source_ref)
+    )
+
+
+def _has_reference_id(source_ref: dict[str, Any]) -> bool:
+    return bool(str(source_ref.get("citation_id") or source_ref.get("reference_id") or "").strip())
+
+
+def _has_source_location(source_ref: dict[str, Any]) -> bool:
+    for key in ("page_start", "page_end", "chunk_id", "document_id", "file_id", "bbox"):
+        value = source_ref.get(key)
+        if value not in (None, "", []):
+            return True
+    return False
+
+
+def _item_identifier(item: Any, index: int) -> str:
+    if isinstance(item, dict):
+        for key in ("id", "field", "requirement"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                return value[:80]
+    return f"item-{index}"
+
+
+def _source_ref_check_summary(items: list[Any], missing: list[str]) -> dict[str, Any]:
+    return {
+        "total": len(items),
+        "missing_count": len(missing),
+        "missing": missing[:12],
+    }
 
 
 def _excerpt(source_text: str, expected_text: str) -> str:

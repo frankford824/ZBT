@@ -12,7 +12,7 @@
 
 当前 ZBT 已有 Go 主后端、Python AI 服务、ModelRouter、OCR HTTP 接入点、RAG 检索、source_refs 落库、Word/PDF/ZIP 导出和 AI 调用成本审计。仍需要继续增强的核心差距：
 
-1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测；前端已补核心字段编辑确认、六模块字段逐项编辑、字段依据复核、字段置信度手工标记、来源摘录高亮、预览搜索定位和文件预览页定位条，仍需继续补 PDF canvas 选区框。
+1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测；前端已补核心字段编辑确认、六模块字段逐项编辑、字段依据复核、字段置信度手工标记、来源摘录高亮、预览搜索定位和文件/知识库文档预览页定位条，仍需继续补 PDF canvas 选区框。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标、统一 `table_blocks` 和 `document_ocr` 网关路由；MinerU/PaddleOCR 样本验收已支持页级置信度、版面 bbox、表格 bbox 和单元格 bbox 门槛；仍缺少生产环境真实 OCR Provider 凭证和持续回归报告。
 3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览并复制页码/引用号/定位码/摘录，单条要求可查看模型/人工覆盖历史，历史来源也可打开原文和复制定位，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；当前已补当前筛选条件下的跨页服务端批处理，预览入口会携带页码和摘录搜索参数，响应来源弹窗、响应历史和字段依据列已高亮来源摘录。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
@@ -28,7 +28,7 @@
 - `ai-service/app/pipelines/parse/document_parser.py` 已为 PDF 输出 `page_quality`，并把 PDF、docx、xlsx、pptx 表格统一归一为 `table_blocks`；每个带行结构的表格块会生成或保留 `md_table`，PyMuPDF 表格会保留 table-level `bbox` 和可用的 `cell_bboxes`，用于模块抽取、RAG 上下文和版面追溯。OCR 接入已显式支持 `OCR_PROVIDER=http_ocr|mineru|paddleocr`，Provider 专属 endpoint/token/mode 会写入安全 metadata。MinerU/PaddleOCR 的同步或异步响应会归一为 `markdown`、`pages`、`blocks`、`layout_blocks`、`table_blocks`，其中表格和版面块会提升到文档顶层 metadata 参与后续解析；OCR 顶层 `tables/table_blocks` 与页级 `pages[].tables` 会合并去重，常见 `cells` 输出会归一成 `rows`、`md_table`、`cell_bboxes` 并进入 chunk 文本。
 - `ai-service/app/config/model_routing.yaml` 已声明 `document_ocr` 本地路由，便于 `/models/health`、Mock 路由审计和生产配置检查覆盖 OCR Provider 能力边界。
 - `ai-service/app/evaluation/ocr_provider_eval.py` 已提供 MinerU / PaddleOCR 真实 endpoint 验收入口，默认把工程1采购 PDF 首页渲染成 PNG 后走 OCR Provider；无 endpoint 时输出 `skipped`，不会伪装为通过；可通过 `--min-page-confidence`、`--min-layout-bbox-count`、`--min-table-bbox-count`、`--min-cell-bbox-count` 把页级置信度和坐标级版面证据纳入验收。
-- `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”、“模块字段”和“响应要点”视图；“模块字段”会把 6 模块 `modules.*.fields` 展开为逐项编辑表，确认时写回原 `structured_result.modules`，并在 `parse_metadata.confirm_overrides.edited_module_fields` 记录调整路径。可解析到文件 ID 的来源会打开前端文件预览页，预览页展示来源标题、页码、摘录关键词和复制定位入口，并继续把页码/搜索词传给内嵌文件预览器。页面不展示模型、token、schema 等技术口径。
+- `frontend/src/features/bid/index.tsx` 的文件解读步骤已增加“信息分组”、“模块字段”和“响应要点”视图；“模块字段”会把 6 模块 `modules.*.fields` 展开为逐项编辑表，确认时写回原 `structured_result.modules`，并在 `parse_metadata.confirm_overrides.edited_module_fields` 记录调整路径。可解析到文件 ID 或知识库文档 ID 的来源会打开前端预览页，预览页展示来源标题、页码、摘录关键词和复制定位入口，并继续把页码/搜索词传给内嵌文件预览器。页面不展示模型、token、schema 等技术口径。
 - `backend/internal/db/migrations/00031_bid_requirement_items.sql` 已新增 `bid_requirement_items` 独立表，按租户启用 RLS，承接 AutoRFP 式 referenceId/source attribution 思路。
 - `backend/internal/platform/bid/store.go` 已在解析回调和人工确认两条路径同步 `requirement_items`，并提供 `ListRequirementItems`。
 - `TenderParseFieldEvidence.source_ref` 已统一携带 `citation_id`、`reference_id`、`source_kind`、`file_id`、`filename`、`chunk_id`、`traceable`，模型增强结果缺少可追溯定位时必须进入人工复核。
@@ -40,7 +40,7 @@
 - 前端“响应要点”表的来源数量可打开响应来源列表；若来源携带 `file_id`、`file_asset_id`、`document_id` 或 `source_document_id`，可复用已有文件/知识库文档预览接口打开原文，带页码的来源会附加页码锚点；来源列表会展示并可复制页码、章节、引用号、定位码和摘录，便于人工复核传递精确定位。
 - `backend/internal/db/migrations/00033_bid_requirement_coverage_events.sql` 已新增 `bid_requirement_coverage_events` RLS 表；模型回写和人工调整都会追加覆盖历史，`GET /bids/:id/requirements/:requirementId/history` 可按单条要求读取最近历史，前端“响应要点”表提供历史弹窗。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements/export`，前端“响应要点”页可导出 UTF-8 CSV 响应矩阵；`?format=xlsx` 可导出含“响应矩阵”和“覆盖历史”两个工作表的 Excel 文件，覆盖状态、响应证据、响应来源、招标原文来源和历史记录均使用业务口径。
-- `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 103 项检查。
+- `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 109 项检查，并强制字段证据和要求项来源具备可追溯原文、引用号和定位信息。
 - `backend/internal/db/migrations/00032_bid_pipeline_gates.sql` 已新增 `bid_pipeline_gates` RLS 表。
 - `backend/internal/platform/bid/store.go` 已在上传、解析、解析回调、人工确认、大纲生成、整标生成和导出路径维护阶段闸门；`GenerateOutline` 会检查 `interpret=passed`，`GenerateBid` 会检查 `plan=passed`，`CreateExport` 会检查 `generate=passed` 和 `check=passed`。旧的已确认解析、大纲、已完成章节内容和已完成合规检查会按真实业务状态自动补齐闸门。
 - `backend/internal/platform/compliance/store.go` 已在创建检查、问题修复、忽略和人工确认 fail 后同步 `check` 阶段闸门；`pass` 自动通过，`warn/fail_candidate` 进入待复核，`fail` 阻断。
@@ -105,7 +105,7 @@
 6. 回归评测：
    - 使用 `docs/ex/工程1` 的 PDF、docx、xlsx 样本建立 golden JSON。
    - 新增脚本输出字段命中率：项目名、预算、截止日、资格要求、评分项、无效标条款、附件清单。
-   - 当前已落地：`docs/sample_docs/golden/工程1.parse.json` 和 `python -m app.evaluation.tender_parse_eval --golden ...`，当前样本 103/103 通过。
+   - 当前已落地：`docs/sample_docs/golden/工程1.parse.json` 和 `python -m app.evaluation.tender_parse_eval --golden ...`，当前样本 109/109 通过；字段证据和要求项 `source_ref` 会检查可追溯原文、引用号和页码/chunk/文件/文档定位。
    - 当前已落地：样本评测会检查 `table_blocks.required_sources`、`min_total_rows`、`min_blocks_with_rows`、`min_blocks_with_bbox`、`min_cells_with_bbox`、`require_md_table`、`md_table_must_contain` 和表格块关键单元格，防止 PDF/DOCX/XLSX 表格退化为普通文本或丢失 PDF 单元格级版面证据。
    - P0 验收门槛：电子文本关键字段准确率不低于 85%；扫描/OCR 字段必须带置信度和人工复核标记。
 

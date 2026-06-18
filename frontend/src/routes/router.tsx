@@ -119,7 +119,8 @@ export function AppRouter() {
               <Route path="/knowledge/tags" element={page(<KnowledgeTagsPage />)} />
             </Route>
             <Route element={<RequireAnyPermission modules={['knowledge', 'bid']} />}>
-              <Route path="/files/:fileId/preview" element={page(<FilePreviewPage />)} />
+              <Route path="/files/:fileId/preview" element={page(<FilePreviewPage sourceType="file" />)} />
+              <Route path="/knowledge/documents/:documentId/preview" element={page(<FilePreviewPage sourceType="knowledge" />)} />
             </Route>
             <Route element={<RequirePermission module="team" />}>
               <Route path="/team" element={page(<TeamPage />)} />
