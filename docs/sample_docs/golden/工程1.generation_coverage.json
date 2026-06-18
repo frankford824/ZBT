@@ -2,7 +2,9 @@
   "name": "工程1.generation_coverage",
   "thresholds": {
     "min_mandatory_coverage_ratio": 1.0,
-    "min_source_ref_resolution_ratio": 1.0
+    "min_source_ref_resolution_ratio": 1.0,
+    "min_source_ref_reference_id_ratio": 1.0,
+    "min_source_ref_location_ratio": 1.0
   },
   "requirements": [
     {
@@ -41,7 +43,11 @@
       "source_refs": [
         {
           "chunk_id": "chunk-engineering1-tender-scope",
-          "document_id": "doc-engineering1-tender"
+          "document_id": "doc-engineering1-tender",
+          "citation_id": "ENG1-TENDER-P001",
+          "reference_id": "ENG1-TENDER-P001",
+          "page_start": 1,
+          "source_text": "桥梁检查项目服务范围、检查组织和进度安排。"
         }
       ],
       "requirement_coverage": [
@@ -52,7 +58,11 @@
           "source_refs": [
             {
               "chunk_id": "chunk-engineering1-tender-scope",
-              "document_id": "doc-engineering1-tender"
+              "document_id": "doc-engineering1-tender",
+              "citation_id": "ENG1-TENDER-P001",
+              "reference_id": "ENG1-TENDER-P001",
+              "page_start": 1,
+              "source_text": "桥梁检查项目服务范围、检查组织和进度安排。"
             }
           ]
         },
@@ -63,7 +73,11 @@
           "source_refs": [
             {
               "chunk_id": "chunk-engineering1-tender-scope",
-              "document_id": "doc-engineering1-tender"
+              "document_id": "doc-engineering1-tender",
+              "citation_id": "ENG1-TENDER-P002",
+              "reference_id": "ENG1-TENDER-P002",
+              "page_start": 2,
+              "source_text": "质量控制章节说明成果复核和可追溯要求。"
             }
           ]
         }
@@ -82,7 +96,11 @@
               "source_refs": [
                 {
                   "chunk_id": "chunk-engineering1-response-format",
-                  "document_id": "doc-engineering1-response-format"
+                  "document_id": "doc-engineering1-response-format",
+                  "citation_id": "ENG1-RESPONSE-P001",
+                  "reference_id": "ENG1-RESPONSE-P001",
+                  "page_start": 1,
+                  "source_text": "商务标响应服务周期、报价说明和承诺事项。"
                 }
               ]
             }

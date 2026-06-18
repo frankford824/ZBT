@@ -8,6 +8,8 @@ from typing import Any
 
 DEFAULT_MIN_COVERAGE_RATIO = 1.0
 DEFAULT_MIN_SOURCE_REF_RESOLUTION_RATIO = 0.95
+DEFAULT_MIN_SOURCE_REF_REFERENCE_ID_RATIO = 1.0
+DEFAULT_MIN_SOURCE_REF_LOCATION_RATIO = 1.0
 
 
 def evaluate_generation_coverage(spec_path: Path) -> dict[str, Any]:
@@ -21,6 +23,14 @@ def evaluate_generation_coverage(spec_path: Path) -> dict[str, Any]:
     min_source_ref_resolution_ratio = _ratio(
         thresholds.get("min_source_ref_resolution_ratio"),
         DEFAULT_MIN_SOURCE_REF_RESOLUTION_RATIO,
+    )
+    min_source_ref_reference_id_ratio = _ratio(
+        thresholds.get("min_source_ref_reference_id_ratio"),
+        DEFAULT_MIN_SOURCE_REF_REFERENCE_ID_RATIO,
+    )
+    min_source_ref_location_ratio = _ratio(
+        thresholds.get("min_source_ref_location_ratio"),
+        DEFAULT_MIN_SOURCE_REF_LOCATION_RATIO,
     )
 
     coverage = _coverage_by_requirement(chapters)
@@ -72,12 +82,30 @@ def evaluate_generation_coverage(spec_path: Path) -> dict[str, Any]:
     source_refs = _all_source_refs(chapters)
     resolved_source_refs = [ref for ref in source_refs if _source_ref_resolved(ref, known_refs)]
     source_ref_resolution_ratio = _safe_ratio(len(resolved_source_refs), len(source_refs))
+    source_refs_with_reference_id = [ref for ref in source_refs if _source_ref_has_reference_id(ref)]
+    source_ref_reference_id_ratio = _safe_ratio(len(source_refs_with_reference_id), len(source_refs))
+    source_refs_with_location = [ref for ref in source_refs if _source_ref_has_location(ref)]
+    source_ref_location_ratio = _safe_ratio(len(source_refs_with_location), len(source_refs))
     _add_check(
         checks,
         "generation.source_refs.resolution_ratio",
         source_ref_resolution_ratio >= min_source_ref_resolution_ratio,
         f">={min_source_ref_resolution_ratio}",
         source_ref_resolution_ratio,
+    )
+    _add_check(
+        checks,
+        "generation.source_refs.reference_id_ratio",
+        source_ref_reference_id_ratio >= min_source_ref_reference_id_ratio,
+        f">={min_source_ref_reference_id_ratio}",
+        source_ref_reference_id_ratio,
+    )
+    _add_check(
+        checks,
+        "generation.source_refs.location_ratio",
+        source_ref_location_ratio >= min_source_ref_location_ratio,
+        f">={min_source_ref_location_ratio}",
+        source_ref_location_ratio,
     )
 
     if spec.get("require_source_refs", True):
@@ -104,6 +132,8 @@ def evaluate_generation_coverage(spec_path: Path) -> dict[str, Any]:
         "source_ref_count": len(source_refs),
         "resolved_source_ref_count": len(resolved_source_refs),
         "source_ref_resolution_ratio": source_ref_resolution_ratio,
+        "source_ref_reference_id_ratio": source_ref_reference_id_ratio,
+        "source_ref_location_ratio": source_ref_location_ratio,
         "checks": checks,
     }
 
@@ -201,16 +231,63 @@ def _source_refs(item: dict[str, Any]) -> list[dict[str, Any]]:
 def _source_ref_resolved(ref: dict[str, Any], known_refs: set[tuple[str, str]]) -> bool:
     if ref.get("resolved") is True:
         return True
-    metadata = ref.get("metadata")
-    if isinstance(metadata, dict):
-        source_ref = metadata.get("source_ref")
-        if isinstance(source_ref, dict) and source_ref.get("resolved") is True:
-            return True
-    chunk_id = _text(ref.get("chunk_id") or ref.get("chunkId"))
-    document_id = _text(ref.get("document_id") or ref.get("documentId") or ref.get("source_document_id"))
+    nested = _nested_source_ref(ref)
+    if nested is not ref and nested.get("resolved") is True:
+        return True
+    chunk_id = _text(ref.get("chunk_id") or ref.get("chunkId") or nested.get("chunk_id") or nested.get("chunkId"))
+    document_id = _text(
+        ref.get("document_id")
+        or ref.get("documentId")
+        or ref.get("source_document_id")
+        or nested.get("document_id")
+        or nested.get("documentId")
+        or nested.get("source_document_id")
+    )
     if not chunk_id:
         return False
     return (chunk_id, document_id) in known_refs or (chunk_id, "") in known_refs
+
+
+def _source_ref_has_reference_id(ref: dict[str, Any]) -> bool:
+    nested = _nested_source_ref(ref)
+    return any(
+        _text(source.get(key))
+        for source in (ref, nested)
+        for key in ("citation_id", "citationId", "reference_id", "referenceId", "locator", "source_locator")
+    )
+
+
+def _source_ref_has_location(ref: dict[str, Any]) -> bool:
+    nested = _nested_source_ref(ref)
+    return any(
+        _text(source.get(key))
+        for source in (ref, nested)
+        for key in (
+            "chunk_id",
+            "chunkId",
+            "document_id",
+            "documentId",
+            "source_document_id",
+            "file_id",
+            "fileId",
+            "source_file_id",
+            "page",
+            "page_start",
+            "pageStart",
+            "page_number",
+            "source_locator",
+            "locator",
+        )
+    )
+
+
+def _nested_source_ref(ref: dict[str, Any]) -> dict[str, Any]:
+    metadata = ref.get("metadata")
+    if isinstance(metadata, dict):
+        source_ref = metadata.get("source_ref")
+        if isinstance(source_ref, dict):
+            return source_ref
+    return ref
 
 
 def _ratio(value: Any, default: float) -> float:

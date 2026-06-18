@@ -49,7 +49,7 @@
 - `backend/internal/platform/externaltool/presets.go` 已新增 Handaas、AutoRFP、qlows、BidCraft、Loopio 只读 Provider 预设目录；`GET /external-tools/catalog` 可返回用途、默认工具白名单、token env、数据边界和来源链接；已知 Provider 会自动应用预设名称和默认白名单，严格 Provider 会拒绝目录外工具和关闭脱敏策略。
 - `frontend/src/features/team/index.tsx` 已新增“外部数据源”tab，可查看 Provider 目录、用途、数据边界、启用状态和调用记录，并通过配置弹窗维护访问地址、启用工具、预算、超时时间、脱敏策略和费用估算。
 - `frontend/src/features/tender/index.tsx` 已新增“外部标讯”业务入口，使用已授权 Handaas 只读数据源检索公开标讯，并可保存为 `metadata.source_type=external_mcp` 的租户内标讯。
-- `ai-service/app/evaluation/generation_coverage_eval.py` 已提供离线生成覆盖评测：检查 mandatory requirement 覆盖率、已覆盖项是否带来源、`source_refs` 是否能解析到给定 `knowledge_chunks`；`docs/sample_docs/golden/工程1.generation_coverage.json` 已固化工程1生成覆盖 golden。
+- `ai-service/app/evaluation/generation_coverage_eval.py` 已提供离线生成覆盖评测：检查 mandatory requirement 覆盖率、已覆盖项是否带来源、`source_refs` 是否能解析到给定 `knowledge_chunks`，并要求响应来源具备引用号/定位码和页码、chunk、文件或文档定位；`docs/sample_docs/golden/工程1.generation_coverage.json` 已固化工程1生成覆盖 golden。
 - `backend/internal/platform/bid/store.go` 已提供 `GET /bids/:id/generation-coverage` 运行态导出：从 `bid_requirement_items`、最新章节版本、章节 `source_refs` 与已解析 `knowledge_chunks` 组合出可直接交给离线评测器的 JSON。
 - `ai-service/app/evaluation/export_format_eval.py` 已提供离线导出格式评测：临时生成 DOCX、ZIP 和 PDF，检查 DOCX 可打开性、目录域、自动更新域、页码域、页眉页脚、表格、ZIP manifest、ZIP 内 DOCX 可打开性、PDF 可打开性、文本层和首屏非空；`docs/sample_docs/golden/工程1.export.json` 已固化工程1导出格式 golden。
 
@@ -256,14 +256,14 @@
 3. 新增生成评测：
    - 检查每个 requirement_item 是否被章节覆盖。
    - 检查每个 source_ref 是否可解析到当前租户 knowledge chunk。
-   - 当前已落地：`python -m app.evaluation.generation_coverage_eval --input <coverage.json>` 可对 `requirements`、`chapters[].requirement_coverage`、章节 `source_refs` 和 `knowledge_chunks` 做离线验收，输出 mandatory 覆盖率和 source_ref 解析率；`docs/sample_docs/golden/工程1.generation_coverage.json` 作为固定 golden 样本。
+   - 当前已落地：`python -m app.evaluation.generation_coverage_eval --input <coverage.json>` 可对 `requirements`、`chapters[].requirement_coverage`、章节 `source_refs` 和 `knowledge_chunks` 做离线验收，输出 mandatory 覆盖率、source_ref 解析率、引用号/定位码完整率和来源位置完整率；`docs/sample_docs/golden/工程1.generation_coverage.json` 作为固定 golden 样本。
    - 当前已落地：`GET /bids/:id/generation-coverage` 可从运行态标书导出 `<coverage.json>` 的完整输入契约。
 4. 新增导出格式评测：
    - 当前已落地：`python -m app.evaluation.export_format_eval --input ../docs/sample_docs/golden/工程1.export.json` 会生成并校验 DOCX、ZIP 和 PDF 导出产物，覆盖目录、页码、页眉页脚、表格、manifest、PDF 文本层和首屏非空。
 5. 验收门槛：
    - 关键字段电子文本准确率不低于 85%。
    - 强制性 requirement 不允许无章节覆盖。
-   - source_refs 解析率不低于 95%，未解析项必须进入人工复核。
+   - source_refs 解析率不低于 95%，引用号/定位码和来源位置完整率必须满足样本阈值，未解析项或缺定位项必须进入人工复核。
    - DOCX / ZIP / PDF 导出格式检查必须全部通过；本地缺 LibreOffice 时只能在配置允许的评测中显式 skipped，生产验收不得伪装通过。
 
 ## 推荐开发顺序

@@ -56,7 +56,7 @@ cd ai-service
 - `chapters`：章节生成结果，可在章节顶层或 `model_metadata.self_check.requirement_coverage` 放置覆盖矩阵。
 - `knowledge_chunks`：可解析来源集合，字段为 `chunk_id` 和可选 `document_id`。
 
-评测会输出 mandatory requirement 覆盖率、source_ref 解析率，并检查已覆盖项是否携带来源。
+评测会输出 mandatory requirement 覆盖率、source_ref 解析率、引用号/定位码完整率和来源位置完整率，并检查已覆盖项是否携带来源。响应侧 `source_refs` 至少应能解析到已知 chunk/document，且具备 `citation_id` / `reference_id` / `locator` 等引用标识，以及页码、chunk、文件或文档定位信息。
 
 工程1导出格式 golden 可使用独立离线评测入口：
 
@@ -109,4 +109,4 @@ OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是�
 6. 来源引用结构验收：字段证据和要求项 `source_ref` 均要求具备可追溯原文、引用号或定位码，并能提供页码、chunk、文件或文档定位，避免 AutoRFP 式来源引用退化成普通摘要。
 7. 六模块质量摘要：`quality_gates.interpret.module_quality` 和 `parse_metadata.module_quality` 会记录每个模块字段数、证据数、要求项数、低置信、缺来源和待复核数量；`review_modules` 用于定位需要人工复核的模块。
 
-当前解析门槛为 109 项检查全部通过；生成覆盖门槛为 7 项检查全部通过；导出格式门槛为 23 项检查全部通过。失败时 CLI 返回非 0，并输出失败项的 expected/actual。
+当前解析门槛为 109 项检查全部通过；生成覆盖门槛为 9 项检查全部通过；导出格式门槛为 23 项检查全部通过。失败时 CLI 返回非 0，并输出失败项的 expected/actual。

@@ -30,7 +30,14 @@ def test_generation_coverage_eval_passes_for_covered_requirements_and_resolved_r
                 "chapters": [
                     {
                         "id": "chapter-1",
-                        "source_refs": [{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                        "source_refs": [
+                            {
+                                "chunk_id": "chunk-1",
+                                "document_id": "doc-1",
+                                "citation_id": "SRC-001",
+                                "page_start": 1,
+                            }
+                        ],
                         "model_metadata": {
                             "self_check": {
                                 "requirement_coverage": [
@@ -38,13 +45,27 @@ def test_generation_coverage_eval_passes_for_covered_requirements_and_resolved_r
                                         "requirement_id": "req-qualification-1",
                                         "satisfied": True,
                                         "evidence": "已提供营业执照章节说明。",
-                                        "source_refs": [{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                                        "source_refs": [
+                                            {
+                                                "chunk_id": "chunk-1",
+                                                "document_id": "doc-1",
+                                                "citation_id": "SRC-001",
+                                                "page_start": 1,
+                                            }
+                                        ],
                                     },
                                     {
                                         "requirement_id": "req-evaluation-1",
                                         "status": "covered",
                                         "evidence": "技术方案章节覆盖评分点。",
-                                        "source_refs": [{"chunk_id": "chunk-2", "document_id": "doc-2"}],
+                                        "source_refs": [
+                                            {
+                                                "chunk_id": "chunk-2",
+                                                "document_id": "doc-2",
+                                                "reference_id": "SRC-002",
+                                                "page_start": 2,
+                                            }
+                                        ],
                                     },
                                 ]
                             }
@@ -62,6 +83,8 @@ def test_generation_coverage_eval_passes_for_covered_requirements_and_resolved_r
     assert result["status"] == "passed"
     assert result["mandatory_coverage_ratio"] == 1
     assert result["source_ref_resolution_ratio"] == 1
+    assert result["source_ref_reference_id_ratio"] == 1
+    assert result["source_ref_location_ratio"] == 1
     assert result["failed_checks"] == 0
 
 
@@ -82,12 +105,26 @@ def test_generation_coverage_eval_fails_for_missing_coverage_and_unresolved_refs
                 "chapters": [
                     {
                         "id": "chapter-1",
-                        "source_refs": [{"chunk_id": "missing-chunk", "document_id": "doc-x"}],
+                        "source_refs": [
+                            {
+                                "chunk_id": "missing-chunk",
+                                "document_id": "doc-x",
+                                "citation_id": "SRC-MISSING",
+                                "page_start": 9,
+                            }
+                        ],
                         "requirement_coverage": [
                             {
                                 "requirement_id": "req-1",
                                 "satisfied": True,
-                                "source_refs": [{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                                "source_refs": [
+                                    {
+                                        "chunk_id": "chunk-1",
+                                        "document_id": "doc-1",
+                                        "citation_id": "SRC-001",
+                                        "page_start": 1,
+                                    }
+                                ],
                             },
                             {
                                 "requirement_id": "req-2",
@@ -112,4 +149,74 @@ def test_generation_coverage_eval_fails_for_missing_coverage_and_unresolved_refs
     failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
     assert "generation.requirements.mandatory_coverage_ratio" in failed_names
     assert "generation.requirements.req-2.covered" in failed_names
+    assert "generation.source_refs.resolution_ratio" in failed_names
+
+
+def test_generation_coverage_eval_fails_when_source_refs_lack_reference_details(tmp_path) -> None:
+    spec = tmp_path / "coverage.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "requirements": [
+                    {"id": "req-1", "mandatory": True, "requirement": "覆盖质量复核机制"},
+                ],
+                "knowledge_chunks": [{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                "chapters": [
+                    {
+                        "id": "chapter-1",
+                        "requirement_coverage": [
+                            {
+                                "requirement_id": "req-1",
+                                "status": "covered",
+                                "source_refs": [{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_generation_coverage(spec)
+
+    assert result["status"] == "failed"
+    failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
+    assert "generation.source_refs.reference_id_ratio" in failed_names
+    assert "generation.source_refs.resolution_ratio" not in failed_names
+
+
+def test_generation_coverage_eval_fails_when_source_refs_lack_location_details(tmp_path) -> None:
+    spec = tmp_path / "coverage.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "requirements": [
+                    {"id": "req-1", "mandatory": True, "requirement": "覆盖质量复核机制"},
+                ],
+                "knowledge_chunks": [{"chunk_id": "chunk-1", "document_id": "doc-1"}],
+                "chapters": [
+                    {
+                        "id": "chapter-1",
+                        "requirement_coverage": [
+                            {
+                                "requirement_id": "req-1",
+                                "status": "covered",
+                                "source_refs": [{"citation_id": "SRC-001"}],
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_generation_coverage(spec)
+
+    assert result["status"] == "failed"
+    failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
+    assert "generation.source_refs.location_ratio" in failed_names
     assert "generation.source_refs.resolution_ratio" in failed_names

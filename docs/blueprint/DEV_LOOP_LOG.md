@@ -4290,3 +4290,45 @@ git diff --check
 
 1. 本轮增强真实 Provider 验收逻辑，不提供真实 MinerU/PaddleOCR endpoint 或 API Key。
 2. `api_key_env` 和 `poll_endpoint_env` 只有在对应 env 已配置时才作为硬检查；无 key 或无轮询地址的同步 OCR Provider 不因此失败。
+
+## Loop-83 / AutoRFP 生成来源引用细节门禁 - 2026-06-18
+
+### 本轮目标
+
+1. 把 AutoRFP 式 `Requirement -> Coverage -> Source` 生成验收从“有来源、能解析 chunk”推进到“来源可引用、可定位”。
+2. 避免响应侧 `source_refs` 只保留 `chunk_id` 或摘要文本，缺少引用号、定位码、页码、文件或文档定位时仍被黄金样本误判通过。
+3. 保持离线评测器可用于运行态 `GET /bids/:id/generation-coverage` 导出的 JSON，不引入数据库依赖。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/generation_coverage_eval.py` 新增 `min_source_ref_reference_id_ratio` 和 `min_source_ref_location_ratio` 两个阈值。
+2. 生成覆盖评测新增 `generation.source_refs.reference_id_ratio` 和 `generation.source_refs.location_ratio` 检查，分别验证响应来源是否具备 `citation_id/reference_id/locator/source_locator`，以及页码、chunk、文件或文档定位。
+3. 来源解析兼容嵌套 `metadata.source_ref`，运行态导出或人工来源编辑把来源放入 metadata 时也能参与解析、引用号和定位完整性检查。
+4. `test_generation_coverage_eval.py` 增加缺引用号和缺定位信息的失败样例，确保退化来源不会只因 chunk 可解析而通过。
+5. `docs/sample_docs/golden/工程1.generation_coverage.json` 补齐工程1黄金样本的 `citation_id`、`reference_id`、页码和来源摘录，并把生成覆盖门槛提高到 9 项检查全部通过。
+6. `AI_IMPLEMENTATION_CHECKLIST.md`、`SAMPLE_DOCS_EVALUATION.md` 同步记录响应侧来源引用结构验收口径。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.generation_coverage_eval --input ../docs/sample_docs/golden/工程1.generation_coverage.json
+python3 -m py_compile ai-service/app/evaluation/generation_coverage_eval.py ai-service/app/tests/test_generation_coverage_eval.py
+cd ai-service && .venv/bin/python -m ruff check app/evaluation/generation_coverage_eval.py app/tests/test_generation_coverage_eval.py
+git diff --check
+```
+
+结果：
+
+1. 生成覆盖评测单测 4 项通过。
+2. 工程1生成覆盖黄金样本通过，mandatory coverage、source_ref resolution、引用号完整率和定位完整率均为 1.0，9/9 检查通过。
+3. 评测脚本与测试语法检查通过。
+4. Ruff 检查通过。
+5. diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮校验响应来源引用结构完整性，不做来源文本与 PDF canvas 选区的视觉框选验证。
+2. 引用号、定位码和页码能证明来源可追溯，但不能单独证明模型生成内容与来源语义完全一致；语义一致性仍需后续人工抽样或更强评测器。
