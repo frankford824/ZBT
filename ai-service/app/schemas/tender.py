@@ -1,8 +1,54 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+
+MAX_TENDER_TASK_ID_LENGTH = 128
+MAX_TENDER_TENANT_ID_LENGTH = 128
+MAX_TENDER_ENTITY_ID_LENGTH = 128
+MAX_TENDER_TITLE_LENGTH = 255
+MAX_TENDER_OBJECT_KEY_LENGTH = 1024
+MAX_TENDER_FILENAME_LENGTH = 255
+MAX_TENDER_CONTENT_TYPE_LENGTH = 255
+MAX_TENDER_CALLBACK_URL_LENGTH = 2048
+
+TenderTaskID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_TENDER_TASK_ID_LENGTH),
+]
+TenderTenantID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_TENANT_ID_LENGTH),
+]
+TenderEntityID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_ENTITY_ID_LENGTH),
+]
+TenderOptionalEntityID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_TENDER_ENTITY_ID_LENGTH),
+]
+TenderTitle = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_TENDER_TITLE_LENGTH),
+]
+TenderObjectKey = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_OBJECT_KEY_LENGTH),
+]
+TenderFilename = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_FILENAME_LENGTH),
+]
+TenderContentType = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_CONTENT_TYPE_LENGTH),
+]
+TenderCallbackURL = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_TENDER_CALLBACK_URL_LENGTH),
+]
 
 
 TenderParseModule = Literal[
@@ -16,15 +62,15 @@ TenderParseModule = Literal[
 
 
 class TenderParseRequest(BaseModel):
-    task_id: str | None = None
-    tenant_id: str
-    bid_id: str | None = None
-    bid_title: str | None = None
-    file_id: str
-    object_key: str
-    filename: str
-    content_type: str
-    callback_url: str | None = None
+    task_id: TenderTaskID | None = None
+    tenant_id: TenderTenantID
+    bid_id: TenderOptionalEntityID | None = None
+    bid_title: TenderTitle | None = None
+    file_id: TenderEntityID
+    object_key: TenderObjectKey
+    filename: TenderFilename
+    content_type: TenderContentType
+    callback_url: TenderCallbackURL | None = None
 
 
 class TenderParseFieldEvidence(BaseModel):

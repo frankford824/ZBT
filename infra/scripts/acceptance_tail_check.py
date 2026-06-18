@@ -435,6 +435,11 @@ def check_static_docs() -> None:
         "MAX_KNOWLEDGE_EMBEDDING_TEXT_LENGTH",
         "MAX_KNOWLEDGE_RERANK_QUERY_LENGTH",
         "MAX_KNOWLEDGE_RERANK_CONTENT_LENGTH",
+        "MAX_KNOWLEDGE_OBJECT_KEY_LENGTH",
+        "MAX_KNOWLEDGE_FILENAME_LENGTH",
+        "KnowledgeObjectKey",
+        "KnowledgeFilename",
+        "KnowledgeCallbackURL",
         "KnowledgeEmbeddingText",
         "KnowledgeRerankQuery",
         "KnowledgeRerankContent",
@@ -447,6 +452,8 @@ def check_static_docs() -> None:
         "test_knowledge_rerank_request_rejects_oversized_query",
         "test_knowledge_rerank_document_rejects_oversized_fields",
         "test_knowledge_rerank_request_strips_bounded_text_fields",
+        "test_knowledge_process_request_rejects_oversized_document_fields",
+        "test_knowledge_process_request_rejects_blank_required_document_fields",
     ):
         require(needle in knowledge_schema_tests, f"Knowledge AI schema missing regression test: {needle}")
     knowledge_store = (ROOT / "backend/internal/platform/knowledge/store.go").read_text(encoding="utf-8")
@@ -500,6 +507,25 @@ def check_static_docs() -> None:
         "test_cost_advice_request_strips_bounded_text_fields",
     ):
         require(needle in cost_schema_tests, f"Cost advice schema missing regression test: {needle}")
+
+    tender_schema = (ROOT / "ai-service/app/schemas/tender.py").read_text(encoding="utf-8")
+    for needle in (
+        "MAX_TENDER_OBJECT_KEY_LENGTH",
+        "MAX_TENDER_FILENAME_LENGTH",
+        "MAX_TENDER_CALLBACK_URL_LENGTH",
+        "TenderObjectKey",
+        "TenderFilename",
+        "TenderCallbackURL",
+        "StringConstraints(strip_whitespace=True",
+    ):
+        require(needle in tender_schema, f"Tender parse schema missing document request guard: {needle}")
+    tender_schema_tests = (ROOT / "ai-service/app/tests/test_tender_schema.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_tender_parse_request_rejects_oversized_document_fields",
+        "test_tender_parse_request_rejects_blank_required_fields",
+        "test_tender_parse_request_strips_bounded_document_fields",
+    ):
+        require(needle in tender_schema_tests, f"Tender parse schema missing regression test: {needle}")
 
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")

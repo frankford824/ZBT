@@ -5797,3 +5797,48 @@ cd ai-service && .venv/bin/python -m pytest app/tests -q -s
 
 1. 本轮治理的是章节生成/改写输入边界，没有新增真实章节生成模型或新的生成策略。
 2. 对异常章节生成请求采取 schema 拒绝策略；后端正常章节生成 payload 已与这些约束对齐。
+
+## Loop-119 / 文档解析任务请求边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 服务 signed 任务入口，处理招标解析与知识入库任务中无界文件标识、对象 key、文件名、content_type 和 callback_url 的问题。
+2. 避免超长文件元数据在解析入口进入 MinIO 读取、回调、审计和后续 provider prompt 链路，造成内存、日志和错误面失控。
+3. 将解析入口 schema 与运行态 tenant object_key 校验、callback_url 白名单校验形成前置边界和运行态边界的双层保护。
+
+### 代码交付
+
+1. `ai-service/app/schemas/tender.py` 新增招标解析请求边界常量和 Pydantic `StringConstraints`，覆盖 task/tenant/bid/file id、bid_title、object_key、filename、content_type 和 callback_url。
+2. `TenderParseRequest` 将必填字段收敛为非空、自动 trim、最大长度受控；可选字段同样限制最大长度，避免超长标题或回调地址进入任务链路。
+3. `ai-service/app/schemas/knowledge.py` 为 `KnowledgeProcessRequest` 增加文档入库任务字段边界，覆盖 task/document/file id、object_key、filename、content_type 和 callback_url。
+4. `ai-service/app/tests/test_tender_schema.py` 新增招标解析 schema 回归测试，覆盖超长文档字段、空白必填字段和首尾空白清理。
+5. `ai-service/app/tests/test_knowledge_schema.py` 补充知识入库任务 schema 回归测试，覆盖超长对象 key/文件名、空白必填字段和首尾空白清理。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求招标解析与知识入库文档字段边界、callback_url 边界和回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_knowledge_schema.py app/tests/test_tender_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/schemas/knowledge.py app/schemas/tender.py app/tests/test_knowledge_schema.py app/tests/test_tender_schema.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_knowledge_schema.py app/tests/test_tender_schema.py -q -s` 通过：`11 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/schemas/knowledge.py app/schemas/tender.py app/tests/test_knowledge_schema.py app/tests/test_tender_schema.py` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd backend && go test ./...` 通过。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`263 passed`。
+
+### 偏离蓝图
+
+1. 本轮治理的是文档解析/入库任务请求边界，没有新增 OCR、表格解析、xlsx/pptx 解析或真实语义抽取能力。
+2. 对异常文档任务请求采取 schema 拒绝策略；运行态仍继续依赖 tenant object_key 校验和 callback_url 白名单作为第二层保护。

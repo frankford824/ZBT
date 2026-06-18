@@ -5,12 +5,15 @@ from pydantic import ValidationError
 
 from app.schemas.knowledge import (
     MAX_KNOWLEDGE_EMBEDDING_TEXT_LENGTH,
+    MAX_KNOWLEDGE_FILENAME_LENGTH,
+    MAX_KNOWLEDGE_OBJECT_KEY_LENGTH,
     MAX_KNOWLEDGE_RERANK_CONTENT_LENGTH,
     MAX_KNOWLEDGE_RERANK_DOCUMENT_ID_LENGTH,
     MAX_KNOWLEDGE_RERANK_QUERY_LENGTH,
     MAX_KNOWLEDGE_RERANK_SECTION_PATH_LENGTH,
     MAX_KNOWLEDGE_RERANK_TITLE_LENGTH,
     KnowledgeEmbeddingRequest,
+    KnowledgeProcessRequest,
     KnowledgeRerankDocument,
     KnowledgeRerankRequest,
 )
@@ -92,3 +95,62 @@ def test_knowledge_rerank_request_strips_bounded_text_fields() -> None:
     assert request.documents[0].title == "标题"
     assert request.documents[0].content == "正文"
     assert request.documents[0].section_path == "第一章"
+
+
+def test_knowledge_process_request_rejects_oversized_document_fields() -> None:
+    base_payload = {
+        "tenant_id": "tenant-demo",
+        "document_id": "document-demo",
+        "file_id": "file-demo",
+        "object_key": "tenant-demo/knowledge/file-demo",
+        "filename": "资料.pdf",
+        "content_type": "application/pdf",
+    }
+
+    oversized_cases = [
+        {"object_key": "x" * (MAX_KNOWLEDGE_OBJECT_KEY_LENGTH + 1)},
+        {"filename": "x" * (MAX_KNOWLEDGE_FILENAME_LENGTH + 1)},
+    ]
+
+    for extra in oversized_cases:
+        payload = {**base_payload, **extra}
+        with pytest.raises(ValidationError):
+            KnowledgeProcessRequest(**payload)
+
+
+def test_knowledge_process_request_rejects_blank_required_document_fields() -> None:
+    base_payload = {
+        "tenant_id": "tenant-demo",
+        "document_id": "document-demo",
+        "file_id": "file-demo",
+        "object_key": "tenant-demo/knowledge/file-demo",
+        "filename": "资料.pdf",
+        "content_type": "application/pdf",
+    }
+
+    for field in ("tenant_id", "document_id", "file_id", "object_key", "filename", "content_type"):
+        payload = {**base_payload, field: "   "}
+        with pytest.raises(ValidationError):
+            KnowledgeProcessRequest(**payload)
+
+
+def test_knowledge_process_request_strips_document_fields() -> None:
+    request = KnowledgeProcessRequest(
+        task_id=" task-demo ",
+        tenant_id=" tenant-demo ",
+        document_id=" document-demo ",
+        file_id=" file-demo ",
+        object_key=" tenant-demo/knowledge/file-demo ",
+        filename=" 资料.pdf ",
+        content_type=" application/pdf ",
+        callback_url=" http://backend:8080/api/v1/ai/callbacks/tasks ",
+    )
+
+    assert request.task_id == "task-demo"
+    assert request.tenant_id == "tenant-demo"
+    assert request.document_id == "document-demo"
+    assert request.file_id == "file-demo"
+    assert request.object_key == "tenant-demo/knowledge/file-demo"
+    assert request.filename == "资料.pdf"
+    assert request.content_type == "application/pdf"
+    assert request.callback_url == "http://backend:8080/api/v1/ai/callbacks/tasks"

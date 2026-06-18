@@ -11,10 +11,45 @@ MAX_KNOWLEDGE_RERANK_DOCUMENT_ID_LENGTH = 128
 MAX_KNOWLEDGE_RERANK_TITLE_LENGTH = 255
 MAX_KNOWLEDGE_RERANK_SECTION_PATH_LENGTH = 512
 MAX_KNOWLEDGE_RERANK_CONTENT_LENGTH = 2400
+MAX_KNOWLEDGE_TASK_ID_LENGTH = 128
+MAX_KNOWLEDGE_DOCUMENT_ID_LENGTH = 128
+MAX_KNOWLEDGE_FILE_ID_LENGTH = 128
+MAX_KNOWLEDGE_OBJECT_KEY_LENGTH = 1024
+MAX_KNOWLEDGE_FILENAME_LENGTH = 255
+MAX_KNOWLEDGE_CONTENT_TYPE_LENGTH = 255
+MAX_KNOWLEDGE_CALLBACK_URL_LENGTH = 2048
 
 KnowledgeTenantID = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_TENANT_ID_LENGTH),
+]
+KnowledgeTaskID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_KNOWLEDGE_TASK_ID_LENGTH),
+]
+KnowledgeProcessID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_DOCUMENT_ID_LENGTH),
+]
+KnowledgeFileID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_FILE_ID_LENGTH),
+]
+KnowledgeObjectKey = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_OBJECT_KEY_LENGTH),
+]
+KnowledgeFilename = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_FILENAME_LENGTH),
+]
+KnowledgeContentType = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_CONTENT_TYPE_LENGTH),
+]
+KnowledgeCallbackURL = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_CALLBACK_URL_LENGTH),
 ]
 KnowledgeEmbeddingText = Annotated[
     str,
@@ -63,14 +98,14 @@ KnowledgeRerankContent = Annotated[
 
 
 class KnowledgeProcessRequest(BaseModel):
-    task_id: str | None = None
+    task_id: KnowledgeTaskID | None = None
     tenant_id: KnowledgeTenantID
-    document_id: str
-    file_id: str
-    object_key: str
-    filename: str
-    content_type: str
-    callback_url: str | None = None
+    document_id: KnowledgeProcessID
+    file_id: KnowledgeFileID
+    object_key: KnowledgeObjectKey
+    filename: KnowledgeFilename
+    content_type: KnowledgeContentType
+    callback_url: KnowledgeCallbackURL | None = None
 
 
 class KnowledgeChunk(BaseModel):
