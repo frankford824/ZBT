@@ -2263,10 +2263,10 @@ function normalizeParseFieldReviewStatus(value: unknown): ParseFieldReviewStatus
 
 function applyParseFieldReviews(result: Record<string, unknown>, fieldReviewDraft: Record<string, ParseFieldReviewStatus>) {
   if (!Object.keys(fieldReviewDraft).length) return
+  const reviewByField = parseFieldReviewByField(fieldReviewDraft)
   const directEvidence = arrayValue(result.field_evidence)
   if (directEvidence.length) {
     result.field_evidence = applyParseFieldReviewsToEvidenceList(directEvidence, fieldReviewDraft, 0).items
-    return
   }
 
   const modules = { ...(objectRecord(result.modules) ?? {}) }
@@ -2276,11 +2276,32 @@ function applyParseFieldReviews(result: Record<string, unknown>, fieldReviewDraf
     if (!currentModule) continue
     const evidence = arrayValue(currentModule.evidence)
     if (!evidence.length) continue
-    const applied = applyParseFieldReviewsToEvidenceList(evidence, fieldReviewDraft, evidenceIndex)
-    modules[moduleKey] = { ...currentModule, evidence: applied.items }
-    evidenceIndex = applied.nextIndex
+    let nextEvidence: unknown[]
+    if (directEvidence.length) {
+      nextEvidence = applyParseFieldReviewsToEvidenceByField(evidence, reviewByField)
+    } else {
+      const applied = applyParseFieldReviewsToEvidenceList(evidence, fieldReviewDraft, evidenceIndex)
+      nextEvidence = applied.items
+      evidenceIndex = applied.nextIndex
+    }
+    modules[moduleKey] = { ...currentModule, evidence: nextEvidence, status: parseModuleStatusFromEvidence(nextEvidence) }
   }
   result.modules = modules
+}
+
+function parseFieldReviewByField(fieldReviewDraft: Record<string, ParseFieldReviewStatus>) {
+  const reviewByField: Record<string, ParseFieldReviewStatus> = {}
+  for (const [rowId, status] of Object.entries(fieldReviewDraft)) {
+    const normalized = normalizeParseFieldReviewStatus(status)
+    if (!normalized) continue
+    const field = parseFieldFromReviewRowId(rowId)
+    if (field) reviewByField[field] = normalized
+  }
+  return reviewByField
+}
+
+function parseFieldFromReviewRowId(rowId: string) {
+  return rowId.replace(/-\d+$/, '').trim()
 }
 
 function applyParseFieldReviewsToEvidenceList(
@@ -2304,6 +2325,20 @@ function applyParseFieldReviewsToEvidenceList(
   return { items, nextIndex }
 }
 
+function applyParseFieldReviewsToEvidenceByField(
+  evidence: unknown[],
+  reviewByField: Record<string, ParseFieldReviewStatus>,
+) {
+  return evidence.map((item) => {
+    const record = objectRecord(item)
+    if (!record) return item
+    const field = String(record.field || '').trim()
+    const reviewStatus = field ? normalizeParseFieldReviewStatus(reviewByField[field]) : null
+    if (!reviewStatus) return item
+    return applyParseFieldReviewToRecord(record, reviewStatus)
+  })
+}
+
 function applyParseFieldReviewToRecord(record: Record<string, unknown>, reviewStatus: ParseFieldReviewStatus) {
   const next: Record<string, unknown> = { ...record, review_status: reviewStatus, reviewed_by_human: true }
   if (reviewStatus === 'confirmed') {
@@ -2322,6 +2357,16 @@ function applyParseFieldReviewToRecord(record: Record<string, unknown>, reviewSt
   next.not_applicable = false
   next.confidence = Math.min(parseEvidenceConfidence(record.confidence), 0.4)
   return next
+}
+
+function parseModuleStatusFromEvidence(evidence: unknown[]) {
+  if (!evidence.length) return 'empty'
+  const needsReview = evidence.some((item) => {
+    const record = objectRecord(item)
+    if (!record || parseEvidenceReviewStatus(record) === 'not_applicable') return false
+    return Boolean(record.needs_review) || parseEvidenceConfidence(record.confidence) < 0.65
+  })
+  return needsReview ? 'needs_review' : 'done'
 }
 
 function refreshParseFieldReviewQualityGate(

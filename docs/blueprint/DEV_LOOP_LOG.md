@@ -3840,3 +3840,38 @@ git diff --check
 
 1. 本轮仍不新增字段复核历史事件表；复核记录随解析确认版本保存在 `structured_result` 中。
 2. 缺来源字段即使人工确认，仍会进入缺来源统计；“不适用”字段不参与低置信和缺来源统计。
+
+## Loop-71 / 字段复核模块状态同步 - 2026-06-18
+
+### 本轮目标
+
+1. 修补 Loop-70 后的状态一致性问题：顶层 `field_evidence` 写回复核状态后，模块 `evidence/status` 仍可能保持旧的待确认状态。
+2. 让“字段依据”“信息分组”和 `quality_gates.interpret` 对同一次人工复核给出一致结论。
+3. 不新增后端协议，继续在解析确认时写回完整 `structured_result`。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的 `applyParseFieldReviews()` 不再在顶层 `field_evidence` 存在时提前返回，而是继续同步模块证据。
+2. 新增 `parseFieldReviewByField()`，用字段名把顶层字段复核结果同步到模块 `evidence`，兼容 top-level evidence 与 module evidence 双写结构。
+3. 新增 `parseModuleStatusFromEvidence()`，模块证据全部通过或不适用时写 `status=done`，仍有低可信或需要补充时写 `status=needs_review`。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录字段复核会同步模块 `evidence/status`。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过，无空白错误。
+
+### 偏离蓝图
+
+1. 多个模块存在同名字段时，当前按字段名同步相同复核结果；后续若需要区分同名字段不同来源，可把字段依据 row id 扩展为模块级路径。
