@@ -264,6 +264,12 @@ def check_static_docs() -> None:
     for needle in ("/knowledge/documents/:documentId/preview", "external-tools", "外部标讯"):
         require(needle in page_routes, f"PAGE_ROUTE_MAP.md missing route/page tab: {needle}")
 
+    team_page = (ROOT / "frontend/src/features/team/index.tsx").read_text(encoding="utf-8")
+    require("preset.token_env" not in team_page, "Team external data source UI exposes token env names")
+    require("endpoint_hint" not in team_page, "Team external data source UI exposes endpoint templates")
+    for needle in ("授权状态", "授权说明", "启用能力"):
+        require(needle in team_page, f"Team external data source UI missing user-facing label: {needle}")
+
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
     for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):

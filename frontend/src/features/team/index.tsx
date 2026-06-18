@@ -124,6 +124,42 @@ const resourceLabels: Record<string, string> = {
   cost_project: '成本测算',
 }
 
+const externalToolNameLabels: Record<string, string> = {
+  analyze_gaps: '差距分析',
+  bid_bigdata_bid_search: '标讯搜索',
+  bid_bigdata_bid_win_stats: '中标统计',
+  bid_bigdata_bidding_info: '招标信息',
+  bid_bigdata_fuzzy_search: '模糊检索',
+  bid_bigdata_planned_projects: '拟建项目',
+  bid_bigdata_procurement_stats: '采购统计',
+  bid_bigdata_tender_stats: '招标统计',
+  bid_no_bid_decision: '投标决策',
+  extract_requirements: '要求抽取',
+  get_deal_snapshot: '机会快照',
+  get_intelligence_summary: '情报摘要',
+  get_library_entry: '答案详情',
+  get_project: '项目详情',
+  get_q_routing_state: '问题分派',
+  get_requirement: '需求详情',
+  get_tender_detail: '标讯详情',
+  list_competitors: '竞品列表',
+  list_deals: '机会列表',
+  list_library_entries: '答案库列表',
+  list_projects: '项目列表',
+  list_questions: '问题列表',
+  list_requirements: '需求列表',
+  list_tags: '标签列表',
+  map_sections: '章节映射',
+  outline_response: '响应提纲',
+  score_win_probability: '中标评分',
+  search_compliance_items: '合规项搜索',
+  search_content_library: '内容库搜索',
+  search_library: '答案库搜索',
+  search_tenders: '标讯检索',
+  search_tenders_for_my_company: '适配标讯',
+  usage_analytics: '使用分析',
+}
+
 type ExternalToolRow = {
   preset: ExternalToolProviderPresetDTO
   config?: ExternalToolConfigDTO
@@ -151,6 +187,21 @@ function formatEstimatedCost(value: number) {
   const cost = Number(value || 0)
   if (!cost) return '-'
   return `¥${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`
+}
+
+function formatExternalToolName(value: string) {
+  return externalToolNameLabels[value] || '外部能力'
+}
+
+function externalToolAuthorizationLabel(preset: ExternalToolProviderPresetDTO) {
+  return preset.requires_token ? '需要授权' : '无需单独授权'
+}
+
+function externalToolAuthorizationHint(preset: ExternalToolProviderPresetDTO) {
+  if (!preset.requires_token) {
+    return '该数据源当前不需要单独授权。'
+  }
+  return '请使用服务商提供的授权信息完成连接。'
 }
 
 function numericMetadata(value: Record<string, unknown> | undefined, key: string) {
@@ -630,13 +681,13 @@ export function TeamPage() {
                             <Space size={6} wrap>
                               {row.config?.enabled ? <Tag color="green">已启用</Tag> : <Tag>未启用</Tag>}
                               {row.preset.read_only ? <Tag color="blue">只读</Tag> : null}
-                              {row.preset.strict_allowed_tools ? <Tag color="gold">受控工具</Tag> : null}
+                              {row.preset.strict_allowed_tools ? <Tag color="gold">受控调用</Tag> : null}
                             </Space>
                             <Typography.Text className="external-tool-muted-text" type="secondary">
-                              密钥项 {row.preset.token_env}
+                              授权状态 {externalToolAuthorizationLabel(row.preset)}
                             </Typography.Text>
                             <Typography.Text type="secondary">
-                              已选工具 {row.config?.allowed_tools?.length || row.preset.default_allowed_tools.length} 项
+                              已选能力 {row.config?.allowed_tools?.length || row.preset.default_allowed_tools.length} 项
                             </Typography.Text>
                           </Space>
                         ),
@@ -681,7 +732,7 @@ export function TeamPage() {
                       scroll={{ x: 960 }}
                       columns={[
                         { title: '数据源', dataIndex: 'tool_provider', width: 150 },
-                        { title: '工具', dataIndex: 'tool_name', width: 180 },
+                        { title: '能力', dataIndex: 'tool_name', width: 180, render: formatExternalToolName },
                         { title: '状态', dataIndex: 'status', width: 90, render: statusTag },
                         { title: '费用', dataIndex: 'estimated_cost', width: 90, render: formatEstimatedCost },
                         { title: '耗时', dataIndex: 'latency_ms', width: 100, render: formatLatency },
@@ -809,16 +860,19 @@ export function TeamPage() {
                 }),
               ]}
             >
-              <Input placeholder={editingExternalTool.preset.endpoint_hint || 'https://example.com/mcp'} />
+              <Input placeholder="粘贴服务商提供的访问地址" />
             </Form.Item>
             <Form.Item
-              label="启用工具"
+              label="启用能力"
               name="allowed_tools"
-              rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个工具' }]}
+              rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个能力' }]}
             >
               <Select
                 mode={editingExternalTool.preset.strict_allowed_tools ? 'multiple' : 'tags'}
-                options={editingExternalTool.preset.default_allowed_tools.map((tool) => ({ value: tool, label: tool }))}
+                options={editingExternalTool.preset.default_allowed_tools.map((tool) => ({
+                  value: tool,
+                  label: formatExternalToolName(tool),
+                }))}
               />
             </Form.Item>
             <Row gutter={16}>
@@ -848,7 +902,7 @@ export function TeamPage() {
             </Form.Item>
             <Space direction="vertical" size={6} className="full-width">
               <Typography.Text className="external-tool-muted-text" type="secondary">
-                密钥配置项：{editingExternalTool.preset.token_env}
+                授权说明：{externalToolAuthorizationHint(editingExternalTool.preset)}
               </Typography.Text>
               {editingExternalTool.preset.data_boundary.map((item) => (
                 <Typography.Text key={item} type="secondary">

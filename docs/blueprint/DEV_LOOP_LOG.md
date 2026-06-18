@@ -4916,3 +4916,42 @@ git diff --check
 
 1. 本轮未运行完整 `acceptance_core_check.py` / `acceptance_tail_check.py` 运行态验收；它们仍需要本地 Docker 栈启动并会创建运行态验收数据。
 2. Docker 中 AI 服务容器未运行时，容器内 pytest 仍按既有逻辑跳过。
+
+## Loop-98 / 外部数据源 UI 技术口径收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查前端可见文案，处理团队页外部数据源配置中残留的开发者口径。
+2. 避免租户管理员在界面里看到环境变量名、底层工具名或服务商 endpoint 模板。
+3. 将该类 UI 防漂移纳入已有静态验收入口。
+
+### 代码交付
+
+1. `frontend/src/features/team/index.tsx` 为外部数据源工具名增加中文业务化显示名，调用记录列从“工具”改为“能力”。
+2. 外部数据源列表和配置弹窗不再展示 `token_env`，改为“授权状态 / 授权说明”。
+3. 启用项文案从“工具”统一改为“能力”，受控标签从“受控工具”改为“受控调用”。
+4. 访问地址输入框不再展示后端 `endpoint_hint` 模板，改为通用服务商访问地址提示。
+5. `acceptance_tail_check.py --static-docs` 增加团队页防漂移检查：禁止渲染 `preset.token_env` 和 `endpoint_hint`，并要求保留“授权状态 / 授权说明 / 启用能力”用户侧标签。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 前端团队页源码检查无 `preset.token_env`、`endpoint_hint`、旧“密钥项 / 密钥配置项 / 启用工具 / 已选工具”残留。
+2. 静态防漂移检查通过。
+3. 前端 ESLint 通过。
+4. 总检通过：前端 build + lint、后端 test + vet、AI compileall + ruff + pytest、工程1三项黄金样本回归均通过。
+
+### 偏离蓝图
+
+1. 本轮只处理团队页外部数据源配置和调用记录的可见技术口径；其它页面仍需继续逐页审查。
+2. 未运行完整浏览器截图回归；本轮通过 TypeScript build、ESLint 和总检验证渲染代码可构建。
