@@ -4209,3 +4209,42 @@ rg -n "/knowledge/documents/:documentId/preview|external-tools|外部标讯|prov
 
 1. 本轮是文档和验收防漂移，不新增外部 MCP Provider，也不配置真实 Handaas/MinerU/PaddleOCR 凭证。
 2. 未运行完整 Docker 运行态验收；本轮未改业务运行时代码。
+
+## Loop-81 / xparse 模块级质量门禁摘要 - 2026-06-18
+
+### 本轮目标
+
+1. 继续补强 xparse 六模块解析清单，把“是否需要复核”从全局计数细化到模块级。
+2. 避免某个模块缺来源、低置信或空结果时，只能从全局 low_confidence_count 反推问题来源。
+3. 保持 AutoRFP 式来源引用和人工复核链路，不把模型空结果当作通过。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/tender_parser.py` 新增模块质量摘要：`quality_gates.interpret.module_quality` 按 basic、qualification、evaluation、submission、invalid_risk、annex 记录字段数、证据数、要求项数、缺来源数、低置信数、要求项待复核数、可追溯来源数和 warning 数。
+2. `quality_gates.interpret.review_modules` 明确列出需要人工复核的模块；模块状态为 `needs_review` / `empty`、存在缺来源、低置信或要求项待复核时，整体 interpret gate 会进入 `needs_review`。
+3. `parse_metadata.module_quality` 和 `parse_metadata.review_modules` 同步保存同一摘要，便于离线评测和人工排查读取。
+4. `test_main_security.py` 增加模块质量摘要断言，覆盖 deterministic 解析和模型增强解析两条路径。
+5. `AI_IMPLEMENTATION_CHECKLIST.md`、`SAMPLE_DOCS_EVALUATION.md` 同步更新当前能力。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/pipelines/parse/tender_parser.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py -q -s -k 'tender_parse or tender_module_context'
+cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+```
+
+结果：
+
+1. `tender_parser.py` 语法检查通过。
+2. tender parse 相关安全/主流程单测 9 项通过。
+3. 解析评测单测 5 项通过。
+4. 工程1真实样本解析评测 109/109 通过。
+
+### 偏离蓝图
+
+1. 本轮是解析质量门禁增强，不接真实 MinerU/PaddleOCR endpoint。
+2. 模块质量摘要用于定位和复核，不替代人工对真实招标文件准确率的抽样核对。

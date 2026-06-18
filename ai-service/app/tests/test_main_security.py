@@ -867,8 +867,20 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
     assert result["quality_gates"]["interpret"]["module_count"] == 6
     assert result["quality_gates"]["interpret"]["module_checklist_version"] == "xparse-six-module-v1"
     assert result["quality_gates"]["interpret"]["missing_modules"] == []
+    assert set(result["quality_gates"]["interpret"]["module_quality"]) == {
+        "basic",
+        "qualification",
+        "evaluation",
+        "submission",
+        "invalid_risk",
+        "annex",
+    }
+    assert "annex" in result["quality_gates"]["interpret"]["review_modules"]
+    assert result["quality_gates"]["interpret"]["module_quality"]["annex"]["missing_source_count"] >= 1
     assert result["parse_metadata"]["module_count"] == 6
     assert result["parse_metadata"]["requirement_count"] == len(result["requirement_items"])
+    assert result["parse_metadata"]["module_quality"]["annex"]["missing_source_count"] >= 1
+    assert "annex" in result["parse_metadata"]["review_modules"]
     assert result["parse_metadata"]["module_checklist"]["modules"]["evaluation"]["requirement_types"]
     qualification_source = result["modules"]["qualification"]["requirement_items"][0]["source_ref"]
     assert qualification_source["citation_id"].startswith("tender:file-demo:parse-chunk-0001")
@@ -1144,6 +1156,8 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert result["structured_result"]["requirement_items"]
     assert result["structured_result"]["field_evidence"]
     assert result["structured_result"]["quality_gates"]["interpret"]["module_count"] == 6
+    assert result["structured_result"]["quality_gates"]["interpret"]["module_quality"]["qualification"]["requirement_count"] >= 1
+    assert "qualification" not in result["structured_result"]["quality_gates"]["interpret"]["review_modules"]
     assert result["model_metadata"]["provider"] == "fake-llm"
     assert result["model_metadata"]["model"] == "fake-model"
     assert result["model_metadata"]["module_call_count"] == 6

@@ -21,7 +21,7 @@
 ## 当前落地进展
 
 - `ai-service/app/schemas/tender.py` 已新增 `TenderParseModuleResult`、`TenderParseFieldEvidence`、`TenderRequirementItem` 和 `TenderParseStructuredResult`。
-- `ai-service/app/pipelines/parse/tender_parser.py` 已在兼容旧字段的同时输出 `modules`、`field_evidence`、`requirement_items` 和 `quality_gates`；模块增强 prompt 已使用 `xparse-context-router-v2`，按标题、关键词行、相邻 chunk 和 `table_blocks.md_table` 生成带 `chunk_id`、页码、`table_block_id`、路由原因的 `source_context`。
+- `ai-service/app/pipelines/parse/tender_parser.py` 已在兼容旧字段的同时输出 `modules`、`field_evidence`、`requirement_items` 和 `quality_gates`；`quality_gates.interpret.module_quality` 和 `review_modules` 会按 6 模块记录字段数、证据数、要求项数、低置信/缺来源/待复核数量，避免只看全局通过率。模块增强 prompt 已使用 `xparse-context-router-v2`，按标题、关键词行、相邻 chunk 和 `table_blocks.md_table` 生成带 `chunk_id`、页码、`table_block_id`、路由原因的 `source_context`。
 - `ai-service/app/main.py` 已按 6 个模块逐一调用 `tender_parse` 路由，每个模块独立走 provider 候选和 fallback；单模块失败时保留基础解析并标记待确认。
 - `ai-service/app/gateway/contracts.py` 已明确 OCR Provider 的 `recognize_document`、`recognize_page`、`extract_layout`、`extract_tables` 契约。
 - HTTP OCR 成功响应已统一归一为 `pages`、`blocks`、`tables`、`table_blocks`、`confidence`、`provider_metadata`。
@@ -87,6 +87,7 @@
    - 每个模块独立调用 `run_provider_task()` 或等价 ModelRouter 路由，允许模块级 fallback。
    - 当前已落地：`process_tender_parse` 使用 `TENDER_PARSE_MODULE_CONCURRENCY` 控制 6 模块并发，主线程按 `MODULE_ORDER` 固定顺序合并结果，单模块失败只标记该模块待复核。
    - 当前已落地：`parse_metadata.module_context` 记录每个模块命中的 chunk 数、表格块数、`chunk_ids`、`table_block_ids` 和匹配原因，供回归审计和后续前端来源定位使用。
+   - 当前已落地：`quality_gates.interpret.module_quality` 和 `parse_metadata.module_quality` 记录每个模块的字段、证据、要求项、低置信、缺来源、待复核和可追溯来源计数；`review_modules` 明确列出需要人工复核的模块。
    - 聚合时按字段级置信度和来源证据合并，不允许模型覆盖高置信确定性字段为空值。
    - prompt 固定四条硬约束：只引用原文、JSON only、字段缺失显式 `missing_fields`、来源原子性（一个 value 对应一处连续原文）。
    - 评分表、格式表、工程量清单默认保留原始 `md_table`，不得让模型重排表格。

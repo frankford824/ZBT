@@ -203,6 +203,8 @@ def build_tender_structured_result(
         "ocr_page_count": parsed.metadata.get("ocr_page_count", 0),
         "module_count": len(modules),
         "requirement_count": len(requirement_items),
+        "review_modules": quality_gates["interpret"].get("review_modules", []),
+        "module_quality": quality_gates["interpret"].get("module_quality", {}),
         "low_confidence_count": int(quality_gates["interpret"]["low_confidence_count"]),
         "missing_source_count": int(quality_gates["interpret"]["missing_source_count"]),
         "module_checklist_version": MODULE_CHECKLIST_VERSION,
@@ -1259,6 +1261,12 @@ def _refresh_structured_indexes(merged: dict[str, object]) -> None:
     missing_source_count = sum(1 for item in field_evidence if not str(item.get("source_text") or "").strip())
     merged["field_evidence"] = field_evidence
     merged["requirement_items"] = requirement_items
+    module_quality = _module_quality_summaries(modules)
+    review_modules = [
+        module
+        for module, summary in module_quality.items()
+        if _module_summary_needs_review(summary)
+    ]
     quality_gates = merged.get("quality_gates")
     if not isinstance(quality_gates, dict):
         quality_gates = {}
@@ -1270,11 +1278,13 @@ def _refresh_structured_indexes(merged: dict[str, object]) -> None:
     interpret.update(
         {
             "status": "needs_review"
-            if low_confidence_count or missing_source_count or ocr_required or missing_modules
+            if low_confidence_count or missing_source_count or ocr_required or missing_modules or review_modules
             else "pass",
             "module_count": module_count,
             "required_modules": list(MODULE_ORDER),
             "missing_modules": missing_modules,
+            "review_modules": review_modules,
+            "module_quality": module_quality,
             "module_checklist_version": MODULE_CHECKLIST_VERSION,
             "requirement_count": len(requirement_items),
             "low_confidence_count": low_confidence_count,
@@ -1287,6 +1297,8 @@ def _refresh_structured_indexes(merged: dict[str, object]) -> None:
     if isinstance(parse_metadata, dict):
         parse_metadata["module_count"] = module_count
         parse_metadata["requirement_count"] = len(requirement_items)
+        parse_metadata["review_modules"] = review_modules
+        parse_metadata["module_quality"] = module_quality
         parse_metadata["low_confidence_count"] = low_confidence_count
         parse_metadata["missing_source_count"] = missing_source_count
         parse_metadata["module_checklist_version"] = MODULE_CHECKLIST_VERSION
@@ -1505,14 +1517,22 @@ def _quality_gates(
     low_confidence_count = sum(1 for item in field_evidence if item.confidence < 0.65 or item.needs_review)
     missing_source_count = sum(1 for item in field_evidence if not item.source_text)
     missing_modules = [module for module in MODULE_ORDER if module not in modules]
+    module_quality = _module_quality_summaries(modules)
+    review_modules = [
+        module
+        for module, summary in module_quality.items()
+        if _module_summary_needs_review(summary)
+    ]
     ocr_required = bool(parsed.metadata.get("ocr_required"))
-    status = "needs_review" if low_confidence_count or missing_source_count or ocr_required or missing_modules else "pass"
+    status = "needs_review" if low_confidence_count or missing_source_count or ocr_required or missing_modules or review_modules else "pass"
     return {
         "interpret": {
             "status": status,
             "module_count": len(modules),
             "required_modules": list(MODULE_ORDER),
             "missing_modules": missing_modules,
+            "review_modules": review_modules,
+            "module_quality": module_quality,
             "module_checklist_version": MODULE_CHECKLIST_VERSION,
             "requirement_count": len(requirement_items),
             "low_confidence_count": low_confidence_count,
@@ -1521,6 +1541,96 @@ def _quality_gates(
             "ocr_page_count": parsed.metadata.get("ocr_page_count", 0),
         }
     }
+
+
+def _module_quality_summaries(
+    modules: dict[object, object],
+) -> dict[str, dict[str, object]]:
+    summaries: dict[str, dict[str, object]] = {}
+    for module in MODULE_ORDER:
+        module_result = modules.get(module)
+        if module_result is None:
+            continue
+        fields = _module_attr(module_result, "fields", {})
+        evidence = _module_attr(module_result, "evidence", [])
+        requirements = _module_attr(module_result, "requirement_items", [])
+        warnings = _module_attr(module_result, "warnings", [])
+        status = str(_module_attr(module_result, "status", "empty") or "empty")
+        evidence_items = [item for item in evidence if _is_evidence_like(item)] if isinstance(evidence, list) else []
+        requirement_items = [
+            item for item in requirements if _is_requirement_like(item)
+        ] if isinstance(requirements, list) else []
+        missing_source_count = sum(1 for item in evidence_items if not _evidence_source_text(item))
+        low_confidence_count = sum(
+            1
+            for item in evidence_items
+            if _evidence_confidence(item) < 0.65 or _evidence_needs_review(item)
+        )
+        requirement_review_count = sum(1 for item in requirement_items if _requirement_needs_review(item))
+        traceable_source_count = sum(1 for item in evidence_items if _evidence_traceable(item))
+        summaries[module] = {
+            "status": status if status in {"done", "needs_review", "empty"} else "needs_review",
+            "field_count": len(fields) if isinstance(fields, dict) else 0,
+            "evidence_count": len(evidence_items),
+            "requirement_count": len(requirement_items),
+            "missing_source_count": missing_source_count,
+            "low_confidence_count": low_confidence_count,
+            "requirement_review_count": requirement_review_count,
+            "traceable_source_count": traceable_source_count,
+            "warning_count": len(warnings) if isinstance(warnings, list) else 0,
+        }
+    return summaries
+
+
+def _module_summary_needs_review(summary: dict[str, object]) -> bool:
+    return (
+        str(summary.get("status") or "") in {"needs_review", "empty"}
+        or int(summary.get("missing_source_count") or 0) > 0
+        or int(summary.get("low_confidence_count") or 0) > 0
+        or int(summary.get("requirement_review_count") or 0) > 0
+    )
+
+
+def _module_attr(module_result: object, key: str, default: object) -> object:
+    if isinstance(module_result, dict):
+        return module_result.get(key, default)
+    return getattr(module_result, key, default)
+
+
+def _is_evidence_like(item: object) -> bool:
+    return isinstance(item, dict | TenderParseFieldEvidence)
+
+
+def _is_requirement_like(item: object) -> bool:
+    return isinstance(item, dict | TenderRequirementItem)
+
+
+def _evidence_source_text(item: object) -> str:
+    value = item.get("source_text") if isinstance(item, dict) else getattr(item, "source_text", "")
+    return str(value or "").strip()
+
+
+def _evidence_confidence(item: object) -> float:
+    value = item.get("confidence") if isinstance(item, dict) else getattr(item, "confidence", 0)
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _evidence_needs_review(item: object) -> bool:
+    value = item.get("needs_review") if isinstance(item, dict) else getattr(item, "needs_review", False)
+    return bool(value)
+
+
+def _evidence_traceable(item: object) -> bool:
+    value = item.get("traceable") if isinstance(item, dict) else getattr(item, "traceable", False)
+    return bool(value)
+
+
+def _requirement_needs_review(item: object) -> bool:
+    value = item.get("needs_review") if isinstance(item, dict) else getattr(item, "needs_review", False)
+    return bool(value)
 
 
 def _keyword_values_with_evidence(
