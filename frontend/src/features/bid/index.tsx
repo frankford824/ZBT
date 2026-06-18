@@ -149,6 +149,8 @@ type ParseConfirmDraft = {
   invalidClauseRisks: string
 }
 
+type ParseModuleFieldsDraft = Record<string, Record<string, string>>
+
 export function BidNewPage() {
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
@@ -512,6 +514,9 @@ export function BidWizardPage() {
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
   const [parseConfirmDraftState, setParseConfirmDraftState] = useState<DraftState<ParseConfirmDraft> | null>(null)
+  const [parseModuleFieldsDraftState, setParseModuleFieldsDraftState] = useState<
+    DraftState<ParseModuleFieldsDraft> | null
+  >(null)
   const [parseFieldReviewDraftState, setParseFieldReviewDraftState] = useState<
     DraftState<Record<string, ParseFieldReviewStatus>> | null
   >(null)
@@ -555,6 +560,20 @@ export function BidWizardPage() {
       ? parseConfirmDraftState.value
       : parseConfirmServerDraft
   const parseConfirmEditedFields = parseConfirmChangedFieldLabels(parseConfirmServerDraft, parseConfirmDraft)
+  const parseModuleFieldsServerDraft = useMemo(
+    () => parseModuleFieldsDraftFromStructuredResult(parseResult.data?.structured_result),
+    [parseResult.data?.structured_result],
+  )
+  const parseModuleFieldsDraft =
+    parseModuleFieldsDraftState?.sourceKey === parseConfirmSourceKey
+      ? parseModuleFieldsDraftState.value
+      : parseModuleFieldsServerDraft
+  const parseModuleFieldEditedCount = parseModuleFieldsChangedPaths(
+    parseModuleFieldsServerDraft,
+    parseModuleFieldsDraft,
+    parseConfirmServerDraft,
+    parseConfirmDraft,
+  ).length
   const canEditParseConfirm =
     canWrite && Boolean(parseResult.data) && ['ready', 'confirmed'].includes(parseResult.data?.status ?? 'queued')
   const parseFieldReviewServerDraft = useMemo(
@@ -570,6 +589,27 @@ export function BidWizardPage() {
       const currentValue =
         currentDraft?.sourceKey === parseConfirmSourceKey ? currentDraft.value : parseConfirmServerDraft
       return { sourceKey: parseConfirmSourceKey, value: { ...currentValue, [field]: value } }
+    })
+  }
+  const setParseModuleFieldDraftValue = (moduleKey: string, fieldKey: string, value: string) => {
+    const coreField = parseModuleCoreDraftField(moduleKey, fieldKey)
+    if (coreField) {
+      const nextValue = coreField === 'bidType' ? normalizeParseConfirmBidType(value) : value
+      setParseConfirmDraftField(coreField, nextValue)
+    }
+    setParseModuleFieldsDraftState((currentDraft) => {
+      const currentValue =
+        currentDraft?.sourceKey === parseConfirmSourceKey ? currentDraft.value : parseModuleFieldsServerDraft
+      return {
+        sourceKey: parseConfirmSourceKey,
+        value: {
+          ...currentValue,
+          [moduleKey]: {
+            ...(currentValue[moduleKey] ?? {}),
+            [fieldKey]: value,
+          },
+        },
+      }
     })
   }
   const setParseFieldReviewStatus = (rowId: string, status: ParseFieldReviewStatus) => {
@@ -711,6 +751,7 @@ export function BidWizardPage() {
         parseResult.data?.structured_result,
         parseConfirmServerDraft,
         parseConfirmDraft,
+        parseModuleFieldsDraft,
         parseFieldReviewDraft,
       )
       return confirmBidParseResult(bidId, { structured_result: structuredResult })
@@ -1097,6 +1138,7 @@ export function BidWizardPage() {
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
   const parseFieldEvidenceRows = structuredFieldEvidenceRows(parseResult.data?.structured_result)
   const parseModuleRows = structuredModuleRows(parseResult.data?.structured_result)
+  const parseModuleFieldRows = structuredModuleFieldRows(parseResult.data?.structured_result)
   const syncedRequirementRows = requirementRowsFromItems(bidRequirements.data ?? [])
   const parseRequirementRows = syncedRequirementRows.length
     ? syncedRequirementRows
@@ -1219,9 +1261,12 @@ export function BidWizardPage() {
               <div className="parse-confirm-panel">
                 <div className="parse-confirm-head">
                   <Typography.Title level={5}>确认信息</Typography.Title>
-                  {parseConfirmEditedFields.length ? (
-                    <Tag color="gold">已调整 {parseConfirmEditedFields.join('、')}</Tag>
-                  ) : null}
+                  <Space size={6} wrap>
+                    {parseConfirmEditedFields.length ? (
+                      <Tag color="gold">已调整 {parseConfirmEditedFields.join('、')}</Tag>
+                    ) : null}
+                    {parseModuleFieldEditedCount ? <Tag color="gold">模块字段已调整 {parseModuleFieldEditedCount} 项</Tag> : null}
+                  </Space>
                 </div>
                 <div className="parse-confirm-grid">
                   <label className="parse-confirm-field">
@@ -1297,7 +1342,7 @@ export function BidWizardPage() {
                   { title: '文件信息', dataIndex: 'value' },
                 ]}
               />
-              {parseFieldEvidenceRows.length || parseModuleRows.length || parseRequirementRows.length ? (
+              {parseFieldEvidenceRows.length || parseModuleRows.length || parseModuleFieldRows.length || parseRequirementRows.length ? (
                 <Tabs
                   size="small"
                   items={[
@@ -1376,6 +1421,62 @@ export function BidWizardPage() {
                                         options={parseFieldReviewOptions}
                                       />
                                     ),
+                                  },
+                                ]}
+                              />
+                            ),
+                          },
+                        ]
+                      : []),
+                    ...(parseModuleFieldRows.length
+                      ? [
+                          {
+                            key: 'module-fields',
+                            label: '模块字段',
+                            children: (
+                              <Table
+                                size="small"
+                                pagination={{ pageSize: 8, size: 'small' }}
+                                rowKey="id"
+                                dataSource={parseModuleFieldRows}
+                                columns={[
+                                  { title: '分组', dataIndex: 'moduleTitle', width: 110 },
+                                  {
+                                    title: '字段',
+                                    width: 150,
+                                    render: (_, row) => <Typography.Text>{row.label}</Typography.Text>,
+                                  },
+                                  {
+                                    title: '确认结果',
+                                    render: (_, row) => {
+                                      const value = parseModuleFieldDraftText(row, parseModuleFieldsDraft, parseConfirmDraft)
+                                      return (
+                                        <Input.TextArea
+                                          value={value}
+                                          disabled={!canEditParseConfirm}
+                                          autoSize={{ minRows: 1, maxRows: 5 }}
+                                          onChange={(event) =>
+                                            setParseModuleFieldDraftValue(row.moduleKey, row.fieldKey, event.target.value)
+                                          }
+                                        />
+                                      )
+                                    },
+                                  },
+                                  {
+                                    title: '状态',
+                                    width: 90,
+                                    render: (_, row) =>
+                                      parseModuleFieldChanged(
+                                        row,
+                                        parseModuleFieldsServerDraft,
+                                        parseModuleFieldsDraft,
+                                        parseConfirmServerDraft,
+                                        parseConfirmDraft,
+                                      ) ? (
+                                        <Tag color="gold">已调整</Tag>
+                                      ) : (
+                                        <Tag>原结果</Tag>
+                                      ),
                                   },
                                 ]}
                               />
@@ -2093,9 +2194,11 @@ function applyParseConfirmDraft(
   structuredResult: Record<string, unknown> | undefined,
   originalDraft: ParseConfirmDraft,
   draft: ParseConfirmDraft,
+  moduleFieldsDraft: ParseModuleFieldsDraft,
   fieldReviewDraft: Record<string, ParseFieldReviewStatus>,
 ): Record<string, unknown> {
   const next = cloneStructuredResult(structuredResult)
+  applyParseModuleFieldsDraft(next, moduleFieldsDraft)
   const qualificationRequirements = parseConfirmTextList(draft.qualificationRequirements)
   const scoringPoints = parseConfirmTextList(draft.scoringPoints)
   const invalidClauseRisks = parseConfirmTextList(draft.invalidClauseRisks)
@@ -2126,6 +2229,12 @@ function applyParseConfirmDraft(
     confirm_overrides: {
       version: 'parse-confirm-draft-v1',
       edited_fields: parseConfirmChangedFields(originalDraft, draft),
+      edited_module_fields: parseModuleFieldsChangedPaths(
+        parseModuleFieldsDraftFromStructuredResult(structuredResult),
+        moduleFieldsDraft,
+        originalDraft,
+        draft,
+      ),
       reviewed_fields: Object.keys(fieldReviewDraft),
       confirmed_at: new Date().toISOString(),
     },
@@ -2289,6 +2398,175 @@ function setParseModuleFields(
     fields: { ...currentFields, ...fields },
   }
   result.modules = modules
+}
+
+const parseModuleOrder = ['basic', 'qualification', 'evaluation', 'submission', 'invalid_risk', 'annex']
+
+const coreParseModuleFieldMap: Record<string, keyof ParseConfirmDraft> = {
+  'basic.project_name': 'projectName',
+  'basic.deadline': 'deadline',
+  'basic.bid_type': 'bidType',
+  'qualification.qualification_requirements': 'qualificationRequirements',
+  'evaluation.scoring_points': 'scoringPoints',
+  'invalid_risk.invalid_clause_risks': 'invalidClauseRisks',
+}
+
+function parseModuleCoreDraftField(moduleKey: string, fieldKey: string): keyof ParseConfirmDraft | null {
+  return coreParseModuleFieldMap[`${moduleKey}.${fieldKey}`] ?? null
+}
+
+function parseModuleFieldsDraftFromStructuredResult(result: Record<string, unknown> | undefined): ParseModuleFieldsDraft {
+  const modules = objectRecord(result?.modules)
+  const draft: ParseModuleFieldsDraft = {}
+  for (const moduleKey of orderedParseModuleKeys(modules)) {
+    const fields = objectRecord(objectRecord(modules?.[moduleKey])?.fields)
+    if (!fields) continue
+    draft[moduleKey] = Object.fromEntries(
+      Object.entries(fields).map(([fieldKey, value]) => [fieldKey, parseModuleFieldValueText(value)]),
+    )
+  }
+  return draft
+}
+
+function structuredModuleFieldRows(result: Record<string, unknown> | undefined) {
+  const modules = objectRecord(result?.modules)
+  return orderedParseModuleKeys(modules).flatMap((moduleKey) => {
+    const module = objectRecord(modules?.[moduleKey])
+    const fields = objectRecord(module?.fields)
+    if (!fields) return []
+    return Object.entries(fields).map(([fieldKey, originalValue], index) => ({
+      id: `${moduleKey}.${fieldKey}`,
+      moduleKey,
+      fieldKey,
+      moduleTitle: String(module?.title || parseModuleLabel(moduleKey)),
+      label: parseModuleFieldLabel(fieldKey, index),
+      originalValue,
+    }))
+  })
+}
+
+function orderedParseModuleKeys(modules: Record<string, unknown> | null) {
+  if (!modules) return []
+  return [
+    ...parseModuleOrder.filter((key) => modules[key] !== undefined),
+    ...Object.keys(modules)
+      .filter((key) => !parseModuleOrder.includes(key))
+      .sort(),
+  ]
+}
+
+function parseModuleFieldLabel(fieldKey: string, index: number) {
+  return parseEvidenceFieldLabels[fieldKey] ?? `其他信息 ${index + 1}`
+}
+
+function parseModuleFieldDraftText(
+  row: ReturnType<typeof structuredModuleFieldRows>[number],
+  draft: ParseModuleFieldsDraft,
+  coreDraft: ParseConfirmDraft,
+) {
+  const coreField = parseModuleCoreDraftField(row.moduleKey, row.fieldKey)
+  if (coreField) return parseModuleFieldValueText(coreDraft[coreField])
+  return draft[row.moduleKey]?.[row.fieldKey] ?? parseModuleFieldValueText(row.originalValue)
+}
+
+function applyParseModuleFieldsDraft(result: Record<string, unknown>, draft: ParseModuleFieldsDraft) {
+  const modules = { ...(objectRecord(result.modules) ?? {}) }
+  for (const [moduleKey, fieldDraft] of Object.entries(draft)) {
+    const currentModule = { ...(objectRecord(modules[moduleKey]) ?? {}) }
+    const currentFields = { ...(objectRecord(currentModule.fields) ?? {}) }
+    const nextFields = { ...currentFields }
+    for (const [fieldKey, value] of Object.entries(fieldDraft)) {
+      nextFields[fieldKey] = parseModuleFieldDraftValue(value, currentFields[fieldKey])
+    }
+    modules[moduleKey] = {
+      ...currentModule,
+      module: String(currentModule.module || moduleKey),
+      title: String(currentModule.title || parseModuleLabel(moduleKey)),
+      fields: nextFields,
+    }
+  }
+  result.modules = modules
+}
+
+function parseModuleFieldValueText(value: unknown): string {
+  if (Array.isArray(value)) {
+    if (value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
+      return value.map((item) => String(item ?? '')).join('\n')
+    }
+    return JSON.stringify(value, null, 2)
+  }
+  if (value && typeof value === 'object') return JSON.stringify(value, null, 2)
+  return value === null || value === undefined ? '' : String(value)
+}
+
+function parseModuleFieldDraftValue(value: string, originalValue: unknown): unknown {
+  const text = value.trim()
+  if (Array.isArray(originalValue)) {
+    if (!text) return []
+    if (originalValue.some((item) => item && typeof item === 'object')) {
+      const parsed = tryParseJSON(text)
+      if (Array.isArray(parsed)) return parsed
+    }
+    return parseConfirmTextList(value)
+  }
+  if (typeof originalValue === 'number') {
+    const parsed = Number(text)
+    return Number.isFinite(parsed) ? parsed : text
+  }
+  if (typeof originalValue === 'boolean') {
+    const normalized = text.toLowerCase()
+    if (['true', '1', 'yes', 'y', '是', '有'].includes(normalized)) return true
+    if (['false', '0', 'no', 'n', '否', '无'].includes(normalized)) return false
+    return text
+  }
+  if (originalValue && typeof originalValue === 'object') {
+    const parsed = tryParseJSON(text)
+    return parsed === undefined ? text : parsed
+  }
+  return text
+}
+
+function tryParseJSON(value: string) {
+  if (!value) return undefined
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+function parseModuleFieldsChangedPaths(
+  originalDraft: ParseModuleFieldsDraft,
+  draft: ParseModuleFieldsDraft,
+  originalCoreDraft: ParseConfirmDraft,
+  coreDraft: ParseConfirmDraft,
+) {
+  const paths = new Set<string>()
+  for (const moduleKey of new Set([...Object.keys(originalDraft), ...Object.keys(draft)])) {
+    const fieldKeys = new Set([...Object.keys(originalDraft[moduleKey] ?? {}), ...Object.keys(draft[moduleKey] ?? {})])
+    for (const fieldKey of fieldKeys) {
+      const path = `${moduleKey}.${fieldKey}`
+      const coreField = parseModuleCoreDraftField(moduleKey, fieldKey)
+      const originalValue = coreField
+        ? parseModuleFieldValueText(originalCoreDraft[coreField])
+        : originalDraft[moduleKey]?.[fieldKey] ?? ''
+      const nextValue = coreField ? parseModuleFieldValueText(coreDraft[coreField]) : draft[moduleKey]?.[fieldKey] ?? ''
+      if (parseConfirmComparableText(originalValue) !== parseConfirmComparableText(nextValue)) {
+        paths.add(path)
+      }
+    }
+  }
+  return [...paths].sort()
+}
+
+function parseModuleFieldChanged(
+  row: ReturnType<typeof structuredModuleFieldRows>[number],
+  originalDraft: ParseModuleFieldsDraft,
+  draft: ParseModuleFieldsDraft,
+  originalCoreDraft: ParseConfirmDraft,
+  coreDraft: ParseConfirmDraft,
+) {
+  return parseModuleFieldsChangedPaths(originalDraft, draft, originalCoreDraft, coreDraft).includes(row.id)
 }
 
 function parseConfirmChangedFieldLabels(originalDraft: ParseConfirmDraft, draft: ParseConfirmDraft) {

@@ -3762,3 +3762,41 @@ git diff --check
 
 1. 浏览器内置 PDF/Office 预览器是否按 `search` 参数高亮命中，取决于具体 viewer 支持；本轮不自建 PDF canvas 选区层。
 2. 本轮只高亮来源摘录本身，不做跨页多片段、多 bbox 或表格单元格级定位。
+
+## Loop-69 / 六模块字段逐项编辑确认 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐文件解读页只能编辑少数核心字段，六模块结构化字段仍主要只读的问题。
+2. 不新增后端协议，继续通过现有解析确认接口提交完整 `structured_result`。
+3. 前端继续使用业务口径，不把模型、schema、内部字段路径暴露给业务用户。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 新增 `ParseModuleFieldsDraft` 状态，按解析结果版本隔离模块字段草稿。
+2. 文件解读页新增“模块字段”页签，将 `modules.*.fields` 展开为分组、字段、确认结果、状态四列。
+3. 模块字段编辑会写回 `structured_result.modules[module].fields`；数组按行编辑，数字、布尔和 JSON 结构在确认时尽量按原字段类型还原。
+4. 项目名称、投标截止、标书类型、资格要求、评分要点、否决风险这些已有核心字段与模块字段共用同一份确认草稿，避免核心面板和模块字段表保存后互相覆盖。
+5. `parse_metadata.confirm_overrides.edited_module_fields` 记录本次调整过的模块字段路径，便于后续审计确认版本。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 同步更新六模块逐项编辑当前状态和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. `git diff --check` 通过，无空白错误。
+
+### 偏离蓝图
+
+1. 本轮不做字段置信度手工改写，也不新增字段级 bbox 选区编辑。
+2. 复杂对象字段提供 JSON 文本编辑和类型还原，不做专用可视化表单。
