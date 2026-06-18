@@ -4102,3 +4102,39 @@ cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden .
 
 1. 本轮校验的是来源引用结构完整性，不做来源文本与 PDF canvas bbox 的视觉框选验证。
 2. 真实 OCR Provider 的持续报告仍依赖外部 MinerU/PaddleOCR endpoint 配置，本轮没有伪造通过。
+
+## Loop-78 / 来源坐标定位贯通 - 2026-06-18
+
+### 本轮目标
+
+1. 把解析和 OCR 产出的坐标信息从后端结构字段继续传到前端来源复核界面。
+2. 响应来源、覆盖历史、字段依据和预览页定位条都能展示并复制坐标定位。
+3. 不在业务界面展示 bbox 等技术口径。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 新增来源坐标解析：支持 `bbox`、`bounding_box`、`boundingBox`、`rect`、`position` 的四点坐标或 `x/y/width/height` 形态，只接受有限数字和有效区域。
+2. 来源定位标签新增“坐标”，并写入复制定位文本；打开文件或知识库文档原文时追加 `source_bbox` query。
+3. `frontend/src/features/knowledge/index.tsx` 的预览定位条读取 `source_bbox`，展示“坐标”标签，并在缺少完整定位文本时仍可复制页码、坐标和摘录组合。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录来源坐标标签已进入人工复核链路。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮是坐标信息贯通和业务展示，不是自建 PDF canvas/Word 坐标层。
+2. 内嵌预览器仍由浏览器或对象存储预览 URL 承载，不能保证按坐标绘制选区框；后续若要视觉框选，需要引入可控 PDF/Office 渲染层。

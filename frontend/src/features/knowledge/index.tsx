@@ -986,12 +986,12 @@ export function FilePreviewPage({ sourceType = 'file' }: { sourceType?: FilePrev
       )
     : null
   const copySourceLocator = async () => {
-    if (!sourceLocator.locatorText) {
+    if (!sourceLocator.copyText) {
       message.info('暂无可复制定位')
       return
     }
     try {
-      await navigator.clipboard.writeText(sourceLocator.locatorText)
+      await navigator.clipboard.writeText(sourceLocator.copyText)
       message.success('定位已复制')
     } catch {
       message.error('复制失败，请手动选择定位信息')
@@ -1022,6 +1022,7 @@ export function FilePreviewPage({ sourceType = 'file' }: { sourceType?: FilePrev
                   <FileSearchOutlined className="file-preview-source-icon" />
                   <Typography.Text strong>{sourceLocator.title || '定位来源'}</Typography.Text>
                   {sourceLocator.page ? <Tag>页码：{sourceLocator.page}</Tag> : null}
+                  {sourceLocator.bboxText ? <Tag>坐标：{sourceLocator.bboxText}</Tag> : null}
                 </Space>
                 {sourceLocator.searchText ? (
                   <Typography.Paragraph className="file-preview-source-excerpt">
@@ -1029,7 +1030,7 @@ export function FilePreviewPage({ sourceType = 'file' }: { sourceType?: FilePrev
                   </Typography.Paragraph>
                 ) : null}
               </div>
-              <Button size="small" icon={<CopyOutlined />} disabled={!sourceLocator.locatorText} onClick={() => void copySourceLocator()}>
+              <Button size="small" icon={<CopyOutlined />} disabled={!sourceLocator.copyText} onClick={() => void copySourceLocator()}>
                 复制定位
               </Button>
             </div>
@@ -1052,13 +1053,36 @@ function filePreviewSourceLocator(searchParams: URLSearchParams) {
   const searchText = normalizePreviewParam(searchParams.get('search'), 120)
   const title = normalizePreviewParam(searchParams.get('source_title'), 120)
   const locatorText = normalizePreviewParam(searchParams.get('source_locator'), 800)
+  const bboxText = normalizePreviewParam(searchParams.get('source_bbox'), 120)
+  const copyText = locatorText || filePreviewLocatorCopyText({ title, page, searchText, bboxText })
   return {
     page,
     searchText,
     title,
     locatorText,
-    hasLocator: Boolean(page || searchText || title || locatorText),
+    bboxText,
+    copyText,
+    hasLocator: Boolean(page || searchText || title || locatorText || bboxText),
   }
+}
+
+function filePreviewLocatorCopyText({
+  title,
+  page,
+  searchText,
+  bboxText,
+}: {
+  title: string
+  page: number | null
+  searchText: string
+  bboxText: string
+}) {
+  return [
+    title,
+    page ? `页码: ${page}` : '',
+    bboxText ? `坐标: ${bboxText}` : '',
+    searchText ? `摘录: ${searchText}` : '',
+  ].filter(Boolean).join('\n')
 }
 
 function positiveIntegerParam(value: string | null) {

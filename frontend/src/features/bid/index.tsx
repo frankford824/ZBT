@@ -3114,7 +3114,21 @@ function requirementSourceLocatorParts(sourceRef: unknown) {
   if (chunkID) {
     parts.push({ label: '定位码', value: chunkID })
   }
+  const bbox = requirementSourceBBoxText(sourceRef)
+  if (bbox) {
+    parts.push({ label: '坐标', value: bbox })
+  }
   return parts
+}
+
+function requirementSourceBBoxText(sourceRef: unknown) {
+  const record = objectRecord(sourceRef)
+  if (!record) return ''
+  for (const key of ['bbox', 'bounding_box', 'boundingBox', 'rect', 'position']) {
+    const value = sourceBBoxText(record[key])
+    if (value) return value
+  }
+  return ''
 }
 
 function requirementSourceLocatorText(sourceRef: unknown) {
@@ -3136,6 +3150,7 @@ function sourcePreviewPageUrl(target: { type: 'file' | 'document'; id: string },
   const searchText = requirementSourceSearchText(sourceRef)
   const title = requirementSourceTitle(sourceRef)
   const locator = requirementSourceLocatorText(sourceRef)
+  const bbox = requirementSourceBBoxText(sourceRef)
   if (page) {
     params.set('page', String(page))
   }
@@ -3147,6 +3162,9 @@ function sourcePreviewPageUrl(target: { type: 'file' | 'document'; id: string },
   }
   if (locator) {
     params.set('source_locator', truncatePreviewParam(locator, 800))
+  }
+  if (bbox) {
+    params.set('source_bbox', bbox)
   }
   const path =
     target.type === 'file'
@@ -3165,6 +3183,42 @@ function normalizePreviewSearchText(value: string) {
   const normalized = value.replace(/\s+/g, ' ').trim()
   if (!normalized) return ''
   return normalized.length > 120 ? normalized.slice(0, 120) : normalized
+}
+
+function sourceBBoxText(value: unknown) {
+  const bbox = sourceBBoxValues(value)
+  if (!bbox) return ''
+  return bbox.map(formatSourceCoordinate).join(', ')
+}
+
+function sourceBBoxValues(value: unknown): [number, number, number, number] | null {
+  if (Array.isArray(value) && value.length === 4) {
+    const values = value.map((item) => Number(item))
+    if (values.every(Number.isFinite) && values[2] > values[0] && values[3] > values[1]) {
+      return [values[0], values[1], values[2], values[3]]
+    }
+  }
+  const record = objectRecord(value)
+  if (!record) return null
+  const x = Number(record.x ?? record.left ?? record.x0)
+  const y = Number(record.y ?? record.top ?? record.y0)
+  const width = Number(record.width ?? record.w)
+  const height = Number(record.height ?? record.h)
+  if ([x, y, width, height].every(Number.isFinite) && width > 0 && height > 0) {
+    return [x, y, x + width, y + height]
+  }
+  const x0 = Number(record.x0 ?? record.left)
+  const y0 = Number(record.y0 ?? record.top)
+  const x1 = Number(record.x1 ?? record.right)
+  const y1 = Number(record.y1 ?? record.bottom)
+  if ([x0, y0, x1, y1].every(Number.isFinite) && x1 > x0 && y1 > y0) {
+    return [x0, y0, x1, y1]
+  }
+  return null
+}
+
+function formatSourceCoordinate(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2)
 }
 
 function HighlightedSourceText({ text, query }: { text: string; query?: string }) {
