@@ -50,7 +50,7 @@
 - `frontend/src/features/team/index.tsx` 已新增“外部数据源”tab，可查看 Provider 目录、用途、数据边界、启用状态和调用记录，并通过配置弹窗维护访问地址、启用工具、预算、超时时间、脱敏策略和费用估算。
 - `frontend/src/features/tender/index.tsx` 已新增“外部标讯”业务入口，使用已授权 Handaas 只读数据源检索公开标讯，并可保存为 `metadata.source_type=external_mcp` 的租户内标讯。
 - `ai-service/app/evaluation/generation_coverage_eval.py` 已提供离线生成覆盖评测：检查 mandatory requirement 覆盖率、已覆盖项是否带来源、`source_refs` 是否能解析到给定 `knowledge_chunks`，并要求响应来源具备引用号/定位码和页码、chunk、文件或文档定位；`docs/sample_docs/golden/工程1.generation_coverage.json` 已固化工程1生成覆盖 golden。
-- `backend/internal/platform/bid/store.go` 已提供 `GET /bids/:id/generation-coverage` 运行态导出：从 `bid_requirement_items`、最新章节版本、章节 `source_refs` 与已解析 `knowledge_chunks` 组合出可直接交给离线评测器的 JSON。
+- `backend/internal/platform/bid/store.go` 已提供 `GET /bids/:id/generation-coverage` 运行态导出：从 `bid_requirement_items`、最新章节版本、章节 `source_refs` 与已解析 `knowledge_chunks` 组合出可直接交给离线评测器的 JSON，并默认携带 mandatory 覆盖、source_ref 解析、引用号/定位码和来源位置完整率阈值。
 - `ai-service/app/evaluation/export_format_eval.py` 已提供离线导出格式评测：临时生成 DOCX、ZIP 和 PDF，检查 DOCX 可打开性、目录域、自动更新域、页码域、页眉页脚、表格、ZIP manifest、ZIP 内 DOCX 可打开性、PDF 可打开性、文本层和首屏非空；`docs/sample_docs/golden/工程1.export.json` 已固化工程1导出格式 golden。
 
 ## P0：6 模块招标解析

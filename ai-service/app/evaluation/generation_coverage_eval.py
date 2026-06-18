@@ -338,6 +338,8 @@ def main() -> int:
         print(
             f"{result['status']} mandatory_coverage={result['mandatory_coverage_ratio']} "
             f"source_ref_resolution={result['source_ref_resolution_ratio']} "
+            f"source_ref_reference_id={result['source_ref_reference_id_ratio']} "
+            f"source_ref_location={result['source_ref_location_ratio']} "
             f"passed={result['passed_checks']}/{result['total_checks']}"
         )
         for check in result["checks"]:

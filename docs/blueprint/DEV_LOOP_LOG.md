@@ -4365,3 +4365,47 @@ rg -n "当前检索结论|Hugin-Z/tender-writer-v4|JbBom/cn-bid-doc-automation|L
 
 1. 本轮只做全网/GitHub 调研归档，不安装第三方 Skill，也不新增 Provider 运行时代码。
 2. GitHub CLI 已安装但尚未完成账号授权；本轮仓库检索使用 GitHub API 和网页搜索结果交叉筛选。
+
+## Loop-85 / 运行态生成覆盖门禁契约同步 - 2026-06-18
+
+### 本轮目标
+
+1. 修正运行态 `GET /bids/:id/generation-coverage` 导出契约滞后于离线评测器的问题。
+2. 真实标书导出的 generation coverage JSON 必须默认触发 AutoRFP 响应来源的引用号/定位码和来源位置完整性门禁。
+3. CLI 普通输出需要展示新增比率，避免只看到 source_ref resolution 而忽略引用号或定位退化。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 的 `buildGenerationCoverageSpec()` 默认阈值新增：
+   - `min_source_ref_reference_id_ratio=1`
+   - `min_source_ref_location_ratio=1`
+2. `backend/internal/platform/bid/store_test.go` 更新导出契约测试，断言运行态 spec 保留章节 `source_refs` 中的 `citation_id` 和 `page_start`，并携带全部四个评测阈值。
+3. `ai-service/app/evaluation/generation_coverage_eval.py` 普通 CLI 输出新增 `source_ref_reference_id` 和 `source_ref_location` 摘要。
+4. `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录运行态导出已携带引用号/定位完整性阈值。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && go test ./internal/platform/bid -run 'TestBuildGenerationCoverageSpecUsesEvaluatorContract'
+cd backend && go test ./internal/api -run 'TestRouteInfosExposeGenerationCoverageAsReadOnlyBidRoute'
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.generation_coverage_eval --input ../docs/sample_docs/golden/工程1.generation_coverage.json
+python3 -m py_compile ai-service/app/evaluation/generation_coverage_eval.py
+cd ai-service && .venv/bin/python -m ruff check app/evaluation/generation_coverage_eval.py app/tests/test_generation_coverage_eval.py
+git diff --check
+```
+
+结果：
+
+1. Go 生成覆盖导出契约单测通过。
+2. Go API 路由只读权限元数据单测通过。
+3. Python 生成覆盖评测单测 4 项通过。
+4. 工程1生成覆盖黄金样本通过，普通输出显示 mandatory coverage、source_ref resolution、引用号完整率、来源位置完整率，9/9 检查通过。
+5. Python 语法检查、Ruff 和 diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮同步运行态导出阈值，不改历史已生成章节的旧 source_refs；旧数据若缺引用号会被评测器正确判为待修复。
+2. 新阈值证明来源结构完整，不替代来源语义一致性的人工抽样或后续语义评测。

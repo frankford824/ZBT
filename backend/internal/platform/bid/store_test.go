@@ -719,18 +719,28 @@ func TestBuildGenerationCoverageSpecUsesEvaluatorContract(t *testing.T) {
 			"requirement_id": "evaluation-001",
 			"satisfied":      true,
 			"source_refs": []any{
-				map[string]any{"chunk_id": "chunk-1", "document_id": "doc-1"},
+				map[string]any{
+					"chunk_id":     "chunk-1",
+					"document_id":  "doc-1",
+					"reference_id": "SRC-001",
+					"page_start":   3,
+				},
 			},
 		},
 	}
 	chapter := GenerationCoverageChapter{
-		ID:         "chapter-1",
-		BidPartID:  "part-1",
-		PartCode:   "tech",
-		PartTitle:  "技术标",
-		Title:      "实施方案",
-		Status:     "generated",
-		SourceRefs: []any{map[string]any{"chunk_id": "chunk-1", "document_id": "doc-1"}},
+		ID:        "chapter-1",
+		BidPartID: "part-1",
+		PartCode:  "tech",
+		PartTitle: "技术标",
+		Title:     "实施方案",
+		Status:    "generated",
+		SourceRefs: []any{map[string]any{
+			"chunk_id":    "chunk-1",
+			"document_id": "doc-1",
+			"citation_id": "SRC-001",
+			"page_start":  3,
+		}},
 		ModelMetadata: map[string]any{
 			"self_check": map[string]any{
 				"requirement_coverage": coverage,
@@ -775,8 +785,16 @@ func TestBuildGenerationCoverageSpecUsesEvaluatorContract(t *testing.T) {
 	if len(spec.Chapters) != 1 || len(spec.Chapters[0].RequirementCoverage) != 1 {
 		t.Fatalf("expected chapter coverage to be exposed at top level, got %#v", spec.Chapters)
 	}
-	if !spec.RequireSourceRefs || spec.Thresholds["min_mandatory_coverage_ratio"] != 1 {
+	if !spec.RequireSourceRefs ||
+		spec.Thresholds["min_mandatory_coverage_ratio"] != 1 ||
+		spec.Thresholds["min_source_ref_resolution_ratio"] != 0.95 ||
+		spec.Thresholds["min_source_ref_reference_id_ratio"] != 1 ||
+		spec.Thresholds["min_source_ref_location_ratio"] != 1 {
 		t.Fatalf("expected evaluator thresholds and source requirement, got %#v", spec)
+	}
+	sourceRef, ok := spec.Chapters[0].SourceRefs[0].(map[string]any)
+	if !ok || sourceRef["citation_id"] != "SRC-001" || sourceRef["page_start"] != 3 {
+		t.Fatalf("expected generation source refs to retain citation and location, got %#v", spec.Chapters[0].SourceRefs)
 	}
 	if !spec.GeneratedAt.Equal(generatedAt) {
 		t.Fatalf("expected generated_at to be retained, got %v", spec.GeneratedAt)

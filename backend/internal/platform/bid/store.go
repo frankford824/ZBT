@@ -4399,8 +4399,10 @@ func buildGenerationCoverageSpec(
 		Chapters:        chapters,
 		KnowledgeChunks: chunks,
 		Thresholds: map[string]float64{
-			"min_mandatory_coverage_ratio":    1,
-			"min_source_ref_resolution_ratio": 0.95,
+			"min_mandatory_coverage_ratio":      1,
+			"min_source_ref_resolution_ratio":   0.95,
+			"min_source_ref_reference_id_ratio": 1,
+			"min_source_ref_location_ratio":     1,
 		},
 		RequireSourceRefs: true,
 		GeneratedAt:       generatedAt,
