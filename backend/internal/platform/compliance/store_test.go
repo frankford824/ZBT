@@ -2,6 +2,7 @@ package compliance
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 )
@@ -136,6 +137,20 @@ func TestNormalizeRuleMetadataRejectsTooManyEntries(t *testing.T) {
 	}
 	if _, err := normalizeRuleMetadata(metadata); err != ErrInvalidRequest {
 		t.Fatalf("expected oversized metadata entry count to be rejected, got %v", err)
+	}
+}
+
+func TestMarshalComplianceJSONRejectsInvalidAndOversizedValues(t *testing.T) {
+	for name, value := range map[string]any{
+		"invalid number": map[string]any{"bad": math.NaN()},
+		"unsupported":    map[string]any{"bad": func() {}},
+		"oversized":      map[string]any{"payload": strings.Repeat("值", maxComplianceReportMetadataBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := marshalComplianceJSON(value, maxComplianceReportMetadataBytes); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid compliance JSON to be rejected, got %v", err)
+			}
+		})
 	}
 }
 

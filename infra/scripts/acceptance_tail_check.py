@@ -555,13 +555,25 @@ def check_static_docs() -> None:
         "maxComplianceLevelSelections",
         "maxComplianceRuleCodeRunes",
         "maxComplianceRuleMetadataBytes",
+        "maxComplianceCheckConfigBytes",
+        "maxComplianceReportMetadataBytes",
+        "maxComplianceIssueLocationBytes",
+        "maxComplianceGateMetadataBytes",
         "normalizeCheckName",
         "normalizeRuleMetadata",
+        "marshalComplianceJSON",
         "validateComplianceTextLength",
         "boundedComplianceText",
         "utf8.RuneCountInString",
     ):
         require(needle in compliance_store, f"Compliance store missing business input boundary: {needle}")
+    for forbidden in (
+        "configRaw, _ := json.Marshal(config)",
+        "metadata, _ := json.Marshal(map[string]any{",
+        "location, _ := json.Marshal(locationMap)",
+        "metadataJSON, _ := json.Marshal(metadata)",
+    ):
+        require(forbidden not in compliance_store, f"Compliance store still ignores JSON marshal failure: {forbidden}")
     compliance_store_tests = (ROOT / "backend/internal/platform/compliance/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestNormalizeLevelsDedupesAndBoundsSelections",
@@ -569,6 +581,7 @@ def check_static_docs() -> None:
         "TestNormalizeRuleRejectsOversizedTextAndMetadata",
         "TestNormalizeRuleTrimsMetadataKeysAndAcceptsBoundedUnicodeText",
         "TestNormalizeRuleMetadataRejectsTooManyEntries",
+        "TestMarshalComplianceJSONRejectsInvalidAndOversizedValues",
         "TestBoundedComplianceTextTrimsGeneratedIssueText",
     ):
         require(needle in compliance_store_tests, f"Compliance store missing business input boundary regression test: {needle}")

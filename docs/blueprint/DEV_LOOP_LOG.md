@@ -6831,3 +6831,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标书模块 AI task 写入边界，没有新增真实大模型 Provider、OCR 或文档排版母版能力。
 2. payload 上限为 96MB，保留导出任务携带大章节文本和附件引用的能力；后续若需要更低数据库压力，应把大 payload 拆成文件资产或任务输入引用。
+
+## Loop-141 / 合规模块派生 JSON 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查合规模块持久化路径，处理检查 config、报告 metadata、问题 location 和管线 gate metadata 仍忽略 JSON marshal 错误的问题。
+2. 避免派生 JSON 在包含不可序列化值、非有限数或异常放大时静默写入空值/坏值，影响合规报告、问题定位和标书管线状态展示。
+3. 将合规模块派生 JSON 字节预算固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/compliance/store.go` 新增 JSON 边界常量，覆盖检查 config、报告 metadata、问题 location 和管线 gate metadata，均为 16KB。
+2. 新增 `marshalComplianceJSON()`，统一处理 JSON marshal 错误和字节上限，错误归一为 `ErrInvalidRequest`。
+3. `CreateCheck()`、`CreateReport()`、`generateIssues()` 和 `upsertCompliancePipelineGate()` 改为使用已校验 JSON，不再忽略 `json.Marshal` 错误。
+4. `backend/internal/platform/compliance/store_test.go` 新增不可 JSON 值、NaN 和超预算 JSON 的拒绝回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加合规模块派生 JSON 边界防回退检查，并禁止回退到忽略 config/metadata/location marshal 错误。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/compliance/store.go internal/platform/compliance/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/compliance
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/compliance` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 合规模块派生 JSON 的入库可靠性，没有新增语义合规模型、OCR 或规则配置 UI。
+2. 16KB 上限适合当前摘要/定位 metadata；若后续需要保存更大定位上下文，应拆成明确字段或文件引用。

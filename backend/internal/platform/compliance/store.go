@@ -34,6 +34,10 @@ const (
 	maxComplianceIssueTitleRunes      = 255
 	maxComplianceIssueEvidenceRunes   = 1000
 	maxComplianceIssueSuggestionRunes = 1000
+	maxComplianceCheckConfigBytes     = 16 * 1024
+	maxComplianceReportMetadataBytes  = 16 * 1024
+	maxComplianceIssueLocationBytes   = 16 * 1024
+	maxComplianceGateMetadataBytes    = 16 * 1024
 )
 
 type Store struct {
@@ -159,7 +163,10 @@ func (s *Store) CreateCheck(ctx context.Context, tenantID string, req CreateChec
 		return CheckSnapshot{}, err
 	}
 	config := map[string]any{"levels": levels}
-	configRaw, _ := json.Marshal(config)
+	configRaw, err := marshalComplianceJSON(config, maxComplianceCheckConfigBytes)
+	if err != nil {
+		return CheckSnapshot{}, err
+	}
 	taskID := "compliance-check-" + uuid.NewString()
 	var checkID string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -319,11 +326,14 @@ func (s *Store) CreateReport(ctx context.Context, tenantID, checkID string) (Rep
 	if err != nil {
 		return Report{}, err
 	}
-	metadata, _ := json.Marshal(map[string]any{
+	metadata, err := marshalComplianceJSON(map[string]any{
 		"score":         snapshot.Check.Score,
 		"result_status": snapshot.Check.ResultStatus,
 		"issue_count":   len(snapshot.Issues),
-	})
+	}, maxComplianceReportMetadataBytes)
+	if err != nil {
+		return Report{}, err
+	}
 	summary := "合规得分 " + itoa(snapshot.Check.Score) + "，结果 " + snapshot.Check.ResultStatus + "，问题 " + itoa(len(snapshot.Issues)) + " 项"
 	var report Report
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
@@ -609,7 +619,10 @@ func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID
 		if err != nil {
 			return err
 		}
-		location, _ := json.Marshal(locationMap)
+		location, err := marshalComplianceJSON(locationMap, maxComplianceIssueLocationBytes)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			insert into compliance_issues (tenant_id, check_id, rule_id, category, severity, status, title, evidence, suggestion, location)
 			values ($1, $2, $3, $4, $5, 'open', $6, $7, $8, $9)
@@ -832,7 +845,10 @@ func upsertCompliancePipelineGate(ctx context.Context, tx pgx.Tx, tenantID, bidI
 	if err != nil {
 		return err
 	}
-	metadataJSON, _ := json.Marshal(metadata)
+	metadataJSON, err := marshalComplianceJSON(metadata, maxComplianceGateMetadataBytes)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(ctx, `
 		insert into bid_pipeline_gates (
 			tenant_id, bid_document_id, stage, status, reviewed_by,
@@ -1029,6 +1045,17 @@ func normalizeRuleMetadata(metadata map[string]any) (map[string]any, error) {
 		return nil, ErrInvalidRequest
 	}
 	return normalized, nil
+}
+
+func marshalComplianceJSON(value any, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
 }
 
 func validateComplianceTextLength(value string, maxRunes int) error {
