@@ -793,20 +793,23 @@ export function BidWizardPage() {
         coverage_status: payload.coverageStatus,
         evidence: payload.evidence,
       }),
-    onSuccess: async (items) => {
-      message.success(`已更新 ${items.length} 项响应状态`)
+    onSuccess: async (items, variables) => {
+      message.success(variables.evidence ? `已更新 ${items.length} 项响应证据` : `已更新 ${items.length} 项响应状态`)
       setSelectedRequirementKeys([])
       await queryClient.invalidateQueries({ queryKey: ['bid-requirements', bidId] })
     },
-    onError: (error) => message.error(getApiErrorMessage(error, '批量更新响应状态失败')),
+    onError: (error) => message.error(getApiErrorMessage(error, '批量更新响应信息失败')),
   })
   const requirementHistoryMutation = useMutation({
     mutationFn: (requirementId: string) => fetchBidRequirementCoverageHistory(bidId, requirementId),
     onError: (error) => message.error(getApiErrorMessage(error, '获取响应历史失败')),
   })
   const updateBatchRequirementStatus = (coverageStatus: BidRequirementItemDTO['coverage_status']) => {
-    if (!selectedRequirementKeys.length || requirementBatchCoverageMutation.isPending) return
-    requirementBatchCoverageMutation.mutate({ requirementIds: [...selectedRequirementKeys], coverageStatus })
+    if (!selectedRequirementRows.length || requirementBatchCoverageMutation.isPending) return
+    requirementBatchCoverageMutation.mutate({
+      requirementIds: selectedRequirementRows.map((row) => row.id),
+      coverageStatus,
+    })
   }
   const updateRequirementStatus = (row: ParseRequirementRow, coverageStatus: BidRequirementItemDTO['coverage_status']) => {
     if (!row.canUpdate) return
@@ -851,6 +854,51 @@ export function BidWizardPage() {
       },
     })
   }
+  const openBatchRequirementEvidenceModal = () => {
+    if (!selectedRequirementRows.length) return
+    let coverageStatus = inferBatchCoverageStatus(selectedRequirementRows)
+    let evidence = ''
+    Modal.confirm({
+      title: '批量补充响应证据',
+      okText: '保存',
+      cancelText: '取消',
+      content: (
+        <Space orientation="vertical" size={10} className="full-width">
+          <Typography.Text type="secondary">已选 {selectedRequirementRows.length} 项</Typography.Text>
+          <Select
+            defaultValue={coverageStatus}
+            className="full-width"
+            options={requirementCoverageOptions}
+            onChange={(value) => {
+              coverageStatus = value
+            }}
+          />
+          <Input.TextArea
+            rows={4}
+            maxLength={1000}
+            showCount
+            autoFocus
+            placeholder="填写这些响应要点共同适用的依据"
+            onChange={(event) => {
+              evidence = event.target.value
+            }}
+          />
+        </Space>
+      ),
+      onOk: () => {
+        const nextEvidence = evidence.trim()
+        if (!nextEvidence) {
+          message.warning('请填写响应证据')
+          return Promise.reject(new Error('empty evidence'))
+        }
+        return requirementBatchCoverageMutation.mutateAsync({
+          requirementIds: selectedRequirementRows.map((row) => row.id),
+          coverageStatus,
+          evidence: nextEvidence,
+        })
+      },
+    })
+  }
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
   const parseRows = structuredResultRows(parseResult.data?.structured_result)
@@ -860,6 +908,7 @@ export function BidWizardPage() {
     ? syncedRequirementRows
     : structuredRequirementRows(parseResult.data?.structured_result)
   const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter)
+  const selectedRequirementRows = parseRequirementRows.filter((row) => row.canUpdate && selectedRequirementKeys.includes(row.id))
   const isRequirementUpdating = requirementCoverageMutation.isPending || requirementBatchCoverageMutation.isPending
   const parseFailureMessage =
     parseResult.data?.status === 'failed'
@@ -1033,13 +1082,22 @@ export function BidWizardPage() {
                                   className="requirement-batch-status-select"
                                   value={undefined}
                                   placeholder="批量标记"
-                                  disabled={!selectedRequirementKeys.length || isRequirementUpdating}
+                                  disabled={!selectedRequirementRows.length || isRequirementUpdating}
                                   loading={requirementBatchCoverageMutation.isPending}
                                   onChange={updateBatchRequirementStatus}
                                   options={requirementCoverageOptions}
                                 />
-                                {selectedRequirementKeys.length ? (
-                                  <Typography.Text type="secondary">已选 {selectedRequirementKeys.length} 项</Typography.Text>
+                                <Button
+                                  size="small"
+                                  icon={<EditOutlined />}
+                                  disabled={!selectedRequirementRows.length || isRequirementUpdating}
+                                  loading={requirementBatchCoverageMutation.isPending}
+                                  onClick={openBatchRequirementEvidenceModal}
+                                >
+                                  批量补证据
+                                </Button>
+                                {selectedRequirementRows.length ? (
+                                  <Typography.Text type="secondary">已选 {selectedRequirementRows.length} 项</Typography.Text>
                                 ) : null}
                               </>
                             ) : null}
@@ -1772,6 +1830,15 @@ const requirementCoverageOptions = [
   { label: '已覆盖', value: 'covered' },
   { label: '待复核', value: 'needs_review' },
 ] satisfies Array<{ label: string; value: BidRequirementItemDTO['coverage_status'] }>
+
+function inferBatchCoverageStatus(rows: ParseRequirementRow[]): BidRequirementItemDTO['coverage_status'] {
+  if (!rows.length) return 'covered'
+  const firstStatus = rows[0].coverageStatus
+  if (firstStatus !== 'unmapped' && rows.every((row) => row.coverageStatus === firstStatus)) {
+    return firstStatus
+  }
+  return 'covered'
+}
 
 function requirementEvidenceCell(
   row: ParseRequirementRow,
