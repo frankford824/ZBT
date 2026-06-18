@@ -1106,6 +1106,10 @@ a {
   width: 118px;
 }
 
+.requirement-evidence-filter-select {
+  width: 112px;
+}
+
 .requirement-evidence-text {
   display: block;
   min-width: 0;

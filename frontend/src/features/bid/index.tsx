@@ -134,6 +134,7 @@ type DraftState<T> = {
 }
 
 type RequirementFilter = 'all' | 'mandatory' | 'review' | 'covered'
+type RequirementEvidenceFilter = 'all' | 'missing_evidence' | 'missing_source' | 'complete'
 
 export function BidNewPage() {
   const navigate = useNavigate()
@@ -498,6 +499,7 @@ export function BidWizardPage() {
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
   const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>('all')
+  const [requirementEvidenceFilter, setRequirementEvidenceFilter] = useState<RequirementEvidenceFilter>('all')
   const [selectedRequirementKeys, setSelectedRequirementKeys] = useState<string[]>([])
   const [historyRequirement, setHistoryRequirement] = useState<ParseRequirementRow | null>(null)
   const bid = useQuery({
@@ -924,7 +926,7 @@ export function BidWizardPage() {
   const parseRequirementRows = syncedRequirementRows.length
     ? syncedRequirementRows
     : structuredRequirementRows(parseResult.data?.structured_result)
-  const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter)
+  const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter, requirementEvidenceFilter)
   const selectedRequirementRows = parseRequirementRows.filter((row) => row.canUpdate && selectedRequirementKeys.includes(row.id))
   const isRequirementUpdating = requirementCoverageMutation.isPending || requirementBatchCoverageMutation.isPending
   const parseFailureMessage =
@@ -1091,6 +1093,13 @@ export function BidWizardPage() {
                                 { label: '待确认', value: 'review' },
                                 { label: '已覆盖', value: 'covered' },
                               ]}
+                            />
+                            <Select
+                              size="small"
+                              className="requirement-evidence-filter-select"
+                              value={requirementEvidenceFilter}
+                              onChange={(value) => setRequirementEvidenceFilter(value)}
+                              options={requirementEvidenceFilterOptions}
                             />
                             {canWrite ? (
                               <>
@@ -1761,18 +1770,37 @@ function requirementRowsFromItems(items: BidRequirementItemDTO[]) {
 
 type ParseRequirementRow = ReturnType<typeof structuredRequirementRows>[number]
 
-function filterRequirementRows(rows: ParseRequirementRow[], filter: RequirementFilter) {
-  switch (filter) {
-    case 'mandatory':
-      return rows.filter((row) => row.mandatory)
-    case 'review':
-      return rows.filter((row) => row.needsReview || row.coverageStatus === 'needs_review')
-    case 'covered':
-      return rows.filter((row) => row.coverageStatus === 'covered')
+function filterRequirementRows(rows: ParseRequirementRow[], filter: RequirementFilter, evidenceFilter: RequirementEvidenceFilter) {
+  const statusRows = (() => {
+    switch (filter) {
+      case 'mandatory':
+        return rows.filter((row) => row.mandatory)
+      case 'review':
+        return rows.filter((row) => row.needsReview || row.coverageStatus === 'needs_review')
+      case 'covered':
+        return rows.filter((row) => row.coverageStatus === 'covered')
+      default:
+        return rows
+    }
+  })()
+  switch (evidenceFilter) {
+    case 'missing_evidence':
+      return statusRows.filter((row) => row.coverageStatus === 'covered' && !row.coverageEvidence.trim())
+    case 'missing_source':
+      return statusRows.filter((row) => row.coverageStatus === 'covered' && row.coverageSourceCount === 0)
+    case 'complete':
+      return statusRows.filter((row) => row.coverageStatus === 'covered' && row.coverageEvidence.trim() && row.coverageSourceCount > 0)
     default:
-      return rows
+      return statusRows
   }
 }
+
+const requirementEvidenceFilterOptions = [
+  { label: '全部依据', value: 'all' },
+  { label: '待补证据', value: 'missing_evidence' },
+  { label: '待补来源', value: 'missing_source' },
+  { label: '依据完整', value: 'complete' },
+] satisfies Array<{ label: string; value: RequirementEvidenceFilter }>
 
 function requirementCoverageStatusValue(value: unknown): BidRequirementItemDTO['coverage_status'] {
   const text = String(value || '').trim().toLowerCase()
