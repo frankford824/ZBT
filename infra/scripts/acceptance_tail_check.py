@@ -598,6 +598,8 @@ def check_static_docs() -> None:
         "normalizeCheckName",
         "normalizeRuleMetadata",
         "marshalComplianceJSON",
+        "unmarshalComplianceJSON",
+        "unmarshalRuleMetadata",
         "validateComplianceTextLength",
         "boundedComplianceText",
         "utf8.RuneCountInString",
@@ -608,8 +610,12 @@ def check_static_docs() -> None:
         "metadata, _ := json.Marshal(map[string]any{",
         "location, _ := json.Marshal(locationMap)",
         "metadataJSON, _ := json.Marshal(metadata)",
+        "_ = json.Unmarshal(raw, &report.Metadata)",
+        "_ = json.Unmarshal(configRaw, &check.Config)",
+        "_ = json.Unmarshal(locationRaw, &issue.Location)",
+        "_ = json.Unmarshal(metadataRaw, &rule.Metadata)",
     ):
-        require(forbidden not in compliance_store, f"Compliance store still ignores JSON marshal failure: {forbidden}")
+        require(forbidden not in compliance_store, f"Compliance store still ignores JSON failure: {forbidden}")
     compliance_store_tests = (ROOT / "backend/internal/platform/compliance/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestNormalizeLevelsDedupesAndBoundsSelections",
@@ -618,6 +624,10 @@ def check_static_docs() -> None:
         "TestNormalizeRuleTrimsMetadataKeysAndAcceptsBoundedUnicodeText",
         "TestNormalizeRuleMetadataRejectsTooManyEntries",
         "TestMarshalComplianceJSONRejectsInvalidAndOversizedValues",
+        "TestUnmarshalComplianceJSONRejectsInvalidStoredFields",
+        "TestUnmarshalComplianceJSONNormalizesEmptyStoredFields",
+        "TestScanComplianceRowsRejectInvalidStoredJSON",
+        "TestScanComplianceRowsNormalizeEmptyStoredJSON",
         "TestBoundedComplianceTextTrimsGeneratedIssueText",
     ):
         require(needle in compliance_store_tests, f"Compliance store missing business input boundary regression test: {needle}")

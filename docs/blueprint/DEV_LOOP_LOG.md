@@ -7639,3 +7639,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 审批步骤读取可靠性，没有新增审批策略、审批前端视图或通知通道。
 2. 读取侧沿用既有写入侧步骤预算；如果后续需要更复杂审批条件，应拆成结构化条件表或规则引用，而不是扩大步骤 JSON。
+
+## Loop-159 / 合规 JSON 读取边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查合规模块读取链路，处理报告 `metadata`、检查 `config`、问题 `location`、规则 `metadata` 读取时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算合规 JSON 静默进入合规检查、问题定位、规则展示和报告摘要。
+3. 将合规 JSON 读取边界固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/compliance/store.go` 新增 `unmarshalComplianceJSON()`，空值和 `null` 归一化为 `{}`，并按各字段既有字节预算校验读取侧 JSON。
+2. `unmarshalRuleMetadata()` 复用规则 metadata 的 key、entry 和 bytes 约束，确保读取侧与写入侧边界一致。
+3. `scanCheck()`、`scanIssue()`、`scanRule()` 和 `CreateReport()` 改为显式处理 JSON 解析错误，不再忽略 `json.Unmarshal` 失败；`scanCheck()`、`scanIssue()` 也先返回底层 `row.Scan` 错误，避免扫描错误被后续逻辑掩盖。
+4. `backend/internal/platform/compliance/store_test.go` 覆盖坏 config/location/metadata 被拒绝，以及空/null 存储值归一化为 `{}`。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加合规 JSON 读取边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/compliance/store.go internal/platform/compliance/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/compliance
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/compliance` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 合规读取可靠性，没有新增语义合规模型、OCR、规则知识库或前端合规视图。
+2. 读取侧沿用既有写入侧 JSON 预算；如果后续合规定位或报告 metadata 需要承载更大结构，应拆成明细表或文件资产引用，而不是继续扩大 JSON 字段。

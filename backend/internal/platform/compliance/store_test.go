@@ -2,9 +2,11 @@ package compliance
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeLevelsDefaultsOnlyBlankLevels(t *testing.T) {
@@ -154,6 +156,77 @@ func TestMarshalComplianceJSONRejectsInvalidAndOversizedValues(t *testing.T) {
 	}
 }
 
+func TestUnmarshalComplianceJSONRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid syntax": []byte(`{"config":`),
+		"invalid shape":  []byte(`[{"config":true}]`),
+		"oversized":      []byte(`{"payload":"` + strings.Repeat("值", maxComplianceCheckConfigBytes) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalComplianceJSON(raw, maxComplianceCheckConfigBytes); err == nil {
+				t.Fatal("expected invalid stored compliance JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalComplianceJSONNormalizesEmptyStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := unmarshalComplianceJSON(raw, maxComplianceCheckConfigBytes)
+			if err != nil {
+				t.Fatalf("expected empty stored compliance JSON to normalize: %v", err)
+			}
+			if got == nil || len(got) != 0 {
+				t.Fatalf("expected empty map, got %+v", got)
+			}
+		})
+	}
+}
+
+func TestScanComplianceRowsRejectInvalidStoredJSON(t *testing.T) {
+	if _, err := scanCheck(complianceCheckScanRow{configRaw: []byte(`{"levels":`)}); err == nil {
+		t.Fatal("expected invalid check config JSON to be rejected")
+	}
+	if _, err := scanIssue(complianceIssueScanRow{locationRaw: []byte(`[{"page":1}]`)}); err == nil {
+		t.Fatal("expected invalid issue location JSON shape to be rejected")
+	}
+	rawRuleMetadata := []byte(`{"` + strings.Repeat("键", maxComplianceRuleMetadataKeyRunes+1) + `":"value"}`)
+	if _, err := scanRule(complianceRuleScanRow{metadataRaw: rawRuleMetadata}); err != ErrInvalidRequest {
+		t.Fatalf("expected invalid rule metadata to be rejected, got %v", err)
+	}
+}
+
+func TestScanComplianceRowsNormalizeEmptyStoredJSON(t *testing.T) {
+	check, err := scanCheck(complianceCheckScanRow{configRaw: nil})
+	if err != nil {
+		t.Fatalf("expected empty check config to normalize: %v", err)
+	}
+	if check.Config == nil || len(check.Config) != 0 {
+		t.Fatalf("expected empty check config map, got %+v", check.Config)
+	}
+
+	issue, err := scanIssue(complianceIssueScanRow{locationRaw: []byte(" null ")})
+	if err != nil {
+		t.Fatalf("expected empty issue location to normalize: %v", err)
+	}
+	if issue.Location == nil || len(issue.Location) != 0 {
+		t.Fatalf("expected empty issue location map, got %+v", issue.Location)
+	}
+
+	rule, err := scanRule(complianceRuleScanRow{metadataRaw: []byte("{}")})
+	if err != nil {
+		t.Fatalf("expected empty rule metadata to normalize: %v", err)
+	}
+	if rule.Metadata == nil || len(rule.Metadata) != 0 {
+		t.Fatalf("expected empty rule metadata map, got %+v", rule.Metadata)
+	}
+}
+
 func TestBoundedComplianceTextTrimsGeneratedIssueText(t *testing.T) {
 	raw := " " + strings.Repeat("问", maxComplianceIssueTitleRunes+10) + " "
 	got := boundedComplianceText(raw, maxComplianceIssueTitleRunes)
@@ -195,4 +268,68 @@ func levelsKey(levels []string) string {
 		result += level
 	}
 	return result
+}
+
+type complianceCheckScanRow struct {
+	configRaw []byte
+}
+
+func (row complianceCheckScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "check-1"
+	*(dest[1].(*sql.NullString)) = sql.NullString{}
+	*(dest[2].(*string)) = "标书"
+	*(dest[3].(*string)) = "合规检查"
+	*(dest[4].(*string)) = "done"
+	*(dest[5].(*string)) = "pass"
+	*(dest[6].(*int)) = 100
+	*(dest[7].(*[]byte)) = row.configRaw
+	*(dest[8].(*sql.NullString)) = sql.NullString{}
+	*(dest[9].(*int)) = 0
+	*(dest[10].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[11].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[12].(*time.Time)) = now
+	*(dest[13].(*time.Time)) = now
+	return nil
+}
+
+type complianceIssueScanRow struct {
+	locationRaw []byte
+}
+
+func (row complianceIssueScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "issue-1"
+	*(dest[1].(*string)) = "check-1"
+	*(dest[2].(*sql.NullString)) = sql.NullString{}
+	*(dest[3].(*string)) = "格式规范"
+	*(dest[4].(*string)) = "warn"
+	*(dest[5].(*string)) = "open"
+	*(dest[6].(*string)) = "问题"
+	*(dest[7].(*string)) = "证据"
+	*(dest[8].(*string)) = "建议"
+	*(dest[9].(*[]byte)) = row.locationRaw
+	*(dest[10].(*time.Time)) = now
+	*(dest[11].(*time.Time)) = now
+	return nil
+}
+
+type complianceRuleScanRow struct {
+	metadataRaw []byte
+}
+
+func (row complianceRuleScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "rule-1"
+	*(dest[1].(*string)) = "rule_code"
+	*(dest[2].(*string)) = "规则"
+	*(dest[3].(*string)) = "分类"
+	*(dest[4].(*string)) = "L1"
+	*(dest[5].(*string)) = "warn"
+	*(dest[6].(*string)) = "说明"
+	*(dest[7].(*bool)) = true
+	*(dest[8].(*[]byte)) = row.metadataRaw
+	*(dest[9].(*time.Time)) = now
+	*(dest[10].(*time.Time)) = now
+	return nil
 }

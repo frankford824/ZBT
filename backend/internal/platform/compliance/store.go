@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -345,8 +346,11 @@ func (s *Store) CreateReport(ctx context.Context, tenantID, checkID string) (Rep
 		`, tenantID, checkID, summary, metadata).Scan(&report.ID, &report.CheckID, &report.Status, &report.Summary, &raw, &report.CreatedAt, &report.UpdatedAt); err != nil {
 			return err
 		}
-		report.Metadata = map[string]any{}
-		_ = json.Unmarshal(raw, &report.Metadata)
+		decoded, err := unmarshalComplianceJSON(raw, maxComplianceReportMetadataBytes)
+		if err != nil {
+			return err
+		}
+		report.Metadata = decoded
 		return nil
 	})
 	return report, err
@@ -728,6 +732,9 @@ func scanCheck(row scanner) (Check, error) {
 		&check.ID, &bidID, &check.BidTitle, &check.Name, &check.Status, &check.ResultStatus, &check.Score,
 		&configRaw, &taskID, &check.IssueCount, &startedAt, &completedAt, &check.CreatedAt, &check.UpdatedAt,
 	)
+	if err != nil {
+		return Check{}, err
+	}
 	if bidID.Valid {
 		check.BidDocumentID = &bidID.String
 	}
@@ -740,9 +747,11 @@ func scanCheck(row scanner) (Check, error) {
 	if completedAt.Valid {
 		check.CompletedAt = &completedAt.Time
 	}
-	check.Config = map[string]any{}
-	_ = json.Unmarshal(configRaw, &check.Config)
-	return check, err
+	check.Config, err = unmarshalComplianceJSON(configRaw, maxComplianceCheckConfigBytes)
+	if err != nil {
+		return Check{}, err
+	}
+	return check, nil
 }
 
 func scanIssue(row scanner) (Issue, error) {
@@ -753,21 +762,31 @@ func scanIssue(row scanner) (Issue, error) {
 		&issue.ID, &issue.CheckID, &ruleID, &issue.Category, &issue.Severity, &issue.Status,
 		&issue.Title, &issue.Evidence, &issue.Suggestion, &locationRaw, &issue.CreatedAt, &issue.UpdatedAt,
 	)
+	if err != nil {
+		return Issue{}, err
+	}
 	if ruleID.Valid {
 		issue.RuleID = &ruleID.String
 	}
-	issue.Location = map[string]any{}
-	_ = json.Unmarshal(locationRaw, &issue.Location)
-	return issue, err
+	issue.Location, err = unmarshalComplianceJSON(locationRaw, maxComplianceIssueLocationBytes)
+	if err != nil {
+		return Issue{}, err
+	}
+	return issue, nil
 }
 
 func scanRule(row scanner) (Rule, error) {
 	var rule Rule
 	var metadataRaw []byte
 	err := row.Scan(&rule.ID, &rule.Code, &rule.Name, &rule.Category, &rule.Level, &rule.Severity, &rule.Description, &rule.Enabled, &metadataRaw, &rule.CreatedAt, &rule.UpdatedAt)
-	rule.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &rule.Metadata)
-	return rule, err
+	if err != nil {
+		return Rule{}, err
+	}
+	rule.Metadata, err = unmarshalRuleMetadata(metadataRaw)
+	if err != nil {
+		return Rule{}, err
+	}
+	return rule, nil
 }
 
 func refreshCheckSummary(ctx context.Context, tx pgx.Tx, tenantID, issueID string) error {
@@ -1056,6 +1075,32 @@ func marshalComplianceJSON(value any, maxBytes int) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func unmarshalComplianceJSON(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return result, nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return map[string]any{}, nil
+	}
+	return result, nil
+}
+
+func unmarshalRuleMetadata(raw []byte) (map[string]any, error) {
+	metadata, err := unmarshalComplianceJSON(raw, maxComplianceRuleMetadataBytes)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeRuleMetadata(metadata)
 }
 
 func validateComplianceTextLength(value string, maxRunes int) error {
