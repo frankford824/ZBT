@@ -6273,3 +6273,52 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是合规规则和检查输入边界，没有新增语义合规模型、OCR 或人工复核工作流。
 2. metadata 当前按条目数和 JSON 字节预算收敛；若后续需要复杂规则参数，应拆成明确字段或版本化 schema，而不是继续扩大自由 JSON。
+
+## Loop-129 / 审批链输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查团队审批模块，处理审批链名称、描述、步骤 JSON、审批意见和通知派生文本缺少边界的问题。
+2. 避免超长审批链配置或过多审批级写入 `approval_chains.steps`，再扩散到 `approval_instances.snapshot`、动作流水和通知。
+3. 保存审批链时校验指定用户与审批角色存在，避免创建后无人可审批或审批动作永久失败的坏配置。
+
+### 代码交付
+
+1. `backend/internal/platform/approval/store.go` 新增审批模块边界常量：审批链名称 255 字符、描述 1000 字符、最多 20 个审批级、steps JSON 16KB、审批级名称 128 字符、角色编码 128 字符、条件说明 1000 字符、审批意见 1000 字符。
+2. `CreateChain()` / `UpdateChain()` 改用 `marshalApprovalSteps()`，不再忽略 steps JSON marshal 错误，并在写库前检查 steps 数量、字段长度和 JSON 字节预算。
+3. `normalizeChain()` 对链路文本、步骤文本和步骤数量做统一校验，保留默认审批链、默认审批级名称和默认 company_admin 的既有行为。
+4. `validateChainStepActors()` 在保存审批链前校验指定用户为当前租户 active 成员，并校验角色编码在当前租户存在。
+5. `Approve()` / `Reject()` 使用 `normalizeDecisionComment()`，超长审批意见进入事务前直接拒绝。
+6. `SubmitBid()` 对审批实例标题和快照 steps 增加边界保护，避免历史异常审批链继续放大实例快照。
+7. `notifyUsersForStep()` / `notifySubmitter()` 对通知标题和正文做业务兜底与截断保护。
+8. `backend/internal/platform/approval/store_test.go` 新增审批链写库前拒绝、文本边界、审批意见边界、快照 marshal 和派生文本截断回归测试。
+9. `infra/scripts/acceptance_tail_check.py --static-docs` 增加审批模块业务输入边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/approval/store.go internal/platform/approval/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/approval
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/approval` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `282 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是审批配置与审批意见输入边界，没有新增条件表达式引擎、拖拽排序 API 或独立审批级表。
+2. steps 仍按既有 JSONB 结构保存；后续若要支持复杂条件路由，应优先拆 schema 和校验器，而不是继续扩大自由 JSON。

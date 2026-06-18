@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,21 @@ var (
 	ErrNotFound       = errors.New("approval resource not found")
 	ErrInvalidRequest = errors.New("invalid approval request")
 	ErrForbidden      = errors.New("approval action forbidden")
+)
+
+const (
+	maxApprovalChainNameRunes         = 255
+	maxApprovalChainDescriptionRunes  = 1000
+	maxApprovalResourceTypeRunes      = 64
+	maxApprovalSteps                  = 20
+	maxApprovalStepsJSONBytes         = 16 * 1024
+	maxApprovalStepNameRunes          = 128
+	maxApprovalStepRoleCodeRunes      = 128
+	maxApprovalStepConditionRunes     = 1000
+	maxApprovalDecisionCommentRunes   = 1000
+	maxApprovalInstanceTitleRunes     = 255
+	maxApprovalNotificationTitleRunes = 128
+	maxApprovalNotificationBodyRunes  = 1000
 )
 
 type Store struct {
@@ -126,10 +142,13 @@ func (s *Store) CreateChain(ctx context.Context, tenantID string, req CreateChai
 	if err != nil {
 		return Chain{}, err
 	}
-	stepsRaw, _ := json.Marshal(normalized.Steps)
+	stepsRaw, err := marshalApprovalSteps(normalized.Steps)
+	if err != nil {
+		return Chain{}, err
+	}
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		if err := validateChainStepUsers(ctx, tx, tenantID, normalized.Steps); err != nil {
+		if err := validateChainStepActors(ctx, tx, tenantID, normalized.Steps); err != nil {
 			return err
 		}
 		return tx.QueryRow(ctx, `
@@ -175,9 +194,12 @@ func (s *Store) UpdateChain(ctx context.Context, tenantID, id string, req Update
 	if err != nil {
 		return Chain{}, err
 	}
-	stepsRaw, _ := json.Marshal(normalized.Steps)
+	stepsRaw, err := marshalApprovalSteps(normalized.Steps)
+	if err != nil {
+		return Chain{}, err
+	}
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		if err := validateChainStepUsers(ctx, tx, tenantID, normalized.Steps); err != nil {
+		if err := validateChainStepActors(ctx, tx, tenantID, normalized.Steps); err != nil {
 			return err
 		}
 		tag, err := tx.Exec(ctx, `
@@ -258,8 +280,14 @@ func (s *Store) SubmitBid(ctx context.Context, tenantID, userID, bidID string) (
 		if err != nil {
 			return err
 		}
-		snapshotRaw, _ := json.Marshal(chain.Steps)
-		title := bidTitle + " 审批"
+		snapshotRaw, err := marshalApprovalSteps(chain.Steps)
+		if err != nil {
+			return err
+		}
+		title := boundedApprovalText(bidTitle+" 审批", maxApprovalInstanceTitleRunes)
+		if title == "" {
+			title = "标书审批"
+		}
 		if err := tx.QueryRow(ctx, `
 			insert into approval_instances (tenant_id, chain_id, bid_document_id, title, status, current_step, submitted_by, snapshot)
 			values ($1, $2, $3, $4, 'pending', 1, $5, $6)
@@ -346,7 +374,11 @@ func (s *Store) Approve(ctx context.Context, tenantID, userID, instanceID string
 	if err := validateUUID(instanceID); err != nil {
 		return InstanceDetail{}, err
 	}
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	comment, err := normalizeDecisionComment(req.Comment)
+	if err != nil {
+		return InstanceDetail{}, err
+	}
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		instance, err := scanInstance(tx.QueryRow(ctx, instanceSelectSQL()+` where ai.tenant_id = $1 and ai.id = $2 for update of ai`, tenantID, instanceID))
 		if err != nil {
 			return err
@@ -364,7 +396,7 @@ func (s *Store) Approve(ctx context.Context, tenantID, userID, instanceID string
 		if _, err := tx.Exec(ctx, `
 			insert into approval_actions (tenant_id, instance_id, actor_user_id, action, step_order, comment)
 			values ($1, $2, $3, 'approve', $4, $5)
-		`, tenantID, instance.ID, userID, instance.CurrentStep, strings.TrimSpace(req.Comment)); err != nil {
+		`, tenantID, instance.ID, userID, instance.CurrentStep, comment); err != nil {
 			return err
 		}
 		if instance.CurrentStep >= len(steps) {
@@ -409,7 +441,11 @@ func (s *Store) Reject(ctx context.Context, tenantID, userID, instanceID string,
 	if err := validateUUID(instanceID); err != nil {
 		return InstanceDetail{}, err
 	}
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	comment, err := normalizeDecisionComment(req.Comment)
+	if err != nil {
+		return InstanceDetail{}, err
+	}
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		instance, err := scanInstance(tx.QueryRow(ctx, instanceSelectSQL()+` where ai.tenant_id = $1 and ai.id = $2 for update of ai`, tenantID, instanceID))
 		if err != nil {
 			return err
@@ -427,7 +463,7 @@ func (s *Store) Reject(ctx context.Context, tenantID, userID, instanceID string,
 		if _, err := tx.Exec(ctx, `
 			insert into approval_actions (tenant_id, instance_id, actor_user_id, action, step_order, comment)
 			values ($1, $2, $3, 'reject', $4, $5)
-		`, tenantID, instance.ID, userID, instance.CurrentStep, strings.TrimSpace(req.Comment)); err != nil {
+		`, tenantID, instance.ID, userID, instance.CurrentStep, comment); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
@@ -579,6 +615,7 @@ func activeBidChain(ctx context.Context, tx pgx.Tx, tenantID string) (Chain, err
 }
 
 func notifyUsersForStep(ctx context.Context, tx pgx.Tx, tenantID string, step Step, title, body string) error {
+	title, body = normalizeApprovalNotification(title, body)
 	userIDs := []string{}
 	if strings.TrimSpace(step.UserID) != "" {
 		userIDs = append(userIDs, strings.TrimSpace(step.UserID))
@@ -628,6 +665,7 @@ func notifyUsersForStep(ctx context.Context, tx pgx.Tx, tenantID string, step St
 }
 
 func notifySubmitter(ctx context.Context, tx pgx.Tx, tenantID string, submittedBy *string, title, body string) error {
+	title, body = normalizeApprovalNotification(title, body)
 	if submittedBy == nil || *submittedBy == "" {
 		_, err := tx.Exec(ctx, `
 			insert into notifications (tenant_id, user_id, title, body)
@@ -691,35 +729,50 @@ func ensureStepActor(ctx context.Context, tx pgx.Tx, tenantID, userID string, st
 	return nil
 }
 
-func validateChainStepUsers(ctx context.Context, tx pgx.Tx, tenantID string, steps []Step) error {
-	seen := map[string]bool{}
+func validateChainStepActors(ctx context.Context, tx pgx.Tx, tenantID string, steps []Step) error {
+	seenUsers := map[string]bool{}
+	seenRoles := map[string]bool{}
 	for _, step := range steps {
-		if strings.TrimSpace(step.UserID) == "" {
+		if strings.TrimSpace(step.UserID) != "" {
+			userID, err := normalizeUUID(step.UserID)
+			if err != nil {
+				return err
+			}
+			if seenUsers[userID] {
+				continue
+			}
+			var exists bool
+			if err := tx.QueryRow(ctx, `
+				select exists(
+					select 1
+					from tenant_members
+					where tenant_id = $1
+						and user_id = $2
+						and status = 'active'
+				)
+			`, tenantID, userID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrInvalidRequest
+			}
+			seenUsers[userID] = true
 			continue
 		}
-		userID, err := normalizeUUID(step.UserID)
-		if err != nil {
-			return err
-		}
-		if seen[userID] {
+		roleCode := strings.TrimSpace(step.RoleCode)
+		if roleCode == "" || seenRoles[roleCode] {
 			continue
 		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `
-			select exists(
-				select 1
-				from tenant_members
-				where tenant_id = $1
-					and user_id = $2
-					and status = 'active'
-			)
-		`, tenantID, userID).Scan(&exists); err != nil {
+			select exists(select 1 from roles where tenant_id = $1 and code = $2)
+		`, tenantID, roleCode).Scan(&exists); err != nil {
 			return err
 		}
 		if !exists {
 			return ErrInvalidRequest
 		}
-		seen[userID] = true
+		seenRoles[roleCode] = true
 	}
 	return nil
 }
@@ -734,6 +787,18 @@ func normalizeChain(req CreateChainRequest) (CreateChainRequest, error) {
 	if req.ResourceType == "" {
 		req.ResourceType = "bid"
 	}
+	for _, check := range []struct {
+		value string
+		limit int
+	}{
+		{req.Name, maxApprovalChainNameRunes},
+		{req.Description, maxApprovalChainDescriptionRunes},
+		{req.ResourceType, maxApprovalResourceTypeRunes},
+	} {
+		if err := validateApprovalTextLength(check.value, check.limit); err != nil {
+			return req, err
+		}
+	}
 	if req.ResourceType != "bid" {
 		return req, ErrInvalidRequest
 	}
@@ -742,6 +807,9 @@ func normalizeChain(req CreateChainRequest) (CreateChainRequest, error) {
 			{Order: 1, Name: "部门主管审批", RoleCode: "department_admin", Required: true},
 			{Order: 2, Name: "项目经理审批", RoleCode: "project_manager", Required: true},
 		}
+	}
+	if len(req.Steps) > maxApprovalSteps {
+		return req, ErrInvalidRequest
 	}
 	for i := range req.Steps {
 		req.Steps[i].Order = i + 1
@@ -762,8 +830,87 @@ func normalizeChain(req CreateChainRequest) (CreateChainRequest, error) {
 		if req.Steps[i].RoleCode == "" && req.Steps[i].UserID == "" {
 			req.Steps[i].RoleCode = "company_admin"
 		}
+		for _, check := range []struct {
+			value string
+			limit int
+		}{
+			{req.Steps[i].Name, maxApprovalStepNameRunes},
+			{req.Steps[i].RoleCode, maxApprovalStepRoleCodeRunes},
+			{req.Steps[i].Condition, maxApprovalStepConditionRunes},
+		} {
+			if err := validateApprovalTextLength(check.value, check.limit); err != nil {
+				return req, err
+			}
+		}
 	}
 	return req, nil
+}
+
+func normalizeDecisionComment(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if err := validateApprovalTextLength(value, maxApprovalDecisionCommentRunes); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func marshalApprovalSteps(steps []Step) ([]byte, error) {
+	if len(steps) > maxApprovalSteps {
+		return nil, ErrInvalidRequest
+	}
+	for _, step := range steps {
+		for _, check := range []struct {
+			value string
+			limit int
+		}{
+			{step.Name, maxApprovalStepNameRunes},
+			{step.RoleCode, maxApprovalStepRoleCodeRunes},
+			{step.Condition, maxApprovalStepConditionRunes},
+		} {
+			if err := validateApprovalTextLength(check.value, check.limit); err != nil {
+				return nil, err
+			}
+		}
+	}
+	raw, err := json.Marshal(steps)
+	if err != nil {
+		return nil, ErrInvalidRequest
+	}
+	if len(raw) > maxApprovalStepsJSONBytes {
+		return nil, ErrInvalidRequest
+	}
+	return raw, nil
+}
+
+func normalizeApprovalNotification(title, body string) (string, string) {
+	title = boundedApprovalText(title, maxApprovalNotificationTitleRunes)
+	if title == "" {
+		title = "审批通知"
+	}
+	body = boundedApprovalText(body, maxApprovalNotificationBodyRunes)
+	return title, body
+}
+
+func validateApprovalTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 {
+		return ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func boundedApprovalText(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:maxRunes]))
 }
 
 func activeSteps(steps []Step) []Step {

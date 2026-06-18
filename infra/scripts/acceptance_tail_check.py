@@ -488,6 +488,31 @@ def check_static_docs() -> None:
     ):
         require(needle in compliance_store_tests, f"Compliance store missing business input boundary regression test: {needle}")
 
+    approval_store = (ROOT / "backend/internal/platform/approval/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxApprovalChainNameRunes",
+        "maxApprovalSteps",
+        "maxApprovalStepsJSONBytes",
+        "maxApprovalDecisionCommentRunes",
+        "marshalApprovalSteps",
+        "normalizeDecisionComment",
+        "validateChainStepActors",
+        "validateApprovalTextLength",
+        "boundedApprovalText",
+        "utf8.RuneCountInString",
+    ):
+        require(needle in approval_store, f"Approval store missing business input boundary: {needle}")
+    approval_store_tests = (ROOT / "backend/internal/platform/approval/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestCreateChainRejectsOversizedConfigBeforeDB",
+        "TestNormalizeChainRejectsOversizedTextFields",
+        "TestNormalizeChainAcceptsBoundedUnicodeText",
+        "TestNormalizeDecisionCommentBoundsAndTrims",
+        "TestMarshalApprovalStepsRejectsOversizedSnapshot",
+        "TestBoundedApprovalTextTrimsGeneratedValues",
+    ):
+        require(needle in approval_store_tests, f"Approval store missing business input boundary regression test: {needle}")
+
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
         require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")

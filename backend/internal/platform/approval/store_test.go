@@ -1,6 +1,10 @@
 package approval
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestCurrentApprovalStepUsesOneBasedActiveStep(t *testing.T) {
 	steps := []Step{
@@ -62,6 +66,65 @@ func TestNormalizeChainRejectsInvalidStepUserID(t *testing.T) {
 	}
 }
 
+func TestCreateChainRejectsOversizedConfigBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+
+	_, err := store.CreateChain(context.Background(), "tenant-id", CreateChainRequest{
+		Name: strings.Repeat("审", maxApprovalChainNameRunes+1),
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized chain name to be rejected before DB, got %v", err)
+	}
+
+	steps := make([]Step, maxApprovalSteps+1)
+	for index := range steps {
+		steps[index] = Step{Name: "审批级", RoleCode: "company_admin", Required: true}
+	}
+	_, err = store.CreateChain(context.Background(), "tenant-id", CreateChainRequest{
+		Name:         "审批链",
+		ResourceType: "bid",
+		Steps:        steps,
+	})
+	if err != ErrInvalidRequest {
+		t.Fatalf("expected oversized step list to be rejected before DB, got %v", err)
+	}
+}
+
+func TestNormalizeChainRejectsOversizedTextFields(t *testing.T) {
+	for _, req := range []CreateChainRequest{
+		{Name: strings.Repeat("审", maxApprovalChainNameRunes+1), ResourceType: "bid"},
+		{Name: "审批链", Description: strings.Repeat("描", maxApprovalChainDescriptionRunes+1), ResourceType: "bid"},
+		{Name: "审批链", ResourceType: strings.Repeat("b", maxApprovalResourceTypeRunes+1)},
+		{Name: "审批链", ResourceType: "bid", Steps: []Step{{Name: strings.Repeat("级", maxApprovalStepNameRunes+1), RoleCode: "company_admin", Required: true}}},
+		{Name: "审批链", ResourceType: "bid", Steps: []Step{{Name: "审批级", RoleCode: strings.Repeat("r", maxApprovalStepRoleCodeRunes+1), Required: true}}},
+		{Name: "审批链", ResourceType: "bid", Steps: []Step{{Name: "审批级", RoleCode: "company_admin", Required: true, Condition: strings.Repeat("条", maxApprovalStepConditionRunes+1)}}},
+	} {
+		if _, err := normalizeChain(req); err != ErrInvalidRequest {
+			t.Fatalf("expected oversized chain request in %+v to be rejected, got %v", req, err)
+		}
+	}
+}
+
+func TestNormalizeChainAcceptsBoundedUnicodeText(t *testing.T) {
+	chain, err := normalizeChain(CreateChainRequest{
+		Name:         " " + strings.Repeat("审", maxApprovalChainNameRunes) + " ",
+		Description:  " " + strings.Repeat("描", maxApprovalChainDescriptionRunes) + " ",
+		ResourceType: " bid ",
+		Steps: []Step{{
+			Name:      " " + strings.Repeat("级", maxApprovalStepNameRunes) + " ",
+			RoleCode:  " company_admin ",
+			Required:  true,
+			Condition: " " + strings.Repeat("条", maxApprovalStepConditionRunes) + " ",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected bounded chain request to normalize: %v", err)
+	}
+	if len([]rune(chain.Name)) != maxApprovalChainNameRunes || len([]rune(chain.Steps[0].Condition)) != maxApprovalStepConditionRunes {
+		t.Fatalf("expected bounded unicode text to be trimmed and preserved, got name=%d condition=%d", len([]rune(chain.Name)), len([]rune(chain.Steps[0].Condition)))
+	}
+}
+
 func TestNormalizeChainCanonicalizesStepUserID(t *testing.T) {
 	chain, err := normalizeChain(CreateChainRequest{
 		Name:         "chain",
@@ -75,6 +138,44 @@ func TestNormalizeChainCanonicalizesStepUserID(t *testing.T) {
 	}
 	if chain.Steps[0].UserID != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
 		t.Fatalf("expected canonical step user id, got %q", chain.Steps[0].UserID)
+	}
+}
+
+func TestNormalizeDecisionCommentBoundsAndTrims(t *testing.T) {
+	comment := strings.Repeat("意", maxApprovalDecisionCommentRunes)
+	got, err := normalizeDecisionComment(" " + comment + " ")
+	if err != nil {
+		t.Fatalf("expected bounded decision comment to normalize: %v", err)
+	}
+	if got != comment {
+		t.Fatalf("expected decision comment to be trimmed and preserved, got %q", got)
+	}
+
+	if _, err := normalizeDecisionComment(strings.Repeat("意", maxApprovalDecisionCommentRunes+1)); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized decision comment to be rejected, got %v", err)
+	}
+}
+
+func TestMarshalApprovalStepsRejectsOversizedSnapshot(t *testing.T) {
+	steps := make([]Step, maxApprovalSteps+1)
+	for index := range steps {
+		steps[index] = Step{Name: "审批级", RoleCode: "company_admin", Required: true}
+	}
+	if _, err := marshalApprovalSteps(steps); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized approval snapshot to be rejected, got %v", err)
+	}
+
+	if _, err := marshalApprovalSteps([]Step{{Name: strings.Repeat("级", maxApprovalStepNameRunes+1), RoleCode: "company_admin"}}); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized approval snapshot text to be rejected, got %v", err)
+	}
+}
+
+func TestBoundedApprovalTextTrimsGeneratedValues(t *testing.T) {
+	raw := " " + strings.Repeat("标", maxApprovalInstanceTitleRunes+10) + " "
+	got := boundedApprovalText(raw, maxApprovalInstanceTitleRunes)
+
+	if len([]rune(got)) != maxApprovalInstanceTitleRunes {
+		t.Fatalf("expected generated approval text to be capped at %d runes, got %d", maxApprovalInstanceTitleRunes, len([]rune(got)))
 	}
 }
 
