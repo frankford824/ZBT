@@ -289,6 +289,8 @@ def check_static_docs() -> None:
     )
     for forbidden in ("parseResult.data.error_message?.trim()", "task.error_message?.trim()) return task.error_message.trim()"):
         require(forbidden not in bid_page, f"Bid task UI exposes raw task error message: {forbidden}")
+    require("empty evidence or source" not in bid_page, "Bid requirement evidence modal exposes internal English validation error")
+    require("new Error('请填写响应证据或来源')" in bid_page, "Bid requirement evidence modal missing business validation rejection")
     require("getUserFacingErrorMessage(parseResult.data.error_message" in bid_page, "Bid parse failure UI missing user-facing error filter")
     require("getUserFacingErrorMessage(task.error_message" in bid_page, "Bid task failure UI missing user-facing error filter")
     require("subtitle={bid.data?.title ?? bidId}" not in bid_page, "Bid editor subtitle exposes bid UUID fallback")

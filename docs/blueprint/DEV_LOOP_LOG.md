@@ -5318,3 +5318,43 @@ cd frontend && pnpm build
 
 1. 后端和 AI 服务仍保留原始 `error_message` 供排查，本轮只调整前端展示口径。
 2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。
+
+## Loop-108 / 响应证据校验文案收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书响应矩阵证据补充弹窗，处理 rejected Promise 中残留英文内部错误的问题。
+2. 保证用户未填写证据或来源时，弹窗、运行时异常和防回退检查都使用业务文案。
+3. 将响应证据弹窗内部校验文案纳入静态验收。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 将单条补证和批量补证弹窗中的 `new Error('empty evidence or source')` 改为 `new Error('请填写响应证据或来源')`。
+2. `infra/scripts/acceptance_tail_check.py --static-docs` 新增防退化检查，禁止标书页回退到英文内部校验错误。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新记录识别为 Loop-108。
+2. `cd frontend && pnpm lint` 通过。
+3. `cd frontend && pnpm build` 通过。
+4. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+5. AI pytest 通过：`237 passed`。
+6. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+7. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 本轮只修复响应证据补充弹窗的内部校验错误文案，不调整响应矩阵数据结构。
+2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。

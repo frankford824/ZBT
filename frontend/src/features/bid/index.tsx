@@ -1057,7 +1057,7 @@ export function BidWizardPage() {
         const nextSourceRefs = sourceRefsFromDrafts(sourceRefs)
         if (!nextEvidence && !nextSourceRefs.length) {
           message.warning('请填写响应证据或来源')
-          return Promise.reject(new Error('empty evidence or source'))
+          return Promise.reject(new Error('请填写响应证据或来源'))
         }
         return requirementCoverageMutation.mutateAsync({
           requirementId: row.id,
@@ -1109,7 +1109,7 @@ export function BidWizardPage() {
         const nextSourceRefs = sourceRefsFromDrafts(sourceRefs)
         if (!nextEvidence && !nextSourceRefs.length) {
           message.warning('请填写响应证据或来源')
-          return Promise.reject(new Error('empty evidence or source'))
+          return Promise.reject(new Error('请填写响应证据或来源'))
         }
         return requirementBatchCoverageMutation.mutateAsync({
           requirementIds: scope === 'selected' ? rows.map((row) => row.id) : undefined,
