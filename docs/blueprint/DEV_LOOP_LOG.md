@@ -6322,3 +6322,51 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是审批配置与审批意见输入边界，没有新增条件表达式引擎、拖拽排序 API 或独立审批级表。
 2. steps 仍按既有 JSONB 结构保存；后续若要支持复杂条件路由，应优先拆 schema 和校验器，而不是继续扩大自由 JSON。
+
+## Loop-130 / SaaS 账号与角色输入边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 SaaS 账号、成员、角色和通知已读写入链路，处理租户名、用户名、邮箱、密码、角色编码、角色名和通知 ID 数组缺少边界的问题。
+2. 避免超长账号资料、角色配置或批量通知 ID 在认证、RBAC、审计和前端团队管理链路间放大。
+3. 对 bcrypt 密码输入做 72 字节上限保护，避免长密码被底层算法静默截断后形成不可见的认证歧义。
+
+### 代码交付
+
+1. `backend/internal/platform/saas/store.go` 新增 SaaS 模块输入边界常量：租户名 255 字符、用户名 255 字符、邮箱 320 字符、密码 8-72 字节、角色编码 128 字符、角色名 255 字符、成员角色最多 20 个、通知已读 ID 最多 100 个。
+2. 新增 `normalizeTenantName()`、`normalizeUserName()`、`normalizeEmail()`、`normalizePassword()`、`normalizeRoleCodes()`、`normalizeNotificationIDs()` 和 `validateSaaSTextLength()`，统一在进入事务前完成归一化和中文友好的长度校验。
+3. `Register()` / `Login()` / `InviteMember()` 对账号身份和密码做写库或认证前校验，邮箱统一转小写并拒绝展示名、空白和超长地址。
+4. `UpdateTenant()` / `UpdateMember()` / `CreateRole()` / `UpdateRole()` / `DeleteRole()` 对租户、成员、角色字段和 UUID 做边界校验，避免无效请求触达数据库。
+5. `MarkNotificationsRead()` 对通知 ID 数组做数量上限、UUID 规范化和去重处理，拒绝全空白的批量请求。
+6. `validateModulePermissions()` 增加权限 map 数量上限，避免异常角色配置扩散到 RBAC 计算。
+7. `backend/internal/platform/saas/store_test.go` 新增账号注册、邮箱、密码、邀请成员、成员角色、角色字段和通知 ID 边界回归测试。
+8. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 SaaS 账号与角色输入边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/saas/store.go internal/platform/saas/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/saas
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/saas` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 SaaS 账号、成员、角色和通知输入边界，没有新增 SSO、账号生命周期策略或登录风控。
+2. 密码按 bcrypt 72 字节上限收敛，保持现有登录方式不变；后续如切换 Argon2 或外部身份源，应同步调整该边界。

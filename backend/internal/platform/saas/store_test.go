@@ -3,6 +3,7 @@ package saas
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
@@ -37,7 +38,9 @@ func TestLoginRejectsInvalidInputBeforeDB(t *testing.T) {
 		{tenantID: "", email: "admin@example.com", password: "password1"},
 		{tenantID: "not-a-uuid", email: "admin@example.com", password: "password1"},
 		{tenantID: "00000000-0000-4000-8000-000000000001", email: "", password: "password1"},
+		{tenantID: "00000000-0000-4000-8000-000000000001", email: "not-an-email", password: "password1"},
 		{tenantID: "00000000-0000-4000-8000-000000000001", email: "admin@example.com", password: ""},
+		{tenantID: "00000000-0000-4000-8000-000000000001", email: "admin@example.com", password: strings.Repeat("p", maxSaaSPasswordBytes+1)},
 	} {
 		_, err := store.Login(context.Background(), req.tenantID, req.email, req.password)
 		if !errors.Is(err, ErrInvalidRequest) {
@@ -88,11 +91,12 @@ func TestCreateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
 
 func TestUpdateRoleRejectsInvalidPermissionsBeforeDB(t *testing.T) {
 	store := NewStore(nil)
+	roleID := "00000000-0000-4000-8000-000000000003"
 	for _, permissions := range []map[string]rbac.Level{
 		{"admin": rbac.LevelFull},
 		{"team": rbac.Level("owner")},
 	} {
-		_, err := store.UpdateRole(context.Background(), "tenant-id", "role-id", "Manager", permissions)
+		_, err := store.UpdateRole(context.Background(), "tenant-id", roleID, "Manager", permissions)
 		if !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("expected ErrInvalidRequest for permissions=%v, got %v", permissions, err)
 		}
@@ -160,6 +164,191 @@ func TestInviteMemberRejectsBlankIdentity(t *testing.T) {
 		if !errors.Is(err, ErrInvalidRequest) {
 			t.Fatalf("expected ErrInvalidRequest for email=%q name=%q, got %v", req.email, req.name, err)
 		}
+	}
+}
+
+func TestRegisterRejectsOversizedIdentityBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	valid := RegisterRequest{
+		TenantName: "智标通",
+		AdminName:  "管理员",
+		Email:      "admin@example.com",
+		Password:   "password1",
+	}
+	for _, req := range []RegisterRequest{
+		{TenantName: strings.Repeat("租", maxSaaSTenantNameRunes+1), AdminName: valid.AdminName, Email: valid.Email, Password: valid.Password},
+		{TenantName: valid.TenantName, AdminName: strings.Repeat("管", maxSaaSUserNameRunes+1), Email: valid.Email, Password: valid.Password},
+		{TenantName: valid.TenantName, AdminName: valid.AdminName, Email: "not-an-email", Password: valid.Password},
+		{TenantName: valid.TenantName, AdminName: valid.AdminName, Email: valid.Email, Password: strings.Repeat("p", maxSaaSPasswordBytes+1)},
+		{TenantName: valid.TenantName, AdminName: valid.AdminName, Email: valid.Email, Password: "short"},
+	} {
+		_, err := store.Register(context.Background(), req)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for register request=%+v, got %v", req, err)
+		}
+	}
+}
+
+func TestNormalizeEmailLowercasesAndRejectsInvalidAddresses(t *testing.T) {
+	email, err := normalizeEmail(" ADMIN@Example.COM ")
+	if err != nil {
+		t.Fatalf("expected bounded email to normalize: %v", err)
+	}
+	if email != "admin@example.com" {
+		t.Fatalf("expected lowercase normalized email, got %q", email)
+	}
+	for _, value := range []string{
+		"not-an-email",
+		"Name <admin@example.com>",
+		"admin @example.com",
+		strings.Repeat("a", maxSaaSEmailRunes) + "@example.com",
+	} {
+		if _, err := normalizeEmail(value); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected invalid email %q to be rejected, got %v", value, err)
+		}
+	}
+}
+
+func TestNormalizePasswordBoundsBcryptInput(t *testing.T) {
+	for _, value := range []string{
+		strings.Repeat("p", minSaaSPasswordBytes),
+		strings.Repeat("p", maxSaaSPasswordBytes),
+	} {
+		password, err := normalizePassword(value)
+		if err != nil {
+			t.Fatalf("expected password length %d to be accepted: %v", len(value), err)
+		}
+		if password != value {
+			t.Fatalf("expected password to remain unchanged")
+		}
+	}
+	for _, value := range []string{
+		strings.Repeat("p", minSaaSPasswordBytes-1),
+		strings.Repeat("p", maxSaaSPasswordBytes+1),
+	} {
+		if _, err := normalizePassword(value); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected password length %d to be rejected, got %v", len(value), err)
+		}
+	}
+}
+
+func TestInviteMemberRejectsOversizedIdentityBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	for _, req := range []struct {
+		email    string
+		name     string
+		roleCode string
+		password string
+	}{
+		{email: "not-an-email", name: "Alice", roleCode: "viewer", password: "password1"},
+		{email: "alice@example.com", name: strings.Repeat("人", maxSaaSUserNameRunes+1), roleCode: "viewer", password: "password1"},
+		{email: "alice@example.com", name: "Alice", roleCode: strings.Repeat("r", maxSaaSRoleCodeRunes+1), password: "password1"},
+		{email: "alice@example.com", name: "Alice", roleCode: "viewer", password: strings.Repeat("p", maxSaaSPasswordBytes+1)},
+	} {
+		_, err := store.InviteMember(context.Background(), "tenant-id", req.email, req.name, req.roleCode, req.password)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for invite request=%+v, got %v", req, err)
+		}
+	}
+}
+
+func TestUpdateMemberRejectsInvalidRoleCodesBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	tenantID := "tenant-id"
+	memberID := "00000000-0000-4000-8000-000000000002"
+
+	_, err := store.UpdateMember(context.Background(), tenantID, "not-a-uuid", UpdateMemberRequest{Name: "Alice"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid member id to be rejected, got %v", err)
+	}
+
+	tooManyRoles := make([]string, maxSaaSRoleCodesPerMember+1)
+	for i := range tooManyRoles {
+		tooManyRoles[i] = "viewer"
+	}
+	for _, req := range []UpdateMemberRequest{
+		{RoleCodes: tooManyRoles},
+		{RoleCode: strings.Repeat("r", maxSaaSRoleCodeRunes+1)},
+		{Name: strings.Repeat("人", maxSaaSUserNameRunes+1)},
+	} {
+		_, err := store.UpdateMember(context.Background(), tenantID, memberID, req)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for member update=%+v, got %v", req, err)
+		}
+	}
+}
+
+func TestNormalizeRoleCodesDedupesAndBoundsValues(t *testing.T) {
+	codes, err := normalizeRoleCodes([]string{" viewer ", "viewer"}, "company_admin")
+	if err != nil {
+		t.Fatalf("expected bounded role codes to normalize: %v", err)
+	}
+	if got, want := strings.Join(codes, ","), "viewer,company_admin"; got != want {
+		t.Fatalf("expected normalized role codes %q, got %q", want, got)
+	}
+	if _, err := normalizeRoleCodes([]string{strings.Repeat("r", maxSaaSRoleCodeRunes+1)}, ""); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected oversized role code to be rejected, got %v", err)
+	}
+}
+
+func TestCreateAndUpdateRoleRejectOversizedFieldsBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	validPermissions := map[string]rbac.Level{"team": rbac.LevelRead}
+	roleID := "00000000-0000-4000-8000-000000000003"
+	for _, req := range []struct {
+		code string
+		name string
+	}{
+		{code: strings.Repeat("r", maxSaaSRoleCodeRunes+1), name: "Manager"},
+		{code: "manager", name: strings.Repeat("角", maxSaaSRoleNameRunes+1)},
+	} {
+		_, err := store.CreateRole(context.Background(), "tenant-id", req.code, req.name, validPermissions)
+		if !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for role create=%+v, got %v", req, err)
+		}
+	}
+
+	_, err := store.UpdateRole(context.Background(), "tenant-id", "not-a-uuid", "Manager", validPermissions)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid role id to be rejected, got %v", err)
+	}
+	_, err = store.UpdateRole(context.Background(), "tenant-id", roleID, strings.Repeat("角", maxSaaSRoleNameRunes+1), validPermissions)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected oversized role name to be rejected, got %v", err)
+	}
+}
+
+func TestMarkNotificationsReadRejectsInvalidIDsBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	tenantID := "tenant-id"
+	userID := "00000000-0000-4000-8000-000000000002"
+
+	tooManyIDs := make([]string, maxSaaSNotificationReadIDs+1)
+	for i := range tooManyIDs {
+		tooManyIDs[i] = "00000000-0000-4000-8000-000000000001"
+	}
+	for _, ids := range [][]string{
+		{"not-a-uuid"},
+		tooManyIDs,
+		{" ", "\t"},
+	} {
+		if _, err := store.MarkNotificationsRead(context.Background(), tenantID, userID, ids); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected ErrInvalidRequest for notification ids=%v, got %v", ids, err)
+		}
+	}
+}
+
+func TestNormalizeNotificationIDsDedupesAndCanonicalizes(t *testing.T) {
+	ids, err := normalizeNotificationIDs([]string{
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000001",
+		"00000000-0000-4000-8000-000000000002",
+	})
+	if err != nil {
+		t.Fatalf("expected bounded notification ids to normalize: %v", err)
+	}
+	if got, want := strings.Join(ids, ","), "00000000-0000-4000-8000-000000000001,00000000-0000-4000-8000-000000000002"; got != want {
+		t.Fatalf("expected normalized notification ids %q, got %q", want, got)
 	}
 }
 

@@ -513,6 +513,37 @@ def check_static_docs() -> None:
     ):
         require(needle in approval_store_tests, f"Approval store missing business input boundary regression test: {needle}")
 
+    saas_store = (ROOT / "backend/internal/platform/saas/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxSaaSTenantNameRunes",
+        "maxSaaSUserNameRunes",
+        "maxSaaSEmailRunes",
+        "maxSaaSPasswordBytes",
+        "maxSaaSRoleCodesPerMember",
+        "maxSaaSNotificationReadIDs",
+        "normalizeEmail",
+        "normalizePassword",
+        "normalizeRoleCodes",
+        "normalizeNotificationIDs",
+        "validateSaaSTextLength",
+        "utf8.RuneCountInString",
+        "mail.ParseAddress",
+    ):
+        require(needle in saas_store, f"SaaS store missing account input boundary: {needle}")
+    saas_store_tests = (ROOT / "backend/internal/platform/saas/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestRegisterRejectsOversizedIdentityBeforeDB",
+        "TestNormalizeEmailLowercasesAndRejectsInvalidAddresses",
+        "TestNormalizePasswordBoundsBcryptInput",
+        "TestInviteMemberRejectsOversizedIdentityBeforeDB",
+        "TestUpdateMemberRejectsInvalidRoleCodesBeforeDB",
+        "TestNormalizeRoleCodesDedupesAndBoundsValues",
+        "TestCreateAndUpdateRoleRejectOversizedFieldsBeforeDB",
+        "TestMarkNotificationsReadRejectsInvalidIDsBeforeDB",
+        "TestNormalizeNotificationIDsDedupesAndCanonicalizes",
+    ):
+        require(needle in saas_store_tests, f"SaaS store missing account input boundary regression test: {needle}")
+
     compliance_page = (ROOT / "frontend/src/features/compliance/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("规则编号", "填写标书编号", "title: '编码'"):
         require(forbidden not in compliance_page, f"Compliance UI exposes technical field: {forbidden}")

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/google/uuid"
@@ -17,6 +19,19 @@ import (
 var (
 	ErrNotFound       = errors.New("not found")
 	ErrInvalidRequest = errors.New("invalid request")
+)
+
+const (
+	maxSaaSTenantNameRunes     = 255
+	maxSaaSUserNameRunes       = 255
+	maxSaaSEmailRunes          = 320
+	maxSaaSPasswordBytes       = 72
+	minSaaSPasswordBytes       = 8
+	maxSaaSRoleCodeRunes       = 128
+	maxSaaSRoleNameRunes       = 255
+	maxSaaSRoleCodesPerMember  = 20
+	maxSaaSModulePermissions   = 8
+	maxSaaSNotificationReadIDs = 100
 )
 
 type Store struct {
@@ -84,16 +99,25 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, error) {
-	tenantName := strings.TrimSpace(req.TenantName)
-	adminName := strings.TrimSpace(req.AdminName)
-	email := strings.ToLower(strings.TrimSpace(req.Email))
-	password := strings.TrimSpace(req.Password)
-	if tenantName == "" || adminName == "" || email == "" || len(password) < 8 {
+	tenantName, err := normalizeTenantName(req.TenantName)
+	if err != nil {
+		return Session{}, err
+	}
+	adminName, err := normalizeUserName(req.AdminName)
+	if err != nil {
+		return Session{}, err
+	}
+	email, err := normalizeEmail(req.Email)
+	if err != nil {
+		return Session{}, err
+	}
+	password, err := normalizePassword(req.Password)
+	if err != nil {
 		return Session{}, ErrInvalidRequest
 	}
 	tenantID := uuid.NewString()
 	var session Session
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var exists bool
 		if err := tx.QueryRow(ctx, `select exists(select 1 from users where lower(email) = lower($1))`, email).Scan(&exists); err != nil {
 			return err
@@ -156,17 +180,20 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, err
 }
 
 func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Session, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	email = strings.ToLower(strings.TrimSpace(email))
-	password = strings.TrimSpace(password)
-	if tenantID == "" || email == "" || password == "" {
-		return Session{}, ErrInvalidRequest
+	tenantID, err := normalizeUUID(tenantID)
+	if err != nil {
+		return Session{}, err
 	}
-	if _, err := uuid.Parse(tenantID); err != nil {
+	email, err = normalizeEmail(email)
+	if err != nil {
+		return Session{}, err
+	}
+	password, err = normalizePassword(password)
+	if err != nil {
 		return Session{}, ErrInvalidRequest
 	}
 	var session Session
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var memberID string
 		err := tx.QueryRow(ctx, `
 			select
@@ -274,23 +301,20 @@ func (s *Store) SessionByUserRole(ctx context.Context, tenantID, userID, roleID 
 }
 
 func (s *Store) RevokeUserSessions(ctx context.Context, tenantID, userID string) error {
-	tenantID = strings.TrimSpace(tenantID)
-	userID = strings.TrimSpace(userID)
-	if tenantID == "" || userID == "" {
-		return ErrInvalidRequest
+	normalizedTenantID, err := normalizeUUID(tenantID)
+	if err != nil {
+		return err
 	}
-	if _, err := uuid.Parse(tenantID); err != nil {
-		return ErrInvalidRequest
+	normalizedUserID, err := normalizeUUID(userID)
+	if err != nil {
+		return err
 	}
-	if _, err := uuid.Parse(userID); err != nil {
-		return ErrInvalidRequest
-	}
-	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	return s.withTenant(ctx, normalizedTenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			update tenant_members
 			set session_revoked_at = clock_timestamp(), updated_at = now()
 			where tenant_id = $1 and user_id = $2
-		`, tenantID, userID)
+		`, normalizedTenantID, normalizedUserID)
 		if err != nil {
 			return err
 		}
@@ -313,8 +337,12 @@ func (s *Store) GetTenant(ctx context.Context, tenantID string) (Tenant, error) 
 }
 
 func (s *Store) UpdateTenant(ctx context.Context, tenantID, name string) (Tenant, error) {
+	name, err := normalizeTenantName(name)
+	if err != nil {
+		return Tenant{}, err
+	}
 	var tenant Tenant
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 			update tenants
 			set name = $2, updated_at = now()
@@ -375,18 +403,28 @@ func (s *Store) ListMembers(ctx context.Context, tenantID string) ([]Member, err
 }
 
 func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCode, initialPassword string) (Member, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	name = strings.TrimSpace(name)
-	roleCode = strings.TrimSpace(roleCode)
-	initialPassword = strings.TrimSpace(initialPassword)
-	if email == "" || name == "" || len(initialPassword) < 8 {
-		return Member{}, ErrInvalidRequest
+	email, err := normalizeEmail(email)
+	if err != nil {
+		return Member{}, err
 	}
+	name, err = normalizeUserName(name)
+	if err != nil {
+		return Member{}, err
+	}
+	roleCode = strings.TrimSpace(roleCode)
 	if roleCode == "" {
 		roleCode = "viewer"
 	}
+	roleCode, err = normalizeRoleCode(roleCode)
+	if err != nil {
+		return Member{}, err
+	}
+	initialPassword, err = normalizePassword(initialPassword)
+	if err != nil {
+		return Member{}, err
+	}
 	var member Member
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var role Role
 		if err := tx.QueryRow(ctx, `select id::text, code, name from roles where tenant_id = $1 and code = $2`, tenantID, roleCode).Scan(&role.ID, &role.Code, &role.Name); err != nil {
 			return err
@@ -426,8 +464,24 @@ func (s *Store) InviteMember(ctx context.Context, tenantID, email, name, roleCod
 }
 
 func (s *Store) UpdateMember(ctx context.Context, tenantID, memberID string, req UpdateMemberRequest) (Member, error) {
+	if _, err := normalizeUUID(memberID); err != nil {
+		return Member{}, err
+	}
+	name := ""
+	if strings.TrimSpace(req.Name) != "" {
+		normalizedName, err := normalizeUserName(req.Name)
+		if err != nil {
+			return Member{}, err
+		}
+		name = normalizedName
+	}
+	roleCodesRequested := req.RoleCodes != nil || strings.TrimSpace(req.RoleCode) != ""
+	roleCodes, err := normalizeRoleCodes(req.RoleCodes, req.RoleCode)
+	if err != nil {
+		return Member{}, err
+	}
 	var member Member
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		var userID string
 		if err := tx.QueryRow(ctx, `
 			select user_id::text
@@ -436,7 +490,7 @@ func (s *Store) UpdateMember(ctx context.Context, tenantID, memberID string, req
 		`, tenantID, memberID).Scan(&userID); err != nil {
 			return err
 		}
-		if name := strings.TrimSpace(req.Name); name != "" {
+		if name != "" {
 			if _, err := tx.Exec(ctx, `
 				update users
 				set name = $2, updated_at = now()
@@ -456,8 +510,7 @@ func (s *Store) UpdateMember(ctx context.Context, tenantID, memberID string, req
 		} else if strings.TrimSpace(req.Status) != "" {
 			return ErrInvalidRequest
 		}
-		roleCodes := normalizeRoleCodes(req.RoleCodes, req.RoleCode)
-		if req.RoleCodes != nil || strings.TrimSpace(req.RoleCode) != "" {
+		if roleCodesRequested {
 			if len(roleCodes) == 0 {
 				return ErrInvalidRequest
 			}
@@ -564,16 +617,19 @@ func (s *Store) ListRoles(ctx context.Context, tenantID string) ([]Role, error) 
 }
 
 func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, permissions map[string]rbac.Level) (Role, error) {
-	code = strings.TrimSpace(code)
-	name = strings.TrimSpace(name)
-	if code == "" || name == "" {
-		return Role{}, ErrInvalidRequest
+	code, err := normalizeRoleCode(code)
+	if err != nil {
+		return Role{}, err
+	}
+	name, err = normalizeRoleName(name)
+	if err != nil {
+		return Role{}, err
 	}
 	if err := validateModulePermissions(permissions); err != nil {
 		return Role{}, err
 	}
 	var role Role
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
 			insert into roles (tenant_id, code, name)
 			values ($1, $2, $3)
@@ -591,6 +647,16 @@ func (s *Store) CreateRole(ctx context.Context, tenantID, code, name string, per
 }
 
 func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, permissions map[string]rbac.Level) (Role, error) {
+	if _, err := normalizeUUID(roleID); err != nil {
+		return Role{}, err
+	}
+	if strings.TrimSpace(name) != "" {
+		normalizedName, err := normalizeRoleName(name)
+		if err != nil {
+			return Role{}, err
+		}
+		name = normalizedName
+	}
 	if permissions != nil {
 		if err := validateModulePermissions(permissions); err != nil {
 			return Role{}, err
@@ -628,6 +694,10 @@ func (s *Store) UpdateRole(ctx context.Context, tenantID, roleID, name string, p
 }
 
 func (s *Store) DeleteRole(ctx context.Context, tenantID, roleID string) error {
+	roleID, err := normalizeUUID(roleID)
+	if err != nil {
+		return err
+	}
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `delete from role_permissions where tenant_id = $1 and role_id = $2`, tenantID, roleID); err != nil {
 			return err
@@ -676,9 +746,13 @@ func (s *Store) ListNotifications(ctx context.Context, tenantID, userID string) 
 }
 
 func (s *Store) MarkNotificationsRead(ctx context.Context, tenantID, userID string, ids []string) (int64, error) {
+	normalizedIDs, err := normalizeNotificationIDs(ids)
+	if err != nil {
+		return 0, err
+	}
 	var affected int64
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		if len(ids) == 0 {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if len(normalizedIDs) == 0 {
 			tag, err := tx.Exec(ctx, `
 				update notifications
 				set read_at = coalesce(read_at, now()), updated_at = now()
@@ -694,7 +768,7 @@ func (s *Store) MarkNotificationsRead(ctx context.Context, tenantID, userID stri
 				update notifications
 				set read_at = coalesce(read_at, now()), updated_at = now()
 				where tenant_id = $1 and (user_id is null or user_id = $2) and id::text = any($3)
-			`, tenantID, userID, ids)
+			`, tenantID, userID, normalizedIDs)
 			if err != nil {
 				return err
 			}
@@ -839,6 +913,9 @@ func ensureTenantManagementAvailable(activeTeamAdmins int) error {
 }
 
 func validateModulePermissions(permissions map[string]rbac.Level) error {
+	if len(permissions) > maxSaaSModulePermissions {
+		return ErrInvalidRequest
+	}
 	for module, level := range permissions {
 		if !rbac.ValidModule(module) || !validLevel(level) {
 			return ErrInvalidRequest
@@ -983,6 +1060,74 @@ func memberByID(ctx context.Context, tx pgx.Tx, tenantID, memberID string) (Memb
 	return *member, nil
 }
 
+func normalizeTenantName(value string) (string, error) {
+	return normalizeRequiredSaaSText(value, maxSaaSTenantNameRunes)
+}
+
+func normalizeUserName(value string) (string, error) {
+	return normalizeRequiredSaaSText(value, maxSaaSUserNameRunes)
+}
+
+func normalizeRoleCode(value string) (string, error) {
+	return normalizeRequiredSaaSText(value, maxSaaSRoleCodeRunes)
+}
+
+func normalizeRoleName(value string) (string, error) {
+	return normalizeRequiredSaaSText(value, maxSaaSRoleNameRunes)
+}
+
+func normalizeRequiredSaaSText(value string, maxRunes int) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", ErrInvalidRequest
+	}
+	if err := validateSaaSTextLength(value, maxRunes); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func validateSaaSTextLength(value string, maxRunes int) error {
+	if maxRunes <= 0 {
+		return ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(value)) > maxRunes {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func normalizeUUID(value string) (string, error) {
+	id, err := uuid.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", ErrInvalidRequest
+	}
+	return id.String(), nil
+}
+
+func normalizeEmail(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", ErrInvalidRequest
+	}
+	if err := validateSaaSTextLength(value, maxSaaSEmailRunes); err != nil {
+		return "", err
+	}
+	parsed, err := mail.ParseAddress(value)
+	if err != nil || parsed.Address != value || strings.ContainsAny(value, " \t\r\n") {
+		return "", ErrInvalidRequest
+	}
+	return value, nil
+}
+
+func normalizePassword(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if len([]byte(value)) < minSaaSPasswordBytes || len([]byte(value)) > maxSaaSPasswordBytes {
+		return "", ErrInvalidRequest
+	}
+	return value, nil
+}
+
 func normalizeMemberStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
@@ -994,16 +1139,59 @@ func normalizeMemberStatus(value string) string {
 	}
 }
 
-func normalizeRoleCodes(values []string, single string) []string {
+func normalizeRoleCodes(values []string, single string) ([]string, error) {
+	if len(values) > maxSaaSRoleCodesPerMember {
+		return nil, ErrInvalidRequest
+	}
 	seen := map[string]bool{}
 	codes := []string{}
 	for _, value := range append(values, single) {
 		code := strings.TrimSpace(value)
-		if code == "" || seen[code] {
+		if code == "" {
 			continue
 		}
-		seen[code] = true
-		codes = append(codes, code)
+		normalized, err := normalizeRoleCode(code)
+		if err != nil {
+			return nil, err
+		}
+		if seen[normalized] {
+			continue
+		}
+		if len(codes) >= maxSaaSRoleCodesPerMember {
+			return nil, ErrInvalidRequest
+		}
+		seen[normalized] = true
+		codes = append(codes, normalized)
 	}
-	return codes
+	return codes, nil
+}
+
+func normalizeNotificationIDs(ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if len(ids) > maxSaaSNotificationReadIDs {
+		return nil, ErrInvalidRequest
+	}
+	seen := map[string]bool{}
+	normalized := []string{}
+	for _, value := range ids {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		id, err := normalizeUUID(value)
+		if err != nil {
+			return nil, err
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		normalized = append(normalized, id)
+	}
+	if len(normalized) == 0 {
+		return nil, ErrInvalidRequest
+	}
+	return normalized, nil
 }
