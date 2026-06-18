@@ -6506,3 +6506,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是手工/外部来源标讯写入边界，没有新增招标文件解析能力、OCR 或外部标讯抓取适配器。
 2. requirements/risk_flags 仍按字符串数组保存；后续若需要评分项级结构，应迁移为明确 schema，而不是扩大数组自由文本。
+
+## Loop-134 / 标讯来源身份字段边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 Tender 来源写入链路，处理来源名称、来源类型和 URL 只有基础合法性校验但缺少长度边界的问题。
+2. 避免超长来源名称、来源类型或 URL 写入 `tender_sources`，再扩散到监控设置、标讯列表和来源检测请求。
+3. 让标讯 `source_url` 和来源 `url` 共用同一 URL 长度限制，减少同类输入边界分叉。
+
+### 代码交付
+
+1. `backend/internal/platform/tender/store.go` 新增来源名称 255 字符、来源类型 128 字符、URL 2048 字符边界常量。
+2. `normalizeSourceWriteRequest()` 改用已有文本边界 helper 归一化来源名称和来源类型，保留空来源类型默认“其他”的既有行为。
+3. `validHTTPURL()` 增加 URL 长度上限，因此标讯 `source_url` 与来源 `url` 都会在进入数据库或检测请求前被拦截。
+4. `backend/internal/platform/tender/store_test.go` 新增来源身份 trim/default、写库前拒绝超长来源名称/类型/URL、标讯 source_url 超长拒绝回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加来源身份字段与 URL 长度边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/tender/store.go internal/platform/tender/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是标讯来源身份字段和 URL 长度边界，没有新增来源检测策略、抓取调度或平台认证能力。
+2. URL 上限采用 2048 字符的通用边界；若后续接入特定平台长查询参数，应改为服务端配置引用或请求体参数，而不是保存超长 URL。

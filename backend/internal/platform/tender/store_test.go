@@ -130,6 +130,7 @@ func TestNormalizeTenderWriteRequestValidatesOptionalSourceURL(t *testing.T) {
 		"http://127.0.0.1/admin",
 		"http://100.64.0.1/admin",
 		"https://user@example.com/tender",
+		"https://example.com/" + strings.Repeat("a", maxTenderURLRunes),
 	} {
 		req := base
 		req.SourceURL = value
@@ -358,6 +359,55 @@ func TestMergeSourceUpdateRequestPreservesOmittedFields(t *testing.T) {
 	}
 	if normalized.SourceType != "招标平台" || normalized.URL != "https://example.com/source" {
 		t.Fatalf("expected omitted source fields to be preserved, got %+v", normalized)
+	}
+}
+
+func TestNormalizeSourceWriteRequestTrimsIdentityAndDefaultsType(t *testing.T) {
+	normalized, err := normalizeSourceWriteRequest(CreateSourceRequest{
+		Name:   " 全国招标来源 ",
+		URL:    " https://example.com/source ",
+		Status: " active ",
+	})
+	if err != nil {
+		t.Fatalf("expected bounded source request to normalize: %v", err)
+	}
+	if normalized.Name != "全国招标来源" || normalized.URL != "https://example.com/source" {
+		t.Fatalf("expected source name and URL to be trimmed, got %+v", normalized)
+	}
+	if normalized.SourceType != "其他" {
+		t.Fatalf("expected blank source type to default, got %q", normalized.SourceType)
+	}
+
+	normalized, err = normalizeSourceWriteRequest(CreateSourceRequest{
+		Name:       "全国招标来源",
+		SourceType: " 招标平台 ",
+		URL:        "https://example.com/source",
+		Status:     "active",
+	})
+	if err != nil {
+		t.Fatalf("expected bounded source type to normalize: %v", err)
+	}
+	if normalized.SourceType != "招标平台" {
+		t.Fatalf("expected source type to be trimmed, got %q", normalized.SourceType)
+	}
+}
+
+func TestCreateSourceRejectsOversizedIdentityBeforeDB(t *testing.T) {
+	store := NewStore(nil)
+	valid := CreateSourceRequest{
+		Name:       "全国招标来源",
+		SourceType: "招标平台",
+		URL:        "https://example.com/source",
+		Status:     "active",
+	}
+	for _, req := range []CreateSourceRequest{
+		{Name: strings.Repeat("源", maxTenderSourceNameRunes+1), SourceType: valid.SourceType, URL: valid.URL, Status: valid.Status},
+		{Name: valid.Name, SourceType: strings.Repeat("类", maxTenderSourceTypeRunes+1), URL: valid.URL, Status: valid.Status},
+		{Name: valid.Name, SourceType: valid.SourceType, URL: "https://example.com/" + strings.Repeat("a", maxTenderURLRunes), Status: valid.Status},
+	} {
+		if _, err := store.CreateSource(context.Background(), "tenant-id", req); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("expected oversized source request to be rejected before DB, got %v for %+v", err, req)
+		}
 	}
 }
 

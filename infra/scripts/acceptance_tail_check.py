@@ -444,12 +444,16 @@ def check_static_docs() -> None:
         "maxTenderListItems",
         "maxTenderMetadataJSONBytes",
         "maxTenderBudgetAmount",
+        "maxTenderSourceNameRunes",
+        "maxTenderSourceTypeRunes",
+        "maxTenderURLRunes",
         "normalizeTenderRequiredText",
         "normalizeTenderOptionalText",
         "normalizeTenderTextList",
         "normalizeTenderMetadata",
         "validateOptionalTenderAmount",
         "math.IsNaN",
+        "len([]rune(value)) > maxTenderURLRunes",
     ):
         require(needle in tender_store, f"Tender write request missing business input boundary: {needle}")
     for needle in (
@@ -457,6 +461,8 @@ def check_static_docs() -> None:
         "TestCreateTenderRejectsOversizedBusinessFieldsBeforeDB",
         "TestNormalizeTenderWriteRequestRejectsOversizedBusinessFields",
         "TestNormalizeTenderWriteRequestRejectsInvalidMetadataAndBudget",
+        "TestNormalizeSourceWriteRequestTrimsIdentityAndDefaultsType",
+        "TestCreateSourceRejectsOversizedIdentityBeforeDB",
     ):
         require(needle in tender_store_tests, f"Tender write request missing business input boundary regression test: {needle}")
 

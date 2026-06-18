@@ -41,6 +41,9 @@ const (
 	maxTenderMetadataKeyRunes      = 128
 	maxTenderMetadataJSONBytes     = 16 * 1024
 	maxTenderBudgetAmount          = 999_999_999_999.99
+	maxTenderSourceNameRunes       = 255
+	maxTenderSourceTypeRunes       = 128
+	maxTenderURLRunes              = 2048
 )
 
 type Store struct {
@@ -831,14 +834,24 @@ func mergeSourceUpdateRequest(current Source, req UpdateSourceRequest) CreateSou
 }
 
 func normalizeSourceWriteRequest(req CreateSourceRequest) (normalizedSourceWriteRequest, error) {
-	name := strings.TrimSpace(req.Name)
 	url := strings.TrimSpace(req.URL)
-	if name == "" || !validHTTPURL(url) {
+	name, err := normalizeTenderRequiredText(req.Name, maxTenderSourceNameRunes)
+	if err != nil {
+		return normalizedSourceWriteRequest{}, err
+	}
+	if !validHTTPURL(url) {
 		return normalizedSourceWriteRequest{}, ErrInvalidRequest
 	}
 	status, err := normalizeSourceStatus(req.Status)
 	if err != nil {
 		return normalizedSourceWriteRequest{}, err
+	}
+	sourceType, err := normalizeTenderOptionalText(req.SourceType, maxTenderSourceTypeRunes)
+	if err != nil {
+		return normalizedSourceWriteRequest{}, err
+	}
+	if sourceType == "" {
+		sourceType = "其他"
 	}
 	config, err := normalizeSourceConfig(req.Config)
 	if err != nil {
@@ -846,7 +859,7 @@ func normalizeSourceWriteRequest(req CreateSourceRequest) (normalizedSourceWrite
 	}
 	return normalizedSourceWriteRequest{
 		Name:       name,
-		SourceType: defaultString(req.SourceType, "其他"),
+		SourceType: sourceType,
 		URL:        url,
 		Status:     status,
 		Config:     config,
@@ -1035,7 +1048,11 @@ func clampScore(value int) int {
 }
 
 func validHTTPURL(value string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(value))
+	value = strings.TrimSpace(value)
+	if value == "" || len([]rune(value)) > maxTenderURLRunes {
+		return false
+	}
+	parsed, err := url.Parse(value)
 	if err != nil {
 		return false
 	}
