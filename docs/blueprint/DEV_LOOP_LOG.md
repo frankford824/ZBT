@@ -3535,3 +3535,39 @@ git diff --check
 
 1. 本轮不实现 PDF/Word 预览器内文本高亮；先提供可复制定位信息和页码预览。
 2. 人工录入且缺少文件或文档 ID 的来源仍只能展示和复制定位，不能伪装成可打开原文。
+
+## Loop-63 / 解析确认字段编辑闭环 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐解析结果确认前只能提交原始 `structured_result`、无法修正核心业务字段的问题。
+2. 让人工确认后的项目名称、截止时间、标书类型和关键要求进入后续目录、素材和响应矩阵使用的结构化事实。
+3. 保持解析确认页使用业务口径，不暴露 provider、model、schema、token 等技术信息。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 新增确认信息草稿，绑定当前解析结果版本，展示项目名称、投标截止、标书类型、资格要求、评分要点和否决风险。
+2. 确认提交前会把人工修正写回 `structured_result.project_name/deadline/bid_type/qualification_requirements/scoring_points/invalid_clause_risks`，并同步到 `modules.basic/qualification/evaluation/invalid_risk.fields`。
+3. 资格要求、评分要点和否决风险发生人工修改时，会同步替换对应模块的 `requirement_items`，后端确认后响应矩阵不再沿用编辑前条目。
+4. `parse_metadata.confirm_overrides` 记录本次人工调整字段和确认时间，便于后续审计。
+5. `frontend/src/index.css` 新增确认信息区响应式网格，移动端降为单列，长标签和输入内容不撑裂布局。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 更新 P1 解析结果页当前落地状态。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+
+### 偏离蓝图
+
+1. 本轮先补核心字段确认编辑，不实现所有六模块字段的逐项编辑、字段置信度手动标记和页内原文高亮。
+2. 本轮未启动完整 docker 栈做运行态端到端验收。

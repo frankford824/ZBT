@@ -139,6 +139,15 @@ type DraftState<T> = {
 type RequirementFilter = 'all' | 'mandatory' | 'review' | 'covered'
 type RequirementEvidenceFilter = 'all' | 'missing_evidence' | 'missing_source' | 'complete'
 
+type ParseConfirmDraft = {
+  projectName: string
+  deadline: string
+  bidType: BidFormValues['bidType']
+  qualificationRequirements: string
+  scoringPoints: string
+  invalidClauseRisks: string
+}
+
 export function BidNewPage() {
   const navigate = useNavigate()
   const { message } = AntApp.useApp()
@@ -501,6 +510,7 @@ export function BidWizardPage() {
   const [materialDraftState, setMaterialDraftState] = useState<
     DraftState<{ selectedRefs: unknown[]; notes: string }> | null
   >(null)
+  const [parseConfirmDraftState, setParseConfirmDraftState] = useState<DraftState<ParseConfirmDraft> | null>(null)
   const [requirementFilter, setRequirementFilter] = useState<RequirementFilter>('all')
   const [requirementEvidenceFilter, setRequirementEvidenceFilter] = useState<RequirementEvidenceFilter>('all')
   const [selectedRequirementKeys, setSelectedRequirementKeys] = useState<string[]>([])
@@ -529,6 +539,27 @@ export function BidWizardPage() {
       return status === 'queued' || status === 'processing' ? 2000 : false
     },
   })
+  const parseConfirmSourceKey = parseResult.data
+    ? `${parseResult.data.id}:${parseResult.data.updated_at}:${parseResult.data.status}`
+    : ''
+  const parseConfirmServerDraft = useMemo(
+    () => parseConfirmDraftFromStructuredResult(parseResult.data?.structured_result),
+    [parseResult.data?.structured_result],
+  )
+  const parseConfirmDraft =
+    parseConfirmDraftState?.sourceKey === parseConfirmSourceKey
+      ? parseConfirmDraftState.value
+      : parseConfirmServerDraft
+  const parseConfirmEditedFields = parseConfirmChangedFieldLabels(parseConfirmServerDraft, parseConfirmDraft)
+  const canEditParseConfirm =
+    canWrite && Boolean(parseResult.data) && ['ready', 'confirmed'].includes(parseResult.data?.status ?? 'queued')
+  const setParseConfirmDraftField = (field: keyof ParseConfirmDraft, value: ParseConfirmDraft[keyof ParseConfirmDraft]) => {
+    setParseConfirmDraftState((currentDraft) => {
+      const currentValue =
+        currentDraft?.sourceKey === parseConfirmSourceKey ? currentDraft.value : parseConfirmServerDraft
+      return { sourceKey: parseConfirmSourceKey, value: { ...currentValue, [field]: value } }
+    })
+  }
   const bidRequirements = useQuery({
     queryKey: ['bid-requirements', bidId],
     queryFn: () => fetchBidRequirements(bidId),
@@ -657,7 +688,12 @@ export function BidWizardPage() {
   })
   const confirmParseMutation = useMutation({
     mutationFn: () => {
-      return confirmBidParseResult(bidId, { structured_result: parseResult.data?.structured_result })
+      const structuredResult = applyParseConfirmDraft(
+        parseResult.data?.structured_result,
+        parseConfirmServerDraft,
+        parseConfirmDraft,
+      )
+      return confirmBidParseResult(bidId, { structured_result: structuredResult })
     },
     onSuccess: async () => {
       message.success('解析结果已确认')
@@ -1112,7 +1148,7 @@ export function BidWizardPage() {
                 <Button
                   icon={<CheckOutlined />}
                   loading={confirmParseMutation.isPending}
-                  disabled={!parseResult.data || !['ready', 'confirmed'].includes(parseResult.data.status)}
+                  disabled={!canEditParseConfirm}
                   onClick={() => confirmParseMutation.mutate()}
                 >
                   确认文件信息
@@ -1122,6 +1158,77 @@ export function BidWizardPage() {
                 </Tag>
               </Space>
               {parseFailureMessage ? <Alert type="error" showIcon message={parseFailureMessage} /> : null}
+              <div className="parse-confirm-panel">
+                <div className="parse-confirm-head">
+                  <Typography.Title level={5}>确认信息</Typography.Title>
+                  {parseConfirmEditedFields.length ? (
+                    <Tag color="gold">已调整 {parseConfirmEditedFields.join('、')}</Tag>
+                  ) : null}
+                </div>
+                <div className="parse-confirm-grid">
+                  <label className="parse-confirm-field">
+                    <span>项目名称</span>
+                    <Input
+                      value={parseConfirmDraft.projectName}
+                      disabled={!canEditParseConfirm}
+                      placeholder="项目名称"
+                      onChange={(event) => setParseConfirmDraftField('projectName', event.target.value)}
+                    />
+                  </label>
+                  <label className="parse-confirm-field">
+                    <span>投标截止</span>
+                    <Input
+                      value={parseConfirmDraft.deadline}
+                      disabled={!canEditParseConfirm}
+                      placeholder="投标截止"
+                      onChange={(event) => setParseConfirmDraftField('deadline', event.target.value)}
+                    />
+                  </label>
+                  <label className="parse-confirm-field">
+                    <span>标书类型</span>
+                    <Select
+                      value={parseConfirmDraft.bidType}
+                      disabled={!canEditParseConfirm}
+                      onChange={(value) => setParseConfirmDraftField('bidType', value)}
+                      options={[
+                        { label: '综合标书', value: 'combined' },
+                        { label: '分离标书', value: 'separated' },
+                        { label: '自定义组合', value: 'custom' },
+                      ]}
+                    />
+                  </label>
+                  <label className="parse-confirm-field parse-confirm-field-wide">
+                    <span>资格要求</span>
+                    <Input.TextArea
+                      value={parseConfirmDraft.qualificationRequirements}
+                      disabled={!canEditParseConfirm}
+                      placeholder="资格要求"
+                      autoSize={{ minRows: 2, maxRows: 5 }}
+                      onChange={(event) => setParseConfirmDraftField('qualificationRequirements', event.target.value)}
+                    />
+                  </label>
+                  <label className="parse-confirm-field parse-confirm-field-wide">
+                    <span>评分要点</span>
+                    <Input.TextArea
+                      value={parseConfirmDraft.scoringPoints}
+                      disabled={!canEditParseConfirm}
+                      placeholder="评分要点"
+                      autoSize={{ minRows: 2, maxRows: 5 }}
+                      onChange={(event) => setParseConfirmDraftField('scoringPoints', event.target.value)}
+                    />
+                  </label>
+                  <label className="parse-confirm-field parse-confirm-field-wide">
+                    <span>否决风险</span>
+                    <Input.TextArea
+                      value={parseConfirmDraft.invalidClauseRisks}
+                      disabled={!canEditParseConfirm}
+                      placeholder="否决风险"
+                      autoSize={{ minRows: 2, maxRows: 5 }}
+                      onChange={(event) => setParseConfirmDraftField('invalidClauseRisks', event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
               <Table
                 size="small"
                 pagination={false}
@@ -1769,6 +1876,263 @@ function taskFailureMessage(
   if (!task || (task.status !== 'failed' && task.status !== 'cancelled')) return ''
   if (task.error_message?.trim()) return task.error_message.trim()
   return task.status === 'cancelled' ? '任务已取消' : fallback
+}
+
+const parseConfirmFieldLabels: Record<keyof ParseConfirmDraft, string> = {
+  projectName: '项目名称',
+  deadline: '投标截止',
+  bidType: '标书类型',
+  qualificationRequirements: '资格要求',
+  scoringPoints: '评分要点',
+  invalidClauseRisks: '否决风险',
+}
+
+function parseConfirmDraftFromStructuredResult(result: Record<string, unknown> | undefined): ParseConfirmDraft {
+  const modules = objectRecord(result?.modules)
+  const basicFields = parseModuleFields(modules, 'basic')
+  const qualificationFields = parseModuleFields(modules, 'qualification')
+  const evaluationFields = parseModuleFields(modules, 'evaluation')
+  const invalidRiskFields = parseModuleFields(modules, 'invalid_risk')
+  return {
+    projectName: parseConfirmText(result?.project_name ?? basicFields?.project_name),
+    deadline: parseConfirmText(result?.deadline ?? basicFields?.deadline),
+    bidType: normalizeParseConfirmBidType(result?.bid_type ?? basicFields?.bid_type),
+    qualificationRequirements: parseConfirmListText(
+      result?.qualification_requirements ?? qualificationFields?.qualification_requirements,
+    ),
+    scoringPoints: parseConfirmListText(result?.scoring_points ?? evaluationFields?.scoring_points),
+    invalidClauseRisks: parseConfirmListText(result?.invalid_clause_risks ?? invalidRiskFields?.invalid_clause_risks),
+  }
+}
+
+function applyParseConfirmDraft(
+  structuredResult: Record<string, unknown> | undefined,
+  originalDraft: ParseConfirmDraft,
+  draft: ParseConfirmDraft,
+): Record<string, unknown> {
+  const next = cloneStructuredResult(structuredResult)
+  const qualificationRequirements = parseConfirmTextList(draft.qualificationRequirements)
+  const scoringPoints = parseConfirmTextList(draft.scoringPoints)
+  const invalidClauseRisks = parseConfirmTextList(draft.invalidClauseRisks)
+  next.project_name = draft.projectName.trim()
+  next.deadline = draft.deadline.trim()
+  next.bid_type = draft.bidType
+  next.qualification_requirements = qualificationRequirements
+  next.scoring_points = scoringPoints
+  next.invalid_clause_risks = invalidClauseRisks
+  setParseModuleFields(next, 'basic', '基础信息', {
+    project_name: next.project_name,
+    deadline: next.deadline,
+    bid_type: next.bid_type,
+  })
+  setParseModuleFields(next, 'qualification', '资格要求', {
+    qualification_requirements: qualificationRequirements,
+  })
+  setParseModuleFields(next, 'evaluation', '评审办法', {
+    scoring_points: scoringPoints,
+  })
+  setParseModuleFields(next, 'invalid_risk', '否决风险', {
+    invalid_clause_risks: invalidClauseRisks,
+  })
+  syncParseConfirmRequirementItems(next, originalDraft, draft)
+  next.parse_metadata = {
+    ...(objectRecord(next.parse_metadata) ?? {}),
+    confirm_overrides: {
+      version: 'parse-confirm-draft-v1',
+      edited_fields: parseConfirmChangedFields(originalDraft, draft),
+      confirmed_at: new Date().toISOString(),
+    },
+  }
+  return next
+}
+
+const parseConfirmRequirementFields: Array<{
+  field: keyof Pick<ParseConfirmDraft, 'qualificationRequirements' | 'scoringPoints' | 'invalidClauseRisks'>
+  moduleKey: string
+  requirementType: string
+  mandatory: boolean
+  priority: 'high' | 'medium' | 'low'
+}> = [
+  {
+    field: 'qualificationRequirements',
+    moduleKey: 'qualification',
+    requirementType: 'qualification',
+    mandatory: true,
+    priority: 'high',
+  },
+  {
+    field: 'scoringPoints',
+    moduleKey: 'evaluation',
+    requirementType: 'scoring',
+    mandatory: false,
+    priority: 'high',
+  },
+  {
+    field: 'invalidClauseRisks',
+    moduleKey: 'invalid_risk',
+    requirementType: 'invalid_risk',
+    mandatory: true,
+    priority: 'high',
+  },
+]
+
+function syncParseConfirmRequirementItems(
+  result: Record<string, unknown>,
+  originalDraft: ParseConfirmDraft,
+  draft: ParseConfirmDraft,
+) {
+  for (const config of parseConfirmRequirementFields) {
+    if (parseConfirmComparableText(originalDraft[config.field]) === parseConfirmComparableText(draft[config.field])) {
+      continue
+    }
+    replaceParseRequirementItems(result, {
+      ...config,
+      previousValues: parseConfirmTextList(originalDraft[config.field]),
+      nextValues: parseConfirmTextList(draft[config.field]),
+    })
+  }
+}
+
+function replaceParseRequirementItems(
+  result: Record<string, unknown>,
+  config: {
+    moduleKey: string
+    requirementType: string
+    mandatory: boolean
+    priority: 'high' | 'medium' | 'low'
+    previousValues: string[]
+    nextValues: string[]
+  },
+) {
+  const markers = new Set([...config.previousValues, ...config.nextValues].map(normalizeParseRequirementText))
+  const nextItems = buildParseConfirmRequirementItems(config)
+  const currentItems = arrayValue(result.requirement_items).map(objectRecord).filter(Boolean)
+  result.requirement_items = [
+    ...currentItems.filter((item) => !isReplaceableParseRequirement(item, config.moduleKey, markers)),
+    ...nextItems,
+  ]
+
+  const modules = { ...(objectRecord(result.modules) ?? {}) }
+  const currentModule = { ...(objectRecord(modules[config.moduleKey]) ?? {}) }
+  const moduleItems = arrayValue(currentModule.requirement_items).map(objectRecord).filter(Boolean)
+  modules[config.moduleKey] = {
+    ...currentModule,
+    requirement_items: [
+      ...moduleItems.filter((item) => !isReplaceableParseRequirement(item, config.moduleKey, markers)),
+      ...nextItems,
+    ],
+  }
+  result.modules = modules
+}
+
+function buildParseConfirmRequirementItems(config: {
+  moduleKey: string
+  requirementType: string
+  mandatory: boolean
+  priority: 'high' | 'medium' | 'low'
+  nextValues: string[]
+}) {
+  return config.nextValues.map((requirement, index) => ({
+    id: `${config.moduleKey}-confirm-${index + 1}`,
+    module: config.moduleKey,
+    type: config.requirementType,
+    requirement,
+    priority: config.priority,
+    mandatory: config.mandatory,
+    status: 'needs_review',
+    needs_review: true,
+    expected_response: '按确认信息准备响应',
+  }))
+}
+
+function isReplaceableParseRequirement(
+  item: Record<string, unknown> | null,
+  moduleKey: string,
+  markers: Set<string>,
+) {
+  if (!item || String(item.module ?? '') !== moduleKey) return false
+  const id = String(item.id ?? '')
+  if (id.startsWith(`${moduleKey}-confirm-`)) return true
+  return markers.has(normalizeParseRequirementText(formatStructuredValue(item.requirement)))
+}
+
+function normalizeParseRequirementText(value: string) {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+function cloneStructuredResult(value: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!value) return {}
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+}
+
+function parseModuleFields(modules: Record<string, unknown> | null, moduleKey: string) {
+  return objectRecord(objectRecord(modules?.[moduleKey])?.fields)
+}
+
+function setParseModuleFields(
+  result: Record<string, unknown>,
+  moduleKey: string,
+  title: string,
+  fields: Record<string, unknown>,
+) {
+  const modules = { ...(objectRecord(result.modules) ?? {}) }
+  const currentModule = { ...(objectRecord(modules[moduleKey]) ?? {}) }
+  const currentFields = { ...(objectRecord(currentModule.fields) ?? {}) }
+  modules[moduleKey] = {
+    ...currentModule,
+    module: String(currentModule.module || moduleKey),
+    title: String(currentModule.title || title),
+    fields: { ...currentFields, ...fields },
+  }
+  result.modules = modules
+}
+
+function parseConfirmChangedFieldLabels(originalDraft: ParseConfirmDraft, draft: ParseConfirmDraft) {
+  return parseConfirmChangedFields(originalDraft, draft).map((field) => parseConfirmFieldLabels[field])
+}
+
+function parseConfirmChangedFields(originalDraft: ParseConfirmDraft, draft: ParseConfirmDraft) {
+  return (Object.keys(parseConfirmFieldLabels) as Array<keyof ParseConfirmDraft>).filter((field) => {
+    if (field === 'bidType') return originalDraft[field] !== draft[field]
+    return parseConfirmComparableText(originalDraft[field]) !== parseConfirmComparableText(draft[field])
+  })
+}
+
+function parseConfirmComparableText(value: string) {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parseConfirmText(value: unknown): string {
+  return formatStructuredValue(value).trim()
+}
+
+function parseConfirmListText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => formatStructuredValue(item).trim())
+      .filter(Boolean)
+      .join('\n')
+  }
+  return parseConfirmText(value)
+}
+
+function parseConfirmTextList(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function normalizeParseConfirmBidType(value: unknown): BidFormValues['bidType'] {
+  const text = String(value ?? '').trim()
+  if (text === 'combined' || text === 'separated' || text === 'custom') return text
+  if (text.includes('综合')) return 'combined'
+  if (text.includes('分离') || text.includes('分册')) return 'separated'
+  return 'custom'
 }
 
 function structuredResultRows(result: Record<string, unknown> | undefined) {

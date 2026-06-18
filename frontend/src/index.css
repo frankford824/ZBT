@@ -1090,6 +1090,62 @@ a {
   overflow-wrap: anywhere;
 }
 
+.parse-confirm-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface-soft);
+}
+
+.parse-confirm-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.parse-confirm-head .ant-typography {
+  margin: 0;
+}
+
+.parse-confirm-head .ant-tag {
+  max-width: 100%;
+  margin-inline-end: 0;
+  white-space: normal;
+}
+
+.parse-confirm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.parse-confirm-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.parse-confirm-field > span {
+  min-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.parse-confirm-field .ant-input,
+.parse-confirm-field .ant-select,
+.parse-confirm-field .ant-input-textarea {
+  min-width: 0;
+}
+
+.parse-confirm-field-wide {
+  grid-column: span 1;
+}
+
 .requirement-evidence-cell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1189,6 +1245,16 @@ a {
 }
 
 @media (max-width: 640px) {
+  .parse-confirm-head,
+  .parse-confirm-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .parse-confirm-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .requirement-source-row {
     grid-template-columns: minmax(0, 1fr) 72px 32px;
   }
