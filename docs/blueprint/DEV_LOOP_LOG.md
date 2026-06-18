@@ -3457,3 +3457,43 @@ git diff --check
 
 1. 本轮不配置真实 MinerU / PaddleOCR endpoint，不执行真实 OCR smoke test。
 2. `document_ocr` 路由只用于配置审计和运行边界表达；实际 OCR HTTP 调用仍由 `document_parser.py` 根据 `OCR_PROVIDER` 系列环境变量完成。
+
+## Loop-61 / xparse 模块上下文路由审计 - 2026-06-18
+
+### 本轮目标
+
+1. 修补六模块增强 prompt 只拿关键词文本行、缺少 `chunk_id/page/table_block` 来源锚点的问题。
+2. 把 xparse 的“标题优先、关键词路由、表格保留 md_table”从文档清单推进到运行态 prompt 和 `parse_metadata`。
+3. 为 AutoRFP 式来源引用继续提供稳定的 `source_context`，便于模型返回 `citation_id/reference_id` 并进入人工复核。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/tender_parser.py` 新增 `xparse-context-router-v1`，按模块关键词从标题路径、正文行和 `table_blocks.md_table` 中选择上下文。
+2. `build_tender_module_prompt()` 现在输出结构化 `source_context`，携带 `chunk_id`、页码、`table_block_id`、匹配原因和摘录；`source_excerpt` 也保留同样锚点。
+3. `build_tender_structured_result()` 的 `parse_metadata.module_context` 记录每个模块的命中 chunk、表格块和路由原因，供回归审计。
+4. `ai-service/app/tests/test_main_security.py` 新增模块上下文路由测试，覆盖评分 chunk、PDF 表格块和附件 chunk 进入对应模块。
+
+### 检查结果
+
+已运行：
+
+```bash
+PYTHONPATH=. ./.venv/bin/python -m pytest -s app/tests/test_main_security.py::test_tender_module_context_routes_chunks_and_tables_with_source_anchors app/tests/test_main_security.py::test_build_tender_structured_result_extracts_business_fields
+PYTHONPATH=. ./.venv/bin/python -m pytest -s app/tests/test_tender_parse_eval.py
+PYTHONPATH=. ./.venv/bin/python -m pytest -s
+./.venv/bin/python -m ruff check app/pipelines/parse/tender_parser.py app/tests/test_main_security.py
+git diff --check
+```
+
+结果：
+
+1. 新增上下文路由测试和既有结构化解析测试通过。
+2. 招标解析 golden 评测单元测试 4 项通过。
+3. AI 服务全量 pytest 222 项通过。
+4. Python ruff 检查通过。
+5. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮不做相邻页/相邻 chunk 扩展和复杂表头层级推断，避免把弱关联上下文误标为确定来源。
+2. 本轮只增强 AI 服务解析 prompt 与 metadata，不新增前端 chunk 内文本高亮。

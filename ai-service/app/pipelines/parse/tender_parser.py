@@ -54,6 +54,8 @@ MODULE_CONTEXT_KEYWORDS: dict[TenderParseModule, tuple[str, ...]] = {
 }
 
 MODULE_CHECKLIST_VERSION = "xparse-six-module-v1"
+MODULE_CONTEXT_ROUTER_VERSION = "xparse-context-router-v1"
+MODULE_CONTEXT_RECORD_LIMIT = 24
 MODULE_CHECKLISTS: dict[TenderParseModule, dict[str, object]] = {
     "basic": {
         "required_fields": ("project_name", "purchaser", "project_code", "budget", "deadline", "opening_time"),
@@ -109,6 +111,14 @@ def module_parse_manifest() -> dict[str, object]:
             for module in MODULE_ORDER
         },
     }
+
+
+def module_context_manifest(parsed: KnowledgeProcessResult) -> dict[str, object]:
+    modules: dict[str, object] = {}
+    for module in MODULE_ORDER:
+        records = _module_context_records(parsed, module)
+        modules[module] = _module_context_summary(records)
+    return {"version": MODULE_CONTEXT_ROUTER_VERSION, "modules": modules}
 
 
 def build_tender_structured_result(
@@ -196,6 +206,8 @@ def build_tender_structured_result(
         "missing_source_count": int(quality_gates["interpret"]["missing_source_count"]),
         "module_checklist_version": MODULE_CHECKLIST_VERSION,
         "module_checklist": module_parse_manifest(),
+        "module_context_router_version": MODULE_CONTEXT_ROUTER_VERSION,
+        "module_context": module_context_manifest(parsed),
     }
     structured = TenderParseStructuredResult(
         project_name=project_name,
@@ -335,7 +347,8 @@ def build_tender_module_prompt(
     module: TenderParseModule,
 ) -> str:
     module_result = _module_record(base_result, module)
-    source_excerpt = "\n".join(_module_context_lines(parsed, module))[:10000]
+    context_records = _module_context_records(parsed, module)
+    source_excerpt = "\n".join(_module_context_lines_from_records(context_records))[:10000]
     return json.dumps(
         {
             "task": "Improve one tender parse module using only source-backed facts.",
@@ -343,9 +356,11 @@ def build_tender_module_prompt(
             "module_title": MODULE_TITLES[module],
             "module_checklist": MODULE_CHECKLISTS[module],
             "module_checklist_version": MODULE_CHECKLIST_VERSION,
+            "module_context_router_version": MODULE_CONTEXT_ROUTER_VERSION,
             "bid_title": payload.bid_title,
             "filename": payload.filename,
             "deterministic_module": module_result,
+            "source_context": _compact_module_context_records(context_records),
             "source_excerpt": source_excerpt,
             "output_contract": {
                 "module": module,
@@ -388,6 +403,7 @@ def build_tender_module_prompt(
                 "Do not invent dates, certificates, prices, page numbers, names, or scores.",
                 "Every changed field or requirement must include source_text or needs_review=true.",
                 "Every traceable changed field or requirement must keep citation_id/reference_id.",
+                "Prefer source_context chunk_id/page/table_block_id when emitting source evidence.",
                 "Follow the module_checklist required_fields and requirement_types.",
                 "Keep business wording concise and suitable for human review.",
             ],
@@ -510,25 +526,310 @@ def _module_record(result: dict[str, object], module: TenderParseModule) -> dict
 
 
 def _module_context_lines(parsed: KnowledgeProcessResult, module: TenderParseModule) -> list[str]:
+    return _module_context_lines_from_records(_module_context_records(parsed, module))
+
+
+def _module_context_records(parsed: KnowledgeProcessResult, module: TenderParseModule) -> list[dict[str, object]]:
     keywords = MODULE_CONTEXT_KEYWORDS[module]
-    matched: list[str] = []
-    fallback: list[str] = []
+    records: list[dict[str, object]] = []
+    for chunk_index, chunk in enumerate(parsed.chunks, start=1):
+        title_path = _chunk_title_path(chunk)
+        title_text = f"{chunk.title} {title_path}".strip()
+        keyword_lines = _keyword_context_lines(chunk.content, keywords, limit=24)
+        reasons: list[str] = []
+        score = 0
+        if _contains_keyword(title_text, keywords):
+            reasons.append("title_path")
+            score += 5
+        if keyword_lines:
+            reasons.append("keyword_line")
+            score += min(len(keyword_lines), 10)
+        if not reasons:
+            continue
+        lines = keyword_lines
+        if "title_path" in reasons:
+            lines = _dedupe_context_lines([*keyword_lines, *_leading_context_lines(chunk.content, limit=8)])
+        records.append(
+            {
+                "kind": "chunk",
+                "chunk_id": _chunk_id(chunk, chunk_index),
+                "title": chunk.title,
+                "title_path": title_path,
+                "page_start": chunk.page_start,
+                "page_end": chunk.page_end,
+                "reasons": reasons,
+                "score": score,
+                "lines": lines[:18],
+            }
+        )
+    records.extend(_module_table_context_records(parsed, module))
+    if not records:
+        records = _fallback_module_context_records(parsed)
+    return sorted(records, key=_module_context_sort_key)[:MODULE_CONTEXT_RECORD_LIMIT]
+
+
+def _module_table_context_records(
+    parsed: KnowledgeProcessResult,
+    module: TenderParseModule,
+) -> list[dict[str, object]]:
+    table_blocks = parsed.metadata.get("table_blocks")
+    if not isinstance(table_blocks, list):
+        return []
+    keywords = MODULE_CONTEXT_KEYWORDS[module]
+    records: list[dict[str, object]] = []
+    for table_index, table in enumerate(table_blocks[:50], start=1):
+        if not isinstance(table, dict):
+            continue
+        table_text = _table_context_text(table)
+        if not table_text or not _contains_keyword(table_text, keywords):
+            continue
+        matched_keywords = [keyword for keyword in keywords if keyword in table_text][:6]
+        score = 4 + min(len(matched_keywords), 6)
+        records.append(
+            {
+                "kind": "table",
+                "table_block_id": _table_block_id(table, table_index),
+                "table_source": str(table.get("source") or ""),
+                "page_start": _object_int(table.get("page_start")),
+                "page_end": _object_int(table.get("page_end")),
+                "sheet": str(table.get("sheet") or ""),
+                "slide": _object_int(table.get("slide")),
+                "row_count": _object_int(table.get("row_count")) or len(_table_rows(table)),
+                "reasons": ["table_block", "table_keyword"],
+                "matched_keywords": matched_keywords,
+                "score": score,
+                "lines": _leading_context_lines(table_text, limit=16),
+            }
+        )
+    return records
+
+
+def _fallback_module_context_records(parsed: KnowledgeProcessResult) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    for chunk_index, chunk in enumerate(parsed.chunks[:4], start=1):
+        lines = _leading_context_lines(chunk.content, limit=8)
+        if not lines:
+            continue
+        records.append(
+            {
+                "kind": "chunk",
+                "chunk_id": _chunk_id(chunk, chunk_index),
+                "title": chunk.title,
+                "title_path": _chunk_title_path(chunk),
+                "page_start": chunk.page_start,
+                "page_end": chunk.page_end,
+                "reasons": ["fallback"],
+                "score": 0,
+                "lines": lines,
+            }
+        )
+    return records
+
+
+def _module_context_lines_from_records(records: list[dict[str, object]]) -> list[str]:
+    lines: list[str] = []
     seen: set[str] = set()
-    for chunk in parsed.chunks:
-        for line in chunk.content.splitlines():
-            value = re.sub(r"\s+", " ", line).strip()
-            if len(value) < 4 or value in seen:
+    for record in records:
+        header = _module_context_header(record)
+        for line in record.get("lines", []):
+            value = re.sub(r"\s+", " ", str(line)).strip()
+            if len(value) < 2:
                 continue
-            seen.add(value)
-            if any(keyword in value for keyword in keywords):
-                matched.append(value)
-            elif len(fallback) < 40:
-                fallback.append(value)
-            if len(matched) >= 80:
+            formatted = f"{header} {value}"
+            if formatted in seen:
+                continue
+            seen.add(formatted)
+            lines.append(formatted)
+            if len(lines) >= 100:
+                return lines
+    return lines
+
+
+def _compact_module_context_records(records: list[dict[str, object]]) -> list[dict[str, object]]:
+    compact: list[dict[str, object]] = []
+    for record in records[:16]:
+        item: dict[str, object] = {
+            "kind": record.get("kind"),
+            "reasons": record.get("reasons", []),
+            "score": record.get("score", 0),
+        }
+        for key in (
+            "chunk_id",
+            "table_block_id",
+            "title_path",
+            "page_start",
+            "page_end",
+            "table_source",
+            "sheet",
+            "slide",
+            "row_count",
+        ):
+            value = record.get(key)
+            if value not in (None, "", []):
+                item[key] = value
+        record_lines = [str(line).strip() for line in record.get("lines", []) if str(line).strip()]
+        if record_lines:
+            item["excerpt"] = "\n".join(record_lines[:8])[:1200]
+        compact.append(item)
+    return compact
+
+
+def _module_context_summary(records: list[dict[str, object]]) -> dict[str, object]:
+    chunk_ids = [
+        str(record.get("chunk_id"))
+        for record in records
+        if record.get("kind") == "chunk" and str(record.get("chunk_id") or "").strip()
+    ]
+    table_block_ids = [
+        str(record.get("table_block_id"))
+        for record in records
+        if record.get("kind") == "table" and str(record.get("table_block_id") or "").strip()
+    ]
+    reasons = sorted(
+        {
+            str(reason)
+            for record in records
+            for reason in record.get("reasons", [])
+            if str(reason).strip()
+        }
+    )
+    return {
+        "record_count": len(records),
+        "chunk_count": len(chunk_ids),
+        "table_block_count": len(table_block_ids),
+        "chunk_ids": chunk_ids[:12],
+        "table_block_ids": table_block_ids[:12],
+        "reasons": reasons,
+    }
+
+
+def _module_context_header(record: dict[str, object]) -> str:
+    reasons = ",".join(str(reason) for reason in record.get("reasons", []) if str(reason).strip())
+    page_start = record.get("page_start")
+    page = f" page={page_start}" if page_start not in (None, "") else ""
+    if record.get("kind") == "table":
+        table_id = str(record.get("table_block_id") or "table")
+        source = str(record.get("table_source") or "").strip()
+        source_part = f" source={source}" if source else ""
+        return f"[table={table_id}{source_part}{page} reason={reasons or 'table'}]"
+    chunk_id = str(record.get("chunk_id") or "chunk")
+    title_path = str(record.get("title_path") or "").strip()
+    title_part = f" section={title_path}" if title_path else ""
+    return f"[chunk={chunk_id}{page}{title_part} reason={reasons or 'context'}]"
+
+
+def _module_context_sort_key(record: dict[str, object]) -> tuple[int, int, str]:
+    score = int(record.get("score") or 0)
+    page = _object_int(record.get("page_start")) or 999999
+    identifier = str(record.get("chunk_id") or record.get("table_block_id") or "")
+    return (-score, page, identifier)
+
+
+def _keyword_context_lines(content: str, keywords: tuple[str, ...], *, limit: int) -> list[str]:
+    matched: list[str] = []
+    seen: set[str] = set()
+    for line in content.splitlines():
+        value = re.sub(r"\s+", " ", line).strip()
+        if len(value) < 2 or value in seen:
+            continue
+        seen.add(value)
+        if _contains_keyword(value, keywords):
+            matched.append(value[:360])
+            if len(matched) >= limit:
                 break
-        if len(matched) >= 80:
+    return matched
+
+
+def _leading_context_lines(content: str, *, limit: int) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in content.splitlines():
+        value = re.sub(r"\s+", " ", line).strip()
+        if len(value) < 2 or value in seen:
+            continue
+        seen.add(value)
+        lines.append(value[:360])
+        if len(lines) >= limit:
             break
-    return matched or fallback[:40]
+    return lines
+
+
+def _dedupe_context_lines(lines: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        value = re.sub(r"\s+", " ", str(line)).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
+    return any(keyword in text for keyword in keywords)
+
+
+def _chunk_id(chunk: object, chunk_index: int) -> str:
+    metadata = getattr(chunk, "metadata", {})
+    if isinstance(metadata, dict):
+        value = metadata.get("chunk_id") or metadata.get("id")
+        if str(value or "").strip():
+            return str(value).strip()
+    return f"parse-chunk-{chunk_index:04d}"
+
+
+def _chunk_title_path(chunk: object) -> str:
+    section_path = str(getattr(chunk, "section_path", "") or "").strip()
+    title = str(getattr(chunk, "title", "") or "").strip()
+    return section_path or title
+
+
+def _table_block_id(table: dict[str, object], table_index: int) -> str:
+    for key in ("table_block_id", "id", "block_id"):
+        value = str(table.get(key) or "").strip()
+        if value:
+            return value
+    page = _object_int(table.get("page_start") or table.get("page"))
+    source = _safe_ref_part(table.get("source") or "table")
+    page_part = f"p{page}" if page else "p0"
+    return f"{source}-{page_part}-{table_index:03d}"
+
+
+def _table_context_text(table: dict[str, object]) -> str:
+    md_table = str(table.get("md_table") or "").strip()
+    rows = _table_rows(table)
+    row_text = "\n".join(" | ".join(row) for row in rows[:20])
+    parts = [
+        str(table.get("sheet") or ""),
+        str(table.get("source") or ""),
+        md_table,
+        row_text,
+    ]
+    return "\n".join(part for part in parts if part.strip()).strip()
+
+
+def _table_rows(table: dict[str, object]) -> list[list[str]]:
+    raw_rows = table.get("rows")
+    if not isinstance(raw_rows, list):
+        return []
+    rows: list[list[str]] = []
+    for row in raw_rows:
+        if not isinstance(row, list):
+            continue
+        values = [str(cell).strip() for cell in row if str(cell).strip()]
+        if values:
+            rows.append(values)
+    return rows
+
+
+def _object_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _normalized_model_module_result(

@@ -45,7 +45,11 @@ from app.main import (
     verify_request_signature,
 )
 from app.gateway.model_router import ModelRouter, RouteTarget
-from app.pipelines.parse.tender_parser import build_tender_structured_result, merge_tender_structured_result
+from app.pipelines.parse.tender_parser import (
+    build_tender_module_prompt,
+    build_tender_structured_result,
+    merge_tender_structured_result,
+)
 from app.schemas.export import DocumentExportRequest, ExportAttachment, ExportChapter, ExportPart
 from app.schemas.knowledge import (
     KnowledgeChunk,
@@ -873,6 +877,83 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
     assert qualification_source["file_id"] == "file-demo"
     assert qualification_source["filename"] == "demo.pdf"
     assert qualification_source["traceable"] is True
+
+
+def test_tender_module_context_routes_chunks_and_tables_with_source_anchors() -> None:
+    payload = TenderParseRequest(
+        tenant_id="tenant-demo",
+        bid_id="bid-demo",
+        bid_title="桥梁检查劳务合作",
+        file_id="file-demo",
+        object_key="tenant/bid_tender/demo.pdf",
+        filename="demo.pdf",
+        content_type="application/pdf",
+    )
+    parsed = KnowledgeProcessResult(
+        processed_title="demo",
+        summary="summary",
+        metadata={
+            "parser": "pymupdf",
+            "page_count": 5,
+            "table_count": 1,
+            "table_blocks": [
+                {
+                    "source": "pdf",
+                    "index": 1,
+                    "page_start": 3,
+                    "page_end": 3,
+                    "row_count": 2,
+                    "rows": [["评审因素", "分值"], ["技术方案", "20"]],
+                    "md_table": "| 评审因素 | 分值 |\n| --- | --- |\n| 技术方案 | 20 |",
+                }
+            ],
+        },
+        chunks=[
+            KnowledgeChunk(
+                title="资格审查",
+                section_path="第二章/资格审查",
+                page_start=2,
+                page_end=2,
+                metadata={"chunk_id": "chunk-qualification"},
+                content="供应商资格要求：具备桥梁检测资质和类似业绩。",
+            ),
+            KnowledgeChunk(
+                title="评审办法",
+                section_path="第三章/评审办法",
+                page_start=3,
+                page_end=3,
+                metadata={"chunk_id": "chunk-evaluation"},
+                content="评分标准：技术方案完整性、项目团队能力和服务承诺。",
+            ),
+            KnowledgeChunk(
+                title="响应文件格式",
+                section_path="第六章/附件格式",
+                page_start=5,
+                page_end=5,
+                metadata={"chunk_id": "chunk-annex"},
+                content="附件一 投标函\n报价表和承诺函须按格式签章提交。",
+            ),
+        ],
+    )
+
+    structured = build_tender_structured_result(payload, parsed)
+    module_context = structured["parse_metadata"]["module_context"]["modules"]
+
+    assert structured["parse_metadata"]["module_context_router_version"] == "xparse-context-router-v1"
+    assert "chunk-evaluation" in module_context["evaluation"]["chunk_ids"]
+    assert module_context["evaluation"]["table_block_count"] == 1
+    assert module_context["evaluation"]["table_block_ids"] == ["pdf-p3-001"]
+    assert "chunk-annex" in module_context["annex"]["chunk_ids"]
+
+    prompt = json.loads(build_tender_module_prompt(payload, parsed, structured, "evaluation"))
+    source_context = prompt["source_context"]
+
+    assert prompt["module_context_router_version"] == "xparse-context-router-v1"
+    assert any(record.get("chunk_id") == "chunk-evaluation" for record in source_context)
+    assert any(record.get("table_block_id") == "pdf-p3-001" for record in source_context)
+    assert "[chunk=chunk-evaluation page=3" in prompt["source_excerpt"]
+    assert "[table=pdf-p3-001 source=pdf page=3" in prompt["source_excerpt"]
+    assert "| 评审因素 | 分值 |" in prompt["source_excerpt"]
 
 
 def test_build_tender_structured_result_joins_cover_project_title_without_bid_title() -> None:
