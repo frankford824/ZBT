@@ -865,6 +865,7 @@ def check_static_docs() -> None:
         "maxBidChapterTokenUsageJSONBytes",
         "maxBidKnowledgeReferenceMetadataBytes",
         "marshalBidTaskJSON",
+        "unmarshalBidTaskJSON",
         "marshalBidBusinessJSON",
         "marshalParseStructuredResultJSON",
         "marshalPipelineGateMetadataJSON",
@@ -904,6 +905,9 @@ def check_static_docs() -> None:
         "needsHumanInputJSON, _ := json.Marshal(chapter.NeedsHumanInput)",
         "modelMetadataJSON, _ := json.Marshal(modelMetadata)",
         "tokenUsageJSON, _ := json.Marshal(tokenUsage)",
+        "_ = json.Unmarshal(payloadRaw, &task.Payload)",
+        "_ = json.Unmarshal(routeRaw, &task.Route)",
+        "_ = json.Unmarshal(resultRaw, &task.Result)",
     ):
         require(forbidden not in bid_store, f"Bid store still ignores guarded JSON marshal failure: {forbidden}")
     bid_store_tests = (ROOT / "backend/internal/platform/bid/store_test.go").read_text(encoding="utf-8")
@@ -911,6 +915,8 @@ def check_static_docs() -> None:
         "TestNormalizeAcceptedTaskRejectsOversizedRoute",
         "TestBidCallbackRejectsInvalidResultBeforeDB",
         "TestBidCallbackRejectsOversizedResultBeforeDB",
+        "TestScanTaskRejectsInvalidStoredJSONFields",
+        "TestScanTaskNormalizesEmptyStoredJSONFields",
         "TestMarshalParseStructuredResultJSONRejectsInvalidAndOversizedValues",
         "TestMarshalPipelineGateMetadataJSONRejectsInvalidAndOversizedValues",
         "TestMarshalRequirementItemJSONRejectsInvalidAndOversizedValues",

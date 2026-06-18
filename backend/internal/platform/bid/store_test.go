@@ -292,6 +292,46 @@ func TestBidCallbackRejectsOversizedResultBeforeDB(t *testing.T) {
 	}
 }
 
+func TestScanTaskRejectsInvalidStoredJSONFields(t *testing.T) {
+	for name, row := range map[string]bidTaskScanRow{
+		"invalid payload object": {
+			payloadRaw: []byte(`[{"bad":"shape"}]`),
+			routeRaw:   []byte(`{}`),
+			resultRaw:  []byte(`{}`),
+		},
+		"invalid route json": {
+			payloadRaw: []byte(`{}`),
+			routeRaw:   []byte(`{"route":`),
+			resultRaw:  []byte(`{}`),
+		},
+		"oversized result": {
+			payloadRaw: []byte(`{}`),
+			routeRaw:   []byte(`{}`),
+			resultRaw:  []byte(`{"payload":"` + strings.Repeat("结", maxBidTaskResultJSONBytes) + `"}`),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := scanTask(row); err == nil {
+				t.Fatal("expected invalid stored task JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestScanTaskNormalizesEmptyStoredJSONFields(t *testing.T) {
+	task, err := scanTask(bidTaskScanRow{
+		payloadRaw: nil,
+		routeRaw:   []byte(`null`),
+		resultRaw:  []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("expected empty stored task JSON fields to normalize, got %v", err)
+	}
+	if task.Payload == nil || len(task.Payload) != 0 || task.Route == nil || len(task.Route) != 0 || task.Result == nil || len(task.Result) != 0 {
+		t.Fatalf("expected empty task JSON maps, got payload=%#v route=%#v result=%#v", task.Payload, task.Route, task.Result)
+	}
+}
+
 func TestMarshalBidBusinessJSONRejectsInvalidAndOversizedValues(t *testing.T) {
 	for name, value := range map[string]any{
 		"invalid number": map[string]any{"bad": math.NaN()},
@@ -1564,4 +1604,29 @@ func TestNormalizeGenerationInputsRejectUnsupportedValues(t *testing.T) {
 	if _, err := normalizeGenerationPartCode("unknown"); err != ErrInvalidRequest {
 		t.Fatalf("expected unsupported generation part code to be rejected, got %v", err)
 	}
+}
+
+type bidTaskScanRow struct {
+	payloadRaw []byte
+	routeRaw   []byte
+	resultRaw  []byte
+}
+
+func (row bidTaskScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "task-1"
+	*(dest[1].(*string)) = "chapter_generate"
+	*(dest[2].(*string)) = "done"
+	*(dest[3].(*sql.NullString)) = sql.NullString{}
+	*(dest[4].(*string)) = "bid_document"
+	*(dest[5].(*string)) = "00000000-0000-4000-8000-000000000001"
+	*(dest[6].(*[]byte)) = row.payloadRaw
+	*(dest[7].(*[]byte)) = row.routeRaw
+	*(dest[8].(*[]byte)) = row.resultRaw
+	*(dest[9].(*sql.NullString)) = sql.NullString{}
+	*(dest[10].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[11].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[12].(*time.Time)) = now
+	*(dest[13].(*time.Time)) = now
+	return nil
 }

@@ -7419,3 +7419,47 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go API SSE 快照指纹可靠性，没有新增标书生成任务调度、前端实时流 UI 或章节生成算法。
 2. 当前错误处理复用既有 `stream_unavailable` 事件；若后续要区分快照序列化异常和存储查询异常，可扩展更细的错误码。
+
+## Loop-154 / 标书任务 JSON 读取边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书 AI 任务读取链路，处理 `scanTask()` 读取 `payload`、`route`、`result` 时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免异常存储 JSON 类型、损坏 JSON 或超预算任务结果静默变成空对象，影响标书解析、生成、导出任务详情、实时进度和审计排查。
+3. 将标书任务 JSON 读取边界固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `unmarshalBidTaskJSON()`，空值和 `null` 归一化为 `{}`，并按既有 payload/route/result 字节预算校验读取侧 JSON。
+2. `scanTask()` 改为显式处理 `payload`、`route`、`result` 解析错误，不再忽略 `json.Unmarshal` 失败。
+3. `backend/internal/platform/bid/store_test.go` 新增 fake scanner，覆盖坏 payload/route/result 被拒绝，以及空/null 存储值归一化为 `{}`。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 增加标书任务 JSON 读取边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书任务读取可靠性，没有新增任务调度、AI Provider 或前端任务详情视图。
+2. 读取侧沿用既有写入侧字节预算；如果后续任务结果需要保存更大结构，应改为文件资产或分表明细，而不是扩大任务 JSON。
