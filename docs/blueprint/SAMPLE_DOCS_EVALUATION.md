@@ -9,7 +9,7 @@ sample_docs 用于 Loop 6 起验证 PDF / Word 解析、切片、embedding、搜
 - docs/sample_docs/expected_outputs：解析和生成期望输出。
 - docs/sample_docs/golden：真实样本的可执行解析验收配置。
 
-当前已建立 `docs/sample_docs/golden/工程1.parse.json`，引用本地 `docs/ex/工程1` 的标准招投标文件，不复制原始文件内容。
+当前已建立 `docs/sample_docs/golden/工程1.parse.json`、`docs/sample_docs/golden/工程1.generation_coverage.json` 和 `docs/sample_docs/golden/工程1.export.json`，引用本地 `docs/ex/工程1` 的标准招投标文件和对应响应场景，不复制原始文件内容。
 
 ## 基础指标
 
@@ -29,7 +29,15 @@ cd ai-service
   --golden ../docs/sample_docs/golden/工程1.parse.json
 ```
 
-生成覆盖与来源引用可使用独立离线评测入口：
+工程1生成覆盖与来源引用 golden 可使用独立离线评测入口：
+
+```bash
+cd ai-service
+.venv/bin/python -m app.evaluation.generation_coverage_eval \
+  --input ../docs/sample_docs/golden/工程1.generation_coverage.json
+```
+
+运行态标书也可以先从后端导出真实标书生成覆盖样本，再交给同一评测器：
 
 ```bash
 # 先从运行态后端导出真实标书生成覆盖样本
@@ -49,6 +57,16 @@ cd ai-service
 - `knowledge_chunks`：可解析来源集合，字段为 `chunk_id` 和可选 `document_id`。
 
 评测会输出 mandatory requirement 覆盖率、source_ref 解析率，并检查已覆盖项是否携带来源。
+
+工程1导出格式 golden 可使用独立离线评测入口：
+
+```bash
+cd ai-service
+.venv/bin/python -m app.evaluation.export_format_eval \
+  --input ../docs/sample_docs/golden/工程1.export.json
+```
+
+导出评测会临时生成 DOCX、ZIP 和 PDF，并检查 DOCX 可打开性、目录域、自动更新域、页码域、页眉页脚、表格、ZIP manifest、ZIP 内 DOCX 可打开性、PDF 可打开性、文本层和首屏非空。`pdf.allow_skip=true` 时，无 LibreOffice 的本地环境会显式记录 skipped；生产验收可把该值改为 `false` 作为硬门槛。
 
 MinerU / PaddleOCR 真实 Provider 可使用独立 OCR 验收入口。默认会把 `docs/ex/工程1/采购文件桥梁检查.pdf` 第一页渲染为 PNG 后走 OCR Provider，避免只验证 PDF 文本层：
 
@@ -89,4 +107,4 @@ OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是�
 4. `清单（固化）(1).xlsx`：清单工作表、表格块、最高单价/综合单价字段。
 5. 表格块结构验收：`table_blocks` 会检查来源类型、总行数、具备 `rows` 的块数量、PDF 表级 bbox 数量、PDF 单元格 bbox 数量、`md_table` 存在性和关键单元格文本，避免表格被降级成普通正文或丢失版面证据。
 
-当前门槛为 103 项检查全部通过；失败时 CLI 返回非 0，并输出失败项的 expected/actual。
+当前解析门槛为 103 项检查全部通过；生成覆盖门槛为 7 项检查全部通过；导出格式门槛为 23 项检查全部通过。失败时 CLI 返回非 0，并输出失败项的 expected/actual。

@@ -1,0 +1,94 @@
+{
+  "name": "工程1.generation_coverage",
+  "thresholds": {
+    "min_mandatory_coverage_ratio": 1.0,
+    "min_source_ref_resolution_ratio": 1.0
+  },
+  "requirements": [
+    {
+      "id": "req-project-scope",
+      "module": "technical",
+      "mandatory": true,
+      "requirement": "响应桥梁检查项目服务范围、检查组织和进度安排。"
+    },
+    {
+      "id": "req-quality-control",
+      "module": "technical",
+      "priority": "high",
+      "requirement": "建立质量控制和成果复核机制，确保成果可追溯。"
+    },
+    {
+      "id": "req-business-commitment",
+      "module": "submission",
+      "mandatory": true,
+      "requirement": "响应采购文件商务条款、服务周期和承诺事项。"
+    }
+  ],
+  "knowledge_chunks": [
+    {
+      "chunk_id": "chunk-engineering1-tender-scope",
+      "document_id": "doc-engineering1-tender"
+    },
+    {
+      "chunk_id": "chunk-engineering1-response-format",
+      "document_id": "doc-engineering1-response-format"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "chapter-tech-plan",
+      "title": "项目实施方案",
+      "source_refs": [
+        {
+          "chunk_id": "chunk-engineering1-tender-scope",
+          "document_id": "doc-engineering1-tender"
+        }
+      ],
+      "requirement_coverage": [
+        {
+          "requirement_id": "req-project-scope",
+          "status": "covered",
+          "evidence": "项目实施方案覆盖服务范围、检查组织和进度安排。",
+          "source_refs": [
+            {
+              "chunk_id": "chunk-engineering1-tender-scope",
+              "document_id": "doc-engineering1-tender"
+            }
+          ]
+        },
+        {
+          "requirement_id": "req-quality-control",
+          "status": "covered",
+          "evidence": "质量控制章节说明成果复核和可追溯要求。",
+          "source_refs": [
+            {
+              "chunk_id": "chunk-engineering1-tender-scope",
+              "document_id": "doc-engineering1-tender"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "chapter-business-commitment",
+      "title": "报价与承诺",
+      "model_metadata": {
+        "self_check": {
+          "requirement_coverage": [
+            {
+              "requirement_id": "req-business-commitment",
+              "satisfied": true,
+              "evidence": "商务标响应服务周期、报价说明和承诺事项。",
+              "source_refs": [
+                {
+                  "chunk_id": "chunk-engineering1-response-format",
+                  "document_id": "doc-engineering1-response-format"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -3987,3 +3987,44 @@ pnpm --dir frontend build
 
 1. 本轮没有自建 PDF canvas 选区框或 Word 文本坐标层；定位条提供稳定业务侧定位提示，内嵌 viewer 的实际文本高亮仍取决于浏览器/PDF 预览器支持。
 2. 知识库 document ID 来源暂时保留原预签名预览方式；只有携带 file_id/file_asset_id 的来源进入前端文件预览页。
+
+## Loop-75 / 工程1生成覆盖与导出格式回归 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐推荐开发顺序中“工程1 golden 样本加入章节生成覆盖率和导出格式回归”的缺口。
+2. 让章节覆盖、来源解析和 DOCX/PDF/ZIP 导出格式都能通过离线 CLI 重复验收。
+3. PDF 在无 LibreOffice 的环境中必须显式 skipped，生产验收可关闭 skip 作为硬门槛。
+
+### 代码交付
+
+1. 新增 `ai-service/app/evaluation/export_format_eval.py`，读取导出格式 golden JSON，临时生成 DOCX、ZIP 和 PDF，并检查 DOCX 可打开性、目录域、自动更新域、页码域、页眉页脚、表格、ZIP manifest、ZIP 内 DOCX 可打开性、PDF 可打开性、文本层和首屏非空。
+2. 新增 `ai-service/app/tests/test_export_format_eval.py`，覆盖 DOCX/ZIP 通过、PDF 显式 skipped、缺少必需文本失败。
+3. 新增 `docs/sample_docs/golden/工程1.generation_coverage.json`，覆盖工程1三条强制/高优先级要求、章节覆盖矩阵和可解析 source_refs。
+4. 新增 `docs/sample_docs/golden/工程1.export.json`，覆盖工程1响应场景的 DOCX/ZIP/PDF 导出格式回归。
+5. `SAMPLE_DOCS_EVALUATION.md` 和 `AI_IMPLEMENTATION_CHECKLIST.md` 同步补充生成覆盖与导出格式评测命令、门槛和生产 skip 边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest -s app/tests/test_export_format_eval.py
+cd ai-service && .venv/bin/python -m ruff check app/evaluation/export_format_eval.py app/tests/test_export_format_eval.py
+cd ai-service && .venv/bin/python -m compileall app/evaluation/export_format_eval.py app/tests/test_export_format_eval.py
+cd ai-service && .venv/bin/python -m app.evaluation.generation_coverage_eval --input ../docs/sample_docs/golden/工程1.generation_coverage.json --json
+cd ai-service && .venv/bin/python -m app.evaluation.export_format_eval --input ../docs/sample_docs/golden/工程1.export.json --json
+```
+
+结果：
+
+1. 新增导出格式评测单测 2 项通过。
+2. Ruff 通过。
+3. 新增评测器和测试文件编译通过。
+4. 工程1生成覆盖 golden 通过，7/7 检查通过，mandatory coverage 和 source_ref resolution 均为 1.0。
+5. 工程1导出格式 golden 通过，23/23 检查通过；本机实际生成 PDF，3 页、文本层 324 字符、首屏非空。
+
+### 偏离蓝图
+
+1. 本轮评测器生成的是离线 golden 场景，不直接拉取运行态真实 bid；运行态可继续用 `GET /bids/:id/generation-coverage` 导出后交给同一评测器。
+2. PDF 视觉验收仍是“可打开、文本层、首屏非空”，不是逐页像素级排版对比。

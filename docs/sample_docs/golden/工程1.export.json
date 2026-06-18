@@ -1,0 +1,71 @@
+{
+  "name": "工程1.export",
+  "bid_title": "工程1桥梁检查采购响应文件",
+  "part_title": "技术标",
+  "layout": {
+    "template_name": "zbt-standard",
+    "watermark_text": "内部评审",
+    "generated_at": "2026-06-18"
+  },
+  "chapters": [
+    {
+      "title": "项目实施方案",
+      "plain_text": "# 总体安排\n本章响应桥梁检查项目服务要求，覆盖检查组织、进度安排、质量控制和安全保障。\n\n| 项目 | 内容 |\n| --- | --- |\n| 服务周期 | 90日历天 |\n| 质量目标 | 满足采购文件要求 |\n\n# 质量控制\n建立复核机制，确保成果文件完整、准确、可追溯。"
+    },
+    {
+      "title": "人员与设备配置",
+      "plain_text": "项目团队配置项目负责人、桥梁检测工程师和资料复核人员，并配备现场检查与数据记录设备。"
+    }
+  ],
+  "docx": {
+    "required_text": [
+      "工程1桥梁检查采购响应文件",
+      "项目实施方案",
+      "服务周期",
+      "质量控制"
+    ],
+    "min_tables": 1,
+    "require_toc": true,
+    "require_update_fields": true,
+    "require_page_fields": true,
+    "require_header_footer": true
+  },
+  "zip": {
+    "parts": [
+      {
+        "code": "tech",
+        "title": "技术标",
+        "chapters": [
+          {
+            "title": "项目实施方案",
+            "plain_text": "响应桥梁检查服务内容、进度安排和质量控制要求。"
+          }
+        ]
+      },
+      {
+        "code": "business",
+        "title": "商务标",
+        "chapters": [
+          {
+            "title": "报价与承诺",
+            "plain_text": "响应采购文件商务条款，包含服务周期、报价说明和承诺事项。"
+          }
+        ]
+      }
+    ],
+    "expected_entries": [
+      "01_投标文件/01-技术标.docx",
+      "01_投标文件/02-商务标.docx",
+      "manifest.json"
+    ],
+    "min_docx_entries": 2,
+    "require_manifest": true
+  },
+  "pdf": {
+    "enabled": true,
+    "allow_skip": true,
+    "min_pages": 1,
+    "require_text": true,
+    "require_first_page_nonblank": true
+  }
+}
