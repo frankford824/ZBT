@@ -218,11 +218,13 @@ type embeddingRequest struct {
 }
 
 type embeddingResponse struct {
-	Provider   string         `json:"provider"`
-	Model      string         `json:"model"`
-	Dimensions int            `json:"dimensions"`
-	Embeddings [][]float64    `json:"embeddings"`
-	Route      map[string]any `json:"route"`
+	Provider      string         `json:"provider"`
+	Model         string         `json:"model"`
+	Dimensions    int            `json:"dimensions"`
+	Embeddings    [][]float64    `json:"embeddings"`
+	Route         map[string]any `json:"route"`
+	TokenUsage    map[string]int `json:"token_usage"`
+	EstimatedCost float64        `json:"estimated_cost"`
 }
 
 type rerankDocument struct {
@@ -247,10 +249,12 @@ type rerankResult struct {
 }
 
 type rerankResponse struct {
-	Provider string         `json:"provider"`
-	Model    string         `json:"model"`
-	Results  []rerankResult `json:"results"`
-	Route    map[string]any `json:"route"`
+	Provider      string         `json:"provider"`
+	Model         string         `json:"model"`
+	Results       []rerankResult `json:"results"`
+	Route         map[string]any `json:"route"`
+	TokenUsage    map[string]int `json:"token_usage"`
+	EstimatedCost float64        `json:"estimated_cost"`
 }
 
 func NewStore(cfg config.Config, pool *pgxpool.Pool, aiLogger *aicall.Store) *Store {
@@ -1259,15 +1263,17 @@ func (s *Store) embedKnowledgeTexts(ctx context.Context, tenantID, userID string
 	}
 	if s.aiLogger != nil {
 		if _, err := s.aiLogger.Record(ctx, aicall.RecordInput{
-			TenantID:    tenantID,
-			UserID:      userID,
-			TraceID:     fmt.Sprintf("knowledge-embedding-%d", time.Now().UnixNano()),
-			TaskType:    "knowledge_embedding",
-			Provider:    decoded.Provider,
-			Model:       decoded.Model,
-			InputTokens: estimateTokens(strings.Join(texts, "\n")),
-			LatencyMS:   int(time.Since(startedAt).Milliseconds()),
-			Status:      "done",
+			TenantID:      tenantID,
+			UserID:        userID,
+			TraceID:       fmt.Sprintf("knowledge-embedding-%d", time.Now().UnixNano()),
+			TaskType:      "knowledge_embedding",
+			Provider:      decoded.Provider,
+			Model:         decoded.Model,
+			InputTokens:   responseTokenOrEstimate(decoded.TokenUsage, "input_tokens", estimateTokens(strings.Join(texts, "\n"))),
+			OutputTokens:  responseTokenOrEstimate(decoded.TokenUsage, "output_tokens", 0),
+			EstimatedCost: positiveFiniteCost(decoded.EstimatedCost),
+			LatencyMS:     int(time.Since(startedAt).Milliseconds()),
+			Status:        "done",
 			BizRef: map[string]any{
 				"endpoint":   "/embeddings/knowledge",
 				"module":     "knowledge",
@@ -1327,16 +1333,17 @@ func (s *Store) rerankKnowledgeResults(ctx context.Context, tenantID, userID, qu
 	}
 	if s.aiLogger != nil {
 		if _, err := s.aiLogger.Record(ctx, aicall.RecordInput{
-			TenantID:     tenantID,
-			UserID:       userID,
-			TraceID:      fmt.Sprintf("knowledge-rerank-%d", time.Now().UnixNano()),
-			TaskType:     "knowledge_rerank",
-			Provider:     decoded.Provider,
-			Model:        decoded.Model,
-			InputTokens:  estimateTokens(query) + estimateTokensForRerank(documents),
-			OutputTokens: estimateTokensForRerankOutput(decoded.Results),
-			LatencyMS:    int(time.Since(startedAt).Milliseconds()),
-			Status:       "done",
+			TenantID:      tenantID,
+			UserID:        userID,
+			TraceID:       fmt.Sprintf("knowledge-rerank-%d", time.Now().UnixNano()),
+			TaskType:      "knowledge_rerank",
+			Provider:      decoded.Provider,
+			Model:         decoded.Model,
+			InputTokens:   responseTokenOrEstimate(decoded.TokenUsage, "input_tokens", estimateTokens(query)+estimateTokensForRerank(documents)),
+			OutputTokens:  responseTokenOrEstimate(decoded.TokenUsage, "output_tokens", estimateTokensForRerankOutput(decoded.Results)),
+			EstimatedCost: positiveFiniteCost(decoded.EstimatedCost),
+			LatencyMS:     int(time.Since(startedAt).Milliseconds()),
+			Status:        "done",
 			BizRef: map[string]any{
 				"endpoint":        "/rerank/knowledge",
 				"module":          "knowledge",
@@ -1433,6 +1440,24 @@ func estimateTokensForRerankOutput(results []rerankResult) int {
 		return len(results)
 	}
 	return estimateTokens(string(body))
+}
+
+func responseTokenOrEstimate(tokenUsage map[string]int, key string, fallback int) int {
+	value := tokenUsage[key]
+	if value > 0 {
+		return value
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 0
+}
+
+func positiveFiniteCost(value float64) float64 {
+	if value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) {
+		return value
+	}
+	return 0
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {

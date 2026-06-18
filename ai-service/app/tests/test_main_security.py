@@ -402,6 +402,9 @@ def test_knowledge_embeddings_falls_back_when_primary_provider_call_fails(monkey
         def get_dimensions(self) -> int:
             return 3
 
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
+
     class FakeRouter:
         def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
             assert tenant_id == "tenant-demo"
@@ -420,6 +423,9 @@ def test_knowledge_embeddings_falls_back_when_primary_provider_call_fails(monkey
                 return FailingEmbeddingProvider()
             return FallbackEmbeddingProvider()
 
+        def log_call(self, **_kwargs: object) -> dict[str, object]:
+            return {"estimated_cost": 0.02, "usage": {"used": 0.02, "currency": "CNY"}}
+
     monkeypatch.setattr("app.main.router", FakeRouter())
 
     response = asyncio.run(
@@ -431,6 +437,10 @@ def test_knowledge_embeddings_falls_back_when_primary_provider_call_fails(monkey
     assert response.dimensions == 3
     assert response.embeddings == [[1.0, 0.0, 0.0]]
     assert response.route["fallback_from"] == "primary-embedding"
+    assert response.token_usage["input_tokens"] > 0
+    assert response.token_usage["output_tokens"] == 0
+    assert response.estimated_cost == 0.02
+    assert response.quota_usage["used"] == 0.02
 
 
 def test_knowledge_rerank_falls_back_when_primary_provider_call_fails(monkeypatch) -> None:
@@ -445,6 +455,9 @@ def test_knowledge_rerank_falls_back_when_primary_provider_call_fails(monkeypatc
 
         def rerank(self, _query: str, _documents: list[str]) -> list[int]:
             return [1, 0]
+
+        def count_tokens(self, text: str) -> int:
+            return max(1, len(text) // 4)
 
     class FakeRouter:
         def resolve_candidates(self, _task_type: str, tenant_id: str) -> list[RouteTarget]:
@@ -462,6 +475,9 @@ def test_knowledge_rerank_falls_back_when_primary_provider_call_fails(monkeypatc
             if target.provider == "primary-rerank":
                 return FailingRerankProvider()
             return FallbackRerankProvider()
+
+        def log_call(self, **_kwargs: object) -> dict[str, object]:
+            return {"estimated_cost": 0.03, "usage": {"used": 0.03, "currency": "CNY"}}
 
     monkeypatch.setattr("app.main.router", FakeRouter())
 
@@ -483,6 +499,10 @@ def test_knowledge_rerank_falls_back_when_primary_provider_call_fails(monkeypatc
     assert response.model == "fallback-rerank-model"
     assert [item.id for item in response.results] == ["doc-2", "doc-1"]
     assert response.route["fallback_from"] == "primary-rerank"
+    assert response.token_usage["input_tokens"] > 0
+    assert response.token_usage["output_tokens"] > 0
+    assert response.estimated_cost == 0.03
+    assert response.quota_usage["used"] == 0.03
 
 
 def test_process_knowledge_document_falls_back_when_embedding_provider_call_fails(monkeypatch) -> None:

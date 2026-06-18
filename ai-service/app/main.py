@@ -444,12 +444,26 @@ async def knowledge_embeddings(payload: KnowledgeEmbeddingRequest) -> KnowledgeE
         lambda _route, candidate: candidate.embed_batch(payload.texts),
         provider_kind="embedding",
     )
+    input_tokens = sum(count_text_tokens(provider, text) for text in payload.texts)
+    accounting = ai_call_accounting(
+        task_type="knowledge_embedding",
+        tenant_id=payload.tenant_id,
+        route=route,
+        provider=provider,
+        input_tokens=input_tokens,
+        output_tokens=0,
+        status="done",
+        trace_id="knowledge-embedding-sync",
+    )
     return KnowledgeEmbeddingResponse(
         provider=provider_name(provider, route),
         model=route.model,
         dimensions=provider_dimensions(provider, route, embeddings),
         embeddings=embeddings,
         route=route.model_dump(),
+        token_usage={"input_tokens": input_tokens, "output_tokens": 0},
+        estimated_cost=accounting["estimated_cost"],
+        quota_usage=accounting["quota_usage"],
     )
 
 
@@ -492,11 +506,29 @@ async def knowledge_rerank(payload: KnowledgeRerankRequest) -> KnowledgeRerankRe
                 score=1.0 / (len(results) + 1),
             )
         )
+    output_text = json.dumps([item.model_dump() for item in results], ensure_ascii=False)
+    input_tokens = count_text_tokens(provider, payload.query) + sum(
+        count_text_tokens(provider, document_text) for document_text in document_texts
+    )
+    output_tokens = count_text_tokens(provider, output_text)
+    accounting = ai_call_accounting(
+        task_type="knowledge_rerank",
+        tenant_id=payload.tenant_id,
+        route=route,
+        provider=provider,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        status="done",
+        trace_id="knowledge-rerank-sync",
+    )
     return KnowledgeRerankResponse(
         provider=provider_name(provider, route),
         model=route.model,
         results=results,
         route=route.model_dump(),
+        token_usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
+        estimated_cost=accounting["estimated_cost"],
+        quota_usage=accounting["quota_usage"],
     )
 
 
@@ -822,6 +854,15 @@ def provider_dimensions(provider: object, route: RouteTarget, embeddings: list[l
     if embeddings:
         return len(embeddings[0])
     return 0
+
+
+def count_text_tokens(provider: object, text: str) -> int:
+    if hasattr(provider, "count_tokens"):
+        try:
+            return positive_int_value(provider.count_tokens(text))
+        except Exception:  # pragma: no cover - defensive provider boundary
+            return estimate_tokens(text)
+    return estimate_tokens(text)
 
 
 def ai_call_accounting(

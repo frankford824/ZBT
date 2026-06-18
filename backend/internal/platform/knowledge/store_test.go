@@ -93,6 +93,29 @@ func TestEstimateTokensForRerankOutputUsesSerializedPayload(t *testing.T) {
 	}
 }
 
+func TestResponseTokenOrEstimatePrefersProviderUsage(t *testing.T) {
+	if got := responseTokenOrEstimate(map[string]int{"input_tokens": 42}, "input_tokens", 7); got != 42 {
+		t.Fatalf("expected provider token usage to win, got %d", got)
+	}
+	if got := responseTokenOrEstimate(map[string]int{"input_tokens": -1}, "input_tokens", 7); got != 7 {
+		t.Fatalf("expected invalid provider token usage to fall back, got %d", got)
+	}
+	if got := responseTokenOrEstimate(nil, "output_tokens", 0); got != 0 {
+		t.Fatalf("expected empty fallback to stay zero, got %d", got)
+	}
+}
+
+func TestPositiveFiniteCostRejectsUnsafeValues(t *testing.T) {
+	if got := positiveFiniteCost(0.125); got != 0.125 {
+		t.Fatalf("expected positive cost to pass through, got %.6f", got)
+	}
+	for _, value := range []float64{0, -1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if got := positiveFiniteCost(value); got != 0 {
+			t.Fatalf("expected unsafe cost %v to be zero, got %.6f", value, got)
+		}
+	}
+}
+
 func TestValidateKnowledgeChunksRejectsUnsafeCallbackChunks(t *testing.T) {
 	for name, chunks := range map[string][]ChunkInput{
 		"empty list": {},

@@ -4566,3 +4566,49 @@ git diff --check
 
 1. 本轮没有接入真实厂商账单 API；费用仍按配置价格表和 token 估算。
 2. Python 侧 quota 是进程内运行期账本，重启后不作为持久化限额依据；持久化审计仍以 Go 后端 `ai_call_logs` 为准。
+
+## Loop-89 / 实时检索 Provider 审计字段闭环 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐同步 `/embeddings/knowledge` 和 `/rerank/knowledge` 端点没有返回 token/费用审计字段的缺口。
+2. 让 Go 知识库搜索写 `ai_call_logs` 时优先使用 AI 服务返回的 Provider token/费用，保留本地估算兜底。
+3. 保持响应扩展兼容旧调用方，不改变 embedding/rerank 主业务返回结构。
+
+### 代码交付
+
+1. `ai-service/app/schemas/knowledge.py` 为 `KnowledgeEmbeddingResponse` 和 `KnowledgeRerankResponse` 增加默认字段：`token_usage`、`estimated_cost`、`quota_usage`。
+2. `ai-service/app/main.py` 在同步 embedding/rerank 调用成功后执行 `ai_call_accounting()`：
+   - embedding 按输入文本计算 `input_tokens`，`output_tokens=0`。
+   - rerank 按 query、候选文档和排序结果 JSON 计算 input/output token。
+   - 两个同步响应都返回费用估算和当前 quota 快照。
+3. `backend/internal/platform/knowledge/store.go` 的 `embeddingResponse` / `rerankResponse` 接收新增字段；写 `ai_call_logs` 时优先使用响应里的 `token_usage` 和 `estimated_cost`，无效或缺失时退回本地 token 估算和后端价格表。
+4. `ai-service/app/tests/test_main_security.py` 增加同步 embedding/rerank 响应审计字段断言。
+5. `backend/internal/platform/knowledge/store_test.go` 增加 token/费用归一化单测，防止负数、NaN 或无穷费用进入日志。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 和 `MODEL_GATEWAY.md` 同步记录实时检索端点审计字段闭环。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/main.py ai-service/app/schemas/knowledge.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_main_security.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/main.py app/schemas/knowledge.py app/tests/test_main_security.py
+cd backend && go test ./internal/platform/knowledge
+cd backend && go test ./internal/platform/aicall
+git diff --check
+```
+
+结果：
+
+1. Python 语法检查通过。
+2. AI 服务安全/任务回调单测 62 项通过，覆盖同步 embedding/rerank 的费用响应字段。
+3. 后端知识库包测试通过，覆盖响应 token/费用优先级和安全归一化。
+4. 后端 AI 调用审计包测试通过。
+5. Ruff 和 diff 空白检查通过。
+
+### 偏离蓝图
+
+1. 本轮仍未接真实厂商账单 API；费用来源仍为 token 用量乘配置价格表。
+2. 同步响应新增字段为兼容扩展，旧前端和旧 Go 客户端可忽略这些字段。

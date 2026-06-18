@@ -42,6 +42,9 @@ class KnowledgeEmbeddingResponse(BaseModel):
     dimensions: int
     embeddings: list[list[float]]
     route: dict[str, object]
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    estimated_cost: float = 0
+    quota_usage: dict[str, object] = Field(default_factory=dict)
 
 
 class KnowledgeRerankDocument(BaseModel):
@@ -70,3 +73,6 @@ class KnowledgeRerankResponse(BaseModel):
     model: str
     results: list[KnowledgeRerankResult]
     route: dict[str, object]
+    token_usage: dict[str, int] = Field(default_factory=dict)
+    estimated_cost: float = 0
+    quota_usage: dict[str, object] = Field(default_factory=dict)
