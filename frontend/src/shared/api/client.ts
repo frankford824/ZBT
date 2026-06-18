@@ -197,6 +197,25 @@ export type ExternalToolConfigDTO = {
   updated_at: string
 }
 
+export type ExternalToolAuditLogDTO = {
+  id: string
+  user_id: string | null
+  config_id: string | null
+  tool_provider: string
+  tool_name: string
+  request_hash: string
+  request_summary: string
+  response_summary: string
+  latency_ms: number
+  status: 'success' | 'failed' | 'blocked'
+  error_message: string
+  estimated_cost: number
+  resource_type: string
+  resource_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export type ApprovalStepDTO = {
   order: number
   name: string
@@ -1120,6 +1139,35 @@ export async function fetchExternalToolCatalog(): Promise<ExternalToolProviderPr
 
 export async function fetchExternalTools(): Promise<ExternalToolConfigDTO[]> {
   const { data } = await apiClient.get<{ items: ExternalToolConfigDTO[] }>('/external-tools')
+  return data.items
+}
+
+export async function updateExternalToolConfig(
+  providerKey: string,
+  payload: {
+    name?: string
+    transport?: 'streamable_http'
+    endpoint?: string
+    command?: string
+    enabled?: boolean
+    allowed_tools?: string[]
+    timeout_ms?: number
+    monthly_budget?: number
+    redaction_policy?: ExternalToolConfigDTO['redaction_policy']
+    metadata?: Record<string, unknown>
+  },
+): Promise<ExternalToolConfigDTO> {
+  const { data } = await apiClient.put<ExternalToolConfigDTO>(
+    `/external-tools/${encodeURIComponent(providerKey)}`,
+    payload,
+  )
+  return data
+}
+
+export async function fetchExternalToolAuditLogs(limit = 50): Promise<ExternalToolAuditLogDTO[]> {
+  const { data } = await apiClient.get<{ items: ExternalToolAuditLogDTO[] }>('/external-tools/audit', {
+    params: { limit },
+  })
   return data.items
 }
 

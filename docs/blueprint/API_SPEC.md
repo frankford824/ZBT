@@ -22,7 +22,7 @@ GET /tenant、PATCH /tenant、GET /tenant/members、POST /tenant/members/invite�
 
 AI 调用审计已落地 `GET /ai-call-logs`，返回当前租户内的模型调用记录，包含 task_type、provider、model、token_usage、latency_ms、status、error_message 和业务资源引用。`/team?tab=logs` 已从审批时间线切换为真实 AI 调用日志表。
 
-外部工具网关一期已落地 `external_tool_configs` 和 `external_tool_audit_logs` RLS 表。`GET /external-tools/catalog` 返回只读 Provider 预设目录、默认工具白名单、token env、用途和数据边界；`GET /external-tools` 读取当前租户工具配置；`PUT /external-tools/:providerKey` 维护只读外部 MCP/工具 Provider，当前仅允许 `streamable_http`，配置包含 enabled、allowed_tools、timeout_ms、monthly_budget 和 redaction_policy，已知 Provider 会应用预设名称和默认白名单，严格 Provider 会拒绝目录外工具和关闭脱敏策略；`POST /external-tools/:providerKey/invoke` 使用 JSON-RPC `tools/call` 调用白名单工具，默认只保存请求摘要和响应摘要，不保存完整客户文件正文；`GET /external-tools/audit` 返回调用审计。配置和调用走 team full 权限，目录和审计读取走 team read 权限。
+外部工具网关一期已落地 `external_tool_configs` 和 `external_tool_audit_logs` RLS 表。`GET /external-tools/catalog` 返回只读 Provider 预设目录、默认工具白名单、token env、用途和数据边界；`GET /external-tools` 读取当前租户工具配置；`PUT /external-tools/:providerKey` 维护只读外部 MCP/工具 Provider，当前仅允许 `streamable_http`，配置包含 enabled、allowed_tools、timeout_ms、monthly_budget 和 redaction_policy，已知 Provider 会应用预设名称和默认白名单，严格 Provider 会拒绝目录外工具和关闭脱敏策略；`POST /external-tools/:providerKey/invoke` 使用 JSON-RPC `tools/call` 调用白名单工具，默认只保存请求摘要和响应摘要，不保存完整客户文件正文；`GET /external-tools/audit` 返回调用审计。配置和调用走 team full 权限，目录和审计读取走 team read 权限。前端 `/team?tab=external-tools` 已接入目录、配置和审计查看。
 
 ## Tender
 

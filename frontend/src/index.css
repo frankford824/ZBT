@@ -1165,6 +1165,16 @@ a {
   overflow-wrap: anywhere;
 }
 
+.external-tool-description {
+  margin: 0 !important;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.external-tool-muted-text {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .requirement-source-row {
     grid-template-columns: minmax(0, 1fr) 72px 32px;

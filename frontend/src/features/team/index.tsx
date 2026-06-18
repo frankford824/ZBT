@@ -1,4 +1,14 @@
-import { CheckOutlined, CloseOutlined, DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons'
+import {
+  ApiOutlined,
+  CheckOutlined,
+  CloseOutlined,
+  CloudServerOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  SettingOutlined,
+  TeamOutlined,
+} from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -7,6 +17,7 @@ import {
   Col,
   Form,
   Input,
+  InputNumber,
   Modal,
   Popconfirm,
   Row,
@@ -18,7 +29,7 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   approveApproval,
   createApprovalChain,
@@ -27,6 +38,9 @@ import {
   fetchAICallLogs,
   fetchApprovalChains,
   fetchApprovals,
+  fetchExternalToolAuditLogs,
+  fetchExternalToolCatalog,
+  fetchExternalTools,
   fetchMembers,
   fetchNotifications,
   fetchRoles,
@@ -34,10 +48,13 @@ import {
   inviteMember,
   markNotificationsRead,
   rejectApproval,
+  updateExternalToolConfig,
   updateMember,
   updateApprovalChain,
   type ApprovalChainDTO,
   type ApprovalStepDTO,
+  type ExternalToolConfigDTO,
+  type ExternalToolProviderPresetDTO,
   type MemberDTO,
 } from '../../shared/api/client'
 import { PageFrame } from '../../shared/components/PageFrame'
@@ -45,7 +62,7 @@ import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/St
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
-const teamTabs = ['members', 'approvals', 'logs', 'notifications'] as const
+const teamTabs = ['members', 'approvals', 'external-tools', 'logs', 'notifications'] as const
 type TeamTab = (typeof teamTabs)[number]
 
 function normalizeTeamTab(value: string | null): TeamTab {
@@ -54,11 +71,13 @@ function normalizeTeamTab(value: string | null): TeamTab {
 
 function statusTag(status: string) {
   const color =
-    status === 'approved' || status === 'done'
+    status === 'approved' || status === 'done' || status === 'success'
       ? 'green'
       : status === 'rejected' || status === 'failed' || status === 'disabled'
         ? 'red'
-        : status === 'pending' || status === 'running' || status === 'queued' || status === 'invited'
+        : status === 'blocked'
+          ? 'gold'
+          : status === 'pending' || status === 'running' || status === 'queued' || status === 'invited'
           ? 'blue'
           : 'default'
   const label: Record<string, string> = {
@@ -67,7 +86,9 @@ function statusTag(status: string) {
     rejected: '已驳回',
     cancelled: '已取消',
     done: '完成',
+    success: '成功',
     failed: '失败',
+    blocked: '已阻断',
     running: '运行中',
     queued: '排队中',
     active: '正常',
@@ -103,6 +124,11 @@ const resourceLabels: Record<string, string> = {
   cost_project: '成本测算',
 }
 
+type ExternalToolRow = {
+  preset: ExternalToolProviderPresetDTO
+  config?: ExternalToolConfigDTO
+}
+
 function formatTime(value?: string | null) {
   return formatDateTime(value)
 }
@@ -127,9 +153,28 @@ function formatEstimatedCost(value: number) {
   return `¥${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`
 }
 
+function numericMetadata(value: Record<string, unknown> | undefined, key: string) {
+  const raw = value?.[key]
+  const numberValue = typeof raw === 'number' ? raw : Number(raw)
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : 0
+}
+
 function formatLatency(value: number) {
   if (!value) return '-'
   return value >= 1000 ? `${(value / 1000).toFixed(1)} 秒` : `${value} 毫秒`
+}
+
+function externalToolFormValues(preset: ExternalToolProviderPresetDTO, config?: ExternalToolConfigDTO) {
+  return {
+    name: config?.name || preset.name,
+    enabled: Boolean(config?.enabled),
+    endpoint: config?.endpoint || '',
+    allowed_tools: config?.allowed_tools?.length ? config.allowed_tools : preset.default_allowed_tools,
+    timeout_ms: config?.timeout_ms || 5000,
+    monthly_budget: config?.monthly_budget || 0,
+    redaction_policy: config?.redaction_policy === 'disabled' ? 'summary_only' : config?.redaction_policy || 'summary_only',
+    cost_per_call: numericMetadata(config?.metadata, 'cost_per_call'),
+  }
 }
 
 export function TeamPage() {
@@ -142,9 +187,12 @@ export function TeamPage() {
   const [chainOpen, setChainOpen] = useState(false)
   const [memberOpen, setMemberOpen] = useState(false)
   const [editingMember, setEditingMember] = useState<MemberDTO | null>(null)
+  const [externalToolOpen, setExternalToolOpen] = useState(false)
+  const [editingExternalTool, setEditingExternalTool] = useState<ExternalToolRow | null>(null)
   const [inviteForm] = Form.useForm()
   const [chainForm] = Form.useForm()
   const [memberForm] = Form.useForm()
+  const [externalToolForm] = Form.useForm()
 
   const membersQuery = useQuery({ queryKey: ['team', 'members'], queryFn: fetchMembers })
   const rolesQuery = useQuery({ queryKey: ['team', 'roles'], queryFn: fetchRoles })
@@ -152,8 +200,29 @@ export function TeamPage() {
   const approvalsQuery = useQuery({ queryKey: ['team', 'approvals'], queryFn: () => fetchApprovals() })
   const chainsQuery = useQuery({ queryKey: ['team', 'approval-chains'], queryFn: fetchApprovalChains })
   const aiLogsQuery = useQuery({ queryKey: ['team', 'ai-call-logs'], queryFn: () => fetchAICallLogs(50) })
+  const externalCatalogQuery = useQuery({ queryKey: ['team', 'external-tools', 'catalog'], queryFn: fetchExternalToolCatalog })
+  const externalToolsQuery = useQuery({ queryKey: ['team', 'external-tools'], queryFn: fetchExternalTools })
+  const externalToolAuditQuery = useQuery({
+    queryKey: ['team', 'external-tools', 'audit'],
+    queryFn: () => fetchExternalToolAuditLogs(50),
+  })
 
   const roleOptions = rolesQuery.data?.map((role) => ({ value: role.code, label: role.name })) ?? []
+  const externalToolConfigMap = useMemo(() => {
+    const map = new Map<string, ExternalToolConfigDTO>()
+    for (const config of externalToolsQuery.data ?? []) {
+      map.set(config.provider_key, config)
+    }
+    return map
+  }, [externalToolsQuery.data])
+  const externalToolRows: ExternalToolRow[] = useMemo(
+    () =>
+      (externalCatalogQuery.data ?? []).map((preset) => ({
+        preset,
+        config: externalToolConfigMap.get(preset.provider_key),
+      })),
+    [externalCatalogQuery.data, externalToolConfigMap],
+  )
 
   const inviteMutation = useMutation({
     mutationFn: inviteMember,
@@ -246,6 +315,41 @@ export function TeamPage() {
     onError: (error) => message.error(getApiErrorMessage(error, '通知状态更新失败')),
   })
 
+  const externalToolMutation = useMutation({
+    mutationFn: (values: {
+      name: string
+      enabled?: boolean
+      endpoint?: string
+      allowed_tools?: string[]
+      timeout_ms?: number
+      monthly_budget?: number
+      redaction_policy?: ExternalToolConfigDTO['redaction_policy']
+      cost_per_call?: number
+    }) => {
+      if (!editingExternalTool) throw new Error('missing external tool')
+      const costPerCall = Number(values.cost_per_call || 0)
+      return updateExternalToolConfig(editingExternalTool.preset.provider_key, {
+        name: values.name || editingExternalTool.preset.name,
+        transport: 'streamable_http',
+        endpoint: values.endpoint?.trim() || '',
+        enabled: Boolean(values.enabled),
+        allowed_tools: values.allowed_tools?.length ? values.allowed_tools : editingExternalTool.preset.default_allowed_tools,
+        timeout_ms: values.timeout_ms || 5000,
+        monthly_budget: values.monthly_budget || 0,
+        redaction_policy: values.redaction_policy || 'summary_only',
+        metadata: costPerCall > 0 ? { cost_per_call: costPerCall } : {},
+      })
+    },
+    onSuccess: () => {
+      setExternalToolOpen(false)
+      setEditingExternalTool(null)
+      externalToolForm.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['team', 'external-tools'] })
+      message.success('外部数据源已保存')
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '外部数据源保存失败')),
+  })
+
   const createChain = (values: {
     name: string
     description?: string
@@ -281,6 +385,12 @@ export function TeamPage() {
       role_codes: member.roles.map((role) => role.code),
     })
     setMemberOpen(true)
+  }
+
+  const openExternalToolEditor = (row: ExternalToolRow) => {
+    setEditingExternalTool(row)
+    externalToolForm.setFieldsValue(externalToolFormValues(row.preset, row.config))
+    setExternalToolOpen(true)
   }
 
   return (
@@ -353,7 +463,7 @@ export function TeamPage() {
             key: 'approvals',
             label: '审批',
             children: (
-              <Space orientation="vertical" size={16} className="full-width">
+              <Space direction="vertical" size={16} className="full-width">
                 <Row gutter={[16, 16]}>
                   <Col xs={24} xl={14}>
                     <Typography.Title level={4}>待办审批</Typography.Title>
@@ -456,6 +566,140 @@ export function TeamPage() {
             ),
           },
           {
+            key: 'external-tools',
+            label: '外部数据源',
+            children:
+              externalCatalogQuery.isLoading || externalToolsQuery.isLoading ? (
+                <LoadingBlock />
+              ) : externalCatalogQuery.isError || externalToolsQuery.isError ? (
+                <ErrorBlock />
+              ) : (
+                <Space direction="vertical" size={16} className="full-width">
+                  <Table
+                    rowKey={(row) => row.preset.provider_key}
+                    dataSource={externalToolRows}
+                    scroll={{ x: 1180 }}
+                    pagination={false}
+                    locale={{ emptyText: <EmptyBlock /> }}
+                    columns={[
+                      {
+                        title: '数据源',
+                        width: 260,
+                        render: (_, row) => (
+                          <Space direction="vertical" size={4} className="full-width">
+                            <Space size={8} wrap={false}>
+                              <CloudServerOutlined />
+                              <Typography.Text strong>{row.preset.name}</Typography.Text>
+                            </Space>
+                            <Typography.Text type="secondary">{row.preset.category}</Typography.Text>
+                            <Typography.Paragraph className="external-tool-description">
+                              {row.preset.description}
+                            </Typography.Paragraph>
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: '用途',
+                        width: 260,
+                        render: (_, row) => (
+                          <Space wrap size={[4, 4]}>
+                            {row.preset.recommended_use.map((item) => (
+                              <Tag key={item}>{item}</Tag>
+                            ))}
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: '数据边界',
+                        width: 300,
+                        render: (_, row) => (
+                          <Space direction="vertical" size={4} className="full-width">
+                            {row.preset.data_boundary.map((item) => (
+                              <Typography.Text key={item} type="secondary">
+                                {item}
+                              </Typography.Text>
+                            ))}
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: '配置状态',
+                        width: 230,
+                        render: (_, row) => (
+                          <Space direction="vertical" size={6} className="full-width">
+                            <Space size={6} wrap>
+                              {row.config?.enabled ? <Tag color="green">已启用</Tag> : <Tag>未启用</Tag>}
+                              {row.preset.read_only ? <Tag color="blue">只读</Tag> : null}
+                              {row.preset.strict_allowed_tools ? <Tag color="gold">受控工具</Tag> : null}
+                            </Space>
+                            <Typography.Text className="external-tool-muted-text" type="secondary">
+                              密钥项 {row.preset.token_env}
+                            </Typography.Text>
+                            <Typography.Text type="secondary">
+                              已选工具 {row.config?.allowed_tools?.length || row.preset.default_allowed_tools.length} 项
+                            </Typography.Text>
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: '操作',
+                        width: 170,
+                        render: (_, row) => (
+                          <Space size={8} wrap={false}>
+                            <Button
+                              size="small"
+                              icon={<SettingOutlined />}
+                              disabled={!canWrite}
+                              onClick={() => openExternalToolEditor(row)}
+                            >
+                              配置
+                            </Button>
+                            <Button
+                              size="small"
+                              icon={<ApiOutlined />}
+                              href={row.preset.source_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              来源
+                            </Button>
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                  <Typography.Title level={4}>调用记录</Typography.Title>
+                  {externalToolAuditQuery.isLoading ? (
+                    <LoadingBlock />
+                  ) : externalToolAuditQuery.isError ? (
+                    <ErrorBlock />
+                  ) : (
+                    <Table
+                      rowKey="id"
+                      dataSource={externalToolAuditQuery.data ?? []}
+                      locale={{ emptyText: <EmptyBlock /> }}
+                      scroll={{ x: 960 }}
+                      columns={[
+                        { title: '数据源', dataIndex: 'tool_provider', width: 150 },
+                        { title: '工具', dataIndex: 'tool_name', width: 180 },
+                        { title: '状态', dataIndex: 'status', width: 90, render: statusTag },
+                        { title: '费用', dataIndex: 'estimated_cost', width: 90, render: formatEstimatedCost },
+                        { title: '耗时', dataIndex: 'latency_ms', width: 100, render: formatLatency },
+                        { title: '请求摘要', dataIndex: 'request_summary', width: 220, ellipsis: true },
+                        {
+                          title: '结果',
+                          width: 220,
+                          ellipsis: true,
+                          render: (_, row) => row.error_message || row.response_summary || '-',
+                        },
+                        { title: '时间', dataIndex: 'created_at', width: 180, render: formatTime },
+                      ]}
+                    />
+                  )}
+                </Space>
+              ),
+          },
+          {
             key: 'logs',
             label: '使用记录',
             children: aiLogsQuery.isLoading ? (
@@ -504,7 +748,7 @@ export function TeamPage() {
             ) : notificationsQuery.isError ? (
               <ErrorBlock />
             ) : (
-              <Space orientation="vertical" size={16} className="full-width">
+              <Space direction="vertical" size={16} className="full-width">
                 <Button loading={readMutation.isPending} onClick={() => readMutation.mutate()}>
                   全部标记已读
                 </Button>
@@ -525,6 +769,96 @@ export function TeamPage() {
           },
         ]}
       />
+      <Modal
+        open={externalToolOpen}
+        title={editingExternalTool ? `配置${editingExternalTool.preset.name}` : '外部数据源配置'}
+        width={720}
+        onCancel={() => {
+          setExternalToolOpen(false)
+          setEditingExternalTool(null)
+          externalToolForm.resetFields()
+        }}
+        onOk={externalToolForm.submit}
+        confirmLoading={externalToolMutation.isPending}
+      >
+        {editingExternalTool ? (
+          <Form form={externalToolForm} layout="vertical" onFinish={externalToolMutation.mutate}>
+            <Row gutter={16}>
+              <Col xs={24} md={12}>
+                <Form.Item label="名称" name="name" rules={[{ required: true, message: '名称必填' }]}>
+                  <Input />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="启用" name="enabled" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item
+              label="访问地址"
+              name="endpoint"
+              rules={[
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    if (!getFieldValue('enabled') || String(value || '').trim()) {
+                      return Promise.resolve()
+                    }
+                    return Promise.reject(new Error('启用时必须填写访问地址'))
+                  },
+                }),
+              ]}
+            >
+              <Input placeholder={editingExternalTool.preset.endpoint_hint || 'https://example.com/mcp'} />
+            </Form.Item>
+            <Form.Item
+              label="启用工具"
+              name="allowed_tools"
+              rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个工具' }]}
+            >
+              <Select
+                mode={editingExternalTool.preset.strict_allowed_tools ? 'multiple' : 'tags'}
+                options={editingExternalTool.preset.default_allowed_tools.map((tool) => ({ value: tool, label: tool }))}
+              />
+            </Form.Item>
+            <Row gutter={16}>
+              <Col xs={24} md={8}>
+                <Form.Item label="超时时间" name="timeout_ms" rules={[{ required: true, message: '超时时间必填' }]}>
+                  <InputNumber min={500} max={60000} step={500} addonAfter="毫秒" className="full-width" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="月度预算" name="monthly_budget">
+                  <InputNumber min={0} step={10} addonAfter="元" className="full-width" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="单次估算" name="cost_per_call">
+                  <InputNumber min={0} step={0.01} addonAfter="元" className="full-width" />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Form.Item label="脱敏策略" name="redaction_policy" rules={[{ required: true, message: '脱敏策略必填' }]}>
+              <Select
+                options={[
+                  { value: 'summary_only', label: '仅保存摘要' },
+                  { value: 'no_sensitive', label: '过滤敏感内容' },
+                ]}
+              />
+            </Form.Item>
+            <Space direction="vertical" size={6} className="full-width">
+              <Typography.Text className="external-tool-muted-text" type="secondary">
+                密钥配置项：{editingExternalTool.preset.token_env}
+              </Typography.Text>
+              {editingExternalTool.preset.data_boundary.map((item) => (
+                <Typography.Text key={item} type="secondary">
+                  {item}
+                </Typography.Text>
+              ))}
+            </Space>
+          </Form>
+        ) : null}
+      </Modal>
       <Modal open={inviteOpen} title="邀请成员" onCancel={() => setInviteOpen(false)} onOk={inviteForm.submit} confirmLoading={inviteMutation.isPending}>
         <Form form={inviteForm} layout="vertical" initialValues={{ role_code: 'viewer' }} onFinish={inviteMutation.mutate}>
           <Form.Item label="姓名" name="name" rules={[{ required: true, message: '姓名必填' }]}>

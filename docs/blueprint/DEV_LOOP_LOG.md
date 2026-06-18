@@ -3379,3 +3379,45 @@ git diff --check
 1. 本轮实现 Provider 目录和后端校验，不接真实第三方凭证。
 2. 本轮只加共享前端 API client，不实现外部工具管理页面。
 3. AutoRFP、qlows、Loopio 等 SaaS 工具名可能随服务端版本变化，预设默认白名单作为初始建议；生产接入仍需 live smoke test 后确认。
+
+## Loop-59 / 外部数据源前端管理入口 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐外部 MCP Provider 目录只有后端 API、没有租户管理员可操作入口的问题。
+2. 前端展示必须围绕业务可理解信息：数据源、用途、数据边界、启用状态、调用记录和费用估算。
+3. 配置入口继续复用后端白名单、脱敏策略、预算和审计约束，不提供绕过安全边界的自由调用面板。
+
+### 代码交付
+
+1. `frontend/src/shared/api/client.ts` 新增 `ExternalToolAuditLogDTO`、`updateExternalToolConfig()` 和 `fetchExternalToolAuditLogs()`。
+2. `frontend/src/features/team/index.tsx` 新增 `external-tools` tab，展示 Provider 目录、用途、数据边界、启用状态、密钥配置项、启用工具数量和最近调用记录。
+3. 外部数据源配置弹窗支持维护名称、启用状态、访问地址、启用工具、超时时间、月度预算、单次估算和脱敏策略；启用时必须填写访问地址。
+4. 团队页状态标签补充 `success` / `blocked`，外部工具审计表可展示成功、失败和阻断状态。
+5. 修正团队页残留的 `Space orientation="vertical"` 为 Ant Design 支持的 `direction="vertical"`。
+6. `frontend/src/index.css` 新增外部数据源描述文本样式，避免表格单元内长文本错行撑裂。
+7. `AI_IMPLEMENTATION_CHECKLIST.md`、`EXTERNAL_MCP_SKILL_RADAR.md`、`API_SPEC.md`、`AI_PIPELINE.md` 同步更新当前能力和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+go test ./...
+pnpm --dir frontend build
+pnpm --dir frontend lint
+git diff --check
+```
+
+结果：
+
+1. 后端全量 Go 测试通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+3. 前端 ESLint 通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮不接真实第三方凭证，不执行生产 smoke test。
+2. 本轮只做团队管理入口，不把外部标讯搜索或企业画像接入项目/标书创建业务流。
+3. 配置弹窗不提供任意工具调用调试面板，避免用户把客户文件正文直接外发。

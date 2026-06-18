@@ -2,7 +2,7 @@
 
 外部同类项目方法论已转成 ZBT 自有任务清单，见 `docs/blueprint/AI_IMPLEMENTATION_CHECKLIST.md`。行业 MCP / Skills 雷达见 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`。这些清单只复用解析、OCR、Skill Pipeline、问题矩阵、来源引用、外部数据工具和交付物编排的方案思路，不复制外部代码。
 
-外部 MCP / Skills 的边界：MCP 只负责确定性外部数据和只读工具调用，Skill 只负责流程编排、检查清单和交付物方法论。客户招标文件、投标文件、报价、资质证明和合同条款不得默认外发到第三方 MCP；任何外部工具接入必须由租户显式开启，并经过脱敏、RBAC、审计、调用限额和成本估算。智标通的解析、生成、合规、导出和租户隔离仍由本工程主链路实现。当前后端已提供 `/external-tools` P0 网关，支持租户级 `streamable_http` Provider 配置、Provider 预设目录、默认工具白名单、JSON-RPC `tools/call` 调用、请求/响应摘要审计和预算阻断；尚未接前端管理/业务入口，也不支持 stdio 工具。
+外部 MCP / Skills 的边界：MCP 只负责确定性外部数据和只读工具调用，Skill 只负责流程编排、检查清单和交付物方法论。客户招标文件、投标文件、报价、资质证明和合同条款不得默认外发到第三方 MCP；任何外部工具接入必须由租户显式开启，并经过脱敏、RBAC、审计、调用限额和成本估算。智标通的解析、生成、合规、导出和租户隔离仍由本工程主链路实现。当前后端已提供 `/external-tools` P0 网关，支持租户级 `streamable_http` Provider 配置、Provider 预设目录、默认工具白名单、JSON-RPC `tools/call` 调用、请求/响应摘要审计和预算阻断；前端 `/team?tab=external-tools` 已支持配置和审计查看；尚未接业务入口，也不支持 stdio 工具。
 
 ## 文档处理
 

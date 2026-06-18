@@ -74,13 +74,13 @@
 4. `GET /external-tools`、`PUT /external-tools/:providerKey`、`POST /external-tools/:providerKey/invoke`、`GET /external-tools/audit`：通过 team 权限访问。
 5. 调用入口使用 JSON-RPC `tools/call`，强制 enabled、allowed_tools、timeout_ms、monthly_budget 和摘要审计。
 6. 已知 Provider 会应用预设名称和默认工具白名单；严格 Provider 不允许配置目录外工具，且不允许关闭脱敏策略。
+7. `/team?tab=external-tools`：展示 Provider 目录、数据边界、启用状态、预算配置和最近调用记录，支持管理员配置访问地址、启用工具、脱敏策略和费用估算。
 
 继续增强清单：
 
-1. 前端管理入口：展示 Provider 目录、数据边界、token 环境变量、启用状态、预算和审计摘要。
-2. Provider 生产验证：用真实 Handaas、AutoRFP、qlows 或 Loopio 凭证跑只读 smoke test，并记录工具名与响应结构。
-3. 业务入口：把已授权的标讯搜索、企业画像、外部应答库检索结果归一为 `external_mcp` 来源。
-4. 禁止首批工具接收完整招标文件、投标文件、报价明细和合同正文。
+1. Provider 生产验证：用真实 Handaas、AutoRFP、qlows 或 Loopio 凭证跑只读 smoke test，并记录工具名与响应结构。
+2. 业务入口：把已授权的标讯搜索、企业画像、外部应答库检索结果归一为 `external_mcp` 来源。
+3. 禁止首批工具接收完整招标文件、投标文件、报价明细和合同正文。
 
 ### P1：业务入口
 
