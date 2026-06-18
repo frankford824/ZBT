@@ -12,6 +12,13 @@
 4. 外部调用必须默认只读、租户级显式开启，并记录调用人、工具名、输入摘要、脱敏策略、耗时、状态、token 或计费估算。
 5. 涉及客户招标文件、投标文件、报价、资质证明和合同条款时，必须先经过脱敏策略和管理员授权；禁止默认外发原文。
 
+## 当前检索结论
+
+1. 有可调用的同行业 MCP / Skills，但强项分散：公开采购数据 MCP 较多，RFP/Proposal 工作流 Skill 较多，中国招投标数据 MCP 较少。
+2. 当前可优先接入的 MCP 是“外部只读数据源”：标讯、企业画像、公开采购机会、历史中标与应答库查询；不应让它们接管文件解析、合规判定或整标生成。
+3. 当前最值得内化的 Skills 是“分阶段、可审查、可追溯”的标书编制流程：控制矩阵、评分矩阵、废标风险、模板残留、跨文档一致性、最终 clean export。
+4. 中国标书 Skill 已出现可直接参考的仓库，但多为本地工作流和脚本包，不具备本工程需要的 SaaS 多租户、RLS、审计、成本核算和运行态 API 边界。
+
 ## 可优先评估接入
 
 | 项目 | 类型 | 价值 | 接入判断 |
@@ -40,6 +47,8 @@
 | 项目 | 类型 | 可借鉴点 |
 | --- | --- | --- |
 | [Openclaw-Metis/rfp-architect](https://github.com/Openclaw-Metis/rfp-architect) | RFP 编写 / 审查 Skill | 双模式 write/review、11 必备章节、台湾采购语境、rubric、linter、source register、release gate |
+| [Hugin-Z/tender-writer-v4](https://github.com/Hugin-Z/tender-writer-v4) | 中国政府项目技术标 Skill / 本地工具链 | 五阶段主流程、评分矩阵逐分追踪、项目类型识别、DOCX 渲染质量、B/C 模式材料组装、跨章节一致性检查；适合作为标书工作流 checklist 和导出质量对照 |
+| [JbBom/cn-bid-doc-automation](https://github.com/JbBom/cn-bid-doc-automation) | Codex 中文投标文档自动化 Skill | source lock、control matrix、fatal risk、template residue、cross-document consistency、clean final DOCX；适合转成智标通的前置控制矩阵和最终清稿检查 |
 | [1102tools/federal-contracting-skills](https://github.com/1102tools/federal-contracting-skills) | 联邦采购 Skills | “MCPs handle data, Skills handle deliverables”的拆分；SOW/PWS、IGCE 和成本估算的可审计交付物流程 |
 | [1102tools/federal-contracting-mcps](https://github.com/1102tools/federal-contracting-mcps) | 采购数据 MCP 组合 | 多个确定性 API MCP 分包、MCPB 打包、每个 server 有测试记录和生产 API 验证 |
 | [sarkisova-creator/tender-research-claude-skill](https://github.com/sarkisova-creator/tender-research-claude-skill) | 标案研究 Skill | 门户抓取、公司画像匹配、机会评分、下载高分文件、输出 Excel 的研究流程 |
@@ -53,8 +62,13 @@
 | 项目 | 覆盖范围 | 可借鉴点 |
 | --- | --- | --- |
 | [blencorp/capture-mcp-server](https://github.com/blencorp/capture-mcp-server) | 美国 SAM.gov、USASpending.gov、Tango | 多 API 组合、结构化 JSON 输出、工具启用矩阵和限流 |
+| [Licinexus/licinexus-mcp](https://github.com/Licinexus/licinexus-mcp) | 巴西 PNCP + Receita Federal | 采购公告与企业数据合并检索，适合观察“标讯 + 企业画像”的工具边界 |
+| [IDNSIDNS/tenderapi-mcp](https://github.com/IDNSIDNS/tenderapi-mcp) | 法国 BOAMP + 欧盟 TED | TenderAPI 包装成 MCP，可借鉴跨源公告统一查询 |
+| [ab75173/sam-gov-mcp](https://github.com/ab75173/sam-gov-mcp) | 美国 SAM.gov | 小型 typed async client、机会检索和 CI 测试，可作为单源 MCP 最小实现参考 |
+| [n0edlg/bidsparq-mcp-server](https://github.com/n0edlg/bidsparq-mcp-server) | 美国 federal/state/local RFPs | 工具数量多，覆盖 RFP、awards、vendors、contact graph、vehicles、pursuits；适合观察工具粒度和权限边界 |
 | [carlosahumada89/govrider-mcp-server](https://github.com/carlosahumada89/govrider-mcp-server) | 多国政府采购机会 | 按公司能力匹配机会、API key 配置、npx 安装体验 |
 | [chrisns/uk-tenders-mcp](https://github.com/chrisns/uk-tenders-mcp) | 英国采购 OCDS 数据 | 官方 URL、数据新鲜度、只读 BigQuery、跨源去重和 schema 查询 |
+| [mayai-it/bandiradar](https://github.com/mayai-it/bandiradar) | 意大利 public funding / tenders / grants | 公司画像匹配、两阶段 matcher、机会排序，适合转成智标通商机评分 checklist |
 | [h30190/SearchProcurementTenders](https://github.com/h30190/SearchProcurementTenders) | 台湾标案 | 中文标案检索、公告过滤、案号去重、字段精简 |
 | [atlasprzetargow/mcp-server](https://github.com/atlasprzetargow/mcp-server) | 波兰公共采购 | 买方/承包商画像、CPV 统计、术语表和 guided workflows |
 | [switchr24/mcp-india-tenders](https://github.com/switchr24/mcp-india-tenders) | 印度政府采购 | OCDS 格式、跨门户 tender 搜索 |

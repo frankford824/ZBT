@@ -4332,3 +4332,36 @@ git diff --check
 
 1. 本轮校验响应来源引用结构完整性，不做来源文本与 PDF canvas 选区的视觉框选验证。
 2. 引用号、定位码和页码能证明来源可追溯，但不能单独证明模型生成内容与来源语义完全一致；语义一致性仍需后续人工抽样或更强评测器。
+
+## Loop-84 / 行业 MCP 与 Skills 雷达补充 - 2026-06-18
+
+### 本轮目标
+
+1. 回答“同行业是否有现成 MCP / Skills 可调用”的问题，并把结果固化到工程目录。
+2. 区分可直接接入的外部只读数据 MCP、可内化的方法论 Skill、以及只能观察工具粒度的海外公共采购 MCP。
+3. 保持边界：外部 MCP / Skill 不接管智标通解析、合规、生成、审计和成本核算主链路。
+
+### 代码交付
+
+1. `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md` 新增“当前检索结论”，明确有可调用同类 MCP / Skills，但强项分散，优先作为只读数据源和 checklist。
+2. Skill 方法论补充 `Hugin-Z/tender-writer-v4` 和 `JbBom/cn-bid-doc-automation`，用于中国技术标工作流、控制矩阵、废标风险、模板残留和最终 clean export 检查。
+3. 全球采购数据 MCP 观察池补充 `Licinexus/licinexus-mcp`、`IDNSIDNS/tenderapi-mcp`、`ab75173/sam-gov-mcp`、`n0edlg/bidsparq-mcp-server` 和 `mayai-it/bandiradar`。
+
+### 检查结果
+
+已运行：
+
+```bash
+git diff --check
+rg -n "当前检索结论|Hugin-Z/tender-writer-v4|JbBom/cn-bid-doc-automation|Licinexus/licinexus-mcp|IDNSIDNS/tenderapi-mcp|ab75173/sam-gov-mcp|n0edlg/bidsparq-mcp-server|mayai-it/bandiradar" docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md
+```
+
+结果：
+
+1. diff 空白检查通过。
+2. 新增候选和检索结论均能在雷达文档中检索到。
+
+### 偏离蓝图
+
+1. 本轮只做全网/GitHub 调研归档，不安装第三方 Skill，也不新增 Provider 运行时代码。
+2. GitHub CLI 已安装但尚未完成账号授权；本轮仓库检索使用 GitHub API 和网页搜索结果交叉筛选。
