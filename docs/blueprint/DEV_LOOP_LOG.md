@@ -5663,3 +5663,49 @@ git diff --check
 
 1. 本轮治理的是文件导出体验和浏览器下载边界，没有新增新的导出格式或 Word/PDF 母版能力。
 2. 前端目前仍没有独立单元测试框架；本轮以 lint/build、全量验收和静态防回退脚本覆盖。
+
+## Loop-116 / 知识库检索 AI 输入体积边界 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查知识库检索链路，处理 embedding/rerank 同步接口缺少单条文本长度限制的问题。
+2. 避免签名请求内的超长 query、embedding text 或 rerank document 被直接送入模型网关，造成模型调用成本、内存和数据库全文检索压力失控。
+3. 将 AI schema、Go 搜索入口和尾部验收脚本的边界保持一致，防止后续回退。
+
+### 代码交付
+
+1. `ai-service/app/schemas/knowledge.py` 为知识库 embedding/rerank 请求新增 Pydantic 字符串约束：tenant、embedding text、rerank query、document id/title/content/section_path 均设置最大长度，并使用 `StringConstraints(strip_whitespace=True)` 拒绝纯空白关键字段。
+2. `ai-service/app/tests/test_knowledge_schema.py` 新增知识库 schema 回归测试，覆盖超长文本、超长 query、超长 rerank 字段、空白必填字段和首尾空白清理。
+3. `backend/internal/platform/knowledge/store.go` 在搜索入口新增 `normalizeKnowledgeSearchQuery()`，将 query 去首尾空白并按 2000 个 rune 截断，保证进入 embedding、rerank 和数据库全文检索的 query 体积可控。
+4. `backend/internal/platform/knowledge/store_test.go` 新增中文 rune 边界测试，确认搜索 query 截断不破坏多字节字符。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求知识库 AI schema、schema 测试、Go 搜索 query 上限和对应测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_knowledge_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/schemas/knowledge.py app/tests/test_knowledge_schema.py
+cd backend && go test ./internal/platform/knowledge
+cd backend && go test ./...
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_knowledge_schema.py -q -s` 通过：`5 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/schemas/knowledge.py app/tests/test_knowledge_schema.py` 通过。
+3. `cd backend && go test ./internal/platform/knowledge` 通过。
+4. `cd backend && go test ./...` 通过。
+5. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+6. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`245 passed`。
+7. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+
+### 偏离蓝图
+
+1. 本轮治理的是检索输入边界和成本保护，没有新增新的检索算法、embedding 模型或 rerank 模型。
+2. 搜索 query 过长时采取截断策略而非业务错误提示；这是为了保持搜索入口容错和现有 UI 交互稳定。

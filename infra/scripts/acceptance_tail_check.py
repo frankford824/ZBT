@@ -430,6 +430,34 @@ def check_static_docs() -> None:
     ):
         require(needle in model_router_tests, f"ModelRouter cost normalization missing regression test: {needle}")
 
+    knowledge_schema = (ROOT / "ai-service/app/schemas/knowledge.py").read_text(encoding="utf-8")
+    for needle in (
+        "MAX_KNOWLEDGE_EMBEDDING_TEXT_LENGTH",
+        "MAX_KNOWLEDGE_RERANK_QUERY_LENGTH",
+        "MAX_KNOWLEDGE_RERANK_CONTENT_LENGTH",
+        "KnowledgeEmbeddingText",
+        "KnowledgeRerankQuery",
+        "KnowledgeRerankContent",
+        "StringConstraints(strip_whitespace=True",
+    ):
+        require(needle in knowledge_schema, f"Knowledge AI schema missing request size guard: {needle}")
+    knowledge_schema_tests = (ROOT / "ai-service/app/tests/test_knowledge_schema.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_knowledge_embedding_request_rejects_oversized_or_empty_text",
+        "test_knowledge_rerank_request_rejects_oversized_query",
+        "test_knowledge_rerank_document_rejects_oversized_fields",
+        "test_knowledge_rerank_request_strips_bounded_text_fields",
+    ):
+        require(needle in knowledge_schema_tests, f"Knowledge AI schema missing regression test: {needle}")
+    knowledge_store = (ROOT / "backend/internal/platform/knowledge/store.go").read_text(encoding="utf-8")
+    for needle in ("maxKnowledgeSearchQueryChars", "normalizeKnowledgeSearchQuery(req.Query)"):
+        require(needle in knowledge_store, f"Knowledge search missing query size guard: {needle}")
+    knowledge_store_tests = (ROOT / "backend/internal/platform/knowledge/store_test.go").read_text(encoding="utf-8")
+    require(
+        "TestNormalizeKnowledgeSearchQueryTrimsAndCapsRunes" in knowledge_store_tests,
+        "Knowledge search query size guard missing regression test",
+    )
+
     ai_pipeline = (ROOT / "docs/blueprint/AI_PIPELINE.md").read_text(encoding="utf-8")
     require("尚未接业务入口" not in ai_pipeline, "AI_PIPELINE.md still claims external MCP has no business entry")
     for needle in ("外部标讯", "provider_profile.endpoint_env", "api_key_env", "poll_endpoint_env"):

@@ -74,6 +74,18 @@ func TestTruncateForRerankPreservesRuneBoundaries(t *testing.T) {
 	}
 }
 
+func TestNormalizeKnowledgeSearchQueryTrimsAndCapsRunes(t *testing.T) {
+	oversized := strings.Repeat("智", maxKnowledgeSearchQueryChars+5)
+	got := normalizeKnowledgeSearchQuery(" \n" + oversized + "\t")
+
+	if count := len([]rune(got)); count != maxKnowledgeSearchQueryChars {
+		t.Fatalf("expected %d runes, got %d", maxKnowledgeSearchQueryChars, count)
+	}
+	if strings.ContainsAny(got, " \n\t") {
+		t.Fatalf("expected query whitespace to be trimmed, got %q", got)
+	}
+}
+
 func TestEstimateTokensForRerankOutputUsesSerializedPayload(t *testing.T) {
 	results := []rerankResult{
 		{ID: "chunk-a", Index: 0, Score: 1},

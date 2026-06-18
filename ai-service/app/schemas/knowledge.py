@@ -1,11 +1,70 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
+
+MAX_KNOWLEDGE_TENANT_ID_LENGTH = 128
+MAX_KNOWLEDGE_EMBEDDING_TEXT_LENGTH = 12000
+MAX_KNOWLEDGE_RERANK_QUERY_LENGTH = 2000
+MAX_KNOWLEDGE_RERANK_DOCUMENT_ID_LENGTH = 128
+MAX_KNOWLEDGE_RERANK_TITLE_LENGTH = 255
+MAX_KNOWLEDGE_RERANK_SECTION_PATH_LENGTH = 512
+MAX_KNOWLEDGE_RERANK_CONTENT_LENGTH = 2400
+
+KnowledgeTenantID = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_KNOWLEDGE_TENANT_ID_LENGTH),
+]
+KnowledgeEmbeddingText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_KNOWLEDGE_EMBEDDING_TEXT_LENGTH,
+    ),
+]
+KnowledgeRerankQuery = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_KNOWLEDGE_RERANK_QUERY_LENGTH,
+    ),
+]
+KnowledgeRerankDocumentID = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_KNOWLEDGE_RERANK_DOCUMENT_ID_LENGTH,
+    ),
+]
+KnowledgeRerankTitle = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_KNOWLEDGE_RERANK_TITLE_LENGTH,
+    ),
+]
+KnowledgeRerankSectionPath = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=MAX_KNOWLEDGE_RERANK_SECTION_PATH_LENGTH),
+]
+KnowledgeRerankContent = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=MAX_KNOWLEDGE_RERANK_CONTENT_LENGTH,
+    ),
+]
 
 
 class KnowledgeProcessRequest(BaseModel):
     task_id: str | None = None
-    tenant_id: str
+    tenant_id: KnowledgeTenantID
     document_id: str
     file_id: str
     object_key: str
@@ -32,8 +91,8 @@ class KnowledgeProcessResult(BaseModel):
 
 
 class KnowledgeEmbeddingRequest(BaseModel):
-    tenant_id: str
-    texts: list[str] = Field(min_length=1, max_length=32)
+    tenant_id: KnowledgeTenantID
+    texts: list[KnowledgeEmbeddingText] = Field(min_length=1, max_length=32)
 
 
 class KnowledgeEmbeddingResponse(BaseModel):
@@ -48,16 +107,16 @@ class KnowledgeEmbeddingResponse(BaseModel):
 
 
 class KnowledgeRerankDocument(BaseModel):
-    id: str
-    title: str
-    content: str
-    section_path: str = ""
+    id: KnowledgeRerankDocumentID
+    title: KnowledgeRerankTitle
+    content: KnowledgeRerankContent
+    section_path: KnowledgeRerankSectionPath = ""
     score: float = 0.0
 
 
 class KnowledgeRerankRequest(BaseModel):
-    tenant_id: str
-    query: str
+    tenant_id: KnowledgeTenantID
+    query: KnowledgeRerankQuery
     documents: list[KnowledgeRerankDocument] = Field(min_length=1, max_length=60)
     top_k: int = Field(default=8, ge=1, le=20)
 

@@ -37,6 +37,7 @@ const (
 	maxKnowledgeChunkTitleChars    = 300
 	maxKnowledgeChunkSectionChars  = 500
 	maxKnowledgeChunkMetadataBytes = 32 * 1024
+	maxKnowledgeSearchQueryChars   = 2000
 )
 
 type Store struct {
@@ -954,7 +955,7 @@ func (s *Store) Stats(ctx context.Context, tenantID string) (Stats, error) {
 }
 
 func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchRequest) ([]SearchResult, error) {
-	query := strings.TrimSpace(req.Query)
+	query := normalizeKnowledgeSearchQuery(req.Query)
 	limit := req.Limit
 	if limit <= 0 || limit > 20 {
 		limit = 8
@@ -1141,6 +1142,10 @@ func (s *Store) Search(ctx context.Context, tenantID, userID string, req SearchR
 		}
 	}
 	return limitSearchResults(results, limit), nil
+}
+
+func normalizeKnowledgeSearchQuery(query string) string {
+	return truncateForRerank(strings.TrimSpace(query), maxKnowledgeSearchQueryChars)
 }
 
 func (s *Store) submitKnowledgeProcess(ctx context.Context, payload map[string]any) (aiTaskAccepted, error) {
