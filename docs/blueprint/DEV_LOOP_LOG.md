@@ -3497,3 +3497,41 @@ git diff --check
 
 1. 本轮不做相邻页/相邻 chunk 扩展和复杂表头层级推断，避免把弱关联上下文误标为确定来源。
 2. 本轮只增强 AI 服务解析 prompt 与 metadata，不新增前端 chunk 内文本高亮。
+
+## Loop-62 / 响应来源定位复制与 Space 布局修正 - 2026-06-18
+
+### 本轮目标
+
+1. 补齐响应来源只支持打开文件/页、不能把 chunk/引用定位传递给人工复核的问题。
+2. 来源详情必须继续使用业务口径，不展示 provider、model、token 等技术信息。
+3. 修复前端残留的 Ant Design `Space orientation="vertical"` 无效属性，避免页面垂直布局被渲染成横向排列。
+
+### 代码交付
+
+1. `frontend/src/features/bid/index.tsx` 的响应来源弹窗新增页码、章节、引用号、定位码展示，并支持复制来源定位文本。
+2. 来源摘要会包含可用的引用号或定位码；打开原文仍复用现有文件/知识库文档预览和页码锚点。
+3. `frontend/src/index.css` 新增来源定位标签布局，长引用号和摘录可换行，不撑裂弹窗。
+4. 全局修正前端残留 `Space orientation="vertical"` 为 `direction="vertical"`，覆盖标书、认证、成本、知识库、项目、标讯和 PageFrame。
+
+### 检查结果
+
+已运行：
+
+```bash
+rg -n "orientation=\"vertical\"" frontend/src -S
+pnpm --dir frontend lint
+pnpm --dir frontend build
+git diff --check
+```
+
+结果：
+
+1. 前端无残留 `orientation="vertical"`。
+2. 前端 ESLint 通过。
+3. 前端 TypeScript 构建和 Vite 打包通过。
+4. `git diff --check` 通过。
+
+### 偏离蓝图
+
+1. 本轮不实现 PDF/Word 预览器内文本高亮；先提供可复制定位信息和页码预览。
+2. 人工录入且缺少文件或文档 ID 的来源仍只能展示和复制定位，不能伪装成可打开原文。

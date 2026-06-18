@@ -14,7 +14,7 @@
 
 1. 招标解析已新增 6 模块结构化结果、字段级来源、置信度、要求项矩阵和模块级独立模型增强；6 个模块已支持受控并发执行、固定顺序合并和单模块失败隔离；`docs/ex/工程1` 已建立可执行 golden 回归评测，仍需要继续做前端字段级编辑确认。
 2. OCR 已有 Provider 契约、外部 HTTP 接口、成功响应归一化、页级质量指标、统一 `table_blocks` 和 `document_ocr` 网关路由；仍缺少真实 OCR Provider 配置和样本回归评测。
-3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；仍需继续补 chunk 级高亮定位和跨页服务端批处理。
+3. AutoRFP 式“问题矩阵/响应矩阵”已形成运行态闭环：招标要求可落入独立表，章节生成可回写覆盖状态、响应证据和来源数量，人工可调整覆盖状态和补充证据，支持单条/批量标记覆盖状态、补充响应证据和编辑响应来源，支持按覆盖、证据、来源完整性筛选，可从响应来源打开原文预览并复制页码/引用号/定位码/摘录，单条要求可查看模型/人工覆盖历史，并可导出评审响应矩阵 CSV 和带覆盖历史工作表的 xlsx；仍需继续补预览器内文本高亮和跨页服务端批处理。
 4. Skill/Gate 已从隐式状态机收敛为显式阶段闸门：`interpret`、`plan`、`generate`、`check`、`format` 阶段已落库并接入关键写操作。
 5. 行业 MCP / Skills 调研已固化到 `docs/blueprint/EXTERNAL_MCP_SKILL_RADAR.md`；外部工具只能作为只读数据源、方法论和 checklist 参考。后端 P0 外部工具网关已提供租户级配置、Provider 预设目录、默认工具白名单、摘要审计、预算阻断和 JSON-RPC `tools/call` 入口，前端团队管理页已提供外部数据源配置和审计入口；仍需继续补业务入口和生产凭证验证。
 
@@ -37,7 +37,7 @@
 - 章节生成、整标逐章生成和章节 AI 自检回调会根据 `self_check.requirement_coverage` 回写 `bid_requirement_items.coverage_status` / `needs_review`，并将响应侧证据保存到 `metadata.latest_coverage`；招标原文 `source_ref` 不被覆盖。前端“响应要点”表已展示覆盖状态、响应证据摘要和来源数量，不展示模型、token、schema 等技术口径。
 - `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements/:requirementId`，可人工调整单条要求覆盖状态并补充响应证据；人工结果写入 `metadata.latest_coverage` 和 `metadata.manual_coverage`，不覆盖招标原文 `source_ref`。
 - `backend/internal/api/routes.go` 已提供 `PATCH /bids/:id/requirements`，前端“响应要点”表支持勾选多条要求后批量标记覆盖状态、批量补充响应证据和批量编辑响应来源；批量操作会逐条写入覆盖历史，任一要求项不存在时整批失败。
-- 前端“响应要点”表的来源数量可打开响应来源列表；若来源携带 `file_id`、`file_asset_id`、`document_id` 或 `source_document_id`，可复用已有文件/知识库文档预览接口打开原文，带页码的来源会附加页码锚点。
+- 前端“响应要点”表的来源数量可打开响应来源列表；若来源携带 `file_id`、`file_asset_id`、`document_id` 或 `source_document_id`，可复用已有文件/知识库文档预览接口打开原文，带页码的来源会附加页码锚点；来源列表会展示并可复制页码、章节、引用号、定位码和摘录，便于人工复核传递精确定位。
 - `backend/internal/db/migrations/00033_bid_requirement_coverage_events.sql` 已新增 `bid_requirement_coverage_events` RLS 表；模型回写和人工调整都会追加覆盖历史，`GET /bids/:id/requirements/:requirementId/history` 可按单条要求读取最近历史，前端“响应要点”表提供历史弹窗。
 - `backend/internal/api/routes.go` 已提供 `GET /bids/:id/requirements/export`，前端“响应要点”页可导出 UTF-8 CSV 响应矩阵；`?format=xlsx` 可导出含“响应矩阵”和“覆盖历史”两个工作表的 Excel 文件，覆盖状态、响应证据、响应来源、招标原文来源和历史记录均使用业务口径。
 - `ai-service/app/evaluation/tender_parse_eval.py` 已提供离线解析评测 CLI，`docs/sample_docs/golden/工程1.parse.json` 已覆盖采购 PDF、响应 docx、盖章投标 PDF 和固化清单 xlsx 的 103 项检查。
@@ -169,6 +169,7 @@
    - 模型输出事实性段落必须带 `{{ref:chunk_id}}` 或结构化 `source_refs`。
    - Go 回调解析后写 `knowledge_references`；无法解析的引用标记 unresolved。
    - 前端显示“来源详情”：文档名、页码、原文摘录、相似度/重排分。
+   - 当前已落地：响应来源弹窗会展示来源标题、页码、引用号、定位码和摘录，并支持一键复制定位；有可预览文件/文档时仍可按页码打开原文。
 
 5. 验收：
    - 任一生成章节能追溯到对应 requirement_items。

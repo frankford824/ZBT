@@ -1165,6 +1165,19 @@ a {
   overflow-wrap: anywhere;
 }
 
+.requirement-source-locator {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.requirement-source-locator .ant-tag {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .external-tool-description {
   margin: 0 !important;
   color: var(--text-secondary);

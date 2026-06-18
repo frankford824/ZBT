@@ -82,7 +82,7 @@ export function KnowledgeHomePage() {
       tags={['资料检索']}
       bare
     >
-      <Space orientation="vertical" size={16} className="full-width">
+      <Space direction="vertical" size={16} className="full-width">
         <Input.Search
           placeholder="搜索企业资质、案例、技术方案"
           enterButton="搜索"
@@ -398,7 +398,7 @@ export function KnowledgeDocsPage() {
           </Card>
         </Col>
         <Col xs={24} xl={18}>
-          <Space orientation="vertical" className="full-width">
+          <Space direction="vertical" className="full-width">
               {canWrite ? (
                 <Upload.Dragger {...uploadProps}>
                   <CloudUploadOutlined />
@@ -1048,7 +1048,7 @@ function statusColor(status: KnowledgeDocumentDTO['parse_status']) {
 function documentStatusCell(document: KnowledgeDocumentDTO) {
   const failureMessage = documentFailureMessage(document)
   return (
-    <Space orientation="vertical" size={2}>
+    <Space direction="vertical" size={2}>
       <Tag color={statusColor(document.parse_status)}>{statusLabel(document.parse_status)}</Tag>
       {failureMessage ? <Typography.Text type="danger">{failureMessage}</Typography.Text> : null}
     </Space>

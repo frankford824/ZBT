@@ -1,6 +1,7 @@
 import {
   CheckOutlined,
   CompressOutlined,
+  CopyOutlined,
   DeleteOutlined,
   DiffOutlined,
   DownloadOutlined,
@@ -319,7 +320,7 @@ export function BidListPage() {
         </Button> : null,
       ]}
     >
-      <Space orientation="vertical" size={16} className="full-width">
+      <Space direction="vertical" size={16} className="full-width">
         <Segmented
           options={Object.keys(bidStatusFilters)}
           value={statusFilter}
@@ -463,7 +464,7 @@ export function BidTemplatesPage() {
                     : undefined
                 }
               >
-                <Space orientation="vertical" size={8}>
+                <Space direction="vertical" size={8}>
                   <Space wrap>
                     <Tag color={template.bid_type === 'combined' ? 'green' : 'blue'}>
                       {template.bid_type === 'combined' ? '综合标' : template.bid_type === 'separated' ? '分册标' : '自定义'}
@@ -848,6 +849,19 @@ export function BidWizardPage() {
       message.error(getApiErrorMessage(error, '获取来源预览失败'))
     }
   }
+  const copyRequirementSourceLocator = async (sourceRef: unknown) => {
+    const locator = requirementSourceLocatorText(sourceRef)
+    if (!locator) {
+      message.info('该来源暂无可复制定位')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(locator)
+      message.success('来源定位已复制')
+    } catch {
+      message.error('复制失败，请手动选择定位信息')
+    }
+  }
   const openRequirementSourcesModal = (row: ParseRequirementRow) => {
     const sourceRefs = row.coverageSourceRefs
     if (!sourceRefs.length) {
@@ -869,10 +883,27 @@ export function BidWizardPage() {
                   <Typography.Paragraph className="requirement-source-preview-text">
                     {requirementSourceRefsSummary([sourceRef]) || '未填写来源摘录'}
                   </Typography.Paragraph>
+                  <div className="requirement-source-locator">
+                    {requirementSourceLocatorParts(sourceRef).map((part) => (
+                      <Tag key={`${part.label}-${part.value}`}>
+                        {part.label}：{part.value}
+                      </Tag>
+                    ))}
+                  </div>
                 </div>
-                <Button size="small" disabled={!target} onClick={() => void openRequirementSourcePreview(sourceRef)}>
-                  查看原文
-                </Button>
+                <Space size={6} wrap={false}>
+                  <Tooltip title="复制来源定位">
+                    <Button
+                      size="small"
+                      icon={<CopyOutlined />}
+                      disabled={!requirementSourceLocatorText(sourceRef)}
+                      onClick={() => void copyRequirementSourceLocator(sourceRef)}
+                    />
+                  </Tooltip>
+                  <Button size="small" disabled={!target} onClick={() => void openRequirementSourcePreview(sourceRef)}>
+                    查看原文
+                  </Button>
+                </Space>
               </div>
             )
           })}
@@ -889,7 +920,7 @@ export function BidWizardPage() {
       okText: '保存',
       cancelText: '取消',
       content: (
-        <Space orientation="vertical" size={10} className="full-width">
+        <Space direction="vertical" size={10} className="full-width">
           <Input.TextArea
             defaultValue={row.coverageEvidence}
             rows={4}
@@ -930,7 +961,7 @@ export function BidWizardPage() {
       okText: '保存',
       cancelText: '取消',
       content: (
-        <Space orientation="vertical" size={10} className="full-width">
+        <Space direction="vertical" size={10} className="full-width">
           <Typography.Text type="secondary">已选 {selectedRequirementRows.length} 项</Typography.Text>
           <Select
             defaultValue={coverageStatus}
@@ -1021,7 +1052,7 @@ export function BidWizardPage() {
       permission={canWrite}
       bare
     >
-      <Space orientation="vertical" size={20} className="full-width">
+      <Space direction="vertical" size={20} className="full-width">
         <Steps
           current={current}
           items={steps.map((title) => ({ title }))}
@@ -1029,7 +1060,7 @@ export function BidWizardPage() {
         />
         <Card title={steps[current]}>
           {current === 0 ? (
-            <Space orientation="vertical" size={16} className="full-width">
+            <Space direction="vertical" size={16} className="full-width">
               <Space wrap>
                 <Upload
                   accept=".pdf,.doc,.docx,.txt,.xlsx,.xlsm,.xls,.pptx,.pptm,.ppt,.png,.jpg,.jpeg,.webp,.tif,.tiff"
@@ -1068,7 +1099,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 1 ? (
-            <Space orientation="vertical" size={16} className="full-width">
+            <Space direction="vertical" size={16} className="full-width">
               <Space wrap>
                 <Button
                   type="primary"
@@ -1132,7 +1163,7 @@ export function BidWizardPage() {
                       key: 'requirements',
                       label: '响应要点',
                       children: (
-                        <Space orientation="vertical" size={12} className="full-width">
+                        <Space direction="vertical" size={12} className="full-width">
                           <Space wrap align="center">
                             <Segmented
                               size="small"
@@ -1288,7 +1319,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 2 ? (
-            <Space orientation="vertical" size={16} className="full-width">
+            <Space direction="vertical" size={16} className="full-width">
               <Space wrap>
                 <Button
                   type="primary"
@@ -1305,7 +1336,7 @@ export function BidWizardPage() {
                   key: part.id,
                   label: part.title,
                   children: (
-                    <Space orientation="vertical" size={12} className="full-width">
+                    <Space direction="vertical" size={12} className="full-width">
                       <Space wrap>
                         <Button icon={<PlusOutlined />} onClick={() => addOutlineDraft(part.id)}>
                           新增章节
@@ -1366,7 +1397,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 3 ? (
-            <Space orientation="vertical" size={16} className="full-width">
+            <Space direction="vertical" size={16} className="full-width">
               <Table
                 size="small"
                 pagination={false}
@@ -1404,7 +1435,7 @@ export function BidWizardPage() {
             </Space>
           ) : null}
           {current === 4 ? (
-            <Space orientation="vertical" size={16} className="full-width">
+            <Space direction="vertical" size={16} className="full-width">
               <Space wrap>
                 <Button
                   type="primary"
@@ -1434,7 +1465,7 @@ export function BidWizardPage() {
                     key: part.id,
                     label: part.title,
                     children: (
-                      <Space orientation="vertical" className="full-width">
+                      <Space direction="vertical" className="full-width">
                         <Progress percent={percent} />
                         <Timeline
                           items={partChapters.map((chapter) => ({
@@ -1515,7 +1546,7 @@ export function BidWizardPage() {
             </Button>
           ) : null}
           {current === 6 ? (
-            <Space orientation="vertical" className="full-width">
+            <Space direction="vertical" className="full-width">
               <Space wrap>
                 {exportableParts.map((part) => (
                   <Space.Compact key={part.id}>
@@ -1593,7 +1624,7 @@ export function BidWizardPage() {
         }}
       >
         {historyRequirement ? (
-          <Space orientation="vertical" size={12} className="full-width">
+          <Space direction="vertical" size={12} className="full-width">
             <Typography.Text strong>{historyRequirement.requirement}</Typography.Text>
             {requirementHistoryMutation.isPending ? (
               <LoadingBlock />
@@ -1663,7 +1694,7 @@ function exportStatusTag(value: BidExportDTO['status']) {
 
 function exportStatusCell(row: BidExportDTO) {
   return (
-    <Space orientation="vertical" size={2}>
+    <Space direction="vertical" size={2}>
       {exportStatusTag(row.status)}
       {row.status === 'failed' || row.status === 'cancelled' ? (
         <Typography.Text type="danger">{taskFailureMessage(row, '导出文件生成失败')}</Typography.Text>
@@ -1687,7 +1718,7 @@ function generationJobStatusTag(value: BidGenerationJobDTO['status']) {
 
 function generationJobStatusCell(row: BidGenerationJobDTO) {
   return (
-    <Space orientation="vertical" size={2}>
+    <Space direction="vertical" size={2}>
       {generationJobStatusTag(row.status)}
       {row.status === 'failed' || row.status === 'cancelled' ? (
         <Typography.Text type="danger">{taskFailureMessage(row, '正文生成失败')}</Typography.Text>
@@ -1885,7 +1916,7 @@ function requirementHistoryTimelineItem(event: BidRequirementCoverageEventDTO) {
   const sourceRefs = arrayValue(event.source_refs)
   const sourceSummary = requirementSourceRefsSummary(sourceRefs)
   return (
-    <Space orientation="vertical" size={4} className="full-width">
+    <Space direction="vertical" size={4} className="full-width">
       <Space size={6} wrap>
         {requirementCoverageTag(event.coverage_status)}
         <Tag>{requirementEventSourceLabel(event.source)}</Tag>
@@ -1922,7 +1953,10 @@ function requirementSourceRefsSummary(sourceRefs: unknown[]) {
       const title = String(record.title || record.filename || record.document_title || '响应来源')
       const page = String(record.page || record.page_start || '').trim()
       const excerpt = formatStructuredValue(record.source_text || record.excerpt || record.text)
-      return [title, page ? `第${page}页` : '', excerpt ? `摘录：${excerpt}` : ''].filter(Boolean).join('，')
+      const locator = firstSourceRefString(record, ['reference_id', 'referenceId', 'citation_id', 'citationId', 'chunk_id', 'chunkId'])
+      return [title, page ? `第${page}页` : '', locator ? `定位：${locator}` : '', excerpt ? `摘录：${excerpt}` : '']
+        .filter(Boolean)
+        .join('，')
     })
     .filter(Boolean)
     .join('；')
@@ -1964,6 +1998,38 @@ function requirementSourcePage(sourceRef: unknown) {
     if (Number.isInteger(value) && value > 0) return value
   }
   return null
+}
+
+function requirementSourceLocatorParts(sourceRef: unknown) {
+  const record = objectRecord(sourceRef)
+  if (!record) return []
+  const parts: Array<{ label: string; value: string }> = []
+  const page = requirementSourcePage(sourceRef)
+  if (page) {
+    parts.push({ label: '页码', value: String(page) })
+  }
+  const section = firstSourceRefString(record, ['section_path', 'sectionPath', 'title_path', 'titlePath'])
+  if (section) {
+    parts.push({ label: '章节', value: section })
+  }
+  const referenceID = firstSourceRefString(record, ['reference_id', 'referenceId', 'citation_id', 'citationId'])
+  if (referenceID) {
+    parts.push({ label: '引用号', value: referenceID })
+  }
+  const chunkID = firstSourceRefString(record, ['chunk_id', 'chunkId'])
+  if (chunkID) {
+    parts.push({ label: '定位码', value: chunkID })
+  }
+  return parts
+}
+
+function requirementSourceLocatorText(sourceRef: unknown) {
+  const record = objectRecord(sourceRef)
+  if (!record) return ''
+  const title = requirementSourceTitle(sourceRef)
+  const parts = requirementSourceLocatorParts(sourceRef).map((part) => `${part.label}: ${part.value}`)
+  const excerpt = formatStructuredValue(record.source_text || record.excerpt || record.text).trim()
+  return [title, ...parts, excerpt ? `摘录: ${excerpt}` : ''].filter(Boolean).join('\n')
 }
 
 function withPreviewPageAnchor(url: string, page: number | null) {
@@ -2014,7 +2080,7 @@ function RequirementSourceRefsEditor({
         </Button>
       </Space>
       {drafts.length ? (
-        <Space orientation="vertical" size={8} className="full-width">
+        <Space direction="vertical" size={8} className="full-width">
           {drafts.map((draft, index) => (
             <div className="requirement-source-row" key={index}>
               <Input
@@ -2587,7 +2653,7 @@ export function BidEditorPage() {
           </Card>
         </div>
         <Card title="智能助手" className="ai-card" size="small">
-          <Space orientation="vertical" size={14} style={{ width: '100%' }}>
+          <Space direction="vertical" size={14} style={{ width: '100%' }}>
             <div className="ai-panel-row">
               <span>
                 <span className={`conn-dot ${generationStreamStatus}`} />

@@ -277,7 +277,7 @@ export function CostDetailPage() {
               </Descriptions.Item>
               <Descriptions.Item label="超预算项">{analysis.data?.overrun_items.length || 0} 项</Descriptions.Item>
               <Descriptions.Item label="建议">
-                <Space orientation="vertical">
+                <Space direction="vertical">
                   {analysis.data?.recommendations.map((item) => (
                     <span key={item}>{item}</span>
                   ))}
@@ -285,7 +285,7 @@ export function CostDetailPage() {
               </Descriptions.Item>
               {adviceTask.data ? (
                 <Descriptions.Item label="智能建议">
-                  <Space orientation="vertical">
+                  <Space direction="vertical">
                     {adviceStatusTag(adviceTask.data.status)}
                     {adviceRecommendations(adviceTask.data.result).map((item) => (
                       <span key={item}>{item}</span>
