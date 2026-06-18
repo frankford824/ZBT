@@ -59,6 +59,9 @@ func TestNormalizeConfigRejectsUnsafeExternalEndpoints(t *testing.T) {
 		"http://[2001:db8::1]/mcp",
 		"https://user:pass@example.com/mcp",
 		"https://example.com@127.0.0.1/mcp",
+		"https://example.com/mcp?token=secret",
+		"https://example.com/mcp?api_key=secret",
+		"https://example.com/mcp?access_token=secret",
 		"//example.com/mcp",
 	} {
 		if _, err := normalizeConfig("handaas-bidding", UpsertConfigRequest{Endpoint: endpoint}); err == nil {
@@ -155,6 +158,48 @@ func TestSummarizeArgumentsDoesNotPersistRawValues(t *testing.T) {
 	if !strings.Contains(summary, "keyword=string") || !strings.Contains(summary, "filters=object") {
 		t.Fatalf("expected structural summary, got %s", summary)
 	}
+}
+
+func TestSummarizeValueDoesNotPersistRawExternalResponse(t *testing.T) {
+	summary := summarizeValue(map[string]any{
+		"items": []any{
+			map[string]any{
+				"title":  "某客户机密采购项目",
+				"phone":  "13800138000",
+				"email":  "buyer@example.com",
+				"amount": 9900000,
+			},
+		},
+		"next_token": "raw-page-token",
+	})
+	for _, leaked := range []string{"某客户机密采购项目", "13800138000", "buyer@example.com", "raw-page-token", "9900000"} {
+		if strings.Contains(summary, leaked) {
+			t.Fatalf("response summary leaked raw value %q: %s", leaked, summary)
+		}
+	}
+	for _, expected := range []string{`"items"`, `"type":"array"`, `"count":1`, `"next_token"`} {
+		if !strings.Contains(summary, expected) {
+			t.Fatalf("expected structural response summary to contain %s, got %s", expected, summary)
+		}
+	}
+}
+
+func TestSafeErrorRedactsExternalEndpointAndSecrets(t *testing.T) {
+	message := safeError(errString(`Post "https://api.example.com/mcp?token=secret-token": external tool error: api_key=raw-key failed`))
+	for _, leaked := range []string{"https://api.example.com", "secret-token", "raw-key"} {
+		if strings.Contains(message, leaked) {
+			t.Fatalf("safe error leaked %q: %s", leaked, message)
+		}
+	}
+	if !strings.Contains(message, "[external-endpoint]") || !strings.Contains(message, "api_key=[redacted]") {
+		t.Fatalf("expected redacted endpoint and secret marker, got %s", message)
+	}
+}
+
+type errString string
+
+func (e errString) Error() string {
+	return string(e)
 }
 
 func TestCallStreamableHTTPUsesMCPToolsCallEnvelope(t *testing.T) {

@@ -609,6 +609,9 @@ func validExternalToolEndpoint(value string) bool {
 	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") {
 		return false
 	}
+	if externalToolEndpointHasSensitiveQuery(parsed.Query()) {
+		return false
+	}
 	if addr, err := netip.ParseAddr(host); err == nil {
 		return publicExternalToolNetIP(addr)
 	}
@@ -708,11 +711,58 @@ func summarizeType(value any) string {
 }
 
 func summarizeValue(value any) string {
-	raw, err := json.Marshal(value)
+	raw, err := json.Marshal(structuralSummary(value, 0))
 	if err != nil {
-		return truncateSummary(fmt.Sprint(value))
+		return summarizeType(value)
 	}
 	return truncateSummary(string(raw))
+}
+
+func structuralSummary(value any, depth int) any {
+	if depth >= 4 {
+		return summarizeType(value)
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		summary := map[string]any{
+			"type":      "object",
+			"key_count": len(keys),
+		}
+		if len(keys) > 0 {
+			visibleKeys := keys
+			if len(visibleKeys) > 12 {
+				visibleKeys = visibleKeys[:12]
+			}
+			summary["keys"] = visibleKeys
+			for _, key := range visibleKeys {
+				summary[key] = structuralSummary(typed[key], depth+1)
+			}
+		}
+		return summary
+	case []any:
+		return map[string]any{
+			"type":  "array",
+			"count": len(typed),
+		}
+	case string:
+		return map[string]any{
+			"type":   "string",
+			"length": len([]rune(typed)),
+		}
+	case nil:
+		return map[string]any{"type": "null"}
+	case bool:
+		return map[string]any{"type": "bool"}
+	case float64, float32, int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return map[string]any{"type": "number"}
+	default:
+		return map[string]any{"type": fmt.Sprintf("%T", value)}
+	}
 }
 
 func truncateSummary(value string) string {
@@ -727,7 +777,13 @@ func safeError(err error) string {
 	if err == nil {
 		return ""
 	}
-	return truncateSummary(err.Error())
+	return truncateSummary(redactExternalToolError(err.Error()))
+}
+
+func redactExternalToolError(value string) string {
+	message := externalToolURLPattern.ReplaceAllString(value, "[external-endpoint]")
+	message = externalToolSecretPattern.ReplaceAllString(message, "$1=[redacted]")
+	return message
 }
 
 func costPerCall(metadata map[string]any) float64 {
@@ -760,6 +816,34 @@ func externalToolToken(providerKey string) string {
 func externalToolTokenEnvName(providerKey string) string {
 	return "EXTERNAL_TOOL_" + strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(providerKey)) + "_TOKEN"
 }
+
+func externalToolEndpointHasSensitiveQuery(query url.Values) bool {
+	for key := range query {
+		if externalToolSensitiveQueryKeys[strings.ToLower(strings.TrimSpace(key))] {
+			return true
+		}
+	}
+	return false
+}
+
+var externalToolSensitiveQueryKeys = map[string]bool{
+	"access_token":  true,
+	"apikey":        true,
+	"api_key":       true,
+	"authorization": true,
+	"auth_token":    true,
+	"key":           true,
+	"password":      true,
+	"secret":        true,
+	"sig":           true,
+	"signature":     true,
+	"token":         true,
+}
+
+var (
+	externalToolURLPattern    = regexp.MustCompile(`https?://[^\s"'<>]+`)
+	externalToolSecretPattern = regexp.MustCompile(`(?i)\b(token|access_token|auth_token|api[_-]?key|secret|password|authorization|signature|sig)\s*=\s*[^,\s&;]+`)
+)
 
 func scanConfig(row pgx.Row) (Config, error) {
 	var item Config

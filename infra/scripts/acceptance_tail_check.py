@@ -305,10 +305,17 @@ def check_static_docs() -> None:
         "newExternalToolHTTPClient",
         "publicExternalToolNetIP",
         "externalToolSpecialUseIPPrefixes",
+        "externalToolEndpointHasSensitiveQuery",
+        "structuralSummary",
+        "redactExternalToolError",
         "net.DefaultResolver.LookupNetIP",
         "CheckRedirect",
     ):
         require(needle in external_tool_store, f"External tool gateway missing public endpoint guard: {needle}")
+    require(
+        "json.Marshal(value)" not in external_tool_store,
+        "External tool audit summary still serializes raw response values",
+    )
     require(
         'if endpoint != "" && !validExternalToolEndpoint(endpoint)' in external_tool_store,
         "External tool config does not validate endpoints with the public endpoint guard",
@@ -318,8 +325,17 @@ def check_static_docs() -> None:
         "External tool gateway does not use the guarded HTTP client",
     )
     external_tool_tests = (ROOT / "backend/internal/platform/externaltool/store_test.go").read_text(encoding="utf-8")
-    for needle in ("TestNormalizeConfigRejectsUnsafeExternalEndpoints", "TestExternalToolHTTPClientRejectsLocalhostDial"):
+    for needle in (
+        "TestNormalizeConfigRejectsUnsafeExternalEndpoints",
+        "TestExternalToolHTTPClientRejectsLocalhostDial",
+        "TestSummarizeValueDoesNotPersistRawExternalResponse",
+        "TestSafeErrorRedactsExternalEndpointAndSecrets",
+    ):
         require(needle in external_tool_tests, f"External tool gateway missing SSRF regression test: {needle}")
+    external_tool_presets = (ROOT / "backend/internal/platform/externaltool/presets.go").read_text(encoding="utf-8")
+    for needle in ("?token=", "<token>", "?api_key=", "?access_token="):
+        require(needle not in external_tool_presets, f"External tool preset leaks token-in-URL hint: {needle}")
+    require("structuralArrayCount" in team_page, "Team external audit UI cannot count structural response summaries")
 
     bid_page = (ROOT / "frontend/src/features/bid/index.tsx").read_text(encoding="utf-8")
     api_client = (ROOT / "frontend/src/shared/api/client.ts").read_text(encoding="utf-8")

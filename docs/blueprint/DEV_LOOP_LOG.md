@@ -5477,3 +5477,51 @@ cd backend && go test ./...
 
 1. 本轮收紧外部 MCP endpoint 为公网 HTTP/HTTPS 地址；如需本地调试外部 MCP，应通过显式测试 client 或安全隧道处理，不再允许生产配置直连内网地址。
 2. 未新增端到端真实第三方 MCP 调用；本轮通过单元测试、静态验收和总检验证边界行为。
+
+## Loop-112 / 外部工具审计摘要脱敏 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查外部 MCP/工具调用记录，处理 `response_summary` 仍按第三方返回 JSON 原文截断入库的问题。
+2. 避免第三方响应里的客户名称、手机号、邮箱、token、金额等原始值进入审计表或团队页。
+3. 禁止外部工具 endpoint 使用常见敏感 query 参数，并清理预设里的 token-in-URL 示例。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/store.go` 将 `summarizeValue()` 改为 `structuralSummary()`：只保留对象 key、数组数量、字段类型和字符串长度，不保存原始响应值。
+2. `safeError()` 增加 `redactExternalToolError()`，把外部 URL 和常见 token/api key/password/signature 片段归一为脱敏标记。
+3. `validExternalToolEndpoint()` 增加敏感 query 拒绝逻辑，拦截 `token`、`api_key`、`access_token` 等参数。
+4. `backend/internal/platform/externaltool/presets.go` 移除 Handaas 和 qlows 预设里的 token-in-URL 示例。
+5. `frontend/src/features/team/index.tsx` 兼容结构化响应摘要，继续把调用记录显示为“返回 N 条结果 / 已返回结果”。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查：禁止回到原始响应 JSON 摘要、要求错误脱敏和结构化摘要测试存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && go test ./internal/platform/externaltool
+cd backend && go test ./...
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+2. `cd backend && go test ./internal/platform/externaltool` 通过，覆盖 unsafe endpoint、结构化响应摘要和错误脱敏。
+3. `cd backend && go test ./...` 通过。
+4. `cd frontend && pnpm lint` 通过。
+5. `cd frontend && pnpm build` 通过。
+6. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+7. AI pytest 通过：`237 passed`。
+8. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+9. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 审计表仍保留字段名、数组数量和类型摘要，用于排查调用质量；不再保留第三方响应原始值。
+2. 本轮未新增真实第三方 MCP 端到端调用，继续用单元测试、静态验收和构建验证数据最小化行为。

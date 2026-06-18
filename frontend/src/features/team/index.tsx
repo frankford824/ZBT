@@ -236,11 +236,22 @@ function countExternalToolResultItems(value: unknown): number {
   if (Array.isArray(value)) return value.length
   if (!value || typeof value !== 'object') return 0
   const record = value as Record<string, unknown>
+  const structuralCount = structuralArrayCount(record)
+  if (structuralCount > 0) return structuralCount
   for (const key of ['items', 'results', 'data', 'documents', 'questions', 'tenders']) {
     const item = record[key]
     if (Array.isArray(item)) return item.length
+    if (item && typeof item === 'object') {
+      const count = structuralArrayCount(item as Record<string, unknown>)
+      if (count > 0) return count
+    }
   }
   return 0
+}
+
+function structuralArrayCount(value: Record<string, unknown>) {
+  const count = value.type === 'array' ? Number(value.count) : 0
+  return Number.isFinite(count) && count > 0 ? count : 0
 }
 
 function externalToolBusinessErrorMessage(value: string, status: ExternalToolAuditLogDTO['status']) {
