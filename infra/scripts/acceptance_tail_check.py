@@ -699,6 +699,13 @@ def check_static_docs() -> None:
         "maxKnowledgeTemplateContentJSONBytes",
         "normalizeDocumentTemplateRequest",
         "normalizeDocumentTemplateContent",
+        "maxKnowledgeCategoryNameRunes",
+        "maxKnowledgeTagNameRunes",
+        "maxKnowledgeDocumentTagIDs",
+        "normalizeKnowledgeCategoryInput",
+        "normalizeKnowledgeTagInput",
+        "normalizeKnowledgeDocumentUpdate",
+        "validateKnowledgeDocumentReferences",
     ):
         require(needle in knowledge_store, f"Knowledge template missing content size guard: {needle}")
     knowledge_store_tests = (ROOT / "backend/internal/platform/knowledge/store_test.go").read_text(encoding="utf-8")
@@ -710,6 +717,10 @@ def check_static_docs() -> None:
         "TestNormalizeDocumentTemplateRequestTrimsDefaultsAndBoundsContent",
         "TestNormalizeDocumentTemplateRequestRejectsOversizedFieldsAndContent",
         "TestCreateDocumentTemplateRejectsInvalidRequestBeforeDB",
+        "TestNormalizeKnowledgeCategoryInputBoundsText",
+        "TestNormalizeKnowledgeTagInputBoundsTextAndColor",
+        "TestNormalizeKnowledgeDocumentUpdateBoundsFieldsAndIDs",
+        "TestKnowledgeWriteMethodsRejectInvalidInputsBeforeDB",
     ):
         require(needle in knowledge_store_tests, f"Knowledge template missing content boundary regression test: {needle}")
 

@@ -6644,3 +6644,51 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是知识库模板自由 JSON 的输入边界，没有新增模板版本历史、模板渲染引擎或模板母版设计能力。
 2. content 上限采用 64KB；若后续模板需要携带大型示例正文或附件，应通过知识文档/文件资产引用，而不是直接塞入模板 JSON。
+
+## Loop-137 / 知识库基础写入口边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查知识库 Store，处理分类、标签和文档更新入口只有基础 trim、缺少统一边界的问题。
+2. 避免超长分类/标签/文档字段、非法颜色、非法文档类型或过多标签 ID 写入知识库列表、检索筛选和前端展示链路。
+3. 修补文档更新时 `category_id` / `tag_id` 只依赖普通外键、未校验引用属于当前租户的关系污染风险。
+
+### 代码交付
+
+1. `backend/internal/platform/knowledge/store.go` 新增知识库分类、标签、文档标题、摘要和标签数量边界常量。
+2. 新增 `normalizeKnowledgeCategoryInput()`、`normalizeKnowledgeTagInput()` 和 `normalizeKnowledgeDocumentUpdate()`，在进入事务前统一完成 trim、长度、颜色、文档类型和 UUID 列表校验。
+3. 标签颜色按当前前端可选业务色收口到 `blue/green/orange/red/purple/cyan`，空颜色在创建时仍默认 `blue`，更新时仍保留原值。
+4. 文档类型按当前系统类型收口到 `general/won_case/pdf/word/spreadsheet/presentation/image`。
+5. `UpdateDocument()` 在同一租户事务中通过 `validateKnowledgeDocumentReferences()` 校验分类和标签都属于当前租户，再写入关联表。
+6. 分类/标签更新与删除新增 UUID 写前校验，避免无效路径参数落到数据库类型错误。
+7. `backend/internal/platform/knowledge/store_test.go` 新增分类/标签/文档更新字段边界、标签颜色、标签 ID 去重和写库前拒绝非法请求回归测试。
+8. `infra/scripts/acceptance_tail_check.py --static-docs` 增加知识库基础写入口边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/platform/knowledge/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/knowledge
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/knowledge` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是知识库基础 CRUD 输入边界和同租户引用校验，没有新增知识库检索算法、模板渲染或文档解析能力。
+2. 分类/标签仍是轻量字典表；若后续需要层级分类编辑、标签合并或颜色主题配置，应单独建业务流程，而不是放宽自由输入。

@@ -87,6 +87,167 @@ func TestNormalizeKnowledgeSearchQueryTrimsAndCapsRunes(t *testing.T) {
 	}
 }
 
+func TestNormalizeKnowledgeCategoryInputBoundsText(t *testing.T) {
+	name, description, err := normalizeKnowledgeCategoryInput(" 资质证书 ", " 企业资质材料 ", false)
+	if err != nil {
+		t.Fatalf("expected category input to normalize: %v", err)
+	}
+	if name != "资质证书" || description != "企业资质材料" {
+		t.Fatalf("unexpected category normalization: name=%q description=%q", name, description)
+	}
+
+	for _, req := range []struct {
+		name        string
+		description string
+		allowBlank  bool
+	}{
+		{name: " ", description: "", allowBlank: false},
+		{name: strings.Repeat("类", maxKnowledgeCategoryNameRunes+1), description: "", allowBlank: false},
+		{name: "分类", description: strings.Repeat("说", maxKnowledgeCategoryDescriptionRunes+1), allowBlank: false},
+	} {
+		if _, _, err := normalizeKnowledgeCategoryInput(req.name, req.description, req.allowBlank); err != ErrInvalidRequest {
+			t.Fatalf("expected invalid category input to be rejected, got %v for %+v", err, req)
+		}
+	}
+}
+
+func TestNormalizeKnowledgeTagInputBoundsTextAndColor(t *testing.T) {
+	name, color, err := normalizeKnowledgeTagInput(" 技术方案 ", " GREEN ", false)
+	if err != nil {
+		t.Fatalf("expected tag input to normalize: %v", err)
+	}
+	if name != "技术方案" || color != "green" {
+		t.Fatalf("unexpected tag normalization: name=%q color=%q", name, color)
+	}
+	_, color, err = normalizeKnowledgeTagInput("项目案例", "", false)
+	if err != nil || color != "blue" {
+		t.Fatalf("expected blank create color to default to blue, got color=%q err=%v", color, err)
+	}
+	_, color, err = normalizeKnowledgeTagInput("", "", true)
+	if err != nil || color != "" {
+		t.Fatalf("expected blank update tag fields to preserve existing values, got color=%q err=%v", color, err)
+	}
+
+	for _, req := range []struct {
+		name       string
+		color      string
+		allowBlank bool
+	}{
+		{name: " ", color: "blue", allowBlank: false},
+		{name: strings.Repeat("标", maxKnowledgeTagNameRunes+1), color: "blue", allowBlank: false},
+		{name: "标签", color: "raw-css-color", allowBlank: false},
+	} {
+		if _, _, err := normalizeKnowledgeTagInput(req.name, req.color, req.allowBlank); err != ErrInvalidRequest {
+			t.Fatalf("expected invalid tag input to be rejected, got %v for %+v", err, req)
+		}
+	}
+}
+
+func TestNormalizeKnowledgeDocumentUpdateBoundsFieldsAndIDs(t *testing.T) {
+	categoryID := "00000000-0000-4000-8000-000000000010"
+	_, normalized, err := normalizeKnowledgeDocumentUpdate("00000000-0000-4000-8000-000000000001", UpdateDocumentRequest{
+		Title:      " 实施方案 ",
+		DocType:    " word ",
+		CategoryID: &categoryID,
+		TagIDs: []string{
+			"00000000-0000-4000-8000-000000000101",
+			"00000000-0000-4000-8000-000000000101",
+			"00000000-0000-4000-8000-000000000102",
+		},
+		Summary: " 摘要 ",
+	})
+	if err != nil {
+		t.Fatalf("expected document update to normalize: %v", err)
+	}
+	if normalized.Title != "实施方案" || normalized.DocType != "word" || normalized.Summary != "摘要" {
+		t.Fatalf("unexpected document normalization: %+v", normalized)
+	}
+	if normalized.CategoryID == nil || *normalized.CategoryID != categoryID {
+		t.Fatalf("expected category id to normalize, got %+v", normalized.CategoryID)
+	}
+	if len(normalized.TagIDs) != 2 {
+		t.Fatalf("expected duplicate tag ids to be deduped, got %+v", normalized.TagIDs)
+	}
+}
+
+func TestNormalizeKnowledgeDocumentUpdateRejectsInvalidFields(t *testing.T) {
+	validID := "00000000-0000-4000-8000-000000000001"
+	blankCategoryID := " "
+	tooManyTags := make([]string, maxKnowledgeDocumentTagIDs+1)
+	for index := range tooManyTags {
+		tooManyTags[index] = "00000000-0000-4000-8000-000000000001"
+	}
+	for name, req := range map[string]struct {
+		id      string
+		request UpdateDocumentRequest
+	}{
+		"invalid document id": {
+			id: "not-a-uuid",
+		},
+		"oversized title": {
+			id:      validID,
+			request: UpdateDocumentRequest{Title: strings.Repeat("题", maxKnowledgeDocumentTitleRunes+1)},
+		},
+		"invalid doc type": {
+			id:      validID,
+			request: UpdateDocumentRequest{DocType: "raw_type"},
+		},
+		"oversized summary": {
+			id:      validID,
+			request: UpdateDocumentRequest{Summary: strings.Repeat("摘", maxKnowledgeDocumentSummaryRunes+1)},
+		},
+		"invalid category id": {
+			id:      validID,
+			request: UpdateDocumentRequest{CategoryID: ptrString("bad-category")},
+		},
+		"blank category id clears value": {
+			id:      validID,
+			request: UpdateDocumentRequest{CategoryID: &blankCategoryID},
+		},
+		"invalid tag id": {
+			id:      validID,
+			request: UpdateDocumentRequest{TagIDs: []string{"bad-tag"}},
+		},
+		"too many tag ids": {
+			id:      validID,
+			request: UpdateDocumentRequest{TagIDs: tooManyTags},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, normalized, err := normalizeKnowledgeDocumentUpdate(req.id, req.request)
+			if name == "blank category id clears value" {
+				if err != nil || normalized.CategoryID != nil {
+					t.Fatalf("expected blank category id to clear value, got category=%+v err=%v", normalized.CategoryID, err)
+				}
+				return
+			}
+			if err != ErrInvalidRequest {
+				t.Fatalf("expected invalid document update to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestKnowledgeWriteMethodsRejectInvalidInputsBeforeDB(t *testing.T) {
+	store := &Store{}
+
+	if _, err := store.CreateCategory(context.Background(), "tenant-id", strings.Repeat("类", maxKnowledgeCategoryNameRunes+1), ""); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized category name to be rejected before DB, got %v", err)
+	}
+	if _, err := store.UpdateCategory(context.Background(), "tenant-id", "bad-id", "分类", ""); err != ErrInvalidRequest {
+		t.Fatalf("expected invalid category id to be rejected before DB, got %v", err)
+	}
+	if _, err := store.CreateTag(context.Background(), "tenant-id", "标签", "raw-css-color"); err != ErrInvalidRequest {
+		t.Fatalf("expected invalid tag color to be rejected before DB, got %v", err)
+	}
+	if _, err := store.UpdateTag(context.Background(), "tenant-id", "bad-id", "标签", "blue"); err != ErrInvalidRequest {
+		t.Fatalf("expected invalid tag id to be rejected before DB, got %v", err)
+	}
+	if _, err := store.UpdateDocument(context.Background(), "tenant-id", "bad-id", UpdateDocumentRequest{}); err != ErrInvalidRequest {
+		t.Fatalf("expected invalid document id to be rejected before DB, got %v", err)
+	}
+}
+
 func TestEstimateTokensForRerankOutputUsesSerializedPayload(t *testing.T) {
 	results := []rerankResult{
 		{ID: "chunk-a", Index: 0, Score: 1},
@@ -274,4 +435,8 @@ func TestCreateDocumentTemplateRejectsInvalidRequestBeforeDB(t *testing.T) {
 	if err != ErrInvalidRequest {
 		t.Fatalf("expected invalid template content to be rejected before DB, got %v", err)
 	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }

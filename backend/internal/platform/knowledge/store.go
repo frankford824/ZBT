@@ -44,6 +44,13 @@ const (
 	maxKnowledgeTemplateDescriptionRunes = 2000
 	maxKnowledgeTemplateVersionRunes     = 64
 	maxKnowledgeTemplateContentJSONBytes = 64 * 1024
+
+	maxKnowledgeCategoryNameRunes        = 128
+	maxKnowledgeCategoryDescriptionRunes = 1000
+	maxKnowledgeTagNameRunes             = 64
+	maxKnowledgeDocumentTitleRunes       = 300
+	maxKnowledgeDocumentSummaryRunes     = 4000
+	maxKnowledgeDocumentTagIDs           = 50
 )
 
 type Store struct {
@@ -301,19 +308,19 @@ func (s *Store) ListCategories(ctx context.Context, tenantID string) ([]Category
 }
 
 func (s *Store) CreateCategory(ctx context.Context, tenantID, name, description string) (Category, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
+	normalizedName, normalizedDescription, err := normalizeKnowledgeCategoryInput(name, description, false)
+	if err != nil {
 		return Category{}, ErrInvalidRequest
 	}
 	var category Category
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		created, err := scanCategory(tx.QueryRow(ctx, `
 			insert into knowledge_categories (tenant_id, name, description)
 			values ($1, $2, $3)
 			on conflict (tenant_id, name) do update
 			set description = knowledge_categories.description
 			returning id::text, name, description, parent_id::text, created_at, updated_at
-		`, tenantID, name, description))
+		`, tenantID, normalizedName, normalizedDescription))
 		if err != nil {
 			return err
 		}
@@ -324,8 +331,16 @@ func (s *Store) CreateCategory(ctx context.Context, tenantID, name, description 
 }
 
 func (s *Store) UpdateCategory(ctx context.Context, tenantID, id, name, description string) (Category, error) {
+	normalizedID, err := normalizeKnowledgeUUID(id)
+	if err != nil {
+		return Category{}, err
+	}
+	normalizedName, normalizedDescription, err := normalizeKnowledgeCategoryInput(name, description, true)
+	if err != nil {
+		return Category{}, err
+	}
 	var category Category
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		updated, err := scanCategory(tx.QueryRow(ctx, `
 			update knowledge_categories
 			set name = coalesce(nullif($3, ''), name),
@@ -333,7 +348,7 @@ func (s *Store) UpdateCategory(ctx context.Context, tenantID, id, name, descript
 				updated_at = now()
 			where tenant_id = $1 and id = $2
 			returning id::text, name, description, parent_id::text, created_at, updated_at
-		`, tenantID, id, strings.TrimSpace(name), description))
+		`, tenantID, normalizedID, normalizedName, normalizedDescription))
 		if err != nil {
 			return err
 		}
@@ -347,22 +362,26 @@ func (s *Store) UpdateCategory(ctx context.Context, tenantID, id, name, descript
 }
 
 func (s *Store) DeleteCategory(ctx context.Context, tenantID, id string) error {
+	normalizedID, err := normalizeKnowledgeUUID(id)
+	if err != nil {
+		return err
+	}
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			update knowledge_categories
 			set parent_id = null, updated_at = now()
 			where tenant_id = $1 and parent_id = $2
-		`, tenantID, id); err != nil {
+		`, tenantID, normalizedID); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			update knowledge_documents
 			set category_id = null, updated_at = now()
 			where tenant_id = $1 and category_id = $2
-		`, tenantID, id); err != nil {
+		`, tenantID, normalizedID); err != nil {
 			return err
 		}
-		tag, err := tx.Exec(ctx, `delete from knowledge_categories where tenant_id = $1 and id = $2`, tenantID, id)
+		tag, err := tx.Exec(ctx, `delete from knowledge_categories where tenant_id = $1 and id = $2`, tenantID, normalizedID)
 		if err != nil {
 			return err
 		}
@@ -399,22 +418,19 @@ func (s *Store) ListTags(ctx context.Context, tenantID string) ([]Tag, error) {
 }
 
 func (s *Store) CreateTag(ctx context.Context, tenantID, name, color string) (Tag, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return Tag{}, ErrInvalidRequest
-	}
-	if color == "" {
-		color = "blue"
+	normalizedName, normalizedColor, err := normalizeKnowledgeTagInput(name, color, false)
+	if err != nil {
+		return Tag{}, err
 	}
 	var tag Tag
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		created, err := scanTag(tx.QueryRow(ctx, `
 			insert into knowledge_tags (tenant_id, name, color)
 			values ($1, $2, $3)
 			on conflict (tenant_id, name) do update
 			set color = knowledge_tags.color
 			returning id::text, name, color, created_at, updated_at
-		`, tenantID, name, color))
+		`, tenantID, normalizedName, normalizedColor))
 		if err != nil {
 			return err
 		}
@@ -425,8 +441,16 @@ func (s *Store) CreateTag(ctx context.Context, tenantID, name, color string) (Ta
 }
 
 func (s *Store) UpdateTag(ctx context.Context, tenantID, id, name, color string) (Tag, error) {
+	normalizedID, err := normalizeKnowledgeUUID(id)
+	if err != nil {
+		return Tag{}, err
+	}
+	normalizedName, normalizedColor, err := normalizeKnowledgeTagInput(name, color, true)
+	if err != nil {
+		return Tag{}, err
+	}
 	var tag Tag
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		updated, err := scanTag(tx.QueryRow(ctx, `
 			update knowledge_tags
 			set name = coalesce(nullif($3, ''), name),
@@ -434,7 +458,7 @@ func (s *Store) UpdateTag(ctx context.Context, tenantID, id, name, color string)
 				updated_at = now()
 			where tenant_id = $1 and id = $2
 			returning id::text, name, color, created_at, updated_at
-		`, tenantID, id, strings.TrimSpace(name), color))
+		`, tenantID, normalizedID, normalizedName, normalizedColor))
 		if err != nil {
 			return err
 		}
@@ -448,8 +472,12 @@ func (s *Store) UpdateTag(ctx context.Context, tenantID, id, name, color string)
 }
 
 func (s *Store) DeleteTag(ctx context.Context, tenantID, id string) error {
+	normalizedID, err := normalizeKnowledgeUUID(id)
+	if err != nil {
+		return err
+	}
 	return s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `delete from knowledge_tags where tenant_id = $1 and id = $2`, tenantID, id)
+		tag, err := tx.Exec(ctx, `delete from knowledge_tags where tenant_id = $1 and id = $2`, tenantID, normalizedID)
 		if err != nil {
 			return err
 		}
@@ -539,7 +567,14 @@ func (s *Store) GetDocument(ctx context.Context, tenantID, id string) (Document,
 }
 
 func (s *Store) UpdateDocument(ctx context.Context, tenantID, id string, req UpdateDocumentRequest) (Document, error) {
-	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+	normalizedID, normalizedReq, err := normalizeKnowledgeDocumentUpdate(id, req)
+	if err != nil {
+		return Document{}, err
+	}
+	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := validateKnowledgeDocumentReferences(ctx, tx, tenantID, normalizedReq); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `
 			update knowledge_documents
 			set title = coalesce(nullif($3, ''), title),
@@ -548,23 +583,23 @@ func (s *Store) UpdateDocument(ctx context.Context, tenantID, id string, req Upd
 				summary = coalesce($6, summary),
 				updated_at = now()
 			where tenant_id = $1 and id = $2
-		`, tenantID, id, strings.TrimSpace(req.Title), strings.TrimSpace(req.DocType), req.CategoryID, req.Summary)
+		`, tenantID, normalizedID, normalizedReq.Title, normalizedReq.DocType, normalizedReq.CategoryID, normalizedReq.Summary)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		if req.TagIDs != nil {
-			if _, err := tx.Exec(ctx, `delete from knowledge_document_tags where tenant_id = $1 and document_id = $2`, tenantID, id); err != nil {
+		if normalizedReq.TagIDs != nil {
+			if _, err := tx.Exec(ctx, `delete from knowledge_document_tags where tenant_id = $1 and document_id = $2`, tenantID, normalizedID); err != nil {
 				return err
 			}
-			for _, tagID := range req.TagIDs {
+			for _, tagID := range normalizedReq.TagIDs {
 				if _, err := tx.Exec(ctx, `
 					insert into knowledge_document_tags (tenant_id, document_id, tag_id)
 					values ($1, $2, $3)
 					on conflict do nothing
-				`, tenantID, id, tagID); err != nil {
+				`, tenantID, normalizedID, tagID); err != nil {
 					return err
 				}
 			}
@@ -574,7 +609,7 @@ func (s *Store) UpdateDocument(ctx context.Context, tenantID, id string, req Upd
 	if err != nil {
 		return Document{}, err
 	}
-	return s.GetDocument(ctx, tenantID, id)
+	return s.GetDocument(ctx, tenantID, normalizedID)
 }
 
 func (s *Store) DeleteDocument(ctx context.Context, tenantID, id string) error {
@@ -1555,6 +1590,163 @@ func knowledgeChunkMetadataJSON(metadata map[string]any, index int) ([]byte, err
 		return nil, ErrInvalidRequest
 	}
 	return metadataJSON, nil
+}
+
+func normalizeKnowledgeCategoryInput(name, description string, allowBlankName bool) (string, string, error) {
+	name = strings.TrimSpace(name)
+	description = strings.TrimSpace(description)
+	if name == "" && !allowBlankName {
+		return "", "", ErrInvalidRequest
+	}
+	if name != "" && utf8.RuneCountInString(name) > maxKnowledgeCategoryNameRunes {
+		return "", "", ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(description) > maxKnowledgeCategoryDescriptionRunes {
+		return "", "", ErrInvalidRequest
+	}
+	return name, description, nil
+}
+
+func normalizeKnowledgeTagInput(name, color string, allowBlankName bool) (string, string, error) {
+	name = strings.TrimSpace(name)
+	color = strings.ToLower(strings.TrimSpace(color))
+	if name == "" && !allowBlankName {
+		return "", "", ErrInvalidRequest
+	}
+	if name != "" && utf8.RuneCountInString(name) > maxKnowledgeTagNameRunes {
+		return "", "", ErrInvalidRequest
+	}
+	if color == "" {
+		if allowBlankName {
+			return name, "", nil
+		}
+		color = "blue"
+	}
+	if !knowledgeTagColorAllowed(color) {
+		return "", "", ErrInvalidRequest
+	}
+	return name, color, nil
+}
+
+func knowledgeTagColorAllowed(color string) bool {
+	switch color {
+	case "blue", "green", "orange", "red", "purple", "cyan":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeKnowledgeDocumentUpdate(id string, req UpdateDocumentRequest) (string, UpdateDocumentRequest, error) {
+	normalizedID, err := normalizeKnowledgeUUID(id)
+	if err != nil {
+		return "", UpdateDocumentRequest{}, err
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	req.DocType = strings.TrimSpace(req.DocType)
+	req.Summary = strings.TrimSpace(req.Summary)
+	if req.Title != "" && utf8.RuneCountInString(req.Title) > maxKnowledgeDocumentTitleRunes {
+		return "", UpdateDocumentRequest{}, ErrInvalidRequest
+	}
+	if req.DocType != "" && !knowledgeDocumentTypeAllowed(req.DocType) {
+		return "", UpdateDocumentRequest{}, ErrInvalidRequest
+	}
+	if utf8.RuneCountInString(req.Summary) > maxKnowledgeDocumentSummaryRunes {
+		return "", UpdateDocumentRequest{}, ErrInvalidRequest
+	}
+	categoryID, err := normalizeOptionalKnowledgeUUID(req.CategoryID)
+	if err != nil {
+		return "", UpdateDocumentRequest{}, err
+	}
+	req.CategoryID = categoryID
+	if req.TagIDs != nil {
+		tagIDs, err := normalizeKnowledgeUUIDList(req.TagIDs, maxKnowledgeDocumentTagIDs)
+		if err != nil {
+			return "", UpdateDocumentRequest{}, err
+		}
+		req.TagIDs = tagIDs
+	}
+	return normalizedID, req, nil
+}
+
+func knowledgeDocumentTypeAllowed(docType string) bool {
+	switch strings.TrimSpace(docType) {
+	case "general", "won_case", "pdf", "word", "spreadsheet", "presentation", "image":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeKnowledgeUUID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if _, err := uuid.Parse(value); err != nil {
+		return "", ErrInvalidRequest
+	}
+	return value, nil
+}
+
+func normalizeOptionalKnowledgeUUID(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	normalized, err := normalizeKnowledgeUUID(*value)
+	if err != nil {
+		if strings.TrimSpace(*value) == "" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &normalized, nil
+}
+
+func normalizeKnowledgeUUIDList(values []string, maxItems int) ([]string, error) {
+	if maxItems <= 0 || len(values) > maxItems {
+		return nil, ErrInvalidRequest
+	}
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized, err := normalizeKnowledgeUUID(value)
+		if err != nil {
+			return nil, err
+		}
+		if seen[normalized] {
+			continue
+		}
+		seen[normalized] = true
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func validateKnowledgeDocumentReferences(ctx context.Context, tx pgx.Tx, tenantID string, req UpdateDocumentRequest) error {
+	if req.CategoryID != nil {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			select exists(select 1 from knowledge_categories where tenant_id = $1 and id = $2)
+		`, tenantID, *req.CategoryID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrInvalidRequest
+		}
+	}
+	if len(req.TagIDs) == 0 {
+		return nil
+	}
+	var count int
+	if err := tx.QueryRow(ctx, `
+		select count(*)
+		from knowledge_tags
+		where tenant_id = $1 and id::text = any($2)
+	`, tenantID, req.TagIDs).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(req.TagIDs) {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 func normalizeDocumentTemplateRequest(req CreateDocumentTemplateRequest) (CreateDocumentTemplateRequest, []byte, error) {
