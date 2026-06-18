@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-from app.schemas.common import SourceRef
+from app.schemas.common import MAX_RESPONSE_METADATA_BYTES, SourceRef, bounded_json_object, bounded_token_usage
 
 MAX_GENERATION_ID_LENGTH = 128
 MAX_GENERATION_SHORT_TEXT_LENGTH = 128
@@ -22,6 +22,12 @@ MAX_GENERATION_CALLBACK_URL_LENGTH = 2048
 MAX_CHAPTER_ACTION_INSTRUCTION_LENGTH = 2000
 MAX_CHAPTER_ACTION_PLAIN_TEXT_LENGTH = 30000
 MAX_CHAPTER_ACTION_TIPTAP_JSON_BYTES = 256 * 1024
+MAX_GENERATION_RESPONSE_SOURCE_REFS = 50
+MAX_GENERATION_RESPONSE_NEEDS_HUMAN_INPUT = 20
+MAX_GENERATION_RESPONSE_NOTE_LENGTH = 500
+MAX_GENERATION_RESPONSE_TIPTAP_JSON_BYTES = 512 * 1024
+MAX_GENERATION_RESPONSE_SELF_CHECK_BYTES = 128 * 1024
+MAX_GENERATION_RESPONSE_METADATA_BYTES = MAX_RESPONSE_METADATA_BYTES
 
 GenerationID = Annotated[
     str,
@@ -70,6 +76,10 @@ ChapterActionPlainText = Annotated[
 GenerationCallbackURL = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_GENERATION_CALLBACK_URL_LENGTH),
+]
+GenerationResponseNote = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_GENERATION_RESPONSE_NOTE_LENGTH),
 ]
 ChapterActionType = Literal["optimize", "expand", "shorten", "add_detail", "self_check"]
 RequirementPriority = Literal["high", "medium", "low"]
@@ -133,10 +143,45 @@ class ChapterActionRequest(ChapterGenerateRequest):
 
 
 class ChapterGenerateResponse(BaseModel):
-    trace_id: str
+    trace_id: GenerationRequiredShortText
     tiptap_json: dict[str, object]
-    source_refs: list[SourceRef]
+    source_refs: list[SourceRef] = Field(default_factory=list, max_length=MAX_GENERATION_RESPONSE_SOURCE_REFS)
     self_check: dict[str, object]
-    needs_human_input: list[str]
+    needs_human_input: list[GenerationResponseNote] = Field(
+        default_factory=list,
+        max_length=MAX_GENERATION_RESPONSE_NEEDS_HUMAN_INPUT,
+    )
     model_metadata: dict[str, object]
     token_usage: dict[str, int]
+
+    @field_validator("tiptap_json")
+    @classmethod
+    def tiptap_json_must_be_bounded(cls, value: dict[str, object]) -> dict[str, object]:
+        return bounded_json_object(
+            value,
+            max_bytes=MAX_GENERATION_RESPONSE_TIPTAP_JSON_BYTES,
+            label="tiptap_json",
+        )
+
+    @field_validator("self_check")
+    @classmethod
+    def self_check_must_be_bounded(cls, value: dict[str, object]) -> dict[str, object]:
+        return bounded_json_object(
+            value,
+            max_bytes=MAX_GENERATION_RESPONSE_SELF_CHECK_BYTES,
+            label="self_check",
+        )
+
+    @field_validator("model_metadata")
+    @classmethod
+    def model_metadata_must_be_bounded(cls, value: dict[str, object]) -> dict[str, object]:
+        return bounded_json_object(
+            value,
+            max_bytes=MAX_GENERATION_RESPONSE_METADATA_BYTES,
+            label="model_metadata",
+        )
+
+    @field_validator("token_usage")
+    @classmethod
+    def token_usage_must_be_bounded(cls, value: dict[str, int]) -> dict[str, int]:
+        return bounded_token_usage(value)

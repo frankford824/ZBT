@@ -5891,3 +5891,54 @@ cd backend && go test ./...
 
 1. 本轮治理的是导出任务请求边界和模板上下文安全预算，没有新增新的 Word/PDF 排版能力、母版模板或 LibreOffice 转换能力。
 2. `export_type` 已收敛为枚举值，但 endpoint 路径类型与 payload 类型的一致性仍由后端正常调用约束，后续可在 AI 服务入口增加显式一致性校验。
+
+## Loop-121 / AI 回调响应契约边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 服务 provider 输出到后端 callback 的路径，处理章节生成/改写与成本建议响应中无界 `source_refs`、`needs_human_input`、`self_check`、`model_metadata`、`token_usage` 和建议列表的问题。
+2. 避免真实模型或兼容 provider 返回超大 JSON 后直接写入回调 payload、审计字段或后端任务结果，造成内存、日志和数据库字段风险。
+3. 将前几轮“请求入口边界”补齐为“请求 + 响应”双向契约边界。
+
+### 代码交付
+
+1. `ai-service/app/schemas/common.py` 为 `TaskAccepted` 与 `SourceRef` 增加 trim/长度/page 范围约束，并新增 `bounded_json_object`、`bounded_token_usage` 作为响应 metadata 和 token_usage 的通用预算校验。
+2. `ai-service/app/schemas/generation.py` 为 `ChapterGenerateResponse` 增加响应级上限，覆盖 source refs 数量、needs_human_input 数量/长度、Tiptap JSON 字节数、self_check 字节数、model_metadata 字节数和 token_usage 项数/取值范围。
+3. `ai-service/app/schemas/cost.py` 为 `CostAdviceResponse` 增加 trace/summary/recommendations/risk_flags/focus_items 的长度与数量约束，并复用 metadata/token_usage 通用校验。
+4. `ai-service/app/tests/test_generation_schema.py` 新增章节响应 schema 回归测试，覆盖超长列表、超大 JSON 输出、非法 source_ref/token_usage 和首尾空白清理。
+5. `ai-service/app/tests/test_cost_schema.py` 新增成本建议响应 schema 回归测试，覆盖超长 summary/列表项、超大 metadata、非法 token_usage 和首尾空白清理。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求通用响应预算、章节响应预算、成本响应预算和对应回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_schema.py app/tests/test_cost_schema.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/schemas/common.py app/schemas/generation.py app/schemas/cost.py app/tests/test_generation_schema.py app/tests/test_cost_schema.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_schema.py app/tests/test_cost_schema.py app/tests/test_model_router.py app/tests/test_openai_compatible_provider.py app/tests/test_main_security.py -q -s
+cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+cd backend && go test ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_schema.py app/tests/test_cost_schema.py -q -s` 通过：`19 passed`。
+2. `cd ai-service && .venv/bin/python -m ruff check app/schemas/common.py app/schemas/generation.py app/schemas/cost.py app/tests/test_generation_schema.py app/tests/test_cost_schema.py` 通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_schema.py app/tests/test_cost_schema.py app/tests/test_model_router.py app/tests/test_openai_compatible_provider.py app/tests/test_main_security.py -q -s` 通过：`170 passed`。
+5. `cd ai-service && .venv/bin/python -m pytest app/tests/test_generation_coverage_eval.py -q -s` 通过：`4 passed`。
+6. `cd ai-service && .venv/bin/python -m ruff check app` 通过。
+7. `cd ai-service && .venv/bin/python -m pytest app/tests -q -s` 通过：`276 passed`。
+8. `cd backend && go test ./...` 通过。
+9. `./infra/scripts/check.sh` 通过；其中工程1导出验收通过：`passed=23/23 name=工程1.export`；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 AI 回调响应契约边界，没有新增新的生成模型、成本分析算法或语义质量提升。
+2. 若 provider 返回超出响应预算的内容，当前策略是让任务进入失败回调，而不是自动截断模型输出；这样可以避免把不完整响应误当成可用业务结果。

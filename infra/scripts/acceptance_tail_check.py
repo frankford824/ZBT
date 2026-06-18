@@ -430,6 +430,20 @@ def check_static_docs() -> None:
     ):
         require(needle in model_router_tests, f"ModelRouter cost normalization missing regression test: {needle}")
 
+    common_schema = (ROOT / "ai-service/app/schemas/common.py").read_text(encoding="utf-8")
+    for needle in (
+        "MAX_SOURCE_REF_ID_LENGTH",
+        "MAX_SOURCE_REF_TITLE_LENGTH",
+        "MAX_RESPONSE_METADATA_BYTES",
+        "MAX_RESPONSE_TOKEN_USAGE_VALUE",
+        "TaskAcceptedID",
+        "SourceRefID",
+        "bounded_json_object",
+        "bounded_token_usage",
+        "StringConstraints(strip_whitespace=True",
+    ):
+        require(needle in common_schema, f"Common AI schema missing response guard: {needle}")
+
     knowledge_schema = (ROOT / "ai-service/app/schemas/knowledge.py").read_text(encoding="utf-8")
     for needle in (
         "MAX_KNOWLEDGE_EMBEDDING_TEXT_LENGTH",
@@ -472,9 +486,16 @@ def check_static_docs() -> None:
         "MAX_RETRIEVED_KNOWLEDGE_REFS",
         "MAX_CHAPTER_ACTION_PLAIN_TEXT_LENGTH",
         "MAX_CHAPTER_ACTION_TIPTAP_JSON_BYTES",
+        "MAX_GENERATION_RESPONSE_SOURCE_REFS",
+        "MAX_GENERATION_RESPONSE_TIPTAP_JSON_BYTES",
+        "MAX_GENERATION_RESPONSE_SELF_CHECK_BYTES",
+        "MAX_GENERATION_RESPONSE_METADATA_BYTES",
+        "GenerationResponseNote",
         "ChapterActionType",
         "StringConstraints(strip_whitespace=True",
         "current_tiptap_json_must_be_bounded",
+        "tiptap_json_must_be_bounded",
+        "token_usage_must_be_bounded",
     ):
         require(needle in generation_schema, f"Chapter generation schema missing request size guard: {needle}")
     generation_schema_tests = (ROOT / "ai-service/app/tests/test_generation_schema.py").read_text(encoding="utf-8")
@@ -484,6 +505,10 @@ def check_static_docs() -> None:
         "test_chapter_action_request_rejects_invalid_action_and_oversized_body",
         "test_chapter_action_request_rejects_oversized_tiptap_json",
         "test_chapter_requests_strip_bounded_text_fields",
+        "test_chapter_generate_response_rejects_oversized_output_lists_and_text",
+        "test_chapter_generate_response_rejects_oversized_json_outputs",
+        "test_chapter_generate_response_rejects_invalid_refs_and_token_usage",
+        "test_chapter_generate_response_strips_bounded_text_fields",
     ):
         require(needle in generation_schema_tests, f"Chapter generation schema missing regression test: {needle}")
 
@@ -493,10 +518,17 @@ def check_static_docs() -> None:
         "MAX_COST_OVERRUN_ITEMS",
         "MAX_COST_RECOMMENDATIONS",
         "MAX_COST_AMOUNT",
+        "MAX_COST_RESPONSE_SUMMARY_LENGTH",
+        "MAX_COST_RESPONSE_TEXT_LENGTH",
+        "MAX_COST_RESPONSE_ITEMS",
+        "MAX_COST_RESPONSE_METADATA_BYTES",
         "CostAmount",
         "CostRecommendation",
+        "CostResponseSummary",
+        "CostResponseText",
         "StringConstraints(strip_whitespace=True",
         "allow_inf_nan=False",
+        "token_usage_must_be_bounded",
     ):
         require(needle in cost_schema, f"Cost advice schema missing request size/cost guard: {needle}")
     cost_schema_tests = (ROOT / "ai-service/app/tests/test_cost_schema.py").read_text(encoding="utf-8")
@@ -505,6 +537,9 @@ def check_static_docs() -> None:
         "test_cost_advice_request_rejects_invalid_money_values",
         "test_cost_overrun_item_rejects_unbounded_text_and_invalid_enums",
         "test_cost_advice_request_strips_bounded_text_fields",
+        "test_cost_advice_response_rejects_oversized_lists_and_text",
+        "test_cost_advice_response_rejects_oversized_metadata_and_invalid_token_usage",
+        "test_cost_advice_response_strips_bounded_text_fields",
     ):
         require(needle in cost_schema_tests, f"Cost advice schema missing regression test: {needle}")
 

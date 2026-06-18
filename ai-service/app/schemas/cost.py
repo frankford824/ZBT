@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, field_validator
+
+from app.schemas.common import MAX_RESPONSE_METADATA_BYTES, bounded_json_object, bounded_token_usage
 
 MAX_COST_ID_LENGTH = 128
 MAX_COST_NAME_LENGTH = 255
@@ -16,6 +18,10 @@ MAX_COST_RECOMMENDATIONS = 20
 MAX_COST_AMOUNT = 1_000_000_000_000
 MIN_COST_MARGIN_RATE = -1000
 MAX_COST_MARGIN_RATE = 1000
+MAX_COST_RESPONSE_SUMMARY_LENGTH = 2000
+MAX_COST_RESPONSE_TEXT_LENGTH = 1000
+MAX_COST_RESPONSE_ITEMS = 20
+MAX_COST_RESPONSE_METADATA_BYTES = MAX_RESPONSE_METADATA_BYTES
 
 CostID = Annotated[
     str,
@@ -52,6 +58,14 @@ CostRecommendation = Annotated[
 CostCallbackURL = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_CALLBACK_URL_LENGTH),
+]
+CostResponseSummary = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_RESPONSE_SUMMARY_LENGTH),
+]
+CostResponseText = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_COST_RESPONSE_TEXT_LENGTH),
 ]
 CostAmount = Annotated[float, Field(ge=0, le=MAX_COST_AMOUNT, allow_inf_nan=False)]
 CostMarginAmount = Annotated[
@@ -103,10 +117,24 @@ class CostAdviceRequest(BaseModel):
 
 
 class CostAdviceResponse(BaseModel):
-    trace_id: str
-    summary: str
-    recommendations: list[str]
-    risk_flags: list[str]
-    focus_items: list[str]
+    trace_id: CostShortText
+    summary: CostResponseSummary
+    recommendations: list[CostResponseText] = Field(default_factory=list, max_length=MAX_COST_RESPONSE_ITEMS)
+    risk_flags: list[CostResponseText] = Field(default_factory=list, max_length=MAX_COST_RESPONSE_ITEMS)
+    focus_items: list[CostResponseText] = Field(default_factory=list, max_length=MAX_COST_RESPONSE_ITEMS)
     model_metadata: dict[str, object]
     token_usage: dict[str, int]
+
+    @field_validator("model_metadata")
+    @classmethod
+    def model_metadata_must_be_bounded(cls, value: dict[str, object]) -> dict[str, object]:
+        return bounded_json_object(
+            value,
+            max_bytes=MAX_COST_RESPONSE_METADATA_BYTES,
+            label="model_metadata",
+        )
+
+    @field_validator("token_usage")
+    @classmethod
+    def token_usage_must_be_bounded(cls, value: dict[str, int]) -> dict[str, int]:
+        return bounded_token_usage(value)

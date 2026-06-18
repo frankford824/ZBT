@@ -11,8 +11,13 @@ from app.schemas.cost import (
     MAX_COST_NAME_LENGTH,
     MAX_COST_NOTE_LENGTH,
     MAX_COST_OVERRUN_ITEMS,
+    MAX_COST_RESPONSE_ITEMS,
+    MAX_COST_RESPONSE_METADATA_BYTES,
+    MAX_COST_RESPONSE_SUMMARY_LENGTH,
+    MAX_COST_RESPONSE_TEXT_LENGTH,
     MAX_COST_RECOMMENDATIONS,
     MAX_COST_RECOMMENDATION_LENGTH,
+    CostAdviceResponse,
     CostAdviceRequest,
     CostCategoryTotal,
     CostOverrunItem,
@@ -29,6 +34,20 @@ def _overrun_item(index: int = 0) -> CostOverrunItem:
         actual_amount=120,
         status="committed",
     )
+
+
+def _cost_response_payload(**extra: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "trace_id": "trace-demo",
+        "summary": "成本结构整体可控。",
+        "recommendations": ["保持周度成本复核。"],
+        "risk_flags": ["关注外采成本。"],
+        "focus_items": ["材料采购。"],
+        "model_metadata": {"provider": "mock", "model": "mock-cost"},
+        "token_usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    payload.update(extra)
+    return payload
 
 
 def test_cost_advice_request_rejects_oversized_lists() -> None:
@@ -151,3 +170,46 @@ def test_cost_advice_request_rejects_oversized_recommendation() -> None:
             cost_project_id="cost-demo",
             recommendations=["x" * (MAX_COST_RECOMMENDATION_LENGTH + 1)],
         )
+
+
+def test_cost_advice_response_rejects_oversized_lists_and_text() -> None:
+    oversized_cases = [
+        {"summary": "x" * (MAX_COST_RESPONSE_SUMMARY_LENGTH + 1)},
+        {"recommendations": ["控制成本"] * (MAX_COST_RESPONSE_ITEMS + 1)},
+        {"risk_flags": ["x" * (MAX_COST_RESPONSE_TEXT_LENGTH + 1)]},
+        {"focus_items": [" "]},
+    ]
+
+    for extra in oversized_cases:
+        with pytest.raises(ValidationError):
+            CostAdviceResponse(**_cost_response_payload(**extra))
+
+
+def test_cost_advice_response_rejects_oversized_metadata_and_invalid_token_usage() -> None:
+    oversized_cases = [
+        {"model_metadata": {"provider": "mock", "notes": "x" * MAX_COST_RESPONSE_METADATA_BYTES}},
+        {"token_usage": {"input_tokens": -1}},
+        {"token_usage": {"": 1}},
+    ]
+
+    for extra in oversized_cases:
+        with pytest.raises(ValidationError):
+            CostAdviceResponse(**_cost_response_payload(**extra))
+
+
+def test_cost_advice_response_strips_bounded_text_fields() -> None:
+    response = CostAdviceResponse(
+        **_cost_response_payload(
+            trace_id=" trace-demo ",
+            summary=" 成本结构整体可控。 ",
+            recommendations=[" 保持周度成本复核。 "],
+            risk_flags=[" 关注外采成本。 "],
+            focus_items=[" 材料采购。 "],
+        )
+    )
+
+    assert response.trace_id == "trace-demo"
+    assert response.summary == "成本结构整体可控。"
+    assert response.recommendations == ["保持周度成本复核。"]
+    assert response.risk_flags == ["关注外采成本。"]
+    assert response.focus_items == ["材料采购。"]
