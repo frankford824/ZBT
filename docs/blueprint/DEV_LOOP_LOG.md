@@ -5233,3 +5233,45 @@ cd frontend && pnpm build
 
 1. 本轮只修复文件预览页历史链接清洗链路，不改变新生成来源定位 URL 的参数结构。
 2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。
+
+## Loop-106 / 外部数据源错误展示收口 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查团队页外部数据源调用记录，处理结果列直接展示后端 `error_message` 的问题。
+2. 防止 HTTP、allowlist、provider、connection 等外部调用技术错误出现在用户界面。
+3. 将调用记录结果列的业务化展示加入静态验收。
+
+### 代码交付
+
+1. `frontend/src/features/team/index.tsx` 新增 `formatExternalToolAuditResult()`，成功时展示响应摘要或“调用成功”。
+2. 新增 `externalToolBusinessErrorMessage()`，将常见英文技术错误映射为“数据源未启用”“该能力未启用”“本月调用预算已用完”“数据源暂时不可用”等业务文案。
+3. 调用记录“结果”列不再直接渲染 `row.error_message || row.response_summary`。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 新增防退化检查，禁止调用记录回退到原始错误展示。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd frontend && pnpm lint
+cd frontend && pnpm build
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新记录识别为 Loop-106。
+2. `cd frontend && pnpm lint` 通过。
+3. `cd frontend && pnpm build` 通过。
+4. `./infra/scripts/check.sh` 通过：前端 build/lint、Go test/vet、AI compileall/ruff/pytest 均通过。
+5. AI pytest 通过：`237 passed`。
+6. 工程1 样例回归通过：解析 `109/109`，来源引用 `9/9`，导出 `23/23`。
+7. 容器内 pytest 因 `ai-service container is not running` 按脚本逻辑跳过。
+
+### 偏离蓝图
+
+1. 后端审计仍保留原始 `error_message` 供排查，本轮只调整前端展示口径。
+2. 未新增浏览器截图验收；本轮继续用静态防漂移、lint、build 和总检验证。

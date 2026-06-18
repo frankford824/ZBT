@@ -53,6 +53,7 @@ import {
   updateApprovalChain,
   type ApprovalChainDTO,
   type ApprovalStepDTO,
+  type ExternalToolAuditLogDTO,
   type ExternalToolConfigDTO,
   type ExternalToolProviderPresetDTO,
   type MemberDTO,
@@ -195,6 +196,38 @@ function formatExternalToolName(value: string) {
 
 function formatExternalToolProviderName(value: string, displayNameMap: Map<string, string>) {
   return displayNameMap.get(value) || '外部数据源'
+}
+
+function formatExternalToolAuditResult(row: ExternalToolAuditLogDTO) {
+  if (row.status === 'success') {
+    return row.response_summary || '调用成功'
+  }
+  const message = row.error_message || row.response_summary
+  return externalToolBusinessErrorMessage(message, row.status)
+}
+
+function externalToolBusinessErrorMessage(value: string, status: ExternalToolAuditLogDTO['status']) {
+  const message = value.trim()
+  if (/[\u4e00-\u9fff]/.test(message)) {
+    return message
+  }
+  const normalized = message.toLowerCase()
+  if (normalized.includes('provider is disabled')) {
+    return '数据源未启用'
+  }
+  if (normalized.includes('tenant allowlist')) {
+    return '该能力未启用'
+  }
+  if (normalized.includes('monthly budget exceeded')) {
+    return '本月调用预算已用完'
+  }
+  if (normalized.includes('http') || normalized.includes('timeout') || normalized.includes('connection')) {
+    return '数据源暂时不可用'
+  }
+  if (normalized.includes('external tool error')) {
+    return '数据源返回失败'
+  }
+  return status === 'blocked' ? '调用已拦截，请检查配置' : '调用失败，请稍后重试'
 }
 
 function externalToolAuthorizationLabel(preset: ExternalToolProviderPresetDTO) {
@@ -762,7 +795,7 @@ export function TeamPage() {
                           title: '结果',
                           width: 220,
                           ellipsis: true,
-                          render: (_, row) => row.error_message || row.response_summary || '-',
+                          render: (_, row) => formatExternalToolAuditResult(row),
                         },
                         { title: '时间', dataIndex: 'created_at', width: 180, render: formatTime },
                       ]}

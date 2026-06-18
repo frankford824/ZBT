@@ -273,7 +273,11 @@ def check_static_docs() -> None:
     )
     for needle in ("授权状态", "授权说明", "启用能力"):
         require(needle in team_page, f"Team external data source UI missing user-facing label: {needle}")
-    for needle in ("formatExternalToolProviderName", "externalToolDisplayNameMap"):
+    require(
+        "render: (_, row) => row.error_message" not in team_page,
+        "Team external audit UI exposes raw external tool errors",
+    )
+    for needle in ("formatExternalToolProviderName", "externalToolDisplayNameMap", "formatExternalToolAuditResult", "externalToolBusinessErrorMessage"):
         require(needle in team_page, f"Team external audit UI missing provider display guard: {needle}")
 
     bid_page = (ROOT / "frontend/src/features/bid/index.tsx").read_text(encoding="utf-8")
