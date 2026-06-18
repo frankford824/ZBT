@@ -3912,3 +3912,43 @@ git diff --check
 
 1. 历史来源继续依赖已有 `source_refs` 中的文件或文档 ID；人工录入且缺少文件/文档 ID 的来源只能复制定位，不能伪装成可打开原文。
 2. 预览仍使用浏览器/PDF 查看器的页码和搜索参数，不自建 PDF canvas 选区层。
+
+## Loop-73 / OCR Provider 坐标级质量门控 - 2026-06-18
+
+### 本轮目标
+
+1. 把 MinerU / PaddleOCR 真实 endpoint 验收从“能返回文本”推进到“能返回页级置信度和版面证据”。
+2. 让 `docs/ex/工程1` 的 OCR Provider 样本评测可以显式要求 layout bbox、table bbox 和 cell bbox。
+3. 不把 MinerU/PaddleOCR 变成硬依赖；未配置 endpoint 时仍输出 skipped，不伪装通过。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/ocr_provider_eval.py` 新增 `--min-page-confidence`、`--min-layout-bbox-count`、`--min-table-bbox-count`、`--min-cell-bbox-count` 门槛。
+2. 评测会从归一化 OCR metadata 中统计页级最低置信度、版面块 bbox 数、表格 bbox 数和单元格 bbox 数，未满足时返回 failed。
+3. `ai-service/app/tests/test_ocr_provider_eval.py` 补充通过和失败用例，覆盖 MinerU/PaddleOCR 响应中的页级置信度和坐标级版面证据。
+4. `SAMPLE_DOCS_EVALUATION.md` 和 `AI_IMPLEMENTATION_CHECKLIST.md` 同步记录真实 OCR Provider 验收命令和剩余生产凭证/持续回归报告缺口。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest -s app/tests/test_ocr_provider_eval.py
+cd ai-service && .venv/bin/python -m ruff check app/evaluation/ocr_provider_eval.py app/tests/test_ocr_provider_eval.py
+cd ai-service && .venv/bin/python -m compileall app/evaluation/ocr_provider_eval.py app/tests/test_ocr_provider_eval.py
+ai-service/.venv/bin/python -m app.evaluation.ocr_provider_eval --provider mineru --sample docs/ex/工程1/采购文件桥梁检查.pdf --allow-skip --json
+git diff --check
+```
+
+结果：
+
+1. OCR Provider 评测单测 4 项通过。
+2. Ruff 通过。
+3. 评测脚本和测试文件编译通过。
+4. 本地未配置 `MINERU_HTTP_ENDPOINT` 时，真实样本 OCR 验收返回 `skipped`，没有伪装通过。
+5. `git diff --check` 通过，无空白错误。
+
+### 偏离蓝图
+
+1. 本轮没有配置真实 MinerU/PaddleOCR endpoint 或 API Key；生产环境仍需提供凭证并保存持续回归报告。
+2. 当前门槛只检查 OCR Provider 返回的已归一化证据数量，不评价 OCR 文字准确率、表格语义正确性或 bbox 与原图的几何重合度。

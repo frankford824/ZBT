@@ -27,6 +27,10 @@ def evaluate_ocr_provider(
     min_text_chars: int = 20,
     min_table_blocks: int = 0,
     min_layout_blocks: int = 0,
+    min_page_confidence: float | None = None,
+    min_layout_bbox_count: int = 0,
+    min_table_bbox_count: int = 0,
+    min_cell_bbox_count: int = 0,
 ) -> dict[str, Any]:
     provider = _normalize_provider(provider)
     root = repo_root or _repo_root()
@@ -58,7 +62,18 @@ def evaluate_ocr_provider(
             ),
             content,
         )
-    _evaluate_parsed_result(provider, parsed, checks, min_text_chars, min_table_blocks, min_layout_blocks)
+    _evaluate_parsed_result(
+        provider,
+        parsed,
+        checks,
+        min_text_chars,
+        min_table_blocks,
+        min_layout_blocks,
+        min_page_confidence,
+        min_layout_bbox_count,
+        min_table_bbox_count,
+        min_cell_bbox_count,
+    )
     status = "passed" if checks and all(check["passed"] for check in checks) else "failed"
     result = _result(provider, sample, status, checks)
     result["metadata"] = _safe_metadata(parsed.metadata)
@@ -72,6 +87,10 @@ def _evaluate_parsed_result(
     min_text_chars: int,
     min_table_blocks: int,
     min_layout_blocks: int,
+    min_page_confidence: float | None,
+    min_layout_bbox_count: int,
+    min_table_bbox_count: int,
+    min_cell_bbox_count: int,
 ) -> None:
     metadata = parsed.metadata
     ocr = metadata.get("ocr")
@@ -96,6 +115,42 @@ def _evaluate_parsed_result(
     if min_layout_blocks > 0:
         actual = _int_value(metadata.get("layout_block_count"), 0)
         _add_check(checks, "ocr.layout_blocks", actual >= min_layout_blocks, f">={min_layout_blocks}", actual)
+    if min_page_confidence is not None:
+        actual = _min_page_confidence(ocr_record)
+        _add_check(
+            checks,
+            "ocr.pages.min_confidence",
+            actual is not None and actual >= min_page_confidence,
+            f">={min_page_confidence}",
+            actual,
+        )
+    if min_layout_bbox_count > 0:
+        actual = _layout_bbox_count(metadata, ocr_record)
+        _add_check(
+            checks,
+            "ocr.layout_bbox_count",
+            actual >= min_layout_bbox_count,
+            f">={min_layout_bbox_count}",
+            actual,
+        )
+    if min_table_bbox_count > 0:
+        actual = _table_bbox_count(metadata, ocr_record)
+        _add_check(
+            checks,
+            "ocr.table_bbox_count",
+            actual >= min_table_bbox_count,
+            f">={min_table_bbox_count}",
+            actual,
+        )
+    if min_cell_bbox_count > 0:
+        actual = _cell_bbox_count(metadata, ocr_record)
+        _add_check(
+            checks,
+            "ocr.cell_bbox_count",
+            actual >= min_cell_bbox_count,
+            f">={min_cell_bbox_count}",
+            actual,
+        )
 
 
 def _sample_content(sample: Path, render_pdf_page: int | None) -> tuple[bytes, str, str]:
@@ -182,6 +237,65 @@ def _int_value(value: Any, default: int) -> int:
         return default
 
 
+def _float_value(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _list_value(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _valid_bbox(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) != 4:
+        return False
+    try:
+        x0, y0, x1, y1 = (float(item) for item in value)
+    except (TypeError, ValueError):
+        return False
+    return x1 > x0 and y1 > y0
+
+
+def _min_page_confidence(ocr_record: dict[str, Any]) -> float | None:
+    confidences = [
+        confidence
+        for page in _list_value(ocr_record.get("pages"))
+        if isinstance(page, dict)
+        for confidence in [_float_value(page.get("confidence"))]
+        if confidence is not None
+    ]
+    if not confidences:
+        return None
+    return round(min(confidences), 4)
+
+
+def _layout_bbox_count(metadata: dict[str, Any], ocr_record: dict[str, Any]) -> int:
+    layout_blocks = _list_value(metadata.get("layout_blocks")) or _list_value(ocr_record.get("layout_blocks"))
+    return sum(1 for block in layout_blocks if isinstance(block, dict) and _valid_bbox(block.get("bbox")))
+
+
+def _table_blocks(metadata: dict[str, Any], ocr_record: dict[str, Any]) -> list[Any]:
+    return _list_value(metadata.get("table_blocks")) or _list_value(ocr_record.get("table_blocks"))
+
+
+def _table_bbox_count(metadata: dict[str, Any], ocr_record: dict[str, Any]) -> int:
+    return sum(1 for table in _table_blocks(metadata, ocr_record) if isinstance(table, dict) and _valid_bbox(table.get("bbox")))
+
+
+def _cell_bbox_count(metadata: dict[str, Any], ocr_record: dict[str, Any]) -> int:
+    count = 0
+    for table in _table_blocks(metadata, ocr_record):
+        if not isinstance(table, dict):
+            continue
+        for row in _list_value(table.get("cell_bboxes")):
+            if not isinstance(row, list):
+                continue
+            count += sum(1 for cell in row if _valid_bbox(cell))
+    return count
+
+
 @contextmanager
 def _temporary_env(values: dict[str, str]):
     previous = {key: os.environ.get(key) for key in values}
@@ -210,6 +324,10 @@ def main() -> int:
     parser.add_argument("--min-text-chars", type=int, default=20)
     parser.add_argument("--min-table-blocks", type=int, default=0)
     parser.add_argument("--min-layout-blocks", type=int, default=0)
+    parser.add_argument("--min-page-confidence", type=float, default=None)
+    parser.add_argument("--min-layout-bbox-count", type=int, default=0)
+    parser.add_argument("--min-table-bbox-count", type=int, default=0)
+    parser.add_argument("--min-cell-bbox-count", type=int, default=0)
     parser.add_argument("--json", action="store_true", help="Print full JSON result.")
     parser.add_argument("--allow-skip", action="store_true", help="Exit 0 when the provider endpoint is not configured.")
     args = parser.parse_args()
@@ -223,6 +341,10 @@ def main() -> int:
         min_text_chars=args.min_text_chars,
         min_table_blocks=args.min_table_blocks,
         min_layout_blocks=args.min_layout_blocks,
+        min_page_confidence=args.min_page_confidence,
+        min_layout_bbox_count=args.min_layout_bbox_count,
+        min_table_bbox_count=args.min_table_bbox_count,
+        min_cell_bbox_count=args.min_cell_bbox_count,
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

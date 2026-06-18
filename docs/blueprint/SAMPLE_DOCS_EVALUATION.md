@@ -58,12 +58,20 @@ cd ai-service
 # MinerU：需要配置 MINERU_HTTP_ENDPOINT，可选 MINERU_API_KEY / MINERU_PARSE_MODE / MINERU_POLL_ENDPOINT
 .venv/bin/python -m app.evaluation.ocr_provider_eval \
   --provider mineru \
-  --min-text-chars 20
+  --min-text-chars 20 \
+  --min-page-confidence 0.80 \
+  --min-layout-bbox-count 1 \
+  --min-table-bbox-count 1 \
+  --min-cell-bbox-count 1
 
 # PaddleOCR：需要配置 PADDLEOCR_HTTP_ENDPOINT，可选 PADDLEOCR_API_KEY / PADDLEOCR_PIPELINE / PADDLEOCR_POLL_ENDPOINT
 .venv/bin/python -m app.evaluation.ocr_provider_eval \
   --provider paddleocr \
-  --min-text-chars 20
+  --min-text-chars 20 \
+  --min-page-confidence 0.80 \
+  --min-layout-bbox-count 1 \
+  --min-table-bbox-count 1 \
+  --min-cell-bbox-count 1
 
 # 本地或 CI 没有真实 endpoint 时可允许 skipped，但报告不会伪装成 passed
 .venv/bin/python -m app.evaluation.ocr_provider_eval \
@@ -71,7 +79,7 @@ cd ai-service
   --allow-skip
 ```
 
-OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 provider_profile 的 endpoint_env。`model_routing.yaml` 同时声明 `document_ocr` 本地路由，用于把 OCR Provider 纳入模型网关配置审计。需要表格或版面块验收时可加 `--min-table-blocks` / `--min-layout-blocks`。
+OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是否为 done、返回 provider 是否匹配、识别文本长度、chunk 数和 provider_profile 的 endpoint_env。`model_routing.yaml` 同时声明 `document_ocr` 本地路由，用于把 OCR Provider 纳入模型网关配置审计。需要表格、版面块或坐标级版面证据验收时可加 `--min-table-blocks`、`--min-layout-blocks`、`--min-page-confidence`、`--min-layout-bbox-count`、`--min-table-bbox-count`、`--min-cell-bbox-count`。
 
 验收覆盖：
 
