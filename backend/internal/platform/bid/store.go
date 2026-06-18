@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
@@ -42,6 +43,8 @@ const (
 	maxExportAttachmentCount            = 50
 	maxExportInlineAttachmentBytes      = 20 * 1024 * 1024
 	maxExportInlineAttachmentTotalBytes = 50 * 1024 * 1024
+	maxExportFilenameRunes              = 255
+	maxExportFilenameLabelRunes         = 64
 	requirementCoverageBatchLimit       = 100
 	maxExactJSONInteger                 = int64(1<<53 - 1)
 )
@@ -6441,17 +6444,44 @@ func exportFilename(title, partCode, exportType string) string {
 	if label == "" {
 		label = partCode
 	}
+	label = truncateRunes(sanitizeFilename(label), maxExportFilenameLabelRunes)
+	if label == "" {
+		label = "导出"
+	}
+	suffix := fmt.Sprintf("-%s.%s", label, exportType)
+	baseLimit := maxExportFilenameRunes - utf8.RuneCountInString(suffix)
+	if baseLimit <= 0 {
+		baseLimit = maxExportFilenameRunes
+	}
 	base := sanitizeFilename(title)
 	if base == "" {
 		base = "bid-document"
 	}
-	return fmt.Sprintf("%s-%s.%s", base, label, exportType)
+	base = truncateRunes(base, baseLimit)
+	return base + suffix
 }
 
 func sanitizeFilename(value string) string {
 	value = strings.TrimSpace(value)
 	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "", "?", "", "\"", "", "<", "", ">", "", "|", "-")
-	return replacer.Replace(value)
+	cleaned := replacer.Replace(value)
+	cleaned = stripFilenameControlChars(cleaned)
+	cleaned = strings.Trim(strings.TrimSpace(cleaned), ".")
+	if utf8.RuneCountInString(cleaned) > maxExportFilenameRunes {
+		cleaned = truncateRunes(cleaned, maxExportFilenameRunes)
+	}
+	return strings.TrimSpace(cleaned)
+}
+
+func stripFilenameControlChars(value string) string {
+	var builder strings.Builder
+	for _, ch := range value {
+		if ch < 0x20 || ch == 0x7f {
+			continue
+		}
+		builder.WriteRune(ch)
+	}
+	return builder.String()
 }
 
 func normalizeBidType(value string) (string, error) {

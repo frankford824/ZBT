@@ -6077,3 +6077,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是成本模块业务输入边界，没有新增成本预测算法、报价策略或模型能力。
 2. 金额上限按当前数据库 `numeric(14,2)` 能力收敛；租户级预算规则、币种规则和动态阈值仍属于后续业务策略层工作。
+
+## Loop-125 / 标书导出文件名边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书导出链路，处理导出文件名只替换少量路径字符、未清理控制字符、未限制长度的问题。
+2. 避免异常标书标题生成带控制字符或超长的导出文件名，进入 `bid_exports.filename`、`file_assets.filename`、AI 导出 payload 和下载响应链路。
+3. 保持中文业务标题、导出类型后缀和业务标识可读，同时为导出文件名建立可测试、可回归的边界。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `maxExportFilenameRunes = 255` 和 `maxExportFilenameLabelRunes = 64`。
+2. `exportFilename` 先清理并限制业务标签，再按最终后缀长度计算标题段预算，确保 `.docx`、`.pdf`、`.zip` 等后缀和业务标签不会被超长标题挤掉。
+3. `sanitizeFilename` 新增控制字符清理、首尾空白与点号清理，并用 `utf8.RuneCountInString` 按字符数限制导出文件名长度。
+4. `backend/internal/platform/bid/store_test.go` 新增导出文件名清理控制字符/路径字符、超长标题截断且保留业务后缀的回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加防回退检查，要求导出文件名边界常量、控制字符清理、后缀预算和对应回归测试同时存在。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid
+git diff --check
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/bid` 通过。
+2. `git diff --check` 通过。
+3. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest `278 passed`、工程1解析评估 `passed=109/109`、生成覆盖评估 `passed=9/9`、工程1导出评估 `passed=23/23 name=工程1.export` 均通过；容器内 pytest 因 `ai-service` 容器未运行被脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是导出文件名稳定性和下载链路输入边界，没有新增导出格式、排版母版或文件扫描能力。
+2. 文件名上限按字符数处理，优先保证中文业务标题和后缀可读；若未来需要兼容特定网关响应头字节上限，可在下载响应层继续增加字节预算。

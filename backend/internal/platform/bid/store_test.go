@@ -928,6 +928,26 @@ func TestValidateExportAttachmentsAllowsTenantObjectKeysAndInlineContent(t *test
 	}
 }
 
+func TestExportFilenameSanitizesUnsafeTitleCharacters(t *testing.T) {
+	got := exportFilename(" ..桥梁\n检查:服务? ", "tech", "docx")
+	if got != "桥梁检查-服务-技术标.docx" {
+		t.Fatalf("unexpected sanitized export filename: %q", got)
+	}
+	if strings.ContainsAny(got, "\r\n\t/\\:*?\"<>|") {
+		t.Fatalf("expected export filename to remove unsafe characters, got %q", got)
+	}
+}
+
+func TestExportFilenameCapsLongTitleAndPreservesSuffix(t *testing.T) {
+	got := exportFilename(strings.Repeat("标", maxExportFilenameRunes+50), "combined_body", "pdf")
+	if runeCount := len([]rune(got)); runeCount > maxExportFilenameRunes {
+		t.Fatalf("expected export filename to stay within %d runes, got %d", maxExportFilenameRunes, runeCount)
+	}
+	if !strings.HasSuffix(got, "-综合标书.pdf") {
+		t.Fatalf("expected export filename to preserve business suffix, got %q", got)
+	}
+}
+
 func TestValidateExportAttachmentsRejectsUnsafeInputs(t *testing.T) {
 	for name, attachments := range map[string][]map[string]any{
 		"cross tenant object": {

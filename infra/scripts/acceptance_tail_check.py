@@ -387,6 +387,22 @@ def check_static_docs() -> None:
     ):
         require(needle in file_service_tests, f"File upload service missing filename length regression test: {needle}")
 
+    bid_store = (ROOT / "backend/internal/platform/bid/store.go").read_text(encoding="utf-8")
+    for needle in (
+        "maxExportFilenameRunes",
+        "maxExportFilenameLabelRunes",
+        "stripFilenameControlChars",
+        "utf8.RuneCountInString(suffix)",
+        "base = truncateRunes(base, baseLimit)",
+    ):
+        require(needle in bid_store, f"Bid export filename missing filename boundary guard: {needle}")
+    bid_store_tests = (ROOT / "backend/internal/platform/bid/store_test.go").read_text(encoding="utf-8")
+    for needle in (
+        "TestExportFilenameSanitizesUnsafeTitleCharacters",
+        "TestExportFilenameCapsLongTitleAndPreservesSuffix",
+    ):
+        require(needle in bid_store_tests, f"Bid export filename missing boundary regression test: {needle}")
+
     knowledge_page = (ROOT / "frontend/src/features/knowledge/index.tsx").read_text(encoding="utf-8")
     for forbidden in ("<Tag>坐标：", "`坐标: ${bboxText}`"):
         require(forbidden not in knowledge_page, f"File preview source UI exposes raw OCR coordinates: {forbidden}")
