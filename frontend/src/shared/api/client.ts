@@ -216,6 +216,15 @@ export type ExternalToolAuditLogDTO = {
   created_at: string
 }
 
+export type ExternalToolInvokeResultDTO = {
+  provider_key: string
+  tool_name: string
+  status: 'success' | 'failed' | 'blocked'
+  result: unknown
+  audit: ExternalToolAuditLogDTO
+  metadata: Record<string, unknown>
+}
+
 export type ApprovalStepDTO = {
   order: number
   name: string
@@ -1159,6 +1168,22 @@ export async function updateExternalToolConfig(
 ): Promise<ExternalToolConfigDTO> {
   const { data } = await apiClient.put<ExternalToolConfigDTO>(
     `/external-tools/${encodeURIComponent(providerKey)}`,
+    payload,
+  )
+  return data
+}
+
+export async function invokeExternalTool(
+  providerKey: string,
+  payload: {
+    tool_name: string
+    arguments: Record<string, unknown>
+    resource_type?: string
+    resource_id?: string
+  },
+): Promise<ExternalToolInvokeResultDTO> {
+  const { data } = await apiClient.post<ExternalToolInvokeResultDTO>(
+    `/external-tools/${encodeURIComponent(providerKey)}/invoke`,
     payload,
   )
   return data

@@ -3649,3 +3649,40 @@ git diff --check
 
 1. 本轮只做相邻 chunk / 相邻页一阶扩展，不做跨章节长距离召回，避免把弱相关上下文误标为确定来源。
 2. 复杂表头层级推断、单元格级 bbox 和预览器文本高亮仍需后续样本驱动推进。
+
+## Loop-66 / 外部标讯业务入口 - 2026-06-18
+
+### 本轮目标
+
+1. 把行业 MCP / Skills 雷达中的 Handaas 招投标数据源从“可配置”推进到标讯大厅可使用的业务入口。
+2. 外部调用仍保持租户显式启用、工具白名单、摘要审计和只读边界，不把客户招标文件或投标文件原文发给第三方。
+3. 页面文案使用业务口径，不暴露 JSON-RPC、工具内部字段或模型口径。
+
+### 代码交付
+
+1. `frontend/src/shared/api/client.ts` 新增 `invokeExternalTool()` 和 `ExternalToolInvokeResultDTO`，复用后端 `/external-tools/:providerKey/invoke` 网关。
+2. `frontend/src/features/tender/index.tsx` 新增“外部标讯”页签，读取已启用的 Handaas 数据源配置后才允许检索。
+3. 检索参数按 Handaas 实际接口传递：`matchKeyword`、`biddingRegion`、`biddingAnncPubStartTime`、`biddingAnncPubEndTime`、`searchMode`、`pageIndex`、`pageSize`。
+4. 外部返回结果做宽松归一，只抽取标讯名称、招标单位、地区、预算、发布日期、截止日期、摘要、要求和来源链接。
+5. 用户可将选中结果保存为租户内标讯，`metadata.source_type=external_mcp`，并在 `metadata.external_mcp` 记录 provider、工具、导入时间和候选标识。
+6. `AI_IMPLEMENTATION_CHECKLIST.md` 和 `EXTERNAL_MCP_SKILL_RADAR.md` 更新当前能力和剩余边界。
+
+### 检查结果
+
+已运行：
+
+```bash
+pnpm --dir frontend lint
+pnpm --dir frontend build
+```
+
+结果：
+
+1. 前端 ESLint 通过。
+2. 前端 TypeScript 构建和 Vite 打包通过。
+
+### 偏离蓝图
+
+1. 本轮未配置真实 Handaas 生产凭证，也未对真实账号做 smoke test；真实响应结构仍需在租户环境验证后继续调优映射。
+2. 本轮只接入标讯搜索入口，不接企业画像、采购统计、外部应答库检索和知识库入库。
+3. 当前保存的是公开标讯摘要和业务字段，不自动抓取或外发完整招标文件附件。

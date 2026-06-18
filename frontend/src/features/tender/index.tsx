@@ -1,4 +1,5 @@
 import {
+  Alert,
   App as AntApp,
   Button,
   Card,
@@ -15,17 +16,20 @@ import {
   Tag,
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   createBidFromTender,
   createProjectFromTender,
+  createTender,
   createTenderSource,
   favoriteTender,
+  fetchExternalTools,
   fetchTender,
   fetchTenderSources,
   fetchTenders,
   getApiErrorMessage,
+  invokeExternalTool,
   unfavoriteTender,
   verifyTenderSource,
   type TenderDTO,
@@ -56,6 +60,241 @@ function tenderStatusLabel(value: string) {
   return labels[value] || '待确认'
 }
 
+const externalTenderProviderKey = 'handaas-bidding'
+const externalTenderSearchTool = 'bid_bigdata_bid_search'
+
+type ExternalTenderSearchValues = {
+  keyword?: string
+  region?: string
+  publish_start?: string
+  publish_end?: string
+}
+
+type ExternalTenderCandidate = {
+  key: string
+  title: string
+  purchaser: string
+  region: string
+  budget_text: string
+  publish_date: string | null
+  deadline: string | null
+  summary: string
+  requirements: string[]
+  source_url: string
+  raw: Record<string, unknown>
+}
+
+const externalResultArrayKeys = [
+  'items',
+  'data',
+  'list',
+  'records',
+  'resultList',
+  'results',
+  'rows',
+  'tenders',
+  'bids',
+  'notices',
+]
+const externalTitleKeys = [
+  'title',
+  'name',
+  'project_name',
+  'projectName',
+  'projectTitle',
+  'tender_name',
+  'bid_title',
+  'notice_title',
+  'announcement_title',
+  'biddingAnncTitle',
+  '公告标题',
+  '项目名称',
+  '标讯名称',
+]
+const externalPurchaserKeys = [
+  'purchaser',
+  'buyer',
+  'buyer_name',
+  'owner',
+  'tenderer',
+  'agency',
+  'biddingPurchaser',
+  'biddingPurchaserName',
+  '招标人',
+  '采购人',
+  '采购单位',
+  '招标单位',
+]
+const externalRegionKeys = ['region', 'area', 'province', 'city', 'location', 'biddingRegion', '地区', '项目地区']
+const externalBudgetKeys = [
+  'budget',
+  'budget_text',
+  'budgetText',
+  'amount',
+  'project_amount',
+  'biddingProjectAmount',
+  '预算',
+  '预算金额',
+  '项目金额',
+]
+const externalPublishDateKeys = ['publish_date', 'publishDate', 'published_at', 'biddingPublishTime', '公告时间', '发布日期']
+const externalDeadlineKeys = ['deadline', 'end_date', 'endDate', 'biddingEndTime', '截止时间', '投标截止']
+const externalURLKeys = ['source_url', 'sourceUrl', 'url', 'link', 'detail_url', 'detailUrl', 'biddingUrl', '公告链接']
+const externalSummaryKeys = ['summary', 'description', 'content', 'biddingContent', 'abstract', '正文', '摘要']
+const externalRequirementKeys = ['requirements', 'qualification', 'biddingInfoType', 'biddingProjectType', '关键要求', '公告类型']
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+function textValue(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
+}
+
+function firstText(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const direct = textValue(record[key])
+    if (direct) return direct
+  }
+  const wanted = new Set(keys.map((key) => key.toLowerCase()))
+  for (const [key, value] of Object.entries(record)) {
+    if (wanted.has(key.toLowerCase())) {
+      const text = textValue(value)
+      if (text) return text
+    }
+  }
+  return ''
+}
+
+function parsePotentialJSON(text: string): unknown {
+  const trimmed = text.trim()
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+    return null
+  }
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+}
+
+function collectExternalRecords(value: unknown, depth = 0): Record<string, unknown>[] {
+  if (depth > 5 || value == null) return []
+  if (typeof value === 'string') {
+    return collectExternalRecords(parsePotentialJSON(value), depth + 1)
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectExternalRecords(item, depth + 1))
+  }
+  const record = asRecord(value)
+  if (!record) return []
+
+  const nested: Record<string, unknown>[] = []
+  for (const key of externalResultArrayKeys) {
+    const nestedValue = record[key]
+    if (nestedValue !== undefined) {
+      nested.push(...collectExternalRecords(nestedValue, depth + 1))
+    }
+  }
+  const content = record.content
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      const contentRecord = asRecord(item)
+      if (contentRecord) {
+        nested.push(...collectExternalRecords(contentRecord.text, depth + 1))
+      }
+    }
+  }
+
+  const title = firstText(record, externalTitleKeys)
+  const url = firstText(record, externalURLKeys)
+  if (title || url) {
+    return [record, ...nested]
+  }
+  return nested
+}
+
+function normalizeExternalDate(value: string): string | null {
+  if (!value) return null
+  const normalized = value.replace(/[年月/.]/g, '-').replace(/日/g, '')
+  const match = normalized.match(/(\d{4})-(\d{1,2})-(\d{1,2})/)
+  if (!match) return null
+  const [, year, month, day] = match
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+}
+
+function normalizeExternalURL(value: string): string {
+  if (!value) return ''
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : ''
+  } catch {
+    return ''
+  }
+}
+
+function listFromExternalValue(value: string): string[] {
+  if (!value) return []
+  return value
+    .split(/[\n,，;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 6)
+}
+
+function externalCandidateKey(record: Record<string, unknown>, index: number) {
+  return (
+    firstText(record, ['id', 'biddingId', 'biddingProjectID', 'project_id', 'notice_id', '公告id', '项目编号']) ||
+    `${firstText(record, externalTitleKeys)}-${firstText(record, externalDeadlineKeys)}-${index}`
+  )
+}
+
+function normalizeExternalTenderCandidates(result: unknown): ExternalTenderCandidate[] {
+  const records = collectExternalRecords(result)
+  const seen = new Set<string>()
+  const candidates: ExternalTenderCandidate[] = []
+  records.forEach((record, index) => {
+    const title = firstText(record, externalTitleKeys)
+    if (!title) return
+    const key = externalCandidateKey(record, index)
+    if (seen.has(key)) return
+    seen.add(key)
+    const requirementText = firstText(record, externalRequirementKeys)
+    const summary = firstText(record, externalSummaryKeys)
+    candidates.push({
+      key,
+      title,
+      purchaser: firstText(record, externalPurchaserKeys),
+      region: firstText(record, externalRegionKeys),
+      budget_text: firstText(record, externalBudgetKeys),
+      publish_date: normalizeExternalDate(firstText(record, externalPublishDateKeys)),
+      deadline: normalizeExternalDate(firstText(record, externalDeadlineKeys)),
+      summary: summary.length > 500 ? `${summary.slice(0, 500)}...` : summary,
+      requirements: listFromExternalValue(requirementText),
+      source_url: normalizeExternalURL(firstText(record, externalURLKeys)),
+      raw: record,
+    })
+  })
+  return candidates.slice(0, 50)
+}
+
+function buildExternalTenderSearchArguments(values: ExternalTenderSearchValues) {
+  return {
+    matchKeyword: values.keyword?.trim() || undefined,
+    biddingRegion: values.region?.trim() || undefined,
+    biddingAnncPubStartTime: values.publish_start?.trim() || undefined,
+    biddingAnncPubEndTime: values.publish_end?.trim() || undefined,
+    searchMode: '全文匹配',
+    pageIndex: 1,
+    pageSize: 20,
+  }
+}
+
 export function TendersPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
@@ -63,15 +302,29 @@ export function TendersPage() {
   const [activeTab, setActiveTab] = useState('全部')
   const [keyword, setKeyword] = useState('')
   const [sourceForm] = Form.useForm()
+  const [externalSearchForm] = Form.useForm<ExternalTenderSearchValues>()
+  const [externalCandidates, setExternalCandidates] = useState<ExternalTenderCandidate[]>([])
   const tenders = useQuery({
     queryKey: ['tenders', activeTab, keyword],
     queryFn: () => fetchTenders({ ...tabParams[activeTab], q: keyword || undefined }),
-    enabled: activeTab !== '监控设置',
+    enabled: activeTab in tabParams,
   })
   const sources = useQuery({
     queryKey: ['tender-sources'],
     queryFn: fetchTenderSources,
   })
+  const externalTools = useQuery({
+    queryKey: ['external-tools', 'tender-search'],
+    queryFn: fetchExternalTools,
+    enabled: activeTab === '外部标讯',
+  })
+  const externalTenderConfig = useMemo(
+    () => externalTools.data?.find((item) => item.provider_key === externalTenderProviderKey),
+    [externalTools.data],
+  )
+  const externalTenderReady = Boolean(
+    externalTenderConfig?.enabled && externalTenderConfig.allowed_tools.includes(externalTenderSearchTool),
+  )
   const favoriteMutation = useMutation({
     mutationFn: (tender: TenderDTO) => (tender.favorite ? unfavoriteTender(tender.id) : favoriteTender(tender.id)),
     onSuccess: () => {
@@ -96,6 +349,60 @@ export function TendersPage() {
       message.success('检测完成')
     },
     onError: (error) => message.error(getApiErrorMessage(error, '检测失败')),
+  })
+  const externalSearchMutation = useMutation({
+    mutationFn: (values: ExternalTenderSearchValues) =>
+      invokeExternalTool(externalTenderProviderKey, {
+        tool_name: externalTenderSearchTool,
+        arguments: buildExternalTenderSearchArguments(values),
+        resource_type: 'tender_external_search',
+      }),
+    onSuccess: (result) => {
+      const candidates = normalizeExternalTenderCandidates(result.result)
+      setExternalCandidates(candidates)
+      message.success(candidates.length ? `找到 ${candidates.length} 条外部标讯` : '未识别到可保存的标讯')
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '外部标讯检索失败')),
+  })
+  const importExternalTenderMutation = useMutation({
+    mutationFn: (candidate: ExternalTenderCandidate) =>
+      createTender({
+        title: candidate.title,
+        purchaser: candidate.purchaser,
+        region: candidate.region,
+        budget_text: candidate.budget_text,
+        publish_date: candidate.publish_date,
+        deadline: candidate.deadline,
+        status: 'open',
+        match_score: 70,
+        summary: candidate.summary,
+        requirements: candidate.requirements,
+        risk_flags: [],
+        source_url: candidate.source_url,
+        metadata: {
+          source_type: 'external_mcp',
+          external_mcp: {
+            provider_key: externalTenderProviderKey,
+            tool_name: externalTenderSearchTool,
+            imported_at: new Date().toISOString(),
+            candidate_key: candidate.key,
+            source_snapshot: {
+              title: candidate.title,
+              purchaser: candidate.purchaser,
+              region: candidate.region,
+              budget_text: candidate.budget_text,
+              publish_date: candidate.publish_date,
+              deadline: candidate.deadline,
+              source_url: candidate.source_url,
+            },
+          },
+        },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tenders'] })
+      message.success('已保存为标讯')
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '保存标讯失败')),
   })
 
   const tenderTable = () => (
@@ -152,6 +459,105 @@ export function TendersPage() {
       />
     )
   }
+
+  const externalSearchPanel = () => (
+    <Space direction="vertical" size={16} className="full-width">
+      <Card title="公共数据源检索">
+        <Space direction="vertical" size={16} className="full-width">
+          {!externalTenderReady ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="外部标讯数据源尚未启用"
+              description={
+                <Space wrap>
+                  <span>请先由管理员在团队管理中启用中国招投标数据源。</span>
+                  <Link to="/team?tab=external-tools">前往配置</Link>
+                </Space>
+              }
+            />
+          ) : null}
+          <Form
+            form={externalSearchForm}
+            layout="inline"
+            onFinish={(values) => externalSearchMutation.mutate(values)}
+            disabled={!externalTenderReady}
+          >
+            <Form.Item name="keyword" rules={[{ required: true, message: '请输入关键词' }]}>
+              <Input placeholder="项目、行业、采购人关键词" allowClear />
+            </Form.Item>
+            <Form.Item name="region">
+              <Input placeholder="地区" allowClear />
+            </Form.Item>
+            <Form.Item name="publish_start">
+              <Input placeholder="发布日期起 YYYY-MM-DD" allowClear />
+            </Form.Item>
+            <Form.Item name="publish_end">
+              <Input placeholder="发布日期止 YYYY-MM-DD" allowClear />
+            </Form.Item>
+            <Form.Item>
+              <Button type="primary" htmlType="submit" loading={externalSearchMutation.isPending}>
+                检索标讯
+              </Button>
+            </Form.Item>
+          </Form>
+        </Space>
+      </Card>
+      {externalSearchMutation.isPending ? <LoadingBlock /> : null}
+      {!externalSearchMutation.isPending && externalCandidates.length === 0 ? (
+        <EmptyBlock description="输入关键词后可从已授权公共数据源检索标讯" />
+      ) : null}
+      {externalCandidates.length ? (
+        <Table
+          rowKey="key"
+          dataSource={externalCandidates}
+          scroll={{ x: 980 }}
+          columns={[
+            {
+              title: '标讯名称',
+              dataIndex: 'title',
+              width: 300,
+              render: (value) => value || '-',
+            },
+            { title: '招标单位', dataIndex: 'purchaser', width: 180, render: (value) => value || '-' },
+            { title: '地区', dataIndex: 'region', width: 120, render: (value) => value || '-' },
+            { title: '预算', dataIndex: 'budget_text', width: 140, render: (value) => value || '-' },
+            { title: '发布日期', dataIndex: 'publish_date', width: 120, render: dateText },
+            { title: '截止日期', dataIndex: 'deadline', width: 120, render: dateText },
+            {
+              title: '操作',
+              width: 130,
+              fixed: 'right',
+              render: (_, row) => (
+                <Button
+                  type="link"
+                  disabled={!canWrite}
+                  loading={importExternalTenderMutation.isPending && importExternalTenderMutation.variables?.key === row.key}
+                  onClick={() => importExternalTenderMutation.mutate(row)}
+                >
+                  保存为标讯
+                </Button>
+              ),
+            },
+          ]}
+          expandable={{
+            expandedRowRender: (row) => (
+              <Space direction="vertical" size={8} className="full-width">
+                <span>{row.summary || '暂无摘要'}</span>
+                {row.requirements.length ? (
+                  <Space wrap>
+                    {row.requirements.map((item) => (
+                      <Tag key={item}>{item}</Tag>
+                    ))}
+                  </Space>
+                ) : null}
+              </Space>
+            ),
+          }}
+        />
+      ) : null}
+    </Space>
+  )
 
   const sourcePanel = () => (
     <Row gutter={[16, 16]}>
@@ -228,10 +634,10 @@ export function TendersPage() {
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
-        items={['全部', '智能推荐', '可投标', '收藏', '监控设置'].map((label) => ({
+        items={['全部', '智能推荐', '可投标', '收藏', '外部标讯', '监控设置'].map((label) => ({
           key: label,
           label,
-          children: label === '监控设置' ? sourcePanel() : tenderTable(),
+          children: label === '监控设置' ? sourcePanel() : label === '外部标讯' ? externalSearchPanel() : tenderTable(),
         }))}
       />
     </PageFrame>
