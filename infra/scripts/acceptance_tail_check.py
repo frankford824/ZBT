@@ -658,13 +658,26 @@ def check_static_docs() -> None:
         require(needle in api_spec, f"API_SPEC.md missing current auth/HMAC behavior: {needle}")
 
     ai_call_store = (ROOT / "backend/internal/platform/aicall/store.go").read_text(encoding="utf-8")
-    for needle in ("maxAIEstimatedCost", "math.Round(value*10000) / 10000", "value > maxAIEstimatedCost"):
+    for needle in (
+        "maxAIEstimatedCost",
+        "maxAIBizRefJSONBytes",
+        "maxAIBizRefExternalTaskIDRunes",
+        "normalizeRecordBizRef",
+        "math.Round(value*10000) / 10000",
+        "value > maxAIEstimatedCost",
+    ):
         require(needle in ai_call_store, f"AI call cost normalization missing DB-safe guard: {needle}")
+    require(
+        "bizRefJSON, _ := json.Marshal(input.BizRef)" not in ai_call_store,
+        "AI call log still ignores biz_ref JSON marshal failure",
+    )
     ai_call_tests = (ROOT / "backend/internal/platform/aicall/pricing_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestNormalizeRecordSanitizesOversizedExplicitCostAndFallsBackToPricing",
         "TestNormalizeRecordRoundsEstimatedCostToDatabaseScale",
         "TestEstimateCostRejectsOversizedComputedCost",
+        "TestNormalizeRecordBizRefRejectsInvalidAndOversizedValues",
+        "TestNormalizeRecordBizRefTrimsAndBoundsExternalTaskID",
     ):
         require(needle in ai_call_tests, f"AI call cost normalization missing regression test: {needle}")
     model_router = (ROOT / "ai-service/app/gateway/model_router.py").read_text(encoding="utf-8")

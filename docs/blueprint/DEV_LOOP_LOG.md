@@ -6876,3 +6876,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 合规模块派生 JSON 的入库可靠性，没有新增语义合规模型、OCR 或规则配置 UI。
 2. 16KB 上限适合当前摘要/定位 metadata；若后续需要保存更大定位上下文，应拆成明确字段或文件引用。
+
+## Loop-142 / AI 调用审计 biz_ref 入库边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 调用审计链路，处理 `ai_call_logs.biz_ref` 入库前仍忽略 JSON marshal 错误的问题。
+2. 避免外部回调或同步 AI 调用携带不可序列化、非有限数或异常放大的业务引用时，写入空值/坏值并破坏审计去重。
+3. 将审计业务引用 JSON 字节预算和 `external_task_id` 去重键长度边界固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/aicall/store.go` 新增 `maxAIBizRefJSONBytes` 和 `maxAIBizRefExternalTaskIDRunes`。
+2. 新增 `normalizeRecordBizRef()`，在进入租户事务前复制并校验 `biz_ref`，统一拒绝 JSON marshal 错误、超预算 JSON 和超长 `external_task_id`。
+3. `Record()` 改为使用已校验 JSON 和已 trim 的 `external_task_id` 参与插入、重复检测和更新，不再忽略 `json.Marshal(input.BizRef)` 错误。
+4. `backend/internal/platform/aicall/pricing_test.go` 新增不可 JSON 值、NaN、超预算 JSON、`external_task_id` trim 和长度拒绝回归测试。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 AI 调用审计 `biz_ref` 边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/aicall/store.go internal/platform/aicall/pricing_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/aicall
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/aicall` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go AI 调用审计入库可靠性，没有新增模型 Provider、OCR Provider 或前端审计筛选交互。
+2. `biz_ref` 上限为 16KB，适合当前 task/resource/module/stage 审计引用；若后续需要保存更大链路上下文，应拆分为明确字段或外部审计资产。

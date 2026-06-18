@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -118,6 +119,47 @@ func TestNormalizeRecordRoundsEstimatedCostToDatabaseScale(t *testing.T) {
 
 	if input.EstimatedCost != 0.1235 {
 		t.Fatalf("expected estimated cost to be rounded to database scale, got %.8f", input.EstimatedCost)
+	}
+}
+
+func TestNormalizeRecordBizRefRejectsInvalidAndOversizedValues(t *testing.T) {
+	for name, value := range map[string]map[string]any{
+		"invalid number": map[string]any{"bad": math.NaN()},
+		"unsupported":    map[string]any{"bad": func() {}},
+		"oversized":      map[string]any{"payload": strings.Repeat("审", maxAIBizRefJSONBytes)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, _, err := normalizeRecordBizRef(value); err != ErrInvalidRequest {
+				t.Fatalf("expected invalid biz_ref to be rejected, got %v", err)
+			}
+		})
+	}
+}
+
+func TestNormalizeRecordBizRefTrimsAndBoundsExternalTaskID(t *testing.T) {
+	normalized, raw, externalTaskID, err := normalizeRecordBizRef(map[string]any{
+		"external_task_id": " external-task-1 ",
+	})
+	if err != nil {
+		t.Fatalf("expected bounded biz_ref to normalize, got %v", err)
+	}
+	if externalTaskID != "external-task-1" {
+		t.Fatalf("expected trimmed external task id, got %q", externalTaskID)
+	}
+	if normalized["external_task_id"] != "external-task-1" {
+		t.Fatalf("expected normalized biz ref to store trimmed external task id, got %#v", normalized["external_task_id"])
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("expected biz_ref JSON to decode, got %v", err)
+	}
+	if decoded["external_task_id"] != "external-task-1" {
+		t.Fatalf("expected JSON biz_ref to store trimmed external task id, got %#v", decoded["external_task_id"])
+	}
+	if _, _, _, err := normalizeRecordBizRef(map[string]any{
+		"external_task_id": strings.Repeat("任", maxAIBizRefExternalTaskIDRunes+1),
+	}); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized external task id to be rejected, got %v", err)
 	}
 }
 

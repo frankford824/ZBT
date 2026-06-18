@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/taskstatus"
 	"github.com/jackc/pgx/v5"
@@ -20,8 +21,10 @@ import (
 var ErrInvalidRequest = errors.New("invalid ai call log request")
 
 const (
-	maxExactJSONInteger = int64(1<<53 - 1)
-	maxAIEstimatedCost  = 100000.0
+	maxExactJSONInteger            = int64(1<<53 - 1)
+	maxAIEstimatedCost             = 100000.0
+	maxAIBizRefJSONBytes           = 16 * 1024
+	maxAIBizRefExternalTaskIDRunes = 255
 )
 
 type Store struct {
@@ -108,9 +111,13 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 	if input.TenantID == "" || input.TraceID == "" || input.TaskType == "" || input.Provider == "" || input.Model == "" || input.Status == "" {
 		return Log{}, ErrInvalidRequest
 	}
+	bizRef, bizRefJSON, externalTaskID, err := normalizeRecordBizRef(input.BizRef)
+	if err != nil {
+		return Log{}, err
+	}
+	input.BizRef = bizRef
 	var log Log
-	err := s.withTenant(ctx, input.TenantID, func(tx pgx.Tx) error {
-		bizRefJSON, _ := json.Marshal(input.BizRef)
+	err = s.withTenant(ctx, input.TenantID, func(tx pgx.Tx) error {
 		created, err := scanLog(tx.QueryRow(ctx, `
 			insert into ai_call_logs (
 				tenant_id, user_id, trace_id, task_type, provider, model,
@@ -132,7 +139,7 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 				error_message, fallback_from, biz_ref, created_at
 		`, input.TenantID, input.UserID, input.TraceID, input.TaskType, input.Provider, input.Model,
 			input.InputTokens, input.OutputTokens, input.EstimatedCost, input.LatencyMS, input.Status, input.ErrorMessage,
-			input.FallbackFrom, bizRefJSON, stringFromMap(input.BizRef, "external_task_id")))
+			input.FallbackFrom, bizRefJSON, externalTaskID))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				existing, err := scanLog(tx.QueryRow(ctx, `
@@ -150,7 +157,7 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 						and coalesce(acl.biz_ref->>'external_task_id', '') = coalesce($4, '')
 					order by acl.created_at desc
 					limit 1
-				`, input.TenantID, input.TraceID, input.TaskType, stringFromMap(input.BizRef, "external_task_id")))
+				`, input.TenantID, input.TraceID, input.TaskType, externalTaskID))
 				if err != nil {
 					return err
 				}
@@ -356,6 +363,25 @@ func normalizeRecord(input RecordInput) RecordInput {
 		input.LatencyMS = 0
 	}
 	return input
+}
+
+func normalizeRecordBizRef(values map[string]any) (map[string]any, []byte, string, error) {
+	normalized := map[string]any{}
+	for key, value := range values {
+		normalized[key] = value
+	}
+	externalTaskID := stringFromMap(normalized, "external_task_id")
+	if _, ok := normalized["external_task_id"]; ok {
+		if utf8.RuneCountInString(externalTaskID) > maxAIBizRefExternalTaskIDRunes {
+			return nil, nil, "", ErrInvalidRequest
+		}
+		normalized["external_task_id"] = externalTaskID
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil || len(raw) > maxAIBizRefJSONBytes {
+		return nil, nil, "", ErrInvalidRequest
+	}
+	return normalized, raw, externalTaskID, nil
 }
 
 func sanitizeCost(value float64) float64 {
