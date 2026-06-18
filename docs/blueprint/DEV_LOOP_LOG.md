@@ -7375,3 +7375,47 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 外部工具请求参数 JSON 指纹可靠性，没有新增 MCP Provider、工具编排策略或前端调用配置。
 2. arguments 上限沿用 64KB，适合当前招投标行业 MCP 查询参数；若后续需要传输大文件或大段上下文，应改为文件资产引用或异步任务载荷。
+
+## Loop-153 / 标书生成 SSE 快照指纹 JSON 错误处理收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标书生成实时流链路，处理 `generationSnapshotFingerprint()` 生成 SSE 去重指纹时仍忽略 `json.Marshal(snapshot)` 错误的问题。
+2. 避免异常快照时间或未来扩展字段导致指纹生成失败时，静默生成错误指纹，影响前端标书生成进度实时刷新和错误感知。
+3. 将标书生成 SSE 快照指纹 JSON 错误处理固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/api/routes.go` 将 `generationSnapshotFingerprint()` 改为返回 `(string, error)`，不再忽略 snapshot JSON marshal 错误。
+2. `streamBidGeneration()` 在初始快照和轮询快照指纹生成失败时，向前端发送 `stream_unavailable` SSE 错误事件并退出。
+3. `backend/internal/api/routes_test.go` 新增指纹忽略 `GeneratedAt`、并拒绝非法 JSON 时间值的回归测试。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 SSE 快照指纹错误处理防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/api/routes.go internal/api/routes_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/api
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/api` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；其中前端 build/lint、后端 go test/vet、AI ruff、AI pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；容器内 pytest 若 `ai-service` 容器未运行则由脚本跳过。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go API SSE 快照指纹可靠性，没有新增标书生成任务调度、前端实时流 UI 或章节生成算法。
+2. 当前错误处理复用既有 `stream_unavailable` 事件；若后续要区分快照序列化异常和存储查询异常，可扩展更细的错误码。

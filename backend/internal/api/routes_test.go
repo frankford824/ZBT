@@ -132,6 +132,42 @@ func TestRespondSessionUsesConfiguredJWTAccessTTL(t *testing.T) {
 	}
 }
 
+func TestGenerationSnapshotFingerprintIgnoresGeneratedAtAndRejectsInvalidJSON(t *testing.T) {
+	base := bid.GenerationSnapshot{
+		BidID:       "bid-1",
+		GeneratedAt: time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC),
+		Tasks: []bid.GenerationTask{{
+			ID:        "task-1",
+			Status:    "running",
+			CreatedAt: time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2026, 6, 18, 10, 1, 0, 0, time.UTC),
+		}},
+	}
+	first, err := generationSnapshotFingerprint(base)
+	if err != nil {
+		t.Fatalf("expected generation snapshot fingerprint, got %v", err)
+	}
+	base.GeneratedAt = base.GeneratedAt.Add(time.Hour)
+	second, err := generationSnapshotFingerprint(base)
+	if err != nil {
+		t.Fatalf("expected generation snapshot fingerprint after timestamp change, got %v", err)
+	}
+	if first != second {
+		t.Fatalf("expected generated_at to be ignored by fingerprint, got %q and %q", first, second)
+	}
+	_, err = generationSnapshotFingerprint(bid.GenerationSnapshot{
+		BidID: "bid-1",
+		Tasks: []bid.GenerationTask{{
+			ID:        "task-invalid",
+			Status:    "failed",
+			UpdatedAt: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC),
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected invalid snapshot JSON to be rejected")
+	}
+}
+
 func TestBidRequirementExportFilenameUsesBusinessTitle(t *testing.T) {
 	now := time.Date(2026, 6, 18, 9, 8, 7, 0, time.UTC)
 

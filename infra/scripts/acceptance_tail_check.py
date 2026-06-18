@@ -398,12 +398,18 @@ def check_static_docs() -> None:
         "boundedQueryLimit(c, 50, 100)",
         "func boundedQueryLimit",
         "respondBadRequest(c)",
+        "func generationSnapshotFingerprint(snapshot bid.GenerationSnapshot) (string, error)",
     ):
         require(needle in api_routes, f"API list endpoint missing bounded query limit guard: {needle}")
+    require(
+        "body, _ := json.Marshal(snapshot)" not in api_routes,
+        "Bid generation SSE fingerprint still ignores snapshot JSON marshal failure",
+    )
     api_routes_tests = (ROOT / "backend/internal/api/routes_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestBoundedQueryLimitDefaultsAndAcceptsRange",
         "TestBoundedQueryLimitRejectsInvalidValues",
+        "TestGenerationSnapshotFingerprintIgnoresGeneratedAtAndRejectsInvalidJSON",
     ):
         require(needle in api_routes_tests, f"API list endpoint missing bounded query limit regression test: {needle}")
     for forbidden in ("label: '引用号'", "label: '定位码'", "label: '坐标'"):

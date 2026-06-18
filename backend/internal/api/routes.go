@@ -2454,7 +2454,11 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 	c.Status(http.StatusOK)
 
-	lastFingerprint := generationSnapshotFingerprint(snapshot)
+	lastFingerprint, err := generationSnapshotFingerprint(snapshot)
+	if err != nil {
+		_ = writeSSE(c, flusher, "error", apiError("stream_unavailable", "实时更新暂时不可用，请稍后重试"))
+		return
+	}
 	if err := writeSSE(c, flusher, "generation", snapshot); err != nil {
 		return
 	}
@@ -2474,7 +2478,11 @@ func (s *server) streamBidGeneration(c *gin.Context) {
 				_ = writeSSE(c, flusher, "error", apiError("stream_unavailable", "实时更新暂时不可用，请稍后重试"))
 				return
 			}
-			fingerprint := generationSnapshotFingerprint(next)
+			fingerprint, err := generationSnapshotFingerprint(next)
+			if err != nil {
+				_ = writeSSE(c, flusher, "error", apiError("stream_unavailable", "实时更新暂时不可用，请稍后重试"))
+				return
+			}
 			if fingerprint == lastFingerprint {
 				continue
 			}
@@ -2931,10 +2939,13 @@ func writeSSE(c *gin.Context, flusher http.Flusher, event string, payload any) e
 	return nil
 }
 
-func generationSnapshotFingerprint(snapshot bid.GenerationSnapshot) string {
+func generationSnapshotFingerprint(snapshot bid.GenerationSnapshot) (string, error) {
 	snapshot.GeneratedAt = time.Time{}
-	body, _ := json.Marshal(snapshot)
-	return string(body)
+	body, err := json.Marshal(snapshot)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
 }
 
 func bearerToken(header string) string {
