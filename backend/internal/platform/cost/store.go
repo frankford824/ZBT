@@ -27,17 +27,18 @@ var (
 )
 
 const (
-	costAdviceSubmitFailureMessage = "成本建议生成启动失败，请稍后重试"
-	maxCostNameRunes               = 255
-	maxCostShortTextRunes          = 128
-	maxCostNoteRunes               = 1000
-	maxCostAmount                  = 999_999_999_999.99
-	maxCostExternalTaskIDRunes     = 128
-	maxCostTaskErrorMessageRunes   = 1000
-	maxCostTaskPayloadJSONBytes    = 256 * 1024
-	maxCostTaskResultJSONBytes     = 128 * 1024
-	maxCostTaskRouteJSONBytes      = 16 * 1024
-	maxCostReportMetadataJSONBytes = 16 * 1024
+	costAdviceSubmitFailureMessage  = "成本建议生成启动失败，请稍后重试"
+	maxCostNameRunes                = 255
+	maxCostShortTextRunes           = 128
+	maxCostNoteRunes                = 1000
+	maxCostAmount                   = 999_999_999_999.99
+	maxCostExternalTaskIDRunes      = 128
+	maxCostTaskErrorMessageRunes    = 1000
+	maxCostTaskPayloadJSONBytes     = 256 * 1024
+	maxCostTaskResultJSONBytes      = 128 * 1024
+	maxCostTaskRouteJSONBytes       = 16 * 1024
+	maxCostReportMetadataJSONBytes  = 16 * 1024
+	maxCostProjectMetadataJSONBytes = maxCostTaskResultJSONBytes + 1024
 )
 
 type Store struct {
@@ -674,10 +675,11 @@ func (s *Store) CreateReport(ctx context.Context, tenantID, projectID string) (R
 		); err != nil {
 			return err
 		}
-		report.Metadata = map[string]any{}
-		if len(metadataRaw) > 0 {
-			_ = json.Unmarshal(metadataRaw, &report.Metadata)
+		decoded, err := unmarshalCostReportMetadata(metadataRaw)
+		if err != nil {
+			return err
 		}
+		report.Metadata = decoded
 		return nil
 	})
 	return report, err
@@ -812,14 +814,17 @@ func scanProject(row scanner) (Project, error) {
 		&project.TotalBudget, &project.TotalActual, &project.MarginAmount, &project.MarginRate,
 		&project.ItemCount, &metadataRaw, &project.CreatedAt, &project.UpdatedAt,
 	)
+	if err != nil {
+		return Project{}, err
+	}
 	if budget.Valid {
 		project.BudgetAmount = &budget.Float64
 	}
-	project.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &project.Metadata)
+	project.Metadata, err = unmarshalCostProjectMetadata(metadataRaw)
+	if err != nil {
+		return Project{}, err
 	}
-	return project, err
+	return project, nil
 }
 
 func scanItem(row scanner) (Item, error) {
@@ -1067,6 +1072,14 @@ func unmarshalCostTaskJSON(raw []byte, maxBytes int) (map[string]any, error) {
 		result = map[string]any{}
 	}
 	return result, nil
+}
+
+func unmarshalCostReportMetadata(raw []byte) (map[string]any, error) {
+	return unmarshalCostTaskJSON(raw, maxCostReportMetadataJSONBytes)
+}
+
+func unmarshalCostProjectMetadata(raw []byte) (map[string]any, error) {
+	return unmarshalCostTaskJSON(raw, maxCostProjectMetadataJSONBytes)
 }
 
 func normalizeCostAdviceCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {

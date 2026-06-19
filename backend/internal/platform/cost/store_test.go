@@ -301,6 +301,82 @@ func TestScanTaskNormalizesEmptyStoredJSONFields(t *testing.T) {
 	}
 }
 
+func TestUnmarshalCostMetadataRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid syntax": []byte(`{"metadata":`),
+		"invalid shape":  []byte(`[{"metadata":true}]`),
+		"oversized":      []byte(`{"payload":"` + strings.Repeat("报", maxCostReportMetadataJSONBytes) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalCostReportMetadata(raw); err == nil {
+				t.Fatal("expected invalid stored report metadata to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalCostProjectMetadataAllowsAdviceSizedPayload(t *testing.T) {
+	raw := []byte(`{"last_ai_advice":{"payload":"` + strings.Repeat("建", maxCostReportMetadataJSONBytes) + `"}}`)
+	metadata, err := unmarshalCostProjectMetadata(raw)
+	if err != nil {
+		t.Fatalf("expected project metadata to allow advice-sized payload: %v", err)
+	}
+	if _, ok := metadata["last_ai_advice"].(map[string]any); !ok {
+		t.Fatalf("expected last_ai_advice metadata object, got %#v", metadata["last_ai_advice"])
+	}
+
+	oversized := []byte(`{"payload":"` + strings.Repeat("建", maxCostProjectMetadataJSONBytes) + `"}`)
+	if _, err := unmarshalCostProjectMetadata(oversized); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized project metadata to be rejected, got %v", err)
+	}
+}
+
+func TestUnmarshalCostMetadataNormalizesEmptyStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			metadata, err := unmarshalCostReportMetadata(raw)
+			if err != nil {
+				t.Fatalf("expected empty stored report metadata to normalize: %v", err)
+			}
+			if metadata == nil || len(metadata) != 0 {
+				t.Fatalf("expected empty metadata map, got %#v", metadata)
+			}
+		})
+	}
+}
+
+func TestScanProjectRejectsInvalidStoredMetadata(t *testing.T) {
+	if _, err := scanProject(costProjectScanRow{metadataRaw: []byte(`{"metadata":`)}); err == nil {
+		t.Fatal("expected invalid stored project metadata JSON to be rejected")
+	}
+	oversized := []byte(`{"payload":"` + strings.Repeat("建", maxCostProjectMetadataJSONBytes) + `"}`)
+	if _, err := scanProject(costProjectScanRow{metadataRaw: oversized}); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized stored project metadata to be rejected, got %v", err)
+	}
+}
+
+func TestScanProjectNormalizesStoredMetadata(t *testing.T) {
+	project, err := scanProject(costProjectScanRow{metadataRaw: []byte(`{"source":"cost-api"}`)})
+	if err != nil {
+		t.Fatalf("expected stored project metadata to normalize: %v", err)
+	}
+	if project.Metadata["source"] != "cost-api" {
+		t.Fatalf("expected decoded project metadata, got %#v", project.Metadata)
+	}
+
+	project, err = scanProject(costProjectScanRow{metadataRaw: []byte(" null ")})
+	if err != nil {
+		t.Fatalf("expected empty stored project metadata to normalize: %v", err)
+	}
+	if project.Metadata == nil || len(project.Metadata) != 0 {
+		t.Fatalf("expected empty project metadata map, got %#v", project.Metadata)
+	}
+}
+
 func TestNormalizeCostAdviceCallbackBoundsErrorMessage(t *testing.T) {
 	_, _, err := normalizeCostAdviceCallbackPayload(CallbackPayload{
 		TenantID:     "tenant-id",
@@ -347,6 +423,29 @@ func (row costTaskScanRow) Scan(dest ...any) error {
 	*(dest[9].(*sql.NullString)) = sql.NullString{}
 	*(dest[10].(*sql.NullTime)) = sql.NullTime{}
 	*(dest[11].(*sql.NullTime)) = sql.NullTime{}
+	*(dest[12].(*time.Time)) = now
+	*(dest[13].(*time.Time)) = now
+	return nil
+}
+
+type costProjectScanRow struct {
+	metadataRaw []byte
+}
+
+func (row costProjectScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "cost-project-1"
+	*(dest[1].(*string)) = "project-1"
+	*(dest[2].(*string)) = "智慧交通项目"
+	*(dest[3].(*string)) = "智慧交通成本"
+	*(dest[4].(*string)) = "active"
+	*(dest[5].(*sql.NullFloat64)) = sql.NullFloat64{Float64: 1200, Valid: true}
+	*(dest[6].(*float64)) = 1000
+	*(dest[7].(*float64)) = 800
+	*(dest[8].(*float64)) = 200
+	*(dest[9].(*float64)) = 20
+	*(dest[10].(*int)) = 3
+	*(dest[11].(*[]byte)) = row.metadataRaw
 	*(dest[12].(*time.Time)) = now
 	*(dest[13].(*time.Time)) = now
 	return nil
