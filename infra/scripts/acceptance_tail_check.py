@@ -447,12 +447,20 @@ def check_static_docs() -> None:
         "config, _ := json.Marshal(req.Config)" not in tender_store,
         "Tender source config still ignores JSON marshal errors",
     )
+    for forbidden in (
+        "_ = json.Unmarshal(metadataRaw, &tender.Metadata)",
+        "_ = json.Unmarshal(configRaw, &source.Config)",
+    ):
+        require(forbidden not in tender_store, f"Tender store still ignores stored JSON failure: {forbidden}")
     for needle in (
         "maxSourceConfigEntries",
         "maxSourceConfigKeyRunes",
         "maxSourceConfigJSONBytes",
         "normalizeSourceConfig",
         "config, err := normalizeSourceConfig(req.Config)",
+        "unmarshalTenderJSONObject",
+        "unmarshalTenderMetadata",
+        "unmarshalSourceConfig",
         "len(raw) > maxSourceConfigJSONBytes",
     ):
         require(needle in tender_store, f"Tender source config missing input boundary: {needle}")
@@ -461,6 +469,11 @@ def check_static_docs() -> None:
         "TestCreateSourceRejectsOversizedConfigBeforeDB",
         "TestNormalizeSourceConfigTrimsKeysAndBoundsJSON",
         "TestNormalizeSourceConfigRejectsInvalidShape",
+        "TestUnmarshalTenderJSONObjectRejectsInvalidStoredFields",
+        "TestUnmarshalTenderJSONObjectNormalizesEmptyStoredFields",
+        "TestScanTenderRowsRejectInvalidStoredJSON",
+        "TestScanTenderRowsNormalizeStoredJSON",
+        "TestScanTenderRowsNormalizeEmptyStoredJSON",
     ):
         require(needle in tender_store_tests, f"Tender source config missing regression test: {needle}")
     for needle in (

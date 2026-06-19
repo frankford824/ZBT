@@ -2,6 +2,7 @@ package tender
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -481,6 +482,91 @@ func TestNormalizeSourceConfigRejectsInvalidShape(t *testing.T) {
 	}
 }
 
+func TestUnmarshalTenderJSONObjectRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid syntax": []byte(`{"metadata":`),
+		"invalid shape":  []byte(`[{"metadata":true}]`),
+		"oversized":      []byte(`{"payload":"` + strings.Repeat("元", maxTenderMetadataJSONBytes) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalTenderJSONObject(raw, maxTenderMetadataJSONBytes); err == nil {
+				t.Fatal("expected invalid stored tender JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalTenderJSONObjectNormalizesEmptyStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("  "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := unmarshalTenderJSONObject(raw, maxTenderMetadataJSONBytes)
+			if err != nil {
+				t.Fatalf("expected empty stored tender JSON to normalize: %v", err)
+			}
+			if got == nil || len(got) != 0 {
+				t.Fatalf("expected empty map, got %+v", got)
+			}
+		})
+	}
+}
+
+func TestScanTenderRowsRejectInvalidStoredJSON(t *testing.T) {
+	if _, err := scanTender(tenderScanRow{metadataRaw: []byte(`{"source":`)}); err == nil {
+		t.Fatal("expected invalid tender metadata JSON to be rejected")
+	}
+	invalidMetadataKey := []byte(`{"` + strings.Repeat("键", maxTenderMetadataKeyRunes+1) + `":"value"}`)
+	if _, err := scanTender(tenderScanRow{metadataRaw: invalidMetadataKey}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid tender metadata key to be rejected, got %v", err)
+	}
+	if _, err := scanSource(sourceScanRow{configRaw: []byte(`[{"region":"浙江"}]`)}); err == nil {
+		t.Fatal("expected invalid source config JSON shape to be rejected")
+	}
+	invalidConfigKey := []byte(`{"` + strings.Repeat("键", maxSourceConfigKeyRunes+1) + `":"value"}`)
+	if _, err := scanSource(sourceScanRow{configRaw: invalidConfigKey}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid source config key to be rejected, got %v", err)
+	}
+}
+
+func TestScanTenderRowsNormalizeStoredJSON(t *testing.T) {
+	tender, err := scanTender(tenderScanRow{metadataRaw: []byte(`{" source ":"manual"}`)})
+	if err != nil {
+		t.Fatalf("expected stored tender metadata to normalize: %v", err)
+	}
+	if tender.Metadata["source"] != "manual" {
+		t.Fatalf("expected tender metadata key to be trimmed, got %+v", tender.Metadata)
+	}
+
+	source, err := scanSource(sourceScanRow{configRaw: []byte(`{" region ":"浙江"}`)})
+	if err != nil {
+		t.Fatalf("expected stored source config to normalize: %v", err)
+	}
+	if source.Config["region"] != "浙江" {
+		t.Fatalf("expected source config key to be trimmed, got %+v", source.Config)
+	}
+}
+
+func TestScanTenderRowsNormalizeEmptyStoredJSON(t *testing.T) {
+	tender, err := scanTender(tenderScanRow{metadataRaw: nil})
+	if err != nil {
+		t.Fatalf("expected empty tender metadata to normalize: %v", err)
+	}
+	if tender.Metadata == nil || len(tender.Metadata) != 0 {
+		t.Fatalf("expected empty tender metadata map, got %+v", tender.Metadata)
+	}
+
+	source, err := scanSource(sourceScanRow{configRaw: []byte(" null ")})
+	if err != nil {
+		t.Fatalf("expected empty source config to normalize: %v", err)
+	}
+	if source.Config == nil || len(source.Config) != 0 {
+		t.Fatalf("expected empty source config map, got %+v", source.Config)
+	}
+}
+
 func TestSourceVerifyOutcomeUsesUserFacingMessages(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -523,4 +609,54 @@ func TestSourceVerifyOutcomeUsesUserFacingMessages(t *testing.T) {
 			}
 		})
 	}
+}
+
+type tenderScanRow struct {
+	metadataRaw []byte
+}
+
+func (row tenderScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	amount := 1200.0
+	*(dest[0].(*string)) = "tender-1"
+	*(dest[1].(*sql.NullString)) = sql.NullString{String: "source-1", Valid: true}
+	*(dest[2].(*string)) = "全国招标来源"
+	*(dest[3].(*string)) = "智慧交通项目"
+	*(dest[4].(*string)) = "采购单位"
+	*(dest[5].(*string)) = "浙江"
+	*(dest[6].(*sql.NullFloat64)) = sql.NullFloat64{Float64: amount, Valid: true}
+	*(dest[7].(*string)) = "1200 万"
+	*(dest[8].(*sql.NullTime)) = sql.NullTime{Time: now, Valid: true}
+	*(dest[9].(*sql.NullTime)) = sql.NullTime{Time: now.AddDate(0, 1, 0), Valid: true}
+	*(dest[10].(*string)) = "open"
+	*(dest[11].(*int)) = 80
+	*(dest[12].(*string)) = "项目摘要"
+	*(dest[13].(*[]string)) = []string{"资质要求"}
+	*(dest[14].(*[]string)) = []string{"风险提示"}
+	*(dest[15].(*string)) = "https://example.com/tender"
+	*(dest[16].(*[]byte)) = row.metadataRaw
+	*(dest[17].(*bool)) = false
+	*(dest[18].(*time.Time)) = now
+	*(dest[19].(*time.Time)) = now
+	return nil
+}
+
+type sourceScanRow struct {
+	configRaw []byte
+}
+
+func (row sourceScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "source-1"
+	*(dest[1].(*string)) = "全国招标来源"
+	*(dest[2].(*string)) = "招标平台"
+	*(dest[3].(*string)) = "https://example.com/source"
+	*(dest[4].(*string)) = "active"
+	*(dest[5].(*sql.NullTime)) = sql.NullTime{Time: now, Valid: true}
+	*(dest[6].(*sql.NullString)) = sql.NullString{String: "ok", Valid: true}
+	*(dest[7].(*string)) = sourceVerifySuccessMessage
+	*(dest[8].(*[]byte)) = row.configRaw
+	*(dest[9].(*time.Time)) = now
+	*(dest[10].(*time.Time)) = now
+	return nil
 }

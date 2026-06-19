@@ -1,6 +1,7 @@
 package tender
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -624,6 +625,9 @@ func scanTender(row scanner) (Tender, error) {
 		&tender.Summary, &tender.Requirements, &tender.RiskFlags, &tender.SourceURL, &metadataRaw, &tender.Favorite,
 		&tender.CreatedAt, &tender.UpdatedAt,
 	)
+	if err != nil {
+		return Tender{}, err
+	}
 	if sourceID.Valid {
 		tender.SourceID = &sourceID.String
 	}
@@ -636,11 +640,11 @@ func scanTender(row scanner) (Tender, error) {
 	if deadline.Valid {
 		tender.Deadline = &deadline.Time
 	}
-	tender.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &tender.Metadata)
+	tender.Metadata, err = unmarshalTenderMetadata(metadataRaw)
+	if err != nil {
+		return Tender{}, err
 	}
-	return tender, err
+	return tender, nil
 }
 
 func mergeTenderUpdateRequest(current Tender, req UpdateTenderRequest) CreateTenderRequest {
@@ -875,17 +879,20 @@ func scanSource(row scanner) (Source, error) {
 		&source.ID, &source.Name, &source.SourceType, &source.URL, &source.Status,
 		&lastVerifiedAt, &lastVerifyStatus, &source.LastVerifyMessage, &configRaw, &source.CreatedAt, &source.UpdatedAt,
 	)
+	if err != nil {
+		return Source{}, err
+	}
 	if lastVerifiedAt.Valid {
 		source.LastVerifiedAt = &lastVerifiedAt.Time
 	}
 	if lastVerifyStatus.Valid {
 		source.LastVerifyStatus = &lastVerifyStatus.String
 	}
-	source.Config = map[string]any{}
-	if len(configRaw) > 0 {
-		_ = json.Unmarshal(configRaw, &source.Config)
+	source.Config, err = unmarshalSourceConfig(configRaw)
+	if err != nil {
+		return Source{}, err
 	}
-	return source, err
+	return source, nil
 }
 
 func normalizeTenderStatus(value string) (string, error) {
@@ -1035,6 +1042,48 @@ func normalizeSourceConfig(value map[string]any) ([]byte, error) {
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func unmarshalTenderJSONObject(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return result, nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return map[string]any{}, nil
+	}
+	return result, nil
+}
+
+func unmarshalTenderMetadata(raw []byte) (map[string]any, error) {
+	metadata, err := unmarshalTenderJSONObject(raw, maxTenderMetadataJSONBytes)
+	if err != nil {
+		return nil, err
+	}
+	normalizedRaw, err := normalizeTenderMetadata(metadata)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalTenderJSONObject(normalizedRaw, maxTenderMetadataJSONBytes)
+}
+
+func unmarshalSourceConfig(raw []byte) (map[string]any, error) {
+	config, err := unmarshalTenderJSONObject(raw, maxSourceConfigJSONBytes)
+	if err != nil {
+		return nil, err
+	}
+	normalizedRaw, err := normalizeSourceConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return unmarshalTenderJSONObject(normalizedRaw, maxSourceConfigJSONBytes)
 }
 
 func clampScore(value int) int {

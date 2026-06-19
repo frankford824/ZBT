@@ -7684,3 +7684,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 合规读取可靠性，没有新增语义合规模型、OCR、规则知识库或前端合规视图。
 2. 读取侧沿用既有写入侧 JSON 预算；如果后续合规定位或报告 metadata 需要承载更大结构，应拆成明细表或文件资产引用，而不是继续扩大 JSON 字段。
+
+## Loop-160 / 标讯 JSON 读取边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查标讯模块读取链路，处理标讯 `metadata` 和采集源 `config` 读取时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算 JSON 静默进入标讯详情、来源配置和后续更新合并逻辑。
+3. 将标讯 JSON 读取边界固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/tender/store.go` 新增 `unmarshalTenderJSONObject()`，空值和 `null` 归一化为 `{}`，并按字段字节预算校验读取侧 JSON。
+2. `unmarshalTenderMetadata()` 和 `unmarshalSourceConfig()` 复用既有写入侧 metadata/config key、entry 和 bytes 约束，确保读写边界一致。
+3. `scanTender()`、`scanSource()` 改为先返回底层 `row.Scan` 错误，再显式处理 JSON 解析错误，不再忽略 `json.Unmarshal` 失败。
+4. `backend/internal/platform/tender/store_test.go` 新增 fake scanner 回归测试，覆盖坏 metadata/config 被拒绝、空/null 存储值归一化为 `{}`，以及读取侧 key trim 行为。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加标讯 JSON 读取边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/tender/store.go internal/platform/tender/store_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/tender` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标讯读取可靠性，没有新增招标公告采集源、解析算法、OCR 或前端标讯视图。
+2. 读取侧沿用既有写入侧 JSON 预算；如果后续来源配置需要保存复杂策略，应拆成结构化字段或独立配置表，而不是扩大 config JSON。
