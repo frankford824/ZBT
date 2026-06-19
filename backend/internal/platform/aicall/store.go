@@ -573,6 +573,9 @@ func scanLog(row scanner) (Log, error) {
 		&log.InputTokens, &log.OutputTokens, &log.EstimatedCost, &log.LatencyMS, &log.Status,
 		&errorMessage, &fallbackFrom, &bizRefRaw, &log.CreatedAt,
 	)
+	if err != nil {
+		return Log{}, err
+	}
 	if userID.Valid {
 		log.UserID = &userID.String
 	}
@@ -582,9 +585,11 @@ func scanLog(row scanner) (Log, error) {
 	if fallbackFrom.Valid {
 		log.FallbackFrom = &fallbackFrom.String
 	}
-	log.BizRef = map[string]any{}
-	_ = json.Unmarshal(bizRefRaw, &log.BizRef)
-	return log, err
+	log.BizRef, err = unmarshalRecordBizRef(bizRefRaw)
+	if err != nil {
+		return Log{}, err
+	}
+	return log, nil
 }
 
 type scanner interface {
@@ -613,10 +618,24 @@ func mapFromMap(parent map[string]any, key string) map[string]any {
 		if err != nil {
 			return map[string]any{}
 		}
-		result := map[string]any{}
-		_ = json.Unmarshal(raw, &result)
+		result, err := unmarshalAITaskJSON(raw, maxAITaskResultJSONBytes)
+		if err != nil {
+			return map[string]any{}
+		}
 		return result
 	}
+}
+
+func unmarshalRecordBizRef(raw []byte) (map[string]any, error) {
+	bizRef, err := unmarshalAITaskJSON(raw, maxAIBizRefJSONBytes)
+	if err != nil {
+		return nil, err
+	}
+	normalized, _, _, err := normalizeRecordBizRef(bizRef)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
 }
 
 func stringFromMap(values map[string]any, key string) string {

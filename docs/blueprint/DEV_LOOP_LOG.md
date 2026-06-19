@@ -7729,3 +7729,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 标讯读取可靠性，没有新增招标公告采集源、解析算法、OCR 或前端标讯视图。
 2. 读取侧沿用既有写入侧 JSON 预算；如果后续来源配置需要保存复杂策略，应拆成结构化字段或独立配置表，而不是扩大 config JSON。
+
+## Loop-161 / AI 调用审计 biz_ref 读取边界收敛 - 2026-06-18
+
+### 本轮目标
+
+1. 继续审查 AI 调用审计读取链路，处理 `scanLog()` 读取 `biz_ref` 时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算 `biz_ref` 静默进入 AI 调用归属、成本审计和团队页展示。
+3. 将 AI 调用审计 `biz_ref` 读取边界固化进静态验收。
+
+### 代码交付
+
+1. `backend/internal/platform/aicall/store.go` 新增 `unmarshalRecordBizRef()`，读取侧复用既有 `biz_ref` 字节预算和 `external_task_id` 长度约束。
+2. `scanLog()` 改为先返回底层 `row.Scan` 错误，再显式处理 `biz_ref` 解析错误，不再忽略 `json.Unmarshal` 失败。
+3. `mapFromMap()` 改为复用 `unmarshalAITaskJSON()` 做 JSON 兼容转换，不再吞掉内部 `json.Unmarshal` 错误。
+4. `backend/internal/platform/aicall/pricing_test.go` 新增 fake scanner 回归测试，覆盖坏 `biz_ref` 被拒绝、空/null 存储值归一化为 `{}`，以及兼容转换的非对象值降级为空对象。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 AI 调用审计 `biz_ref` 读取边界防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/aicall/store.go internal/platform/aicall/pricing_test.go
+cd backend && GOTOOLCHAIN=local go test ./internal/platform/aicall
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && GOTOOLCHAIN=local go test ./...
+cd backend && GOTOOLCHAIN=local go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && GOTOOLCHAIN=local go test ./internal/platform/aicall` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && GOTOOLCHAIN=local go test ./...` 通过。
+5. `cd backend && GOTOOLCHAIN=local go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go AI 调用审计读取可靠性，没有新增 AI Provider、模型路由策略或前端审计视图。
+2. 读取侧沿用既有 `biz_ref` JSON 预算；如果后续审计关联需要更复杂的业务上下文，应拆成结构化审计字段，而不是扩大 `biz_ref` JSON。

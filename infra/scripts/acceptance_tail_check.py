@@ -734,6 +734,7 @@ def check_static_docs() -> None:
         "maxAITaskResultJSONBytes",
         "normalizeRecordBizRef",
         "unmarshalAITaskJSON",
+        "unmarshalRecordBizRef",
         "callbackTaskResult",
         "math.Round(value*10000) / 10000",
         "value > maxAIEstimatedCost",
@@ -744,10 +745,12 @@ def check_static_docs() -> None:
         "AI call log still ignores biz_ref JSON marshal failure",
     )
     for forbidden in (
+        "_ = json.Unmarshal(bizRefRaw, &log.BizRef)",
+        "_ = json.Unmarshal(raw, &result)",
         "_ = json.Unmarshal(routeRaw, &task.Route)",
         "_ = json.Unmarshal(resultRaw, &task.Result)",
     ):
-        require(forbidden not in ai_call_store, f"AI call task callback still ignores stored task JSON failure: {forbidden}")
+        require(forbidden not in ai_call_store, f"AI call store still ignores stored JSON failure: {forbidden}")
     ai_call_tests = (ROOT / "backend/internal/platform/aicall/pricing_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestNormalizeRecordSanitizesOversizedExplicitCostAndFallsBackToPricing",
@@ -757,6 +760,11 @@ def check_static_docs() -> None:
         "TestNormalizeRecordBizRefTrimsAndBoundsExternalTaskID",
         "TestUnmarshalAITaskJSONRejectsInvalidStoredFields",
         "TestUnmarshalAITaskJSONNormalizesEmptyStoredFields",
+        "TestUnmarshalRecordBizRefRejectsInvalidStoredFields",
+        "TestUnmarshalRecordBizRefNormalizesStoredFields",
+        "TestScanLogRejectsInvalidStoredBizRef",
+        "TestScanLogNormalizesStoredBizRef",
+        "TestMapFromMapUsesCheckedJSONConversion",
         "TestCallbackTaskResultPrefersCallbackPayload",
     ):
         require(needle in ai_call_tests, f"AI call cost normalization missing regression test: {needle}")

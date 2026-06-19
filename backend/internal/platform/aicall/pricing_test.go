@@ -195,6 +195,85 @@ func TestUnmarshalAITaskJSONNormalizesEmptyStoredFields(t *testing.T) {
 	}
 }
 
+func TestUnmarshalRecordBizRefRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid syntax":          []byte(`{"biz_ref":`),
+		"invalid shape":           []byte(`[{"resource_id":"x"}]`),
+		"oversized":               []byte(`{"payload":"` + strings.Repeat("审", maxAIBizRefJSONBytes) + `"}`),
+		"oversized external task": []byte(`{"external_task_id":"` + strings.Repeat("任", maxAIBizRefExternalTaskIDRunes+1) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalRecordBizRef(raw); err == nil {
+				t.Fatal("expected invalid stored biz_ref to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalRecordBizRefNormalizesStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := unmarshalRecordBizRef(raw)
+			if err != nil {
+				t.Fatalf("expected empty stored biz_ref to normalize: %v", err)
+			}
+			if result == nil || len(result) != 0 {
+				t.Fatalf("expected empty biz_ref map, got %#v", result)
+			}
+		})
+	}
+
+	result, err := unmarshalRecordBizRef([]byte(`{"external_task_id":" external-task-1 "}`))
+	if err != nil {
+		t.Fatalf("expected stored biz_ref external task id to normalize: %v", err)
+	}
+	if result["external_task_id"] != "external-task-1" {
+		t.Fatalf("expected external task id to be trimmed, got %#v", result["external_task_id"])
+	}
+}
+
+func TestScanLogRejectsInvalidStoredBizRef(t *testing.T) {
+	if _, err := scanLog(aiCallLogScanRow{bizRefRaw: []byte(`{"biz_ref":`)}); err == nil {
+		t.Fatal("expected invalid stored biz_ref JSON to be rejected")
+	}
+	raw := []byte(`{"external_task_id":"` + strings.Repeat("任", maxAIBizRefExternalTaskIDRunes+1) + `"}`)
+	if _, err := scanLog(aiCallLogScanRow{bizRefRaw: raw}); err != ErrInvalidRequest {
+		t.Fatalf("expected oversized stored biz_ref external task id to be rejected, got %v", err)
+	}
+}
+
+func TestScanLogNormalizesStoredBizRef(t *testing.T) {
+	log, err := scanLog(aiCallLogScanRow{bizRefRaw: []byte(`{"external_task_id":" external-task-1 ","module":"bid"}`)})
+	if err != nil {
+		t.Fatalf("expected stored biz_ref to normalize: %v", err)
+	}
+	if log.BizRef["external_task_id"] != "external-task-1" || log.BizRef["module"] != "bid" {
+		t.Fatalf("expected normalized biz_ref, got %#v", log.BizRef)
+	}
+
+	log, err = scanLog(aiCallLogScanRow{bizRefRaw: nil})
+	if err != nil {
+		t.Fatalf("expected empty stored biz_ref to normalize: %v", err)
+	}
+	if log.BizRef == nil || len(log.BizRef) != 0 {
+		t.Fatalf("expected empty biz_ref map, got %#v", log.BizRef)
+	}
+}
+
+func TestMapFromMapUsesCheckedJSONConversion(t *testing.T) {
+	converted := mapFromMap(map[string]any{"metadata": map[string]string{"provider": "deepseek"}}, "metadata")
+	if converted["provider"] != "deepseek" {
+		t.Fatalf("expected map[string]string to convert, got %#v", converted)
+	}
+	if got := mapFromMap(map[string]any{"metadata": []any{"bad"}}, "metadata"); len(got) != 0 {
+		t.Fatalf("expected non-object JSON compatible value to return empty map, got %#v", got)
+	}
+}
+
 func TestCallbackTaskResultPrefersCallbackPayload(t *testing.T) {
 	result, err := callbackTaskResult(map[string]any{"trace_id": "callback-trace"}, []byte(`{"result":`))
 	if err != nil {
@@ -420,6 +499,31 @@ func TestNormalizeStatusCanonicalizesKnownValues(t *testing.T) {
 			t.Fatalf("expected %q to normalize to %q, got %q", tc.input, tc.want, got)
 		}
 	}
+}
+
+type aiCallLogScanRow struct {
+	bizRefRaw []byte
+}
+
+func (row aiCallLogScanRow) Scan(dest ...any) error {
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	*(dest[0].(*string)) = "log-1"
+	*(dest[1].(*sql.NullString)) = sql.NullString{String: "user-1", Valid: true}
+	*(dest[2].(*string)) = "张三"
+	*(dest[3].(*string)) = "trace-1"
+	*(dest[4].(*string)) = "chapter_generate"
+	*(dest[5].(*string)) = "deepseek"
+	*(dest[6].(*string)) = "deepseek-chat"
+	*(dest[7].(*int)) = 100
+	*(dest[8].(*int)) = 50
+	*(dest[9].(*float64)) = 0.001
+	*(dest[10].(*int)) = 1200
+	*(dest[11].(*string)) = "done"
+	*(dest[12].(*sql.NullString)) = sql.NullString{}
+	*(dest[13].(*sql.NullString)) = sql.NullString{String: "qwen", Valid: true}
+	*(dest[14].(*[]byte)) = row.bizRefRaw
+	*(dest[15].(*time.Time)) = now
+	return nil
 }
 
 func TestNormalizeStatusRejectsUnsupportedValues(t *testing.T) {
