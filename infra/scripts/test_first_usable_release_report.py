@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import first_usable_release_report as report
 
@@ -105,6 +106,19 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertGreater(summary["bytes"], 0)
         self.assertRegex(str(summary["sha256"]), r"^[0-9a-f]{64}$")
 
+    def test_clear_artifact_removes_stale_json_before_new_evidence(self) -> None:
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            artifact = Path(directory) / "provider_canary.json"
+            artifact.write_text(json.dumps({"name": "provider_canary", "status": "passed"}), encoding="utf-8")
+
+            report.clear_artifact(artifact)
+
+            summary = report.artifact_summary("provider_canary", artifact)
+
+        self.assertEqual(summary["status"], "missing")
+
     def test_json_artifact_command_preserves_full_output(self) -> None:
         tmp_root = report.ROOT / "tmp"
         tmp_root.mkdir(exist_ok=True)
@@ -135,6 +149,50 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertEqual(saved["name"], "production_env_audit")
         self.assertEqual(saved["status"], "passed")
         self.assertEqual(saved["payload"], payload)
+
+    def test_production_report_indexes_provider_and_ocr_canary_artifacts(self) -> None:
+        args = argparse.Namespace(
+            profile="production",
+            env_file=None,
+            include_repo_check=False,
+            include_project1_runtime=False,
+            timeout_s=30,
+        )
+        commands: list[tuple[str, list[str]]] = []
+
+        def fake_run_command(name: str, command: list[str], **_: object) -> dict[str, object]:
+            commands.append((name, command))
+            return {"name": name, "status": "passed", "returncode": 0}
+
+        def fake_json_artifact_command(name: str, _: list[str], artifact: Path, **__: object) -> dict[str, object]:
+            return {
+                "name": name,
+                "status": "failed",
+                "returncode": 1,
+                "artifact": {"name": name, "path": str(artifact.relative_to(report.ROOT)), "status": "present"},
+            }
+
+        def fake_artifact_summary(name: str, path: Path) -> dict[str, object]:
+            return {"name": name, "path": str(path.relative_to(report.ROOT)), "status": "missing"}
+
+        with (
+            patch.object(report, "load_env_file", return_value=({}, [])),
+            patch.object(report, "run_command", side_effect=fake_run_command),
+            patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
+            patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
+            patch.object(report, "git_value", return_value=""),
+        ):
+            generated = report.build_report(args)
+
+        production_command = next(command for name, command in commands if name == "production_readiness")
+        self.assertIn("--provider-canary-json-output", production_command)
+        self.assertIn("tmp/provider_canary.json", production_command)
+        self.assertIn("--ocr-canary-json-output", production_command)
+        self.assertIn("tmp/ocr_provider_canary.json", production_command)
+        self.assertEqual(
+            [artifact["name"] for artifact in generated["artifacts"]],
+            ["production_env_audit_json", "provider_canary", "ocr_provider_canary"],
+        )
 
 
 if __name__ == "__main__":

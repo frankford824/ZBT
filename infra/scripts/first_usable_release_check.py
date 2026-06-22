@@ -470,7 +470,17 @@ def run_json_command(command: list[str], *, cwd: Path, env: dict[str, str] | Non
     return completed.returncode, parsed, output
 
 
-def check_provider_canary(profile: str) -> None:
+def write_json_output(path: Path, fallback_name: str, result: dict[str, Any]) -> None:
+    payload = result if result else {
+        "name": fallback_name,
+        "status": "failed",
+        "issues": ["canary did not return valid JSON"],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def check_provider_canary(profile: str, *, json_output: Path | None = None) -> None:
     command = [
         ai_python(),
         "-m",
@@ -488,6 +498,8 @@ def check_provider_canary(profile: str) -> None:
     else:
         command.append("--allow-skip")
     code, result, output = run_json_command(command, cwd=AI_SERVICE)
+    if json_output is not None:
+        write_json_output(json_output, "provider_canary", result)
     status = str(result.get("status") or "")
     if profile == "production":
         require(code == 0 and status == "passed", f"production Provider canary failed: {output[:1200]}")
@@ -496,7 +508,7 @@ def check_provider_canary(profile: str) -> None:
     ok("provider canary", {"profile": profile, "status": status, "passed": result.get("passed_checks"), "total": result.get("total_checks")})
 
 
-def check_ocr_canary(profile: str) -> None:
+def check_ocr_canary(profile: str, *, json_output: Path | None = None) -> None:
     ocr_provider = env_value("OCR_PROVIDER") or "http_ocr"
     command = [
         ai_python(),
@@ -523,6 +535,8 @@ def check_ocr_canary(profile: str) -> None:
     if profile != "production":
         command.append("--allow-skip")
     code, result, output = run_json_command(command, cwd=AI_SERVICE)
+    if json_output is not None:
+        write_json_output(json_output, "ocr_provider_eval", result)
     status = str(result.get("status") or "")
     if profile == "production":
         require(code == 0 and status == "passed", f"production OCR canary failed: {output[:1200]}")
@@ -542,6 +556,8 @@ def main() -> int:
         help="Emit a machine-readable production env matrix without printing secrets.",
     )
     parser.add_argument("--run-canaries", action="store_true", help="Run Provider/OCR canaries in addition to static checks.")
+    parser.add_argument("--provider-canary-json-output", type=Path, help="Write Provider canary JSON evidence to this path.")
+    parser.add_argument("--ocr-canary-json-output", type=Path, help="Write OCR canary JSON evidence to this path.")
     args = parser.parse_args()
 
     if args.audit_production_env_json:
@@ -558,8 +574,8 @@ def main() -> int:
         print("[ok] production env audit-only")
         return 0
     if args.run_canaries or args.profile == "production":
-        check_provider_canary(args.profile)
-        check_ocr_canary(args.profile)
+        check_provider_canary(args.profile, json_output=args.provider_canary_json_output)
+        check_ocr_canary(args.profile, json_output=args.ocr_canary_json_output)
     print(f"[ok] first usable release readiness profile={args.profile}")
     return 0
 

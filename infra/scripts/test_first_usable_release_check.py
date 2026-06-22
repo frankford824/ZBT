@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import first_usable_release_check as check
@@ -105,6 +107,37 @@ class FirstUsableReleaseCheckTest(unittest.TestCase):
             audit["issues"],
         )
         self.assertTrue(any(not item["matched"] for item in audit["evidence"]["pricing_matches"]))
+
+    def test_canary_json_outputs_are_written_before_status_gate(self) -> None:
+        provider_result = {
+            "name": "provider_canary",
+            "status": "passed",
+            "passed_checks": 1,
+            "total_checks": 1,
+            "routes": [],
+        }
+        ocr_result = {
+            "name": "ocr_provider_eval",
+            "status": "passed",
+            "passed_checks": 1,
+            "total_checks": 1,
+            "checks": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            provider_output = Path(directory) / "provider_canary.json"
+            ocr_output = Path(directory) / "ocr_provider_canary.json"
+            with patch.object(check, "run_json_command", return_value=(0, provider_result, json.dumps(provider_result))):
+                check.check_provider_canary("production", json_output=provider_output)
+            with patch.object(check, "run_json_command", return_value=(0, ocr_result, json.dumps(ocr_result))):
+                check.check_ocr_canary("production", json_output=ocr_output)
+
+            saved_provider = json.loads(provider_output.read_text(encoding="utf-8"))
+            saved_ocr = json.loads(ocr_output.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved_provider["name"], "provider_canary")
+        self.assertEqual(saved_provider["status"], "passed")
+        self.assertEqual(saved_ocr["name"], "ocr_provider_eval")
+        self.assertEqual(saved_ocr["status"], "passed")
 
 
 if __name__ == "__main__":

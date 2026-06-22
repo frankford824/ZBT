@@ -8522,3 +8522,47 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮仍没有真实 `.env.production`，因此 artifact 只能证明模板环境不会假通过，不能证明 production readiness 已完成。
 2. 工程1运行态 artifact 只有在真实服务栈执行 `--include-project1-runtime` 时才会生成并进入最终报告。
+
+## Loop-179 / 生产 Provider 与 OCR Canary 证据文件化 - 2026-06-22
+
+### 本轮目标
+
+1. 让最终第一可用版报告能单独索引真实 Provider canary 与 OCR canary JSON 证据。
+2. 避免 `production_readiness` 的截断 stdout 成为唯一运行态证据来源。
+3. 清理旧 artifact，防止 env 审计失败或 canary 未运行时误用历史 JSON 证据。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_check.py` 新增 `--provider-canary-json-output` 和 `--ocr-canary-json-output` 参数。
+2. readiness 脚本新增 `write_json_output()`，Provider canary 与 OCR canary 运行后会把 JSON 结果写入指定文件；如果子命令没有返回合法 JSON，会写入失败态 fallback JSON，不伪装通过。
+3. `infra/scripts/first_usable_release_report.py` 在 production profile 下向 readiness 命令传入 `tmp/provider_canary.json` 与 `tmp/ocr_provider_canary.json`。
+4. 最终 report 的 `artifacts` 现在会登记 `production_env_audit_json`、`provider_canary`、`ocr_provider_canary` 和工程1运行态证据。
+5. `clear_artifact()` 会在每次生成生产 canary、生产 env JSON 和工程1运行态 JSON 前删除旧文件，避免历史运行污染本次证据。
+6. 新增回归测试覆盖 canary JSON 输出、production report artifact 索引和 stale artifact 清理。
+7. README 与 `acceptance_tail_check.py --static-docs` 同步新增 Provider/OCR canary artifact 文件名和输出参数锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_check.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/test_first_usable_release_check.py infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_check.py` 通过，4 项测试覆盖生产 env 矩阵、Cloudflare AI Gateway、价格表缺失和 canary JSON 输出。
+2. `python3 infra/scripts/test_first_usable_release_report.py` 通过，8 项测试覆盖脱敏、阻断项、artifact 摘要、长 JSON 保存、production canary artifact 索引和 stale artifact 清理。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-179。
+4. production 模板证据包仍正确生成 `loop_can_end=false`，阻断项包含 production env audit、production Provider/OCR readiness、repo-wide check 和工程1运行态验收。
+5. 模板报告中 `production_env_audit_json` 为 present 且 `json_status=failed`；`provider_canary` 与 `ocr_provider_canary` 为 missing，证明 env 审计失败时不会复用旧 canary 证据。
+6. `./infra/scripts/check.sh` 通过；生产审计测试、证据包测试、静态文档、first usable local gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮仍没有真实 `.env.production`，所以 Provider/OCR canary JSON 输出路径已接入，但没有真实 production canary 成功样本。
+2. 第一可用版结束条件仍未满足：真实生产配置、真实 Provider/OCR canary、repo-wide check 和工程1运行态验收需要在同一份 production report 中全部通过并得到 `loop_can_end=true`。

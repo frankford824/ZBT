@@ -21,6 +21,8 @@ SENSITIVE_ENV_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|HMAC|J
 URL_WITH_PASSWORD_RE = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
+PROVIDER_CANARY_JSON = ROOT / "tmp/provider_canary.json"
+OCR_CANARY_JSON = ROOT / "tmp/ocr_provider_canary.json"
 PROJECT1_RUNTIME_JSON = ROOT / "tmp/project1_runtime_acceptance.json"
 
 
@@ -120,6 +122,7 @@ def run_json_artifact_command(
     redact,
 ) -> dict[str, Any]:
     started = time.monotonic()
+    clear_artifact(artifact)
     try:
         completed = subprocess.run(
             command,
@@ -158,6 +161,11 @@ def run_json_artifact_command(
             "output": redacted_output[-8000:],
             "error": f"timed out after {timeout_s}s",
         }
+
+
+def clear_artifact(path: Path) -> None:
+    if path.is_file():
+        path.unlink()
 
 
 def artifact_summary(name: str, path: Path) -> dict[str, Any]:
@@ -228,9 +236,19 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.profile == "production":
+        clear_artifact(PROVIDER_CANARY_JSON)
+        clear_artifact(OCR_CANARY_JSON)
         production_command = [python, "infra/scripts/first_usable_release_check.py", "--profile", "production"]
         if args.env_file:
             production_command.extend(["--env-file", str(args.env_file)])
+        production_command.extend(
+            [
+                "--provider-canary-json-output",
+                str(PROVIDER_CANARY_JSON.relative_to(ROOT)),
+                "--ocr-canary-json-output",
+                str(OCR_CANARY_JSON.relative_to(ROOT)),
+            ]
+        )
         steps.append(run_command("production_readiness", production_command, env=env, timeout_s=args.timeout_s, redact=redact))
     else:
         steps.append(
@@ -246,6 +264,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     if args.include_repo_check:
         steps.append(run_command("repo_wide_check", ["./infra/scripts/check.sh"], env=env, timeout_s=args.timeout_s, redact=redact))
     if args.include_project1_runtime:
+        clear_artifact(PROJECT1_RUNTIME_JSON)
         steps.append(
             run_command(
                 "project1_runtime_acceptance",
@@ -268,6 +287,12 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         for artifact in (
             artifact_summary("production_env_audit_json", PRODUCTION_ENV_AUDIT_JSON)
             if args.env_file or args.profile == "production"
+            else None,
+            artifact_summary("provider_canary", PROVIDER_CANARY_JSON)
+            if args.profile == "production"
+            else None,
+            artifact_summary("ocr_provider_canary", OCR_CANARY_JSON)
+            if args.profile == "production"
             else None,
             artifact_summary("project1_runtime_acceptance", PROJECT1_RUNTIME_JSON)
             if args.include_project1_runtime
