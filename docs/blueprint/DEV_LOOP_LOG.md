@@ -9116,3 +9116,47 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮收口的是最终验收入口，没有提交真实 `.env.production`，也没有让真实 Provider/OCR production canary 通过。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。
+
+## Loop-192 / 终局报告 repo-wide check 环境隔离 - 2026-06-22
+
+### 本轮目标
+
+1. 修复 `--first-usable --env-file .env.production` 运行时，生产 env file 污染 `./infra/scripts/check.sh` 子进程的问题。
+2. 保持 production env 仍只用于 production audit、production readiness、Provider/OCR canary 和 artifact 脱敏。
+3. 让终局报告可以同时携带生产配置做 readiness，又用干净测试环境执行 repo-wide check。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 为 `repo_wide_check` 新增独立 `repo_check_env = os.environ.copy()`。
+2. `repo_wide_check` 不再继承 `load_env_file()` 载入的 `.env.production` 变量，避免 `APP_ENV=production`、`USE_MOCK_PROVIDERS=false`、Provider key 或 endpoint 改写测试夹具行为。
+3. 脱敏逻辑仍保留 `.env.production` 和当前进程环境中的敏感值，避免 repo-wide check 输出中泄漏密钥。
+4. `infra/scripts/test_first_usable_release_report.py` 新增 `test_repo_wide_check_does_not_inherit_loaded_production_env`，验证 env file 变量进入 production readiness，但不会进入 repo-wide check。
+5. `test_first_usable_mode_implies_full_production_evidence_bundle`、`test_repo_wide_check_does_not_inherit_loaded_production_env` 和 `test_production_report_indexes_provider_and_ocr_canary_artifacts` 改用临时 Provider/OCR/工程1 artifact 路径，防止 repo-wide check 中的单元测试删除主报告正在收集的 `tmp/provider_canary.json`、`tmp/ocr_provider_canary.json` 或 `tmp/project1_runtime_acceptance.json`。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `repo_check_env` 和新增测试名防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --first-usable --env-file .env.production.example --output tmp/first_usable_release_report.first-usable-template.json --timeout-s 1800
+```
+
+结果：
+
+1. 三个脚本编译通过。
+2. `test_first_usable_release_report.py` 通过 21 项，新增 repo-wide check 环境隔离回归。
+3. 修复前用 `.env.production.example` 运行 `first_usable_release_report.py --first-usable` 时，`repo_wide_check` 被 production env 污染并在 `test_validate_production_config_rejects_mock_model_routes` 失败；本轮已将该污染路径移除。
+4. 同一次终局报告复测还暴露了 repo-wide check 中的报告单元测试会删除主报告 canary artifact；本轮已将相关测试 artifact 路径全部隔离到临时目录。
+5. 修复后 `first_usable_release_report.py --first-usable --env-file .env.production.example` 成功生成终局模板报告，`first_usable_mode=true`，`include_repo_check=true`，`include_project1_runtime=true`。
+6. 该报告中 `repo_wide_check=passed`、`project1_runtime_acceptance=passed`、`export_format_eval=passed`，证明终局入口已能纳入 repo-wide check 和工程1运行态验收。
+7. 该报告中 `provider_canary` 与 `ocr_provider_canary` 均为 `status=present`、`json_status=failed`、`semantic_status=failed`，不再被 repo-wide check 中的测试清理成 missing。
+8. `loop_can_end=false` 的剩余阻断项为模板生产配置未替换、真实 Provider/OCR readiness 未通过、关键 production artifact 未 passed，以及本轮未提交时的 `git worktree must be clean`。
+
+### 偏离蓝图
+
+1. 本轮修复的是终局报告执行环境隔离，没有提交真实 `.env.production`，也没有让真实 Provider/OCR production canary 通过。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。

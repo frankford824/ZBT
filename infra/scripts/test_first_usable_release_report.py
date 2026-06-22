@@ -327,14 +327,19 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 "semantic_status": "passed",
             }
 
-        with (
-            patch.object(report, "load_env_file", return_value=({}, [])),
-            patch.object(report, "run_command", side_effect=fake_run_command),
-            patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
-            patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
-            patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
-        ):
-            generated = report.build_report(args)
+        with tempfile.TemporaryDirectory(dir=report.ROOT / "tmp") as directory:
+            artifact_dir = Path(directory)
+            with (
+                patch.object(report, "PROVIDER_CANARY_JSON", artifact_dir / "provider_canary.json"),
+                patch.object(report, "OCR_CANARY_JSON", artifact_dir / "ocr_provider_canary.json"),
+                patch.object(report, "PROJECT1_RUNTIME_JSON", artifact_dir / "project1_runtime_acceptance.json"),
+                patch.object(report, "load_env_file", return_value=({}, [])),
+                patch.object(report, "run_command", side_effect=fake_run_command),
+                patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
+                patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
+                patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
+            ):
+                generated = report.build_report(args)
 
         command_names = [name for name, _ in commands]
         self.assertEqual(generated["profile"], "production")
@@ -345,6 +350,58 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertIn("repo_wide_check", command_names)
         self.assertIn("project1_runtime_acceptance", command_names)
         self.assertEqual(generated["blocking_requirements"], [])
+
+    def test_repo_wide_check_does_not_inherit_loaded_production_env(self) -> None:
+        args = argparse.Namespace(
+            profile="local",
+            first_usable=True,
+            env_file=Path(".env.production"),
+            include_repo_check=False,
+            include_project1_runtime=False,
+            timeout_s=30,
+        )
+        command_envs: dict[str, dict[str, str]] = {}
+
+        def fake_run_command(name: str, _: list[str], **kwargs: object) -> dict[str, object]:
+            env = kwargs["env"]
+            self.assertIsInstance(env, dict)
+            command_envs[name] = dict(env)
+            return {"name": name, "status": "passed", "returncode": 0}
+
+        def fake_json_artifact_command(name: str, _: list[str], __: Path, **___: object) -> dict[str, object]:
+            return {"name": name, "status": "passed", "returncode": 0}
+
+        def fake_artifact_summary(name: str, path: Path) -> dict[str, object]:
+            return {
+                "name": name,
+                "path": str(path.relative_to(report.ROOT)),
+                "status": "present",
+                "json_status": "passed",
+                "semantic_status": "passed",
+            }
+
+        loaded_env = {
+            "OPENAI_API_KEY": "sk-production-secret",
+            "ZBT_PRODUCTION_ONLY_SENTINEL": "production-env-file-only",
+        }
+        with tempfile.TemporaryDirectory(dir=report.ROOT / "tmp") as directory:
+            artifact_dir = Path(directory)
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch.object(report, "PROVIDER_CANARY_JSON", artifact_dir / "provider_canary.json"),
+                patch.object(report, "OCR_CANARY_JSON", artifact_dir / "ocr_provider_canary.json"),
+                patch.object(report, "PROJECT1_RUNTIME_JSON", artifact_dir / "project1_runtime_acceptance.json"),
+                patch.object(report, "load_env_file", return_value=(loaded_env, ["sk-production-secret"])),
+                patch.object(report, "run_command", side_effect=fake_run_command),
+                patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
+                patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
+                patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
+            ):
+                generated = report.build_report(args)
+
+        self.assertTrue(generated["first_usable_mode"])
+        self.assertEqual(command_envs["production_readiness"]["ZBT_PRODUCTION_ONLY_SENTINEL"], "production-env-file-only")
+        self.assertNotIn("ZBT_PRODUCTION_ONLY_SENTINEL", command_envs["repo_wide_check"])
 
     def test_blocking_items_allow_complete_production_evidence(self) -> None:
         args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
@@ -770,20 +827,25 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         def fake_artifact_summary(name: str, path: Path) -> dict[str, object]:
             return {"name": name, "path": str(path.relative_to(report.ROOT)), "status": "missing"}
 
-        with (
-            patch.object(report, "load_env_file", return_value=({}, [])),
-            patch.object(report, "run_command", side_effect=fake_run_command),
-            patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
-            patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
-            patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
-        ):
-            generated = report.build_report(args)
+        with tempfile.TemporaryDirectory(dir=report.ROOT / "tmp") as directory:
+            artifact_dir = Path(directory)
+            with (
+                patch.object(report, "PROVIDER_CANARY_JSON", artifact_dir / "provider_canary.json"),
+                patch.object(report, "OCR_CANARY_JSON", artifact_dir / "ocr_provider_canary.json"),
+                patch.object(report, "PROJECT1_RUNTIME_JSON", artifact_dir / "project1_runtime_acceptance.json"),
+                patch.object(report, "load_env_file", return_value=({}, [])),
+                patch.object(report, "run_command", side_effect=fake_run_command),
+                patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
+                patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
+                patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
+            ):
+                generated = report.build_report(args)
 
         production_command = next(command for name, command in commands if name == "production_readiness")
         self.assertIn("--provider-canary-json-output", production_command)
-        self.assertIn("tmp/provider_canary.json", production_command)
+        self.assertIn(str((artifact_dir / "provider_canary.json").relative_to(report.ROOT)), production_command)
         self.assertIn("--ocr-canary-json-output", production_command)
-        self.assertIn("tmp/ocr_provider_canary.json", production_command)
+        self.assertIn(str((artifact_dir / "ocr_provider_canary.json").relative_to(report.ROOT)), production_command)
         export_command = next(command for name, command in artifact_commands if name == "export_format_eval")
         self.assertIn("app.evaluation.export_format_eval", export_command)
         self.assertIn("--require-pdf", export_command)

@@ -794,7 +794,16 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     if args.include_repo_check:
-        steps.append(run_command("repo_wide_check", ["./infra/scripts/check.sh"], env=env, timeout_s=args.timeout_s, redact=redact))
+        repo_check_env = os.environ.copy()
+        steps.append(
+            run_command(
+                "repo_wide_check",
+                ["./infra/scripts/check.sh"],
+                env=repo_check_env,
+                timeout_s=args.timeout_s,
+                redact=redact,
+            )
+        )
     if args.include_project1_runtime:
         clear_artifact(PROJECT1_RUNTIME_JSON)
         steps.append(
