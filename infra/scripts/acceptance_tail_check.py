@@ -840,6 +840,9 @@ def check_static_docs() -> None:
         "maxKnowledgeCategoryNameRunes",
         "maxKnowledgeTagNameRunes",
         "maxKnowledgeDocumentTagIDs",
+        "maxKnowledgeDocumentMetadataJSONBytes",
+        "maxKnowledgeDocumentTagsJSONBytes",
+        "maxKnowledgeReferenceMetadataBytes",
         "normalizeKnowledgeCategoryInput",
         "normalizeKnowledgeTagInput",
         "normalizeKnowledgeDocumentUpdate",
@@ -850,6 +853,9 @@ def check_static_docs() -> None:
         "maxKnowledgeTaskRouteJSONBytes",
         "marshalKnowledgeTaskJSON",
         "unmarshalKnowledgeTaskJSON",
+        "unmarshalKnowledgeJSONObject",
+        "unmarshalKnowledgeTagsJSON",
+        "unmarshalKnowledgeJSON",
         "normalizeKnowledgeCallbackPayload",
         "normalizeAcceptedKnowledgeTask",
         "validateKnowledgeTextLength",
@@ -862,8 +868,14 @@ def check_static_docs() -> None:
         "_ = json.Unmarshal(payloadRaw, &task.Payload)",
         "_ = json.Unmarshal(routeRaw, &task.Route)",
         "_ = json.Unmarshal(resultRaw, &task.Result)",
+        "_ = json.Unmarshal(metadataRaw, &document.Metadata)",
+        "_ = json.Unmarshal(tagsRaw, &document.Tags)",
+        "_ = json.Unmarshal(metadataRaw, &result.Metadata)",
+        "_ = json.Unmarshal(documentMetadataRaw, &document.Metadata)",
+        "_ = json.Unmarshal(metadataRaw, &reference.Metadata)",
+        "_ = json.Unmarshal(contentRaw, &template.Content)",
     ):
-        require(forbidden not in knowledge_store, f"Knowledge store still ignores AI task JSON marshal failure: {forbidden}")
+        require(forbidden not in knowledge_store, f"Knowledge store still ignores guarded JSON failure: {forbidden}")
     knowledge_store_tests = (ROOT / "backend/internal/platform/knowledge/store_test.go").read_text(encoding="utf-8")
     require(
         "TestNormalizeKnowledgeSearchQueryTrimsAndCapsRunes" in knowledge_store_tests,
@@ -881,6 +893,10 @@ def check_static_docs() -> None:
         "TestKnowledgeCallbackRejectsOversizedResultBeforeDB",
         "TestScanTaskRejectsInvalidStoredJSONFields",
         "TestScanTaskNormalizesEmptyStoredJSONFields",
+        "TestUnmarshalKnowledgeStoredBusinessJSONRejectsInvalidFields",
+        "TestUnmarshalKnowledgeStoredBusinessJSONNormalizesEmptyFields",
+        "TestScanKnowledgeStoredBusinessJSONFieldsRejectInvalidJSON",
+        "TestScanKnowledgeStoredBusinessJSONFieldsNormalizeEmptyJSON",
         "TestNormalizeKnowledgeCallbackBoundsDocumentFields",
         "TestKnowledgeCallbackRejectsInvalidDoneChunksBeforeDB",
         "TestNormalizeAcceptedKnowledgeTaskRejectsOversizedRoute",

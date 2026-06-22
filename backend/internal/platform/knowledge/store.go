@@ -45,12 +45,15 @@ const (
 	maxKnowledgeTemplateVersionRunes     = 64
 	maxKnowledgeTemplateContentJSONBytes = 64 * 1024
 
-	maxKnowledgeCategoryNameRunes        = 128
-	maxKnowledgeCategoryDescriptionRunes = 1000
-	maxKnowledgeTagNameRunes             = 64
-	maxKnowledgeDocumentTitleRunes       = 300
-	maxKnowledgeDocumentSummaryRunes     = 4000
-	maxKnowledgeDocumentTagIDs           = 50
+	maxKnowledgeCategoryNameRunes         = 128
+	maxKnowledgeCategoryDescriptionRunes  = 1000
+	maxKnowledgeTagNameRunes              = 64
+	maxKnowledgeDocumentTitleRunes        = 300
+	maxKnowledgeDocumentSummaryRunes      = 4000
+	maxKnowledgeDocumentTagIDs            = 50
+	maxKnowledgeDocumentMetadataJSONBytes = 256 * 1024
+	maxKnowledgeDocumentTagsJSONBytes     = 64 * 1024
+	maxKnowledgeReferenceMetadataBytes    = 512 * 1024
 
 	maxKnowledgeExternalTaskIDRunes   = 128
 	maxKnowledgeTaskErrorMessageRunes = 1000
@@ -1825,6 +1828,39 @@ func unmarshalKnowledgeTaskJSON(raw []byte, maxBytes int) (map[string]any, error
 	return result, nil
 }
 
+func unmarshalKnowledgeJSONObject(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	if err := unmarshalKnowledgeJSON(raw, maxBytes, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
+}
+
+func unmarshalKnowledgeTagsJSON(raw []byte, maxBytes int) ([]Tag, error) {
+	result := []Tag{}
+	if err := unmarshalKnowledgeJSON(raw, maxBytes, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []Tag{}
+	}
+	return result, nil
+}
+
+func unmarshalKnowledgeJSON(raw []byte, maxBytes int, dest any) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return ErrInvalidRequest
+	}
+	return json.Unmarshal(trimmed, dest)
+}
+
 func normalizeKnowledgeCallbackPayload(payload CallbackPayload) (CallbackPayload, []byte, error) {
 	payload.TenantID = strings.TrimSpace(payload.TenantID)
 	payload.TaskID = strings.TrimSpace(payload.TaskID)
@@ -2004,9 +2040,9 @@ func scanDocument(row scanner) (Document, error) {
 	if err != nil {
 		return Document{}, err
 	}
-	document.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &document.Metadata)
+	document.Metadata, err = unmarshalKnowledgeJSONObject(metadataRaw, maxKnowledgeDocumentMetadataJSONBytes)
+	if err != nil {
+		return Document{}, err
 	}
 	if errorMessage.Valid {
 		document.ErrorMessage = &errorMessage.String
@@ -2031,9 +2067,9 @@ func scanDocument(row scanner) (Document, error) {
 		}
 		document.Category = &category
 	}
-	document.Tags = []Tag{}
-	if len(tagsRaw) > 0 {
-		_ = json.Unmarshal(tagsRaw, &document.Tags)
+	document.Tags, err = unmarshalKnowledgeTagsJSON(tagsRaw, maxKnowledgeDocumentTagsJSONBytes)
+	if err != nil {
+		return Document{}, err
 	}
 	return document, nil
 }
@@ -2107,10 +2143,14 @@ func scanSearchResult(row scanner) (SearchResult, error) {
 		value := int(pageEnd.Int32)
 		result.PageEnd = &value
 	}
-	result.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &result.Metadata)
-	document.Metadata = map[string]any{}
-	_ = json.Unmarshal(documentMetadataRaw, &document.Metadata)
+	result.Metadata, err = unmarshalKnowledgeJSONObject(metadataRaw, maxKnowledgeChunkMetadataBytes)
+	if err != nil {
+		return SearchResult{}, err
+	}
+	document.Metadata, err = unmarshalKnowledgeJSONObject(documentMetadataRaw, maxKnowledgeDocumentMetadataJSONBytes)
+	if err != nil {
+		return SearchResult{}, err
+	}
 	if processedAt.Valid {
 		document.ProcessedAt = &processedAt.Time
 	}
@@ -2131,8 +2171,10 @@ func scanSearchResult(row scanner) (SearchResult, error) {
 		}
 		document.Category = &category
 	}
-	document.Tags = []Tag{}
-	_ = json.Unmarshal(tagsRaw, &document.Tags)
+	document.Tags, err = unmarshalKnowledgeTagsJSON(tagsRaw, maxKnowledgeDocumentTagsJSONBytes)
+	if err != nil {
+		return SearchResult{}, err
+	}
 	result.Document = document
 	result.SourceRef = SourceRef{
 		ChunkID:    result.ChunkID,
@@ -2172,8 +2214,10 @@ func scanDocumentReference(row scanner) (DocumentReference, error) {
 	if chunkID.Valid {
 		reference.ChunkID = &chunkID.String
 	}
-	reference.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &reference.Metadata)
+	reference.Metadata, err = unmarshalKnowledgeJSONObject(metadataRaw, maxKnowledgeReferenceMetadataBytes)
+	if err != nil {
+		return DocumentReference{}, err
+	}
 	return reference, nil
 }
 
@@ -2195,8 +2239,10 @@ func scanDocumentTemplate(row scanner) (DocumentTemplate, error) {
 	if err != nil {
 		return DocumentTemplate{}, err
 	}
-	template.Content = map[string]any{}
-	_ = json.Unmarshal(contentRaw, &template.Content)
+	template.Content, err = unmarshalKnowledgeJSONObject(contentRaw, maxKnowledgeTemplateContentJSONBytes)
+	if err != nil {
+		return DocumentTemplate{}, err
+	}
 	return template, nil
 }
 

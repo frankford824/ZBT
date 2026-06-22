@@ -7864,3 +7864,49 @@ cd backend && go vet ./...
 
 1. 本轮治理的是 Go 标书模块读取可靠性，没有新增真实 AI Provider、OCR Provider、文档解析格式或 Word/PDF 母版排版能力。
 2. 全工程仍有读取侧 `_ = json.Unmarshal` 残留，集中在 `knowledge/store.go`、`externaltool/store.go` 和 `project/store.go`，应由后续 Loop 继续收敛。
+
+## Loop-164 / 知识库业务 JSON 读取边界收敛 - 2026-06-21
+
+### 本轮目标
+
+1. 继续审查知识库模块读取链路，处理文档 metadata、文档标签聚合、搜索 chunk metadata、搜索结果内文档 metadata/tags、知识引用 metadata 和模板 content 读取时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算 JSON 静默进入知识库列表、搜索、来源引用、模板库和生成引用链路。
+3. 将 Knowledge 业务 JSON 读取边界固化进静态验收，防止后续回退到 `_ = json.Unmarshal(...)`。
+
+### 代码交付
+
+1. `backend/internal/platform/knowledge/store.go` 新增 `maxKnowledgeDocumentMetadataJSONBytes`、`maxKnowledgeDocumentTagsJSONBytes`、`maxKnowledgeReferenceMetadataBytes`，并复用既有 chunk metadata 和模板 content 上限。
+2. 新增 `unmarshalKnowledgeJSONObject()`、`unmarshalKnowledgeTagsJSON()` 和 `unmarshalKnowledgeJSON()`，读取侧统一处理空/null 归一化、对象/标签数组形状校验和字节预算。
+3. `scanDocument()`、`scanSearchResult()`、`scanDocumentReference()`、`scanDocumentTemplate()` 改为显式返回存储 JSON 解析错误，不再忽略 `json.Unmarshal` 失败。
+4. `backend/internal/platform/knowledge/store_test.go` 新增 fake scanner 回归测试，覆盖坏对象、坏标签数组、超预算字段、空/null 字段归一化，以及 Knowledge 主要 scan 对象的读取侧错误传播。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 Knowledge 业务 JSON 读取边界 helper、测试名和所有剩余 Knowledge `_ = json.Unmarshal(...)` 防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/knowledge/store.go internal/platform/knowledge/store_test.go
+cd backend && go test ./internal/platform/knowledge
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && go test ./...
+cd backend && go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && go test ./internal/platform/knowledge` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && go test ./...` 通过。
+5. `cd backend && go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+7. `backend/internal/platform/knowledge/store.go` 已无 `_ = json.Unmarshal` 残留。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 知识库读取可靠性，没有新增真实 embedding/rerank Provider、OCR Provider、知识库 UI 或文档解析格式。
+2. 全工程仍有读取侧 `_ = json.Unmarshal` 残留，集中在 `externaltool/store.go` 和 `project/store.go`，应由后续 Loop 继续收敛。

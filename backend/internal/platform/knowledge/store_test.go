@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -511,6 +512,136 @@ func TestScanTaskNormalizesEmptyStoredJSONFields(t *testing.T) {
 	}
 }
 
+func TestUnmarshalKnowledgeStoredBusinessJSONRejectsInvalidFields(t *testing.T) {
+	for name, check := range map[string]func() error{
+		"invalid object syntax": func() error {
+			_, err := unmarshalKnowledgeJSONObject([]byte(`{"metadata":`), maxKnowledgeDocumentMetadataJSONBytes)
+			return err
+		},
+		"object shape mismatch": func() error {
+			_, err := unmarshalKnowledgeJSONObject([]byte(`[{"metadata":true}]`), maxKnowledgeDocumentMetadataJSONBytes)
+			return err
+		},
+		"object oversized": func() error {
+			_, err := unmarshalKnowledgeJSONObject([]byte(`{"payload":"`+strings.Repeat("知", maxKnowledgeDocumentMetadataJSONBytes)+`"}`), maxKnowledgeDocumentMetadataJSONBytes)
+			return err
+		},
+		"tags shape mismatch": func() error {
+			_, err := unmarshalKnowledgeTagsJSON([]byte(`{"id":"tag-1"}`), maxKnowledgeDocumentTagsJSONBytes)
+			return err
+		},
+		"tags field mismatch": func() error {
+			_, err := unmarshalKnowledgeTagsJSON([]byte(`[{"id":1}]`), maxKnowledgeDocumentTagsJSONBytes)
+			return err
+		},
+		"tags oversized": func() error {
+			_, err := unmarshalKnowledgeTagsJSON([]byte(`[{"name":"`+strings.Repeat("标", maxKnowledgeDocumentTagsJSONBytes)+`"}]`), maxKnowledgeDocumentTagsJSONBytes)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); err == nil {
+				t.Fatal("expected invalid stored knowledge JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalKnowledgeStoredBusinessJSONNormalizesEmptyFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			object, err := unmarshalKnowledgeJSONObject(raw, maxKnowledgeDocumentMetadataJSONBytes)
+			if err != nil || object == nil || len(object) != 0 {
+				t.Fatalf("expected empty object, got object=%#v err=%v", object, err)
+			}
+			tags, err := unmarshalKnowledgeTagsJSON(raw, maxKnowledgeDocumentTagsJSONBytes)
+			if err != nil || tags == nil || len(tags) != 0 {
+				t.Fatalf("expected empty tags, got tags=%#v err=%v", tags, err)
+			}
+		})
+	}
+}
+
+func TestScanKnowledgeStoredBusinessJSONFieldsRejectInvalidJSON(t *testing.T) {
+	badObject := []byte(`{"metadata":`)
+	badTags := []byte(`{"id":"tag-1"}`)
+
+	for name, check := range map[string]func() error{
+		"document metadata": func() error {
+			_, err := scanDocument(knowledgeDocumentScanRow(badObject, []byte(`[]`)))
+			return err
+		},
+		"document tags": func() error {
+			_, err := scanDocument(knowledgeDocumentScanRow([]byte(`{}`), badTags))
+			return err
+		},
+		"search chunk metadata": func() error {
+			_, err := scanSearchResult(knowledgeSearchResultScanRow(badObject, []byte(`{}`), []byte(`[]`)))
+			return err
+		},
+		"search document metadata": func() error {
+			_, err := scanSearchResult(knowledgeSearchResultScanRow([]byte(`{}`), badObject, []byte(`[]`)))
+			return err
+		},
+		"search document tags": func() error {
+			_, err := scanSearchResult(knowledgeSearchResultScanRow([]byte(`{}`), []byte(`{}`), badTags))
+			return err
+		},
+		"reference metadata": func() error {
+			_, err := scanDocumentReference(knowledgeReferenceScanRow(badObject))
+			return err
+		},
+		"template content": func() error {
+			_, err := scanDocumentTemplate(knowledgeTemplateScanRow(badObject))
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); err == nil {
+				t.Fatal("expected invalid stored knowledge JSON field to be rejected")
+			}
+		})
+	}
+}
+
+func TestScanKnowledgeStoredBusinessJSONFieldsNormalizeEmptyJSON(t *testing.T) {
+	document, err := scanDocument(knowledgeDocumentScanRow(nil, []byte(`null`)))
+	if err != nil {
+		t.Fatalf("expected empty document JSON fields to normalize: %v", err)
+	}
+	if document.Metadata == nil || len(document.Metadata) != 0 || document.Tags == nil || len(document.Tags) != 0 {
+		t.Fatalf("expected empty document fields, got metadata=%#v tags=%#v", document.Metadata, document.Tags)
+	}
+
+	result, err := scanSearchResult(knowledgeSearchResultScanRow(nil, nil, nil))
+	if err != nil {
+		t.Fatalf("expected empty search JSON fields to normalize: %v", err)
+	}
+	if result.Metadata == nil || len(result.Metadata) != 0 || result.Document.Metadata == nil || len(result.Document.Metadata) != 0 || result.Document.Tags == nil || len(result.Document.Tags) != 0 {
+		t.Fatalf("expected empty search fields, got result=%#v document=%#v", result.Metadata, result.Document)
+	}
+
+	reference, err := scanDocumentReference(knowledgeReferenceScanRow(nil))
+	if err != nil {
+		t.Fatalf("expected empty reference metadata to normalize: %v", err)
+	}
+	if reference.Metadata == nil || len(reference.Metadata) != 0 {
+		t.Fatalf("expected empty reference metadata, got %#v", reference.Metadata)
+	}
+
+	template, err := scanDocumentTemplate(knowledgeTemplateScanRow(nil))
+	if err != nil {
+		t.Fatalf("expected empty template content to normalize: %v", err)
+	}
+	if template.Content == nil || len(template.Content) != 0 {
+		t.Fatalf("expected empty template content, got %#v", template.Content)
+	}
+}
+
 func TestNormalizeKnowledgeCallbackBoundsDocumentFields(t *testing.T) {
 	for name, payload := range map[string]CallbackPayload{
 		"oversized processed title": {
@@ -605,4 +736,148 @@ func (row knowledgeTaskScanRow) Scan(dest ...any) error {
 	*(dest[12].(*time.Time)) = now
 	*(dest[13].(*time.Time)) = now
 	return nil
+}
+
+type knowledgeStoredJSONScanRow []any
+
+func (row knowledgeStoredJSONScanRow) Scan(dest ...any) error {
+	if len(dest) != len(row) {
+		return fmt.Errorf("scan dest mismatch: got %d want %d", len(dest), len(row))
+	}
+	for i, value := range row {
+		if err := assignKnowledgeScanValue(dest[i], value); err != nil {
+			return fmt.Errorf("scan dest %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func assignKnowledgeScanValue(dest any, value any) error {
+	switch target := dest.(type) {
+	case *string:
+		typed, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", value)
+		}
+		*target = typed
+	case *int:
+		typed, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("expected int, got %T", value)
+		}
+		*target = typed
+	case *int64:
+		switch typed := value.(type) {
+		case int64:
+			*target = typed
+		case int:
+			*target = int64(typed)
+		default:
+			return fmt.Errorf("expected int64, got %T", value)
+		}
+	case *float64:
+		typed, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("expected float64, got %T", value)
+		}
+		*target = typed
+	case *time.Time:
+		typed, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("expected time.Time, got %T", value)
+		}
+		*target = typed
+	case *[]byte:
+		switch typed := value.(type) {
+		case nil:
+			*target = nil
+		case []byte:
+			*target = typed
+		case string:
+			*target = []byte(typed)
+		default:
+			return fmt.Errorf("expected []byte, got %T", value)
+		}
+	case *sql.NullString:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullString{}
+		case sql.NullString:
+			*target = typed
+		case string:
+			*target = sql.NullString{String: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullString, got %T", value)
+		}
+	case *sql.NullInt32:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullInt32{}
+		case sql.NullInt32:
+			*target = typed
+		case int32:
+			*target = sql.NullInt32{Int32: typed, Valid: true}
+		case int:
+			*target = sql.NullInt32{Int32: int32(typed), Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullInt32, got %T", value)
+		}
+	case *sql.NullTime:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullTime{}
+		case sql.NullTime:
+			*target = typed
+		case time.Time:
+			*target = sql.NullTime{Time: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullTime, got %T", value)
+		}
+	default:
+		return fmt.Errorf("unsupported scan destination %T", dest)
+	}
+	return nil
+}
+
+func knowledgeScanTime() time.Time {
+	return time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+}
+
+func knowledgeDocumentScanRow(metadataRaw, tagsRaw []byte) knowledgeStoredJSONScanRow {
+	now := knowledgeScanTime()
+	return knowledgeStoredJSONScanRow{
+		"document-1", "知识文档", "pdf", "processed", "摘要", metadataRaw,
+		sql.NullString{}, sql.NullTime{}, now, now,
+		"file-1", "知识文档.pdf", "application/pdf", int64(1024), "ready",
+		sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullTime{}, sql.NullTime{},
+		tagsRaw,
+	}
+}
+
+func knowledgeSearchResultScanRow(metadataRaw, documentMetadataRaw, tagsRaw []byte) knowledgeStoredJSONScanRow {
+	now := knowledgeScanTime()
+	return knowledgeStoredJSONScanRow{
+		"chunk-1", "document-1", "片段", "正文", "第一章",
+		sql.NullInt32{}, sql.NullInt32{}, metadataRaw, 0.93, now,
+		"document-1", "知识文档", "pdf", "processed", "摘要", documentMetadataRaw,
+		sql.NullTime{}, now, now,
+		"file-1", "知识文档.pdf", "application/pdf", int64(1024), "ready",
+		sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullString{}, sql.NullTime{}, sql.NullTime{},
+		tagsRaw,
+	}
+}
+
+func knowledgeReferenceScanRow(metadataRaw []byte) knowledgeStoredJSONScanRow {
+	now := knowledgeScanTime()
+	return knowledgeStoredJSONScanRow{
+		"reference-1", "document-1", sql.NullString{}, "标书",
+		sql.NullString{}, "章节", sql.NullString{}, "引用", metadataRaw, now,
+	}
+}
+
+func knowledgeTemplateScanRow(contentRaw []byte) knowledgeStoredJSONScanRow {
+	now := knowledgeScanTime()
+	return knowledgeStoredJSONScanRow{
+		"template-1", "模板", "默认", "描述", "v1", contentRaw, 0, "active", now, now,
+	}
 }
