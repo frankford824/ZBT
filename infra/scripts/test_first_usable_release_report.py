@@ -151,6 +151,24 @@ def valid_project1_runtime_payload() -> dict[str, object]:
     }
 
 
+def valid_git_release_state() -> dict[str, object]:
+    commit = "abc123"
+    return {
+        "commit": commit,
+        "branch": report.EXPECTED_RELEASE_BRANCH,
+        "remote": report.EXPECTED_ORIGIN_REMOTE,
+        "expected_remote": report.EXPECTED_ORIGIN_REMOTE,
+        "expected_branch": report.EXPECTED_RELEASE_BRANCH,
+        "worktree_clean": True,
+        "dirty_entries": [],
+        "remote_ref": f"refs/heads/{report.EXPECTED_RELEASE_BRANCH}",
+        "remote_head": commit,
+        "remote_error": "",
+        "head_matches_remote": True,
+        "remote_checked": True,
+    }
+
+
 class FirstUsableReleaseReportTest(unittest.TestCase):
     def test_load_env_file_collects_sensitive_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -240,9 +258,75 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "semantic_status": "passed",
                 },
             ],
+            valid_git_release_state(),
         )
 
         self.assertEqual(blocking, [])
+
+    def test_blocking_items_require_clean_synced_git_release_state(self) -> None:
+        args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
+        dirty_state = valid_git_release_state()
+        dirty_state.update(
+            {
+                "branch": "codex/test",
+                "remote": "https://github.com/frankford824/ZBT.git",
+                "worktree_clean": False,
+                "dirty_entries": [" M README.md"],
+                "remote_head": "def456",
+                "head_matches_remote": False,
+            }
+        )
+        blocking = report.blocking_items(
+            args,
+            {
+                "static_readiness": "passed",
+                "production_env_audit": "passed",
+                "production_readiness": "passed",
+                "repo_wide_check": "passed",
+                "project1_runtime_acceptance": "passed",
+            },
+            [
+                {
+                    "name": "production_env_audit_json",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "passed"},
+                {
+                    "name": "ocr_provider_canary",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {
+                    "name": "project1_runtime_acceptance",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+            ],
+            dirty_state,
+        )
+
+        self.assertEqual(
+            blocking,
+            [
+                "git branch must be main",
+                "git origin remote must be git@github.com:frankford824/ZBT.git",
+                "git worktree must be clean",
+                "git HEAD must match origin/main",
+            ],
+        )
+
+    def test_blocking_items_require_readable_remote_head(self) -> None:
+        args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
+        git_state = valid_git_release_state()
+        git_state.update({"remote_head": "", "remote_error": "timeout", "head_matches_remote": False})
+
+        blocking = report.git_release_state_blocking_items(args, git_state)
+
+        self.assertEqual(blocking, ["git remote main HEAD must be readable"])
 
     def test_blocking_items_require_semantically_valid_artifacts(self) -> None:
         args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
@@ -276,6 +360,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "semantic_status": "passed",
                 },
             ],
+            valid_git_release_state(),
         )
 
         self.assertEqual(blocking, ["production artifact provider_canary must be present and passed"])
@@ -302,6 +387,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "semantic_status": "passed",
                 },
             ],
+            valid_git_release_state(),
         )
 
         self.assertEqual(
@@ -345,6 +431,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "semantic_status": "failed",
                 },
             ],
+            valid_git_release_state(),
         )
 
         self.assertEqual(blocking, ["project1 runtime artifact must be present and passed"])
@@ -479,7 +566,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             patch.object(report, "run_command", side_effect=fake_run_command),
             patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
             patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
-            patch.object(report, "git_value", return_value=""),
+            patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
         ):
             generated = report.build_report(args)
 
@@ -492,6 +579,10 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             [artifact["name"] for artifact in generated["artifacts"]],
             ["production_env_audit_json", "provider_canary", "ocr_provider_canary"],
         )
+        self.assertEqual(generated["commit"], valid_git_release_state()["commit"])
+        self.assertEqual(generated["branch"], report.EXPECTED_RELEASE_BRANCH)
+        self.assertEqual(generated["remote"], report.EXPECTED_ORIGIN_REMOTE)
+        self.assertEqual(generated["git_release_state"]["head_matches_remote"], True)
 
 
 if __name__ == "__main__":

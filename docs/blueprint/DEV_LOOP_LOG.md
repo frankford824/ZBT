@@ -8706,3 +8706,47 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮强化的是最终 artifact 证据语义校验，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 production report 中全部通过，并且关键 artifact 均为 `json_status=passed`、`semantic_status=passed`。
+
+## Loop-183 / 第一可用版 Git 发布状态门禁 - 2026-06-22
+
+### 本轮目标
+
+1. 防止最终第一可用版报告在未提交、未推送或远端不一致的本地状态下误判 `loop_can_end=true`。
+2. 将工作区干净、指定 SSH origin、`main` 分支和 `origin/main` HEAD 同步纳入 production profile 硬门禁。
+3. 保持 local profile 不依赖 GitHub 网络，避免常规 `./infra/scripts/check.sh` 被远端连通性牵连。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `EXPECTED_ORIGIN_REMOTE=git@github.com:frankford824/ZBT.git` 与 `EXPECTED_RELEASE_BRANCH=main`。
+2. 新增 `collect_git_release_state()`，记录当前 commit、branch、origin remote、工作区 dirty entries、远端 `refs/heads/main` HEAD、远端错误、`head_matches_remote` 和 `remote_checked`。
+3. 新增 `git_release_state_blocking_items()`，production profile 下要求分支为 `main`、origin 为指定 SSH 仓库、工作区干净、远端 HEAD 可读且等于当前 HEAD。
+4. `build_report()` 将 `git_release_state` 写入最终 JSON，并继续保留顶层 `commit`、`branch`、`remote` 字段。
+5. `blocking_items()` 在 production profile 下把 Git 发布状态阻断项纳入 `loop_can_end` 判定；local profile 不查远端，也不增加 Git release 阻断项。
+6. `infra/scripts/test_first_usable_release_report.py` 新增 `valid_git_release_state()`、dirty/remote mismatch 负例和 remote HEAD 不可读负例。
+7. README 与 `acceptance_tail_check.py --static-docs` 同步新增 Git 发布状态、SSH origin、clean worktree 和 `origin/main` 同步防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，15 项测试覆盖脱敏、命令阻断、artifact 语义、Git release clean/synced 状态、remote HEAD 可读性、stale artifact 清理和 production canary artifact 索引。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 识别为 Loop-182，日志写入后再次运行通过并识别为 Loop-183。
+3. production 模板证据包仍正确生成 `loop_can_end=false`，并新增 `git worktree must be clean` 阻断项；报告中 `git_release_state.remote_head` 等于当前远端 `origin/main`，`head_matches_remote=true`，但 `worktree_clean=false`，证明未提交改动不会被误放行。
+4. local 证据包仍正确生成 `loop_can_end=false`，`git_release_state.remote_checked=false`，不会为了 local profile 访问远端。
+5. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是最终发布状态门禁，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过。

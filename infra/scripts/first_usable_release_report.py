@@ -24,6 +24,8 @@ PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
 PROVIDER_CANARY_JSON = ROOT / "tmp/provider_canary.json"
 OCR_CANARY_JSON = ROOT / "tmp/ocr_provider_canary.json"
 PROJECT1_RUNTIME_JSON = ROOT / "tmp/project1_runtime_acceptance.json"
+EXPECTED_ORIGIN_REMOTE = "git@github.com:frankford824/ZBT.git"
+EXPECTED_RELEASE_BRANCH = "main"
 PRODUCTION_REQUIRED_ARTIFACTS = (
     ("production_env_audit_json", "production artifact production_env_audit_json must be present and passed"),
     ("provider_canary", "production artifact provider_canary must be present and passed"),
@@ -470,16 +472,86 @@ def float_value(value: Any) -> float:
         return 0.0
 
 
-def git_value(command: list[str]) -> str:
-    completed = subprocess.run(
-        command,
-        cwd=str(ROOT),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+def git_value(command: list[str], *, timeout_s: int | None = None) -> str:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     return completed.stdout.strip()
+
+
+def git_value_with_error(command: list[str], *, timeout_s: int) -> tuple[str, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "", f"timed out after {timeout_s}s"
+    return completed.stdout.strip(), "" if completed.returncode == 0 else completed.stdout.strip()
+
+
+def collect_git_release_state(*, include_remote: bool, timeout_s: int) -> dict[str, Any]:
+    commit = git_value(["git", "rev-parse", "HEAD"], timeout_s=10)
+    branch = git_value(["git", "branch", "--show-current"], timeout_s=10)
+    remote = git_value(["git", "remote", "get-url", "origin"], timeout_s=10)
+    status_porcelain = git_value(["git", "status", "--porcelain"], timeout_s=10)
+    state: dict[str, Any] = {
+        "commit": commit,
+        "branch": branch,
+        "remote": remote,
+        "expected_remote": EXPECTED_ORIGIN_REMOTE,
+        "expected_branch": EXPECTED_RELEASE_BRANCH,
+        "worktree_clean": status_porcelain == "",
+        "dirty_entries": status_porcelain.splitlines()[:50],
+        "remote_ref": f"refs/heads/{EXPECTED_RELEASE_BRANCH}",
+        "remote_head": "",
+        "remote_error": "",
+        "head_matches_remote": False,
+        "remote_checked": include_remote,
+    }
+    if include_remote:
+        remote_head, remote_error = git_value_with_error(
+            ["git", "ls-remote", "origin", f"refs/heads/{EXPECTED_RELEASE_BRANCH}"],
+            timeout_s=min(max(timeout_s, 1), 60),
+        )
+        state["remote_error"] = remote_error
+        if remote_head:
+            state["remote_head"] = remote_head.split()[0]
+        state["head_matches_remote"] = bool(commit and state["remote_head"] == commit)
+    return state
+
+
+def git_release_state_blocking_items(args: argparse.Namespace, state: dict[str, Any] | None) -> list[str]:
+    if args.profile != "production":
+        return []
+    if not state:
+        return ["git release state must be available"]
+    blocking: list[str] = []
+    if state.get("branch") != EXPECTED_RELEASE_BRANCH:
+        blocking.append(f"git branch must be {EXPECTED_RELEASE_BRANCH}")
+    if state.get("remote") != EXPECTED_ORIGIN_REMOTE:
+        blocking.append(f"git origin remote must be {EXPECTED_ORIGIN_REMOTE}")
+    if state.get("worktree_clean") is not True:
+        blocking.append("git worktree must be clean")
+    if state.get("remote_checked") is not True or not state.get("remote_head"):
+        blocking.append(f"git remote {EXPECTED_RELEASE_BRANCH} HEAD must be readable")
+    elif state.get("head_matches_remote") is not True:
+        blocking.append(f"git HEAD must match origin/{EXPECTED_RELEASE_BRANCH}")
+    return blocking
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
@@ -576,15 +648,20 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         )
         if artifact is not None
     ]
+    git_release_state = collect_git_release_state(
+        include_remote=args.profile == "production",
+        timeout_s=min(max(args.timeout_s, 1), 60),
+    )
     step_status = {step["name"]: step["status"] for step in steps}
-    blocking_requirements = blocking_items(args, step_status, artifacts)
+    blocking_requirements = blocking_items(args, step_status, artifacts, git_release_state)
     return {
         "name": "first_usable_release_report",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "profile": args.profile,
-        "commit": git_value(["git", "rev-parse", "HEAD"]),
-        "branch": git_value(["git", "branch", "--show-current"]),
-        "remote": git_value(["git", "remote", "get-url", "origin"]),
+        "commit": git_release_state["commit"],
+        "branch": git_release_state["branch"],
+        "remote": git_release_state["remote"],
+        "git_release_state": git_release_state,
         "env_file": str(args.env_file) if args.env_file else None,
         "include_repo_check": args.include_repo_check,
         "include_project1_runtime": args.include_project1_runtime,
@@ -620,6 +697,7 @@ def blocking_items(
     args: argparse.Namespace,
     step_status: dict[str, str],
     artifacts: list[dict[str, Any]] | None = None,
+    git_release_state: dict[str, Any] | None = None,
 ) -> list[str]:
     blocking: list[str] = []
     if step_status.get("static_readiness") != "passed":
@@ -632,6 +710,7 @@ def blocking_items(
         if step_status.get("production_readiness") != "passed":
             blocking.append("production Provider/OCR readiness must pass")
         blocking.extend(required_artifact_statuses(artifacts, PRODUCTION_REQUIRED_ARTIFACTS))
+        blocking.extend(git_release_state_blocking_items(args, git_release_state))
     if not args.include_repo_check:
         blocking.append("repo-wide check must be included")
     elif step_status.get("repo_wide_check") != "passed":
