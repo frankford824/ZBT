@@ -800,6 +800,45 @@ def check_static_docs() -> None:
         "test_router_pricing_ignores_oversized_computed_cost",
     ):
         require(needle in model_router_tests, f"ModelRouter cost normalization missing regression test: {needle}")
+    provider_canary = (ROOT / "ai-service/app/evaluation/provider_canary_eval.py").read_text(encoding="utf-8")
+    for needle in (
+        "evaluate_provider_canary",
+        "DEFAULT_ROUTES",
+        "chapter_generate",
+        "knowledge_embedding",
+        "knowledge_rerank",
+        "call_provider",
+        "require_cost",
+        "router.provider_backed_mock_routes",
+        "router.log_call",
+        "estimated_cost",
+        "quota_usage",
+        "--allow-skip",
+        "--strict",
+        "--call-provider",
+        "--require-cost",
+    ):
+        require(needle in provider_canary, f"Provider canary missing production gate: {needle}")
+    provider_canary_tests = (ROOT / "ai-service/app/tests/test_provider_canary_eval.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_provider_canary_skips_without_real_provider_config",
+        "test_provider_canary_passes_production_routes_without_mock_fallback",
+        "test_provider_canary_can_call_openai_compatible_llm",
+        "test_provider_canary_require_cost_fails_without_pricing",
+    ):
+        require(needle in provider_canary_tests, f"Provider canary missing regression test: {needle}")
+    check_script = (ROOT / "infra/scripts/check.sh").read_text(encoding="utf-8")
+    require(
+        "app.evaluation.provider_canary_eval --allow-skip" in check_script,
+        "Repo-wide check does not run provider canary in local skip mode",
+    )
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for needle in (
+        "provider_canary_eval --allow-skip",
+        "provider_canary_eval --strict --call-provider --require-cost",
+        "--route chapter_generate --route knowledge_embedding --route knowledge_rerank",
+    ):
+        require(needle in readme, f"README missing Provider canary guidance: {needle}")
 
     common_schema = (ROOT / "ai-service/app/schemas/common.py").read_text(encoding="utf-8")
     for needle in (

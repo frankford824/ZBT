@@ -16,6 +16,8 @@ ModelRouter：resolve、fallback、log_call、quota_status、enforce_quota。
 
 `log_call()` 维护 Python AI 服务运行期内存账本，用于把调用返回中的 `estimated_cost` 按租户聚合，并输出当前预算状态快照；调用方未显式传入正数费用时，会按 `AI_MODEL_PRICING_JSON` 或配置内 `pricing` 的 provider/model/token 单价估算费用。tender_parse 六模块、knowledge embedding、chapter_generate、chapter_action 和 cost_advice 回调会主动携带 `estimated_cost`；同步 `/embeddings/knowledge` 与 `/rerank/knowledge` 响应也会返回 `token_usage`、`estimated_cost` 和 `quota_usage`，Go 端写入 `ai_call_logs` 时优先使用响应内 token/费用，缺失时保留本地估算兜底。`enforce_quota()` 基于 `quotas.default_tenant_monthly_budget` 和 `quotas.per_tenant_monthly_budget` 判断租户是否还能继续使用 Provider-backed 路由。随仓策略为 `downgrade_then_block`：租户预算耗尽后优先降级到 `mock/local` 这类零外部模型成本 Provider；没有可降级候选时明确拒绝路由解析。
 
+`app.evaluation.provider_canary_eval` 是 Provider 生产可用性验收入口。默认检查 `chapter_generate`、`knowledge_embedding` 和 `knowledge_rerank` 三条 Provider-backed 路由；无真实密钥时返回 `skipped`，供本地 CI 使用 `--allow-skip`。上线前应使用 `--strict --call-provider --require-cost`，要求路由不落回 Mock、健康检查通过、最小真实调用成功，并输出正向 `estimated_cost` 和 quota usage。
+
 当前已落地 `/embeddings/knowledge`，Go 后端在知识库搜索时调用该端点获取 query embedding。该端点通过 `knowledge_embedding` 路由解析 Provider；随仓配置以 OpenAI-compatible embedding 为主路径，未配置真实 Key 时才走显式 Mock fallback。`AI_EMBEDDING_PROVIDER` / `AI_EMBEDDING_MODEL` 可覆盖到 OpenAI-compatible、DashScope 或 Local BGE。
 
 当前已落地 `/rerank/knowledge`，Go 后端在知识库搜索完成 RRF 融合后调用该端点精排候选。该端点通过 `knowledge_rerank` 路由解析 RerankProvider；随仓配置以 OpenAI-compatible Provider 为主路径，未配置真实 Key 时才走显式 Mock fallback。`AI_RERANK_PROVIDER` / `AI_RERANK_MODEL` 可覆盖到真实 rerank provider。

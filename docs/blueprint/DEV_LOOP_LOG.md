@@ -7957,3 +7957,49 @@ cd backend && go vet ./...
 
 1. 本轮治理的是 Go 平台读取可靠性，没有新增真实 AI Provider、OCR Provider、文档解析格式或 Word/PDF 母版排版能力。
 2. ExternalTool 网关仍需要在后续 loop 接真实外部能力成本回填、配额 enforcement 和可观测降级策略；本轮仅处理持久化 metadata 读取边界。
+
+## Loop-166 / 真实 Provider 生产 canary 闭环 - 2026-06-21
+
+### 本轮目标
+
+1. 将“真实 AI Provider 可用”从代码能力推进到可执行验收入口，而不是只依赖单元测试和文档说明。
+2. 覆盖 LLM、embedding、rerank 三条核心 Provider-backed 路由，确认生产配置可拒绝 Mock、可做健康检查、可选发起最小真实调用，并输出费用估算和 quota 快照。
+3. 让本地无密钥环境继续可重复检查，同时给上线前严格验收提供明确命令。
+
+### 代码交付
+
+1. 新增 `ai-service/app/evaluation/provider_canary_eval.py`，默认检查 `chapter_generate`、`knowledge_embedding`、`knowledge_rerank`，输出 `status`、`checks[]`、`routes[]`、`estimated_cost` 和 `quota_usage`。
+2. canary 支持 `--allow-skip`、`--strict`、`--call-provider`、`--require-cost`：本地无真实密钥时可跳过，生产验收可要求非 Mock 路由、Provider 健康、最小真实调用和正向成本估算。
+3. 新增 `ai-service/app/tests/test_provider_canary_eval.py`，覆盖无真实配置跳过、生产关闭 mock fallback 通过、OpenAI-compatible 最小调用通过、要求计费但缺价格配置失败。
+4. `infra/scripts/check.sh` 增加 `python -m app.evaluation.provider_canary_eval --allow-skip`，把 provider canary 纳入仓库总检查。
+5. `README.md`、`docs/blueprint/MODEL_GATEWAY.md` 和 `docs/blueprint/AI_IMPLEMENTATION_CHECKLIST.md` 同步记录本地/生产两种 canary 命令与验收口径。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 provider canary 文件、测试名、README 命令和 `check.sh` 入口防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m py_compile app/evaluation/provider_canary_eval.py app/tests/test_provider_canary_eval.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_provider_canary_eval.py app/tests/test_model_router.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/evaluation/provider_canary_eval.py app/tests/test_provider_canary_eval.py
+cd ai-service && .venv/bin/python -m app.evaluation.provider_canary_eval --allow-skip
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_provider_canary_eval.py app/tests/test_model_router.py -q -s` 通过，55 项通过。
+2. `cd ai-service && .venv/bin/python -m ruff check app/evaluation/provider_canary_eval.py app/tests/test_provider_canary_eval.py` 通过。
+3. `cd ai-service && .venv/bin/python -m app.evaluation.provider_canary_eval --allow-skip` 在本机无真实 Provider 密钥时返回 skipped，符合本地检查口径；失败检查明确列出当前会落回 Mock 的路由。
+4. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+5. `git diff --check` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、Provider canary 本地跳过、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮没有调用真实外部模型 API，因为本机环境未配置生产密钥；交付的是可重复的生产 canary 入口和严格验收门槛。
+2. `--strict --call-provider --require-cost` 需要真实 Provider key、模型名和 `AI_MODEL_PRICING_JSON` 后才能作为上线硬门槛运行。

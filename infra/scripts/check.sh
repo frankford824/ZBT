@@ -32,6 +32,7 @@ fi
   exit 1
 }
 "$AI_PYTHON" -m pytest app/tests -q -s
+"$AI_PYTHON" -m app.evaluation.provider_canary_eval --allow-skip
 "$AI_PYTHON" -m app.evaluation.tender_parse_eval \
   --golden "$ROOT/docs/sample_docs/golden/工程1.parse.json"
 "$AI_PYTHON" -m app.evaluation.generation_coverage_eval \

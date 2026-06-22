@@ -121,6 +121,15 @@ AI_MODEL_PRICING_JSON='{"deepseek/deepseek-chat":{"input_per_1m":1,"output_per_1
 
 价格可按 `provider/model`、`model`、`provider/*` 或 `*` 匹配；未配置价格时 `estimated_cost` 保持 0。
 
+真实 Provider 配置完成后，可在 AI 服务目录运行生产 canary。无真实密钥的本地检查允许跳过；上线前应开启严格模式，要求路由不落回 Mock、Provider 健康检查通过、最小真实调用成功，并能按价格表得到正向费用和 quota 快照：
+
+```bash
+cd ai-service
+python -m app.evaluation.provider_canary_eval --allow-skip
+python -m app.evaluation.provider_canary_eval --strict --call-provider --require-cost \
+  --route chapter_generate --route knowledge_embedding --route knowledge_rerank
+```
+
 AI 服务向后端投递任务回调时，成功响应默认最多读取 64 KB，可用 `AI_CALLBACK_MAX_RESPONSE_BYTES` 在 1 MB 内调整；超限响应会触发重试且不会把响应体写入错误信息。
 
 Go 后端 API JSON 请求体默认限制为 96 MB，可通过 `API_MAX_BODY_BYTES` 调整，最大允许配置到 256 MB。AI 服务入口请求体同样默认限制为 96 MB，可通过 `AI_SERVICE_MAX_BODY_BYTES` 调整，最大允许配置到 256 MB。
