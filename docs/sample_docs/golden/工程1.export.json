@@ -25,6 +25,8 @@
       "质量控制"
     ],
     "min_tables": 1,
+    "require_cover": true,
+    "require_watermark": true,
     "require_toc": true,
     "require_update_fields": true,
     "require_page_fields": true,
@@ -35,6 +37,13 @@
       {
         "code": "tech",
         "title": "技术标",
+        "attachments": [
+          {
+            "filename": "技术附件.txt",
+            "content_type": "text/plain",
+            "content_base64": "5oqA5pyv6ZmE5Lu25YaF5a65"
+          }
+        ],
         "chapters": [
           {
             "title": "项目实施方案",
@@ -56,7 +65,24 @@
     "expected_entries": [
       "01_投标文件/01-技术标.docx",
       "01_投标文件/02-商务标.docx",
+      "02_附件/tech/技术附件.txt",
+      "02_附件/资质证明.txt",
+      "03_工程量清单/工程量清单.xlsx",
       "manifest.json"
+    ],
+    "attachments": [
+      {
+        "filename": "资质证明.txt",
+        "content_type": "text/plain",
+        "content_base64": "6LWE6LSo6K+B5piO5YaF5a65"
+      }
+    ],
+    "boq_files": [
+      {
+        "filename": "工程量清单.xlsx",
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content_base64": "5riF5Y2V6ZmE5Lu25YaF5a65"
+      }
     ],
     "min_docx_entries": 2,
     "require_manifest": true
@@ -65,6 +91,7 @@
     "enabled": true,
     "allow_skip": true,
     "min_pages": 1,
+    "required_text": ["工程1桥梁检查采购响应文件", "项目实施方案"],
     "require_text": true,
     "require_first_page_nonblank": true
   }

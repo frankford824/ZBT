@@ -18,6 +18,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
+AI_SERVICE = ROOT / "ai-service"
 SENSITIVE_ENV_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|HMAC|JWT)", re.IGNORECASE)
 URL_WITH_PASSWORD_RE = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
@@ -26,11 +27,13 @@ SENSITIVE_URL_ENV_KEYS = {"DATABASE_URL", "MIGRATION_DATABASE_URL", "REDIS_URL"}
 PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
 PROVIDER_CANARY_JSON = ROOT / "tmp/provider_canary.json"
 OCR_CANARY_JSON = ROOT / "tmp/ocr_provider_canary.json"
+EXPORT_FORMAT_JSON = ROOT / "tmp/export_format_eval.json"
 PROJECT1_RUNTIME_JSON = ROOT / "tmp/project1_runtime_acceptance.json"
 EXPECTED_ORIGIN_REMOTE = "git@github.com:frankford824/ZBT.git"
 EXPECTED_GITHUB_HTTPS_REMOTE = "https://github.com/frankford824/ZBT.git"
 EXPECTED_RELEASE_BRANCH = "main"
 PRODUCTION_REQUIRED_ARTIFACTS = (
+    ("export_format_eval", "export format artifact must be present and passed"),
     ("production_env_audit_json", "production artifact production_env_audit_json must be present and passed"),
     ("provider_canary", "production artifact provider_canary must be present and passed"),
     ("ocr_provider_canary", "production artifact ocr_provider_canary must be present and passed"),
@@ -56,6 +59,26 @@ REQUIRED_OCR_CHECKS = (
     "ocr.layout_bbox_count",
     "ocr.table_bbox_count",
     "ocr.cell_bbox_count",
+)
+REQUIRED_EXPORT_CHECKS = (
+    "export.docx.openable",
+    "export.docx.non_empty",
+    "export.docx.cover",
+    "export.docx.watermark",
+    "export.docx.toc_field",
+    "export.docx.update_fields",
+    "export.docx.page_fields",
+    "export.docx.header_footer",
+    "export.docx.header_footer_text",
+    "export.zip.manifest",
+    "export.zip.manifest_part_count",
+    "export.zip.manifest_integrity",
+    "export.zip.safe_paths",
+    "export.zip.docx_entries_openable",
+    "export.pdf.generated",
+    "export.pdf.openable",
+    "export.pdf.text_layer",
+    "export.pdf.first_page_nonblank",
 )
 PROJECT1_REQUIRED_STEPS = (
     "parse_response_matrix",
@@ -126,11 +149,23 @@ def redactor(values: list[str]):
 
 
 def run_command(name: str, command: list[str], *, env: dict[str, str], timeout_s: int, redact) -> dict[str, Any]:
+    return run_command_in_cwd(name, command, cwd=ROOT, env=env, timeout_s=timeout_s, redact=redact)
+
+
+def run_command_in_cwd(
+    name: str,
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_s: int,
+    redact,
+) -> dict[str, Any]:
     started = time.monotonic()
     try:
         completed = subprocess.run(
             command,
-            cwd=str(ROOT),
+            cwd=str(cwd),
             env=env,
             text=True,
             stdout=subprocess.PIPE,
@@ -168,13 +203,14 @@ def run_json_artifact_command(
     env: dict[str, str],
     timeout_s: int,
     redact,
+    cwd: Path = ROOT,
 ) -> dict[str, Any]:
     started = time.monotonic()
     clear_artifact(artifact)
     try:
         completed = subprocess.run(
             command,
-            cwd=str(ROOT),
+            cwd=str(cwd),
             env=env,
             text=True,
             stdout=subprocess.PIPE,
@@ -251,6 +287,8 @@ def artifact_semantic_issues(name: str, payload: dict[str, Any]) -> list[str]:
         return provider_canary_artifact_issues(payload)
     if name == "ocr_provider_canary":
         return ocr_canary_artifact_issues(payload)
+    if name == "export_format_eval":
+        return export_format_artifact_issues(payload)
     if name == "project1_runtime_acceptance":
         return project1_runtime_artifact_issues(payload)
     return []
@@ -379,6 +417,51 @@ def ocr_canary_artifact_issues(payload: dict[str, Any]) -> list[str]:
             issues.append("OCR canary OCR metadata must be present")
         elif ocr_metadata.get("provider") != provider:
             issues.append("OCR canary OCR metadata provider must match")
+    return issues
+
+
+def export_format_artifact_issues(payload: dict[str, Any]) -> list[str]:
+    issues = common_artifact_issues(payload, "工程1.export")
+    issues.extend(check_count_issues(payload, "export format"))
+
+    check_index = _index_dicts(payload.get("checks"), "name")
+    for check_name in REQUIRED_EXPORT_CHECKS:
+        check = check_index.get(check_name)
+        if not check:
+            issues.append(f"export format check {check_name} must be present")
+        elif check.get("passed") is not True:
+            issues.append(f"export format check {check_name} must pass")
+
+    docx = payload.get("docx")
+    if not isinstance(docx, dict):
+        issues.append("export format DOCX result must be present")
+    else:
+        if int_value(docx.get("size_bytes")) <= 1024:
+            issues.append("export format DOCX size must be nontrivial")
+        if int_value(docx.get("table_count")) < 1:
+            issues.append("export format DOCX table_count must be positive")
+
+    zip_result = payload.get("zip")
+    if not isinstance(zip_result, dict):
+        issues.append("export format ZIP result must be present")
+    else:
+        if int_value(zip_result.get("docx_entry_count")) < 2:
+            issues.append("export format ZIP must include tech and business DOCX entries")
+        if zip_result.get("manifest_issues"):
+            issues.append("export format ZIP manifest must have no integrity issues")
+
+    pdf = payload.get("pdf")
+    if not isinstance(pdf, dict):
+        issues.append("export format PDF result must be present")
+    else:
+        if pdf.get("status") != "generated":
+            issues.append("export format PDF must be generated, not skipped")
+        if int_value(pdf.get("page_count")) < 1:
+            issues.append("export format PDF page_count must be positive")
+        if int_value(pdf.get("text_chars")) <= 0:
+            issues.append("export format PDF text layer must be non-empty")
+        if pdf.get("first_page_nonblank") is not True:
+            issues.append("export format PDF first page must render nonblank")
     return issues
 
 
@@ -550,6 +633,13 @@ def git_remote_head_candidates(remote: str, remote_ref: str) -> list[tuple[str, 
     return candidates
 
 
+def ai_python() -> str:
+    venv_python = AI_SERVICE / ".venv/bin/python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return "python3"
+
+
 def remote_head_from_ls_remote(output: str, remote_ref: str) -> str:
     for line in output.splitlines():
         parts = line.strip().split()
@@ -634,6 +724,28 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     static_command = [python, "infra/scripts/first_usable_release_check.py"]
     steps.append(run_command("static_readiness", static_command, env=env, timeout_s=args.timeout_s, redact=redact))
 
+    export_command = [
+        ai_python(),
+        "-m",
+        "app.evaluation.export_format_eval",
+        "--input",
+        "../docs/sample_docs/golden/工程1.export.json",
+        "--json",
+    ]
+    if args.profile == "production":
+        export_command.append("--require-pdf")
+    steps.append(
+        run_json_artifact_command(
+            "export_format_eval",
+            export_command,
+            EXPORT_FORMAT_JSON,
+            env=env,
+            timeout_s=args.timeout_s,
+            redact=redact,
+            cwd=AI_SERVICE,
+        )
+    )
+
     if args.env_file or args.profile == "production":
         audit_command = [python, "infra/scripts/first_usable_release_check.py", "--audit-production-env"]
         if args.env_file:
@@ -704,6 +816,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             artifact_summary("production_env_audit_json", PRODUCTION_ENV_AUDIT_JSON)
             if args.env_file or args.profile == "production"
             else None,
+            artifact_summary("export_format_eval", EXPORT_FORMAT_JSON),
             artifact_summary("provider_canary", PROVIDER_CANARY_JSON)
             if args.profile == "production"
             else None,
@@ -770,6 +883,8 @@ def blocking_items(
     blocking: list[str] = []
     if step_status.get("static_readiness") != "passed":
         blocking.append("static readiness gate must pass")
+    if step_status.get("export_format_eval") != "passed":
+        blocking.append("export format evaluation must pass")
     if args.profile != "production":
         blocking.append("report profile must be production")
     if args.profile == "production":

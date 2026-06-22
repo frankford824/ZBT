@@ -116,6 +116,26 @@ def valid_ocr_canary_payload() -> dict[str, object]:
     }
 
 
+def valid_export_format_payload() -> dict[str, object]:
+    checks = [{"name": check_name, "passed": True} for check_name in report.REQUIRED_EXPORT_CHECKS]
+    return {
+        "name": "工程1.export",
+        "status": "passed",
+        "passed_checks": len(checks),
+        "failed_checks": 0,
+        "total_checks": len(checks),
+        "docx": {"size_bytes": 4096, "table_count": 1},
+        "zip": {"entry_count": 6, "docx_entry_count": 2, "manifest_issues": []},
+        "pdf": {
+            "status": "generated",
+            "page_count": 2,
+            "text_chars": 128,
+            "first_page_nonblank": True,
+        },
+        "checks": checks,
+    }
+
+
 def valid_project1_runtime_payload() -> dict[str, object]:
     return {
         "name": "project1_runtime_acceptance",
@@ -239,6 +259,21 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 },
             ),
             patch.object(report, "run_command", side_effect=fake_run_command),
+            patch.object(
+                report,
+                "run_json_artifact_command",
+                return_value={"name": "export_format_eval", "status": "passed", "returncode": 0},
+            ),
+            patch.object(
+                report,
+                "artifact_summary",
+                return_value={
+                    "name": "export_format_eval",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+            ),
             patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
         ):
             generated = report.build_report(args)
@@ -253,7 +288,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         args = argparse.Namespace(profile="local", include_repo_check=False, include_project1_runtime=False)
         blocking = report.blocking_items(
             args,
-            {"static_readiness": "passed", "local_readiness_canaries": "passed"},
+            {"static_readiness": "passed", "export_format_eval": "passed", "local_readiness_canaries": "passed"},
         )
 
         self.assertEqual(
@@ -271,6 +306,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             args,
             {
                 "static_readiness": "passed",
+                "export_format_eval": "passed",
                 "production_env_audit": "passed",
                 "production_readiness": "passed",
                 "repo_wide_check": "passed",
@@ -283,6 +319,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "json_status": "passed",
                     "semantic_status": "passed",
                 },
+                {"name": "export_format_eval", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {
                     "name": "ocr_provider_canary",
@@ -319,6 +356,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             args,
             {
                 "static_readiness": "passed",
+                "export_format_eval": "passed",
                 "production_env_audit": "passed",
                 "production_readiness": "passed",
                 "repo_wide_check": "passed",
@@ -331,6 +369,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "json_status": "passed",
                     "semantic_status": "passed",
                 },
+                {"name": "export_format_eval", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {
                     "name": "ocr_provider_canary",
@@ -418,6 +457,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             args,
             {
                 "static_readiness": "passed",
+                "export_format_eval": "passed",
                 "production_env_audit": "passed",
                 "production_readiness": "passed",
                 "repo_wide_check": "passed",
@@ -430,6 +470,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "json_status": "passed",
                     "semantic_status": "passed",
                 },
+                {"name": "export_format_eval", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "failed"},
                 {
                     "name": "ocr_provider_canary",
@@ -455,6 +496,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             args,
             {
                 "static_readiness": "passed",
+                "export_format_eval": "passed",
                 "production_env_audit": "passed",
                 "production_readiness": "passed",
                 "repo_wide_check": "passed",
@@ -462,6 +504,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             },
             [
                 {"name": "production_env_audit_json", "status": "present", "json_status": "failed"},
+                {"name": "export_format_eval", "status": "missing"},
                 {"name": "provider_canary", "status": "missing"},
                 {"name": "ocr_provider_canary", "status": "present", "json_status": "not_json"},
                 {
@@ -477,6 +520,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertEqual(
             blocking,
             [
+                "export format artifact must be present and passed",
                 "production artifact production_env_audit_json must be present and passed",
                 "production artifact provider_canary must be present and passed",
                 "production artifact ocr_provider_canary must be present and passed",
@@ -489,6 +533,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             args,
             {
                 "static_readiness": "passed",
+                "export_format_eval": "passed",
                 "production_env_audit": "passed",
                 "production_readiness": "passed",
                 "repo_wide_check": "passed",
@@ -501,6 +546,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                     "json_status": "passed",
                     "semantic_status": "passed",
                 },
+                {"name": "export_format_eval", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "passed"},
                 {
                     "name": "ocr_provider_canary",
@@ -558,11 +604,42 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertIn("provider canary call_provider must be true", summary["semantic_issues"])
         self.assertIn("provider canary route chapter_generate must be present", summary["semantic_issues"])
 
+    def test_artifact_summary_rejects_fake_passed_export_format(self) -> None:
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            artifact = Path(directory) / "export_format_eval.json"
+            artifact.write_text(
+                json.dumps(
+                    {
+                        "name": "工程1.export",
+                        "status": "passed",
+                        "passed_checks": 1,
+                        "failed_checks": 0,
+                        "total_checks": 1,
+                        "docx": {"size_bytes": 2048, "table_count": 1},
+                        "zip": {"docx_entry_count": 2, "manifest_issues": []},
+                        "pdf": {"status": "skipped"},
+                        "checks": [{"name": "export.docx.openable", "passed": True}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = report.artifact_summary("export_format_eval", artifact)
+
+        self.assertEqual(summary["json_status"], "passed")
+        self.assertEqual(summary["semantic_status"], "failed")
+        self.assertIn("export format PDF must be generated, not skipped", summary["semantic_issues"])
+        self.assertIn("export format check export.zip.manifest_integrity must be present", summary["semantic_issues"])
+
     def test_artifact_summary_accepts_complete_provider_ocr_and_project1_artifacts(self) -> None:
         tmp_root = report.ROOT / "tmp"
         tmp_root.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
             artifact_specs = [
+                ("export_format_eval", "export_format_eval.json", valid_export_format_payload()),
                 ("provider_canary", "provider_canary.json", valid_provider_canary_payload()),
                 ("ocr_provider_canary", "ocr_provider_canary.json", valid_ocr_canary_payload()),
                 ("project1_runtime_acceptance", "project1_runtime_acceptance.json", valid_project1_runtime_payload()),
@@ -573,7 +650,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 artifact.write_text(json.dumps(payload), encoding="utf-8")
                 summaries.append(report.artifact_summary(name, artifact))
 
-        self.assertEqual([summary["semantic_status"] for summary in summaries], ["passed", "passed", "passed"])
+        self.assertEqual([summary["semantic_status"] for summary in summaries], ["passed", "passed", "passed", "passed"])
         self.assertTrue(all(summary["semantic_issues"] == [] for summary in summaries))
 
     def test_clear_artifact_removes_stale_json_before_new_evidence(self) -> None:
@@ -629,12 +706,14 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             timeout_s=30,
         )
         commands: list[tuple[str, list[str]]] = []
+        artifact_commands: list[tuple[str, list[str]]] = []
 
         def fake_run_command(name: str, command: list[str], **_: object) -> dict[str, object]:
             commands.append((name, command))
             return {"name": name, "status": "passed", "returncode": 0}
 
-        def fake_json_artifact_command(name: str, _: list[str], artifact: Path, **__: object) -> dict[str, object]:
+        def fake_json_artifact_command(name: str, command: list[str], artifact: Path, **__: object) -> dict[str, object]:
+            artifact_commands.append((name, command))
             return {
                 "name": name,
                 "status": "failed",
@@ -659,9 +738,12 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertIn("tmp/provider_canary.json", production_command)
         self.assertIn("--ocr-canary-json-output", production_command)
         self.assertIn("tmp/ocr_provider_canary.json", production_command)
+        export_command = next(command for name, command in artifact_commands if name == "export_format_eval")
+        self.assertIn("app.evaluation.export_format_eval", export_command)
+        self.assertIn("--require-pdf", export_command)
         self.assertEqual(
             [artifact["name"] for artifact in generated["artifacts"]],
-            ["production_env_audit_json", "provider_canary", "ocr_provider_canary"],
+            ["production_env_audit_json", "export_format_eval", "provider_canary", "ocr_provider_canary"],
         )
         self.assertEqual(generated["commit"], valid_git_release_state()["commit"])
         self.assertEqual(generated["branch"], report.EXPECTED_RELEASE_BRANCH)

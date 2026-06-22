@@ -70,7 +70,14 @@ def test_export_format_eval_passes_docx_zip_and_skipped_pdf(tmp_path, monkeypatc
     assert result["failed_checks"] == 0
     assert result["docx"]["table_count"] == 1
     assert result["zip"]["docx_entry_count"] == 2
+    assert result["zip"]["manifest_issues"] == []
     assert result["pdf"]["status"] == "skipped"
+    passed_names = {check["name"] for check in result["checks"] if check["passed"]}
+    assert "export.docx.cover" in passed_names
+    assert "export.docx.watermark" in passed_names
+    assert "export.docx.header_footer_text" in passed_names
+    assert "export.zip.manifest_integrity" in passed_names
+    assert "export.zip.safe_paths" in passed_names
 
 
 def test_export_format_eval_fails_when_docx_required_text_is_missing(tmp_path) -> None:
@@ -101,3 +108,33 @@ def test_export_format_eval_fails_when_docx_required_text_is_missing(tmp_path) -
     assert result["status"] == "failed"
     failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
     assert "export.docx.text.不存在的承诺条款" in failed_names
+
+
+def test_export_format_eval_requires_pdf_when_configured(tmp_path, monkeypatch) -> None:
+    spec = tmp_path / "export.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "bid_title": "工程1桥梁检查采购响应文件",
+                "part_title": "技术标",
+                "layout": {"generated_at": "2026-06-18"},
+                "chapters": [{"title": "项目实施方案", "plain_text": "正文。"}],
+                "docx": {
+                    "required_text": ["工程1桥梁检查采购响应文件"],
+                    "require_watermark": False,
+                },
+                "zip": {"enabled": False},
+                "pdf": {"enabled": True, "allow_skip": True},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LIBREOFFICE_PATH", "/not-installed/soffice")
+
+    result = evaluate_export_format(spec, require_pdf=True)
+
+    assert result["status"] == "failed"
+    assert result["pdf"]["status"] == "failed"
+    failed = {check["name"]: check for check in result["checks"] if not check["passed"]}
+    assert failed["export.pdf.generated"]["actual"] == "LibreOffice PDF conversion failed"

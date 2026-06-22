@@ -8975,3 +8975,54 @@ python3 infra/scripts/acceptance_tail_check.py --static-docs
 
 1. 本轮强化的是 OCR production 启动门禁，没有提交真实 `.env.production`，也没有生成真实 OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：还需要真实 OCR endpoint、真实 Provider key、真实外部 canary artifact，以及包含 repo-wide check 与工程1运行态验收的 clean/synced production report 达到 `loop_can_end=true`。
+
+## Loop-189 / 导出保真 artifact 硬门禁 - 2026-06-22
+
+### 本轮目标
+
+1. 将工程1 Word/PDF/ZIP 导出保真从 repo-wide check 的单项输出提升为最终第一可用版报告的 JSON artifact。
+2. 防止 production report 在 PDF skipped、ZIP manifest 弱校验或 DOCX 母版关键元素缺失时仍允许 `loop_can_end=true`。
+3. 强化工程1导出 golden，使其覆盖封面、水印、目录域、页眉页脚文本、页码域、表格、附件、工程量清单、ZIP manifest 完整性和 PDF 文本/渲染。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/export_format_eval.py` 新增 `--require-pdf`；production 最终报告使用该参数，PDF 转换不可再被 skipped。
+2. 导出评估新增 DOCX 封面、水印、页眉页脚文本检查；ZIP 新增 manifest 与实际包内文件的 `size_bytes`、`sha256`、章节数、附件数、工程量清单数一致性检查，并校验 ZIP 路径没有绝对路径或 `..`。
+3. PDF 评估新增 required text 检查；对中文 PDF 抽取的空格和局部重排使用归一化/字符覆盖率匹配，仍要求 PDF 真实生成、可打开、文本层非空、首屏渲染非空。
+4. `docs/sample_docs/golden/工程1.export.json` 增加技术附件、资质附件和工程量清单附件，并明确要求封面、水印和 PDF 关键文本。
+5. `infra/scripts/first_usable_release_report.py` 新增 `tmp/export_format_eval.json` artifact；production profile 下自动运行 `app.evaluation.export_format_eval --require-pdf`，并将 `export format artifact must be present and passed` 纳入阻断项。
+6. `export_format_artifact_issues()` 会拒绝伪造 passed 的导出 JSON：必须包含 `REQUIRED_EXPORT_CHECKS`，且 DOCX/ZIP/PDF 结果具备非平凡大小、表格、manifest 无 integrity issues、PDF generated、页数、文本层和非空首屏。
+7. `infra/scripts/test_first_usable_release_report.py` 新增伪 passed 导出 artifact 负例，并更新完整 production evidence 正例；`ai-service/app/tests/test_export_format_eval.py` 增加 `--require-pdf` 失败回归。
+8. README、`infra/scripts/first_usable_release_check.py` 与 `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `tmp/export_format_eval.json`、`--require-pdf` 和导出 artifact 防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/evaluation/export_format_eval.py ai-service/app/tests/test_export_format_eval.py infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+cd ai-service && .venv/bin/python -m pytest app/tests/test_export_format_eval.py -q -s
+cd ai-service && .venv/bin/python -m ruff check app/evaluation/export_format_eval.py app/tests/test_export_format_eval.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 infra/scripts/test_first_usable_release_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+cd ai-service && .venv/bin/python -m app.evaluation.export_format_eval --input ../docs/sample_docs/golden/工程1.export.json --json
+python3 infra/scripts/first_usable_release_check.py
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json --timeout-s 120
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json --timeout-s 120
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `test_export_format_eval.py` 通过 3 项，覆盖 DOCX/ZIP/PDF skipped、本轮新增检查项、缺必需文本失败和 `--require-pdf` 拒绝跳过 PDF。
+2. `test_first_usable_release_report.py` 通过 19 项，覆盖导出 artifact 语义门禁、production 完整证据正例、缺/伪 artifact 阻断、Git release 状态、脱敏和 Provider/OCR artifact。
+3. 工程1导出评估通过：`passed=33/33 name=工程1.export`，PDF 状态为 `generated`，页数 3，`manifest_issues=[]`。
+4. local 与 production-template report 均成功写入 `tmp/export_format_eval.json`；artifact summary 为 `json_status=passed`、`semantic_status=passed`、`semantic_issues=[]`。
+5. production-template report 仍正确保持 `loop_can_end=false`；阻断项集中在模板生产配置、真实 Provider/OCR artifact、工作区未提交、repo-wide check 和工程1运行态验收未纳入，没有因导出 artifact 阻断。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 Go test/vet、AI compile/ruff、AI pytest `302 passed`、Provider/OCR local canary skipped、工程1 parse/generation/export、容器内 AI pytest `291 passed` 均通过。
+
+### 偏离蓝图
+
+1. 本轮关闭的是导出保真 artifact 与最终报告硬门禁，没有提交真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。
