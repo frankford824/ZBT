@@ -21,6 +21,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 AI_SERVICE = ROOT / "ai-service"
 FALSE_ENV_VALUES = {"0", "false", "no"}
+PRODUCTION_PLACEHOLDER_MARKERS = ("<replace-", "replace-with", "changeme", "todo", "placeholder")
 PRODUCTION_SECRET_DEFAULTS = {
     "JWT_SECRET": "dev-only-zbt-jwt-secret",
     "AI_SERVICE_HMAC_SECRET": "dev-only-zbt-ai-callback-secret",
@@ -67,6 +68,11 @@ def env_value(key: str) -> str:
 
 def env_is_false(key: str) -> bool:
     return env_value(key).lower() in FALSE_ENV_VALUES
+
+
+def env_is_placeholder(value: str) -> bool:
+    normalized = value.strip().lower()
+    return any(marker in normalized for marker in PRODUCTION_PLACEHOLDER_MARKERS)
 
 
 def load_env_file(path: Path | None) -> dict[str, str]:
@@ -123,6 +129,7 @@ def check_static_release_evidence() -> None:
         "docs/sample_docs/golden/工程1.parse.json",
         "docs/sample_docs/golden/工程1.generation_coverage.json",
         "docs/sample_docs/golden/工程1.export.json",
+        ".env.production.example",
         "docs/ex/工程1/采购文件桥梁检查.pdf",
         "docs/ex/工程1/响应文件格式.docx",
         "docs/ex/工程1/清单（固化）(1).xlsx",
@@ -155,6 +162,19 @@ def check_static_release_evidence() -> None:
         "AI_MODEL_PRICING_JSON",
     ):
         require(needle in readme, f"README missing first usable guidance: {needle}")
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    require(".env.production" in gitignore, ".gitignore must ignore real production env files")
+    production_template = (ROOT / ".env.production.example").read_text(encoding="utf-8")
+    for needle in (
+        "APP_ENV=production",
+        "USE_MOCK_PROVIDERS=false",
+        "ALLOW_MOCK_FALLBACK=false",
+        "AI_MODEL_PRICING_JSON=",
+        "OPENAI_API_KEY=<replace-with-openai-api-key>",
+        "OCR_HTTP_ENDPOINT=<replace-with-ocr-http-endpoint>",
+        "AI_SERVICE_HMAC_SECRET=<replace-with-strong-ai-callback-secret-at-least-16-chars>",
+    ):
+        require(needle in production_template, f".env.production.example missing production guidance: {needle}")
 
     log = (ROOT / "docs/blueprint/DEV_LOOP_LOG.md").read_text(encoding="utf-8")
     latest_heading, latest_section = latest_loop_section(log)
@@ -173,7 +193,11 @@ def check_static_release_evidence() -> None:
 
 
 def require_env_group(label: str, alternatives: tuple[str, ...]) -> str:
-    matched = [key for key in alternatives if env_value(key)]
+    configured = [key for key in alternatives if env_value(key)]
+    placeholder = [key for key in configured if env_is_placeholder(env_value(key))]
+    matched = [key for key in configured if key not in placeholder]
+    if not matched and placeholder:
+        raise ReadinessError(f"production env {placeholder[0]} still uses a placeholder value")
     require(
         bool(matched),
         f"production env missing {label}: set one of {', '.join(alternatives)}",
@@ -184,6 +208,7 @@ def require_env_group(label: str, alternatives: tuple[str, ...]) -> str:
 def require_production_secret(key: str, default_value: str) -> None:
     value = env_value(key)
     require(bool(value), f"production env missing {key}")
+    require(not env_is_placeholder(value), f"production env {key} still uses a placeholder value")
     require(value != default_value and len(value) >= 16, f"production env {key} must not use the development default or a short value")
 
 

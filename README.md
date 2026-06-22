@@ -199,7 +199,8 @@ python3 infra/scripts/acceptance_project1_check.py
 
 ```bash
 python3 infra/scripts/first_usable_release_check.py --run-canaries
+cp .env.production.example .env.production
 python3 infra/scripts/first_usable_release_check.py --profile production --env-file .env.production
 ```
 
-本地 profile 允许 Provider/OCR 在未配置 endpoint 或密钥时显式 skipped；production profile 会先审计生产环境，再要求 Provider/OCR canary 非 skipped、非 Mock、真实调用成功并具备正向 `estimated_cost`。`.env.production` 不应提交到仓库，至少需要配置 `USE_MOCK_PROVIDERS=false`、`ALLOW_MOCK_FALLBACK=false`、`AI_MODEL_PRICING_JSON`、`JWT_SECRET`、`AI_SERVICE_HMAC_SECRET`、生产对象存储凭据、所选 LLM/embedding/rerank Provider 的 API key/base URL，以及 `OCR_HTTP_ENDPOINT`、`MINERU_HTTP_ENDPOINT` 或 `PADDLEOCR_HTTP_ENDPOINT`。
+本地 profile 允许 Provider/OCR 在未配置 endpoint 或密钥时显式 skipped；production profile 会先审计生产环境，再要求 Provider/OCR canary 非 skipped、非 Mock、真实调用成功并具备正向 `estimated_cost`。`.env.production` 已加入 `.gitignore`，不要提交真实密钥；可以从 `.env.production.example` 复制后替换所有占位值，脚本会拒绝 `<replace-with-...>`、`changeme`、`todo` 和 `placeholder`。生产配置至少需要包含 `USE_MOCK_PROVIDERS=false`、`ALLOW_MOCK_FALLBACK=false`、`AI_MODEL_PRICING_JSON`、`JWT_SECRET`、`AI_SERVICE_HMAC_SECRET`、生产对象存储凭据、所选 LLM/embedding/rerank Provider 的 API key/base URL，以及 `OCR_HTTP_ENDPOINT`、`MINERU_HTTP_ENDPOINT` 或 `PADDLEOCR_HTTP_ENDPOINT`。

@@ -1,4 +1,6 @@
 .env
+.env.local
+.env.production
 .venv/
 node_modules/
 dist/

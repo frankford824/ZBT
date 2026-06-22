@@ -8211,3 +8211,45 @@ python3 infra/scripts/first_usable_release_check.py --profile production
 
 1. 本轮仍没有把 production profile 伪装为通过；没有 `.env.production` 和真实 Provider/OCR 服务时，生产收口必须失败。
 2. 真实模型、真实 embedding/rerank 和真实 OCR 的非 skipped 验收仍是下一轮 Provider/OCR 接入任务；本轮交付的是生产门禁和失败形态，不替代真实外部服务可用性证明。
+
+## Loop-172 / 生产配置样板与密钥防误提 - 2026-06-22
+
+### 本轮目标
+
+1. 补齐生产 readiness 所需的 `.env.production` 交接样板，让真实密钥填入后可以直接运行 production profile。
+2. 防止真实 `.env.production` 被误提交到仓库。
+3. 防止 `.env.production.example` 这类占位模板被误当成真实生产配置跑过收口门禁。
+
+### 代码交付
+
+1. 新增 `.env.production.example`，覆盖生产数据库、Redis、JWT、R2/MinIO、AI HMAC、模型路由、OpenAI-compatible、Cloudflare AI Gateway 备选、DeepSeek/DashScope 备选、`AI_MODEL_PRICING_JSON`、OCR Provider、LibreOffice 和导出模板相关配置。
+2. `.gitignore` 新增 `.env.local` 和 `.env.production`，真实生产密钥文件默认不进入 Git；模板 `.env.production.example` 保持可追踪。
+3. `infra/scripts/first_usable_release_check.py` 的静态证据新增 `.env.production.example` 和 `.gitignore` 检查。
+4. production profile 新增占位值拒绝：`<replace-...>`、`replace-with`、`changeme`、`todo`、`placeholder` 都不能作为生产 secret、Provider key 或 OCR endpoint。
+5. README 的第一可用版收口命令增加 `cp .env.production.example .env.production`，并说明模板占位值会被 readiness gate 拒绝。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加生产模板字段、`.gitignore` 和占位值拒绝逻辑的防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/first_usable_release_check.py --profile production --env-file .env.production.example
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `.env.production.example` 可被 `--env-file` 正常解析，加载 65 个 key。
+2. `python3 infra/scripts/first_usable_release_check.py --profile production --env-file .env.production.example` 按预期失败于 `production env JWT_SECRET still uses a placeholder value`，证明模板不会假冒生产配置通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-172。
+4. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；Provider/OCR 本地 profile 继续显式 skipped。
+5. `./infra/scripts/check.sh` 通过；继续覆盖 readiness gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR canary、工程1 golden、生成覆盖、导出格式和容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮仍没有真实生产密钥和真实 OCR endpoint，因此不能把 active goal 标记为完成。
+2. `.env.production.example` 是交接模板，不是生产配置；production profile 只有在真实 `.env.production` 填完并通过真实 Provider/OCR canary 后才可作为 loop 收口证据。

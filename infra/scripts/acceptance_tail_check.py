@@ -868,9 +868,25 @@ def check_static_docs() -> None:
         "AI_SERVICE_HMAC_SECRET",
         "OPENAI_API_KEY",
         "OCR_HTTP_ENDPOINT",
+        ".env.production.example",
+        "PRODUCTION_PLACEHOLDER_MARKERS",
+        "env_is_placeholder",
         "check_production_env",
     ):
         require(needle in first_usable_check, f"First usable release check missing gate: {needle}")
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    require(".env.production" in gitignore, ".gitignore does not ignore real production env files")
+    production_env_example = (ROOT / ".env.production.example").read_text(encoding="utf-8")
+    for needle in (
+        "APP_ENV=production",
+        "USE_MOCK_PROVIDERS=false",
+        "ALLOW_MOCK_FALLBACK=false",
+        "AI_MODEL_PRICING_JSON=",
+        "OPENAI_API_KEY=<replace-with-openai-api-key>",
+        "OCR_HTTP_ENDPOINT=<replace-with-ocr-http-endpoint>",
+        "AI_SERVICE_HMAC_SECRET=<replace-with-strong-ai-callback-secret-at-least-16-chars>",
+    ):
+        require(needle in production_env_example, f".env.production.example missing production env template field: {needle}")
     project1_acceptance = (ROOT / "infra/scripts/acceptance_project1_check.py").read_text(encoding="utf-8")
     for needle in (
         "docs/ex/工程1",
@@ -893,8 +909,11 @@ def check_static_docs() -> None:
         "provider_canary_eval --allow-skip",
         "provider_canary_eval --strict --call-provider --require-cost",
         "first_usable_release_check.py --run-canaries",
+        "cp .env.production.example .env.production",
         "first_usable_release_check.py --profile production --env-file .env.production",
+        ".env.production.example",
         ".env.production",
+        ".gitignore",
         "USE_MOCK_PROVIDERS=false",
         "ALLOW_MOCK_FALLBACK=false",
         "AI_SERVICE_HMAC_SECRET",
