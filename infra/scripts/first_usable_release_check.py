@@ -134,6 +134,7 @@ def check_static_release_evidence() -> None:
         "infra/scripts/acceptance_tail_check.py",
         "infra/scripts/check.sh",
         "infra/scripts/first_usable_release_report.py",
+        "infra/scripts/test_first_usable_release_report.py",
         "ai-service/app/evaluation/provider_canary_eval.py",
         "ai-service/app/evaluation/ocr_provider_eval.py",
         "ai-service/app/evaluation/tender_parse_eval.py",

@@ -856,6 +856,10 @@ def check_static_docs() -> None:
         "first_usable_release_report.py" in check_script,
         "Repo-wide check does not compile first usable release report script",
     )
+    require(
+        "test_first_usable_release_report.py" in check_script,
+        "Repo-wide check does not run first usable release report regression tests",
+    )
     first_usable_check = (ROOT / "infra/scripts/first_usable_release_check.py").read_text(encoding="utf-8")
     for needle in (
         "first usable release readiness",
@@ -965,6 +969,18 @@ def check_static_docs() -> None:
         "Bearer",
     ):
         require(needle in first_usable_report, f"First usable release report missing evidence guard: {needle}")
+    first_usable_report_tests = (ROOT / "infra/scripts/test_first_usable_release_report.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_load_env_file_collects_sensitive_values",
+        "test_redactor_masks_secrets_urls_and_bearer_tokens",
+        "test_blocking_items_require_production_repo_check_and_project1_runtime",
+        "test_blocking_items_allow_complete_production_evidence",
+        "sk-production-secret",
+        "db-password",
+        "Bearer <redacted>",
+        "project1 runtime acceptance must be included",
+    ):
+        require(needle in first_usable_report_tests, f"First usable release report tests missing regression: {needle}")
     sample_docs_eval = (ROOT / "docs/blueprint/SAMPLE_DOCS_EVALUATION.md").read_text(encoding="utf-8")
     for needle in (
         "工程1 OCR canary",

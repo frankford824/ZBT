@@ -8339,3 +8339,47 @@ python3 infra/scripts/first_usable_release_check.py --run-canaries
 
 1. 本轮仍没有真实生产密钥或真实 OCR endpoint，因此证据包只能证明“未完成原因清晰”，不能证明第一可用版可结束。
 2. 结束 loop 的可审查证据改为：真实 `.env.production` 下运行最终证据包命令，并得到 `loop_can_end=true`。
+
+## Loop-175 / 证据包脱敏与完成判定回归 - 2026-06-22
+
+### 本轮目标
+
+1. 给第一可用版证据包增加自动回归测试，防止后续改动泄露生产密钥或放宽 `loop_can_end` 判定。
+2. 将证据包测试纳入 `./infra/scripts/check.sh`，使默认总检能覆盖最终收口证据链。
+3. 把测试覆盖点写入静态验收，避免只编译脚本但不验证脱敏和阻断规则。
+
+### 代码交付
+
+1. 新增 `infra/scripts/test_first_usable_release_report.py`，使用标准库 `unittest`，不引入额外依赖。
+2. 测试覆盖 `.env.production` 解析：支持注释、`export KEY=VALUE`、引号值，并只把 API key、数据库 URL 等敏感项收集进脱敏列表。
+3. 测试覆盖脱敏：API key、数据库 URL 密码和 Bearer token 都必须被替换为 `<redacted>`。
+4. 测试覆盖 `blocking_items`：local 报告必须因非 production、未包含 repo-wide check 和工程1运行态验收而阻断；production 全证据步骤全部 passed 时才允许无阻断项。
+5. `infra/scripts/check.sh` 将新测试纳入 Python 语法编译和默认执行。
+6. `infra/scripts/first_usable_release_check.py` 将测试文件纳入第一可用版静态证据；`infra/scripts/acceptance_tail_check.py --static-docs` 增加测试函数名、敏感样例和阻断文案防回退锚点。
+7. README 说明证据包脱敏与阻断条件由 `infra/scripts/test_first_usable_release_report.py` 回归保护。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，4 项测试覆盖 env 解析、脱敏、local 阻断和 production 完成判定。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-175。
+3. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；本地 Provider/OCR canary 继续显式 skipped。
+4. local 证据包仍生成 `loop_can_end=false`，不会因本地 skipped canary 被误判为完成。
+5. `./infra/scripts/check.sh` 通过；新增证据包测试、readiness gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、工程1 golden、生成覆盖、导出格式和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮仍没有真实生产 `.env.production`，所以不能运行最终 `loop_can_end=true` 证据包。
+2. 第一可用版完成判定现在已被测试保护；剩余外部条件仍是填入真实生产配置并跑通 production profile、repo-wide check 和工程1运行态验收。
