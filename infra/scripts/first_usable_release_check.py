@@ -59,6 +59,17 @@ PRODUCTION_OCR_PROVIDER_ENV_GROUPS = {
     "mineru": (("MINERU_HTTP_ENDPOINT", "OCR_HTTP_ENDPOINT"),),
     "paddleocr": (("PADDLEOCR_HTTP_ENDPOINT", "OCR_HTTP_ENDPOINT"),),
 }
+OCR_CANARY_REQUIRED_CHECKS = (
+    "provider.endpoint_configured",
+    "sample.exists",
+    "ocr.status",
+    "ocr.provider",
+    "ocr.text_chars",
+    "ocr.table_blocks",
+    "ocr.layout_bbox_count",
+    "ocr.table_bbox_count",
+    "ocr.cell_bbox_count",
+)
 
 
 class ReadinessError(RuntimeError):
@@ -499,6 +510,91 @@ def write_json_output(path: Path, fallback_name: str, result: dict[str, Any]) ->
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def write_blocked_production_canary_outputs(
+    provider_output: Path | None,
+    ocr_output: Path | None,
+    audit: dict[str, Any],
+) -> None:
+    if provider_output is not None:
+        write_json_output(provider_output, "provider_canary", blocked_provider_canary_payload(audit))
+    if ocr_output is not None:
+        write_json_output(ocr_output, "ocr_provider_eval", blocked_ocr_canary_payload(audit))
+
+
+def blocked_provider_canary_payload(audit: dict[str, Any]) -> dict[str, Any]:
+    issues = [str(issue) for issue in audit.get("issues", []) if str(issue)]
+    evidence = audit.get("evidence") if isinstance(audit.get("evidence"), dict) else {}
+    routes = [
+        {
+            "route": str(route.get("route") or ""),
+            "kind": str(route.get("kind") or ""),
+            "provider": str(route.get("provider") or ""),
+            "model": str(route.get("model") or ""),
+            "resolved": False,
+            "call": {"passed": False, "blocked_by": "production_env_audit"},
+            "accounting": {"estimated_cost": 0},
+        }
+        for route in _dict_items(evidence.get("routes"))
+    ]
+    checks = [
+        {
+            "name": "production_env_audit",
+            "passed": False,
+            "expected": "passed",
+            "actual": "failed",
+        }
+    ]
+    return {
+        "name": "provider_canary",
+        "status": "failed",
+        "strict": True,
+        "call_provider": True,
+        "require_cost": True,
+        "blocked_by": "production_env_audit",
+        "issues": issues,
+        "passed_checks": 0,
+        "failed_checks": len(checks),
+        "total_checks": len(checks),
+        "routes": routes,
+        "checks": checks,
+    }
+
+
+def blocked_ocr_canary_payload(audit: dict[str, Any]) -> dict[str, Any]:
+    issues = [str(issue) for issue in audit.get("issues", []) if str(issue)]
+    evidence = audit.get("evidence") if isinstance(audit.get("evidence"), dict) else {}
+    provider = str(evidence.get("ocr_provider") or env_value("OCR_PROVIDER") or "http_ocr")
+    checks = [
+        {
+            "name": check_name,
+            "passed": False,
+            "expected": "passed",
+            "actual": "blocked by production_env_audit",
+        }
+        for check_name in OCR_CANARY_REQUIRED_CHECKS
+    ]
+    return {
+        "name": "ocr_provider_eval",
+        "status": "failed",
+        "provider": provider,
+        "blocked_by": "production_env_audit",
+        "issues": issues,
+        "passed_checks": 0,
+        "failed_checks": len(checks),
+        "total_checks": len(checks),
+        "checks": checks,
+        "metadata": {
+            "table_block_count": 0,
+            "ocr": {"provider": provider},
+            "blocked_by": "production_env_audit",
+        },
+    }
+
+
+def _dict_items(value: object) -> list[dict[str, object]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def check_provider_canary(profile: str, *, json_output: Path | None = None) -> None:
     command = [
         ai_python(),
@@ -588,7 +684,17 @@ def main() -> int:
     load_env_file(args.env_file)
     check_static_release_evidence()
     if args.audit_production_env or args.profile == "production":
-        check_production_env()
+        audit = production_env_audit()
+        if audit["issues"]:
+            if args.profile == "production":
+                write_blocked_production_canary_outputs(
+                    args.provider_canary_json_output,
+                    args.ocr_canary_json_output,
+                    audit,
+                )
+            joined = "\n- ".join(audit["issues"])
+            raise ReadinessError(f"production env audit failed:\n- {joined}")
+        ok("production env audit", audit["evidence"])
     if args.audit_production_env:
         print("[ok] production env audit-only")
         return 0

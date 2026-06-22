@@ -173,6 +173,40 @@ class FirstUsableReleaseCheckTest(unittest.TestCase):
         self.assertEqual(saved_ocr["name"], "ocr_provider_eval")
         self.assertEqual(saved_ocr["status"], "passed")
 
+    def test_blocked_canary_json_outputs_are_written_when_production_env_audit_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            provider_output = Path(directory) / "provider_canary.json"
+            ocr_output = Path(directory) / "ocr_provider_canary.json"
+            with patch.dict(os.environ, {}, clear=True):
+                audit = check.production_env_audit()
+                check.write_blocked_production_canary_outputs(provider_output, ocr_output, audit)
+
+            saved_provider = json.loads(provider_output.read_text(encoding="utf-8"))
+            saved_ocr = json.loads(ocr_output.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved_provider["name"], "provider_canary")
+        self.assertEqual(saved_provider["status"], "failed")
+        self.assertEqual(saved_provider["blocked_by"], "production_env_audit")
+        self.assertTrue(saved_provider["strict"])
+        self.assertTrue(saved_provider["call_provider"])
+        self.assertTrue(saved_provider["require_cost"])
+        self.assertEqual(
+            [route["route"] for route in saved_provider["routes"]],
+            ["chapter_generate", "knowledge_embedding", "knowledge_rerank"],
+        )
+        self.assertEqual(saved_provider["checks"][0]["name"], "production_env_audit")
+        self.assertFalse(saved_provider["checks"][0]["passed"])
+
+        self.assertEqual(saved_ocr["name"], "ocr_provider_eval")
+        self.assertEqual(saved_ocr["status"], "failed")
+        self.assertEqual(saved_ocr["blocked_by"], "production_env_audit")
+        self.assertEqual(saved_ocr["provider"], "http_ocr")
+        self.assertEqual(
+            [item["name"] for item in saved_ocr["checks"]],
+            list(check.OCR_CANARY_REQUIRED_CHECKS),
+        )
+        self.assertTrue(all(item["passed"] is False for item in saved_ocr["checks"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9026,3 +9026,47 @@ python3 infra/scripts/first_usable_release_report.py --profile production --env-
 
 1. 本轮关闭的是导出保真 artifact 与最终报告硬门禁，没有提交真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。
+
+## Loop-190 / 生产 canary 阻断证据结构化 - 2026-06-22
+
+### 本轮目标
+
+1. 防止 production env audit 失败时，最终第一可用版报告中的 Provider/OCR canary artifact 只是 `missing`。
+2. 在生产配置尚未满足时，也生成明确的 failed canary JSON，标注 `blocked_by=production_env_audit`。
+3. 保持硬门禁不放松：结构化 failed artifact 只能增强证据，不能让 `loop_can_end=true`。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_check.py` 新增 `write_blocked_production_canary_outputs()`。
+2. 当 production profile 的 `production_env_audit()` 失败且调用方传入 `--provider-canary-json-output` / `--ocr-canary-json-output` 时，脚本会写入 `tmp/provider_canary.json` 与 `tmp/ocr_provider_canary.json`。
+3. Provider blocked artifact 保留 `strict=true`、`call_provider=true`、`require_cost=true`，列出 `chapter_generate`、`knowledge_embedding`、`knowledge_rerank` 三条路由，并将 `resolved=false`、`call.passed=false`、`estimated_cost=0` 写成结构化证据。
+4. OCR blocked artifact 保留 `provider`、九项 OCR 必需检查和 metadata，并将所有检查标记为 failed，原因是 `production_env_audit` 阻断。
+5. `infra/scripts/first_usable_release_report.py` 调整 OCR artifact 语义问题输出，避免通用 check-count 与 OCR 必需检查重复报告同一失败项。
+6. `infra/scripts/test_first_usable_release_check.py` 新增 `test_blocked_canary_json_outputs_are_written_when_production_env_audit_fails`，回归保护 blocked artifact 的字段、路由和 OCR required check。
+7. README 与 `infra/scripts/acceptance_tail_check.py --static-docs` 增加 blocked canary artifact 行为和测试名防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_check.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/test_first_usable_release_check.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json --timeout-s 120
+```
+
+结果：
+
+1. `test_first_usable_release_check.py` 通过 6 项，新增 blocked canary artifact 回归通过。
+2. `test_first_usable_release_report.py` 通过 19 项，报告 artifact 语义门禁仍保持。
+3. `acceptance_tail_check.py --static-docs` 通过，最新 Loop 写入前仍识别为 Loop-189。
+4. production-template report 仍正确保持 `loop_can_end=false`。
+5. `tmp/provider_canary.json` 与 `tmp/ocr_provider_canary.json` 不再 missing；最终报告 artifact summary 显示二者均为 `status=present`、`json_status=failed`、`semantic_status=failed`，且都带有 `blocked_by=production_env_audit`。
+6. OCR artifact 语义问题不再重复同一批 required check。
+
+### 偏离蓝图
+
+1. 本轮增强的是生产失败证据结构化，没有提交真实 `.env.production`，也没有让真实 Provider/OCR canary 通过。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。

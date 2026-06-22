@@ -396,7 +396,7 @@ def ocr_canary_artifact_issues(payload: dict[str, Any]) -> list[str]:
     provider = str(payload.get("provider") or "")
     if provider not in SUPPORTED_OCR_PROVIDERS:
         issues.append("OCR canary provider must be supported")
-    issues.extend(check_count_issues(payload, "OCR canary"))
+    issues.extend(check_count_issues(payload, "OCR canary", include_check_failures=False))
 
     check_index = _index_dicts(payload.get("checks"), "name")
     for check_name in REQUIRED_OCR_CHECKS:
@@ -524,7 +524,7 @@ def project1_runtime_artifact_issues(payload: dict[str, Any]) -> list[str]:
     return issues
 
 
-def check_count_issues(payload: dict[str, Any], label: str) -> list[str]:
+def check_count_issues(payload: dict[str, Any], label: str, *, include_check_failures: bool = True) -> list[str]:
     issues: list[str] = []
     total = int_value(payload.get("total_checks"))
     passed = int_value(payload.get("passed_checks"))
@@ -535,9 +535,10 @@ def check_count_issues(payload: dict[str, Any], label: str) -> list[str]:
         issues.append(f"{label} failed_checks must be 0")
     if total > 0 and passed != total:
         issues.append(f"{label} passed_checks must equal total_checks")
-    for check in _list_of_dicts(payload.get("checks")):
-        if check.get("passed") is not True:
-            issues.append(f"{label} check {check.get('name') or '<unknown>'} must pass")
+    if include_check_failures:
+        for check in _list_of_dicts(payload.get("checks")):
+            if check.get("passed") is not True:
+                issues.append(f"{label} check {check.get('name') or '<unknown>'} must pass")
     return issues
 
 
