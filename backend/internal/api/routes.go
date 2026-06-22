@@ -2721,7 +2721,7 @@ func requireFileAccess(c *gin.Context, bizType string, level rbac.Level) bool {
 }
 
 func (s *server) getAITask(c *gin.Context) {
-	result, err := s.knowledgeStore.GetTask(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("taskId"))
+	result, err := s.bidStore.GetTask(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("taskId"))
 	if err != nil {
 		respond(c, result, err)
 		return

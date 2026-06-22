@@ -128,7 +128,9 @@ async def require_backend_signature(request: Request, call_next):
     async def receive() -> dict[str, object]:
         return {"type": "http.request", "body": body, "more_body": False}
 
-    return await call_next(Request(request.scope, receive))
+    request._receive = receive  # type: ignore[attr-defined]
+    request._stream_consumed = False  # type: ignore[attr-defined]
+    return await call_next(request)
 
 
 def ai_service_max_body_bytes() -> int:

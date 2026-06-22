@@ -19,6 +19,7 @@ from app.main import (
     DEFAULT_AI_HMAC_SECRET,
     DEFAULT_MINIO_ACCESS_KEY,
     DEFAULT_MINIO_SECRET_KEY,
+    app,
     ai_service_max_body_bytes,
     ai_service_hmac_secret,
     callback_allowed_hosts,
@@ -100,6 +101,28 @@ def test_ai_service_middleware_keeps_only_public_paths_unsigned() -> None:
     assert asyncio.run(middleware_status("GET", "/not-found", signed_headers(b""))) == 209
     body = b'{"task":"demo"}'
     assert asyncio.run(middleware_status("POST", "/tasks/demo", signed_headers(body), body=body)) == 209
+
+
+def test_signed_tender_parse_request_preserves_body(monkeypatch) -> None:
+    monkeypatch.setattr("app.main.process_tender_parse", lambda _task_id, _payload: None)
+    payload = {
+        "task_id": "task-tender-parse-backend-owned",
+        "tenant_id": "00000000-0000-4000-8000-000000000001",
+        "bid_id": "8c1aa79e-734f-436f-bee4-9e734c5f673c",
+        "bid_title": "工程1桥梁检查运行态验收",
+        "file_id": "30abbf73-5301-40a2-928b-68803e5e75da",
+        "object_key": "00000000-0000-4000-8000-000000000001/bid_tender/demo.pdf",
+        "filename": "采购文件桥梁检查.pdf",
+        "content_type": "application/pdf",
+        "callback_url": "http://backend:8080/api/v1/ai/callbacks/tasks",
+    }
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    headers = signed_headers(body) | {"Content-Type": "application/json"}
+
+    status, response_body = asyncio.run(asgi_request("POST", "/tasks/tender-parse", headers, body))
+
+    assert status == 202
+    assert json.loads(response_body)["task_id"] == payload["task_id"]
 
 
 def test_ai_service_max_body_bytes_uses_safe_env_bounds(monkeypatch) -> None:
@@ -1955,3 +1978,56 @@ async def middleware_status(
 
     response = await require_backend_signature(request, call_next)
     return response.status_code
+
+
+async def asgi_request(
+    method: str,
+    path: str,
+    headers: dict[str, str],
+    body: bytes,
+) -> tuple[int, str]:
+    request_headers = dict(headers)
+    request_headers.setdefault("Content-Length", str(len(body)))
+    raw_headers = [
+        (key.lower().encode("latin-1"), value.encode("latin-1"))
+        for key, value in request_headers.items()
+    ]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "path": path,
+        "raw_path": path.encode("utf-8"),
+        "root_path": "",
+        "scheme": "http",
+        "query_string": b"",
+        "headers": raw_headers,
+        "server": ("testserver", 80),
+        "client": ("testclient", 1234),
+    }
+    received = False
+    messages: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        nonlocal received
+        if not received:
+            received = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        messages.append(message)
+
+    await app(scope, receive, send)
+    status = next(
+        int(message["status"])
+        for message in messages
+        if message["type"] == "http.response.start"
+    )
+    response_body = b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    return status, response_body.decode("utf-8")

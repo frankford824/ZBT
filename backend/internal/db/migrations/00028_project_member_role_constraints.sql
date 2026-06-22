@@ -3,6 +3,7 @@ update project_members
 set role = 'member', updated_at = now()
 where role not in ('owner', 'member', 'viewer');
 
+-- +goose StatementBegin
 do $$
 begin
     if not exists (
@@ -16,6 +17,7 @@ begin
             check (role in ('owner', 'member', 'viewer'));
     end if;
 end $$;
+-- +goose StatementEnd
 
 -- +goose Down
 alter table project_members drop constraint if exists project_members_role_check;

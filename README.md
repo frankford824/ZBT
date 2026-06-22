@@ -188,3 +188,9 @@ cd ai-service
 
 最终验收清单见 `x.md` 第 21 节。每轮交付和验证证据记录在 `docs/blueprint/DEV_LOOP_LOG.md`，当前 API 状态见 `docs/blueprint/API_SPEC.md`。
 工程1样本解析验收会检查六模块、来源引用、表格结构和响应问题清单质量；`requirement_items` 必须具备类型、强制性、优先级、`expected_response` 和可追溯来源，才能进入响应矩阵与章节生成链路。
+运行态工程1验收可在本地服务栈启动后执行，使用 `docs/ex/工程1` 的真实 PDF/DOCX/XLSX 文件走上传、解析确认、响应矩阵、知识处理、全量章节生成、生成覆盖、合规检查和 DOCX 导出：
+
+```bash
+docker compose up -d --build
+python3 infra/scripts/acceptance_project1_check.py
+```

@@ -843,6 +843,27 @@ def check_static_docs() -> None:
         "--allow-skip",
     ):
         require(needle in check_script, f"Repo-wide check does not run OCR provider canary gate: {needle}")
+    require(
+        "acceptance_project1_check.py" in check_script,
+        "Repo-wide check does not compile project1 runtime acceptance script",
+    )
+    project1_acceptance = (ROOT / "infra/scripts/acceptance_project1_check.py").read_text(encoding="utf-8")
+    for needle in (
+        "docs/ex/工程1",
+        "采购文件桥梁检查.pdf",
+        "响应文件格式.docx",
+        "清单（固化）(1).xlsx",
+        "upload_binary_asset",
+        "biz_type=\"bid_tender\"",
+        "/bids/{bid_id}/parse-tender",
+        "/bids/{bid_id}/requirements/export?format=xlsx",
+        "\"scope\": \"full\"",
+        "/bids/{bid_id}/generation-coverage",
+        "/compliance/checks",
+        "/compliance/issues/{issue['id']}/ignore",
+        "\"export_type\": \"docx\"",
+    ):
+        require(needle in project1_acceptance, f"Project1 runtime acceptance script missing gate: {needle}")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for needle in (
         "provider_canary_eval --allow-skip",
@@ -898,10 +919,13 @@ def check_static_docs() -> None:
         "响应问题清单验收",
         "expected_response",
         "117 项检查",
+        "acceptance_project1_check.py",
+        "采购文件桥梁检查.pdf",
+        "生成覆盖",
     ):
         require(needle in sample_docs_eval, f"SAMPLE_DOCS_EVALUATION missing response-question guidance: {needle}")
     require(
-        "响应问题清单质量" in readme and "expected_response" in readme,
+        "响应问题清单质量" in readme and "expected_response" in readme and "acceptance_project1_check.py" in readme,
         "README missing response-question validation guidance",
     )
 

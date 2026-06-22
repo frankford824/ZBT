@@ -5879,6 +5879,28 @@ func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx)
 	return tx.Commit(ctx)
 }
 
+func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (Task, error) {
+	var task Task
+	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		found, err := scanTask(tx.QueryRow(ctx, `
+			select id::text, task_type, status, external_task_id::text,
+				resource_type, resource_id::text, payload, route, result, error_message,
+				started_at, completed_at, created_at, updated_at
+			from ai_tasks
+			where tenant_id = $1 and id = $2
+		`, tenantID, taskID))
+		if err != nil {
+			return err
+		}
+		task = found
+		return nil
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrNotFound
+	}
+	return task, err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

@@ -8086,3 +8086,49 @@ git diff --check
 
 1. 本轮仍未解决真实 OCR 非 skipped 闭环，因为本机未配置真实 OCR endpoint。
 2. 本轮未新增前端交互；交付集中在解析输出质量和验收门槛，保障后续响应矩阵与章节生成可用。
+
+## Loop-169 / 工程1运行态端到端验收闭环 - 2026-06-22
+
+### 本轮目标
+
+1. 将工程1真实样本从离线 golden 评测推进到运行态 HTTP API 全链路验收。
+2. 使用 `docs/ex/工程1` 的真实 PDF、DOCX、XLSX 文件覆盖上传、招标解析、响应矩阵、知识处理、全量章节生成、生成覆盖、合规 gate 和 DOCX 导出。
+3. 修复验收过程中暴露的运行态阻断，确保第一可用版不是只靠静态/离线脚本证明。
+
+### 代码交付
+
+1. 新增 `infra/scripts/acceptance_project1_check.py`，固定读取 `采购文件桥梁检查.pdf`、`响应文件格式.docx` 和 `清单（固化）(1).xlsx`，通过本地 Docker 栈的 HTTP API 跑工程1真实样本。
+2. `infra/scripts/check.sh` 将工程1运行态验收脚本纳入 Python 语法检查；`infra/scripts/acceptance_tail_check.py --static-docs` 增加工程1运行态脚本、真实样本文件、全量生成、合规检查和 DOCX 导出的防回退锚点。
+3. 修复 `ai-service/app/main.py` HMAC 中间件读取 body 后未回放给 FastAPI 路由的问题；补充 signed tender-parse 请求回归测试，覆盖中文标题、中文文件名和后端回调 URL。
+4. 修复 `/ai-tasks/:taskId` 对大体积 bid 解析结果返回 400 的问题：通用任务查询改用 bid store 的大 payload/result 上限 scanner，并新增 `bid.Store.GetTask`。
+5. 修复 `backend/internal/db/migrations/00028_project_member_role_constraints.sql` 的 goose `DO $$` 语句边界，避免全新/重建 backend 在 00028 迁移处启动失败。
+6. README 和 `docs/blueprint/SAMPLE_DOCS_EVALUATION.md` 增加工程1运行态验收命令和覆盖范围说明。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/acceptance_project1_check.py infra/scripts/acceptance_core_check.py infra/scripts/acceptance_tail_check.py
+docker compose build --pull=false ai-service
+docker compose up -d ai-service
+docker compose exec -T ai-service pytest -q app/tests/test_main_security.py -k 'signed_tender_parse_request_preserves_body or ai_service_middleware_keeps_only_public_paths_unsigned'
+docker compose build --pull=false backend
+docker compose up -d backend frontend
+python3 infra/scripts/acceptance_project1_check.py
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. signed tender-parse 真实接口复测从 422 修复为 202，返回 `task-tender-parse-*` 队列任务。
+2. AI 服务聚焦回归测试通过：`2 passed, 65 deselected`。
+3. backend 镜像构建通过，`/ai-tasks/{id}` 可返回 276KB 的 bid `tender_parse` result。
+4. `python3 infra/scripts/acceptance_project1_check.py` 通过；工程1运行态验收完成，解析 40 条 requirements、响应建议 40 条、强制项 24 条、高优先级 32 条，知识检索返回 8 条，生成覆盖 64 行，合规检查通过并导出 `工程1桥梁检查运行态验收-综合标书.docx`。
+5. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest `288 passed`、Provider canary 本地 skipped、OCR canary 本地 skipped、工程1解析评估 `117/117`、生成覆盖评估 `9/9`、导出格式评估 `23/23` 和运行中 `ai-service` 容器内 pytest `288 passed` 均通过。
+
+### 偏离蓝图
+
+1. 本轮仍未把本地环境切换到真实外部大模型和真实 OCR endpoint；工程1运行态验收继续使用当前模型路由的可用 Provider/fallback 能力。
+2. 工程1运行态脚本依赖本地 Docker 服务栈和对象存储状态，不放入 `check.sh` 的默认运行链路；`check.sh` 只编译脚本并继续执行离线 golden 与 canary。
+3. 合规 gate 里现有 L4 `score_optimization` warn 规则会产生非阻断建议；脚本通过现有忽略建议 API 处理后再验证导出 gate，不绕过后端状态机。
