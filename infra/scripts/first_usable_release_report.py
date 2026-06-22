@@ -846,6 +846,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     )
     step_status = {step["name"]: step["status"] for step in steps}
     blocking_requirements = blocking_items(args, step_status, artifacts, git_release_state)
+    next_actions = build_next_actions(args, step_status, artifacts, blocking_requirements)
     return {
         "name": "first_usable_release_report",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -861,6 +862,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "steps": steps,
         "artifacts": artifacts,
         "blocking_requirements": blocking_requirements,
+        "next_actions": next_actions,
         "loop_can_end": not blocking_requirements,
     }
 
@@ -892,6 +894,156 @@ def required_artifact_statuses(
         for name, message in required
         if not artifact_has_passed(indexed.get(name))
     ]
+
+
+def build_next_actions(
+    args: argparse.Namespace,
+    step_status: dict[str, str],
+    artifacts: list[dict[str, Any]] | None,
+    blocking_requirements: list[str],
+) -> list[dict[str, Any]]:
+    if not blocking_requirements:
+        return []
+    indexed_artifacts = {str(artifact.get("name")): artifact for artifact in artifacts or []}
+    actions: list[dict[str, Any]] = []
+    production_env_payload = artifact_payload(indexed_artifacts.get("production_env_audit_json"))
+
+    if args.profile != "production":
+        actions.append(
+            {
+                "id": "run_production_profile",
+                "status": "required",
+                "command": "python3 infra/scripts/first_usable_release_report.py --first-usable --env-file .env.production --output tmp/first_usable_release_report.json",
+            }
+        )
+
+    if (
+        step_status.get("production_env_audit") != "passed"
+        or not artifact_has_passed(indexed_artifacts.get("production_env_audit_json"))
+    ):
+        actions.append(production_env_next_action(args, production_env_payload, indexed_artifacts.get("production_env_audit_json")))
+
+    if not artifact_has_passed(indexed_artifacts.get("provider_canary")):
+        actions.append(
+            {
+                "id": "provider_canary_live_calls",
+                "status": "required",
+                "artifact": "tmp/provider_canary.json",
+                "command": "python3 infra/scripts/first_usable_release_check.py --profile production --env-file .env.production",
+                "routes": list(REQUIRED_PROVIDER_ROUTES),
+                "requirements": [
+                    "routes resolve to non-mock providers",
+                    "live Provider calls pass",
+                    "estimated_cost is positive for every required route",
+                ],
+            }
+        )
+
+    if not artifact_has_passed(indexed_artifacts.get("ocr_provider_canary")):
+        actions.append(
+            {
+                "id": "ocr_provider_live_check",
+                "status": "required",
+                "artifact": "tmp/ocr_provider_canary.json",
+                "command": "python3 infra/scripts/first_usable_release_check.py --profile production --env-file .env.production",
+                "providers": sorted(SUPPORTED_OCR_PROVIDERS),
+                "requirements": list(REQUIRED_OCR_CHECKS),
+            }
+        )
+
+    if not args.include_repo_check or step_status.get("repo_wide_check") != "passed":
+        actions.append({"id": "repo_wide_check", "status": "required", "command": "./infra/scripts/check.sh"})
+    if not args.include_project1_runtime or step_status.get("project1_runtime_acceptance") != "passed":
+        actions.append(
+            {
+                "id": "project1_runtime_acceptance",
+                "status": "required",
+                "command": "python3 infra/scripts/acceptance_project1_check.py --json-output tmp/project1_runtime_acceptance.json",
+            }
+        )
+
+    actions.append(
+        {
+            "id": "final_first_usable_report",
+            "status": "ready_when_required_actions_pass",
+            "command": "python3 infra/scripts/first_usable_release_report.py --first-usable --env-file .env.production --output tmp/first_usable_release_report.json",
+            "success_condition": "loop_can_end=true",
+        }
+    )
+    return actions
+
+
+def production_env_next_action(
+    args: argparse.Namespace,
+    payload: dict[str, Any] | None,
+    summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    issues = _string_list(payload.get("issues") if payload else None)
+    evidence = payload.get("evidence") if isinstance(payload, dict) and isinstance(payload.get("evidence"), dict) else {}
+    semantic_issues = _string_list(summary.get("semantic_issues") if summary else None)
+    provider_requirements = _list_of_dicts(evidence.get("provider_requirements"))
+    ocr_requirement = evidence.get("ocr_requirement") if isinstance(evidence.get("ocr_requirement"), dict) else {}
+    return {
+        "id": "production_env_inputs",
+        "status": "required",
+        "env_file": production_env_target(args.env_file),
+        "command": "python3 infra/scripts/first_usable_release_check.py --audit-production-env --env-file .env.production",
+        "missing_or_placeholder_env_keys": env_keys_from_issues(issues),
+        "provider_requirements": [
+            {
+                "provider": str(requirement.get("provider") or ""),
+                "required_env_groups": requirement.get("required_env_groups") or [],
+                "configured_envs": requirement.get("configured_envs") or [],
+                "issues": _string_list(requirement.get("issues")),
+            }
+            for requirement in provider_requirements
+        ],
+        "ocr_requirement": {
+            "provider": str(ocr_requirement.get("provider") or evidence.get("ocr_provider") or ""),
+            "required_env_groups": ocr_requirement.get("required_env_groups") or [],
+            "configured_envs": ocr_requirement.get("configured_envs") or [],
+            "issues": _string_list(ocr_requirement.get("issues")),
+        },
+        "pricing_matches": _list_of_dicts(evidence.get("pricing_matches")),
+        "issues": issues,
+        "semantic_issues": semantic_issues,
+    }
+
+
+def artifact_payload(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not summary or summary.get("status") != "present":
+        return None
+    path = summary.get("path")
+    if not isinstance(path, str) or not path:
+        return None
+    artifact_path = ROOT / path
+    if not artifact_path.is_file():
+        return None
+    try:
+        parsed = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def production_env_target(path: Path | None) -> str:
+    if path is None:
+        return ".env.production"
+    value = str(path)
+    if value.endswith(".example"):
+        return value[: -len(".example")]
+    return value
+
+
+def env_keys_from_issues(issues: list[str]) -> list[str]:
+    keys: set[str] = set()
+    for issue in issues:
+        keys.update(re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", issue))
+    return sorted(keys)
+
+
+def _string_list(value: Any) -> list[str]:
+    return [str(item) for item in value if str(item)] if isinstance(value, list) else []
 
 
 def blocking_items(

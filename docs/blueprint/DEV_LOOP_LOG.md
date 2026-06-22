@@ -9160,3 +9160,47 @@ python3 infra/scripts/first_usable_release_report.py --first-usable --env-file .
 
 1. 本轮修复的是终局报告执行环境隔离，没有提交真实 `.env.production`，也没有让真实 Provider/OCR production canary 通过。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。
+
+## Loop-193 / 生产缺口 next_actions 结构化 - 2026-06-22
+
+### 本轮目标
+
+1. 让终局报告在 `loop_can_end=false` 时不仅给出阻断项，还输出可执行的下一步清单。
+2. 将缺失或仍为占位的生产 env key、Provider live canary、OCR live canary、repo-wide check、工程1运行态验收和最终收口命令结构化写入报告。
+3. 保持报告不输出任何密钥值，只输出 env key、Provider/OCR 类型和命令。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `next_actions` 字段。
+2. 新增 `build_next_actions()`，根据 `blocking_requirements`、step 状态和 artifact summary 输出后续动作。
+3. 新增 `production_env_inputs` 动作，读取脱敏的 `production_env_audit_json`，提取 `missing_or_placeholder_env_keys`、Provider credential group、OCR endpoint group 和 pricing match 矩阵。
+4. 新增 `provider_canary_live_calls`、`ocr_provider_live_check` 和 `final_first_usable_report` 动作，明确下一轮真实生产配置后要跑的命令。
+5. 新增 `production_env_target()`，当模板报告使用 `.env.production.example` 时，`next_actions.env_file` 仍指向真正需要创建和替换的 `.env.production`。
+6. `infra/scripts/test_first_usable_release_report.py` 新增 `test_next_actions_explain_remaining_production_inputs`，覆盖缺失 env key、Provider requirement、OCR requirement 和最终收口命令。
+7. README 与 `infra/scripts/acceptance_tail_check.py --static-docs` 同步增加 `next_actions` 说明和防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json --timeout-s 120
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 三个脚本编译通过。
+2. `test_first_usable_release_report.py` 通过 22 项，新增 `next_actions` 回归。
+3. `acceptance_tail_check.py --static-docs` 通过，静态锚点覆盖 `next_actions`、`production_env_inputs`、`provider_canary_live_calls`、`ocr_provider_live_check`、`final_first_usable_report` 和新增测试名。
+4. production-template report 成功生成 `next_actions`，包含 `production_env_inputs`、`provider_canary_live_calls`、`ocr_provider_live_check`、`repo_wide_check`、`project1_runtime_acceptance` 和 `final_first_usable_report`。
+5. `production_env_inputs.env_file` 正确指向 `.env.production`；缺失/占位 key 明确列出 `DATABASE_URL`、`MIGRATION_DATABASE_URL`、`REDIS_URL`、对象存储凭据、`OPENAI_API_KEY`、`OCR_HTTP_ENDPOINT`、`JWT_SECRET` 和 `AI_SERVICE_HMAC_SECRET`。
+6. `./infra/scripts/check.sh` 通过；覆盖 first usable 测试、静态文档、前端 build/lint、Go test、AI compile/ruff、AI pytest `302 passed`、Provider/OCR local canary skipped、工程1 parse/generation/export 和容器内 AI pytest `291 passed`。
+
+### 偏离蓝图
+
+1. 本轮增强的是第一可用版最后一公里的生产输入清单，没有提交真实 `.env.production`，也没有让真实 Provider/OCR production canary 通过。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint，并在 clean/synced 状态下运行 `first_usable_release_report.py --first-usable --env-file .env.production --output tmp/first_usable_release_report.json` 得到 `loop_can_end=true`。

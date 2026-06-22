@@ -60,6 +60,30 @@ def valid_production_env_payload() -> dict[str, object]:
     }
 
 
+def failed_production_env_payload() -> dict[str, object]:
+    payload = valid_production_env_payload()
+    payload["status"] = "failed"
+    payload["issues"] = [
+        "production env DATABASE_URL still uses a placeholder value",
+        "production env missing openai_compatible_primary credentials: set one of OPENAI_API_KEY",
+        "production env OCR_HTTP_ENDPOINT still uses a placeholder value",
+    ]
+    evidence = payload["evidence"]
+    assert isinstance(evidence, dict)
+    provider_requirements = evidence["provider_requirements"]
+    assert isinstance(provider_requirements, list)
+    provider_requirements[0]["required_env_groups"] = [["OPENAI_API_KEY"]]
+    provider_requirements[0]["configured_envs"] = []
+    provider_requirements[0]["issues"] = ["production env missing openai_compatible_primary credentials: set one of OPENAI_API_KEY"]
+    evidence["ocr_requirement"] = {
+        "provider": "http_ocr",
+        "required_env_groups": [["OCR_HTTP_ENDPOINT"]],
+        "configured_envs": [],
+        "issues": ["production env OCR_HTTP_ENDPOINT still uses a placeholder value"],
+    }
+    return payload
+
+
 def valid_provider_canary_payload() -> dict[str, object]:
     checks = [{"name": "router.load", "passed": True}]
     routes = []
@@ -629,6 +653,63 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 "production artifact ocr_provider_canary must be present and passed",
             ],
         )
+
+    def test_next_actions_explain_remaining_production_inputs(self) -> None:
+        args = argparse.Namespace(
+            profile="production",
+            env_file=Path(".env.production.example"),
+            include_repo_check=True,
+            include_project1_runtime=True,
+        )
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            audit_artifact = Path(directory) / "production_env_audit.json"
+            audit_artifact.write_text(json.dumps(failed_production_env_payload()), encoding="utf-8")
+            audit_summary = report.artifact_summary("production_env_audit_json", audit_artifact)
+
+            actions = report.build_next_actions(
+                args,
+                {
+                    "static_readiness": "passed",
+                    "export_format_eval": "passed",
+                    "production_env_audit": "failed",
+                    "production_readiness": "failed",
+                    "repo_wide_check": "passed",
+                    "project1_runtime_acceptance": "passed",
+                },
+                [
+                    audit_summary,
+                    {"name": "export_format_eval", "status": "present", "json_status": "passed", "semantic_status": "passed"},
+                    {"name": "provider_canary", "status": "present", "json_status": "failed", "semantic_status": "failed"},
+                    {"name": "ocr_provider_canary", "status": "present", "json_status": "failed", "semantic_status": "failed"},
+                    {
+                        "name": "project1_runtime_acceptance",
+                        "status": "present",
+                        "json_status": "passed",
+                        "semantic_status": "passed",
+                    },
+                ],
+                [
+                    "production env audit must pass",
+                    "production Provider/OCR readiness must pass",
+                    "production artifact provider_canary must be present and passed",
+                    "production artifact ocr_provider_canary must be present and passed",
+                ],
+            )
+
+        actions_by_id = {str(action["id"]): action for action in actions}
+        self.assertIn("production_env_inputs", actions_by_id)
+        self.assertIn("provider_canary_live_calls", actions_by_id)
+        self.assertIn("ocr_provider_live_check", actions_by_id)
+        self.assertIn("final_first_usable_report", actions_by_id)
+        env_action = actions_by_id["production_env_inputs"]
+        self.assertEqual(env_action["env_file"], ".env.production")
+        self.assertIn("DATABASE_URL", env_action["missing_or_placeholder_env_keys"])
+        self.assertIn("OPENAI_API_KEY", env_action["missing_or_placeholder_env_keys"])
+        self.assertIn("OCR_HTTP_ENDPOINT", env_action["missing_or_placeholder_env_keys"])
+        self.assertEqual(env_action["provider_requirements"][0]["provider"], "openai_compatible_primary")
+        self.assertEqual(env_action["ocr_requirement"]["provider"], "http_ocr")
 
     def test_blocking_items_require_project1_runtime_artifact_to_pass(self) -> None:
         args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
