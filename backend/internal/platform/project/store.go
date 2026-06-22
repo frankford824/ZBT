@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -1033,14 +1034,17 @@ func scanActivity(row scanner) (Activity, error) {
 	var actorUserID sql.NullString
 	var metadataRaw []byte
 	err := row.Scan(&activity.ID, &activity.ProjectID, &actorUserID, &activity.ActorName, &activity.Action, &metadataRaw, &activity.CreatedAt)
+	if err != nil {
+		return Activity{}, err
+	}
 	if actorUserID.Valid {
 		activity.ActorUserID = &actorUserID.String
 	}
-	activity.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &activity.Metadata)
+	activity.Metadata, err = unmarshalProjectMetadataJSON(metadataRaw, maxProjectLogMetadataBytes)
+	if err != nil {
+		return Activity{}, err
 	}
-	return activity, err
+	return activity, nil
 }
 
 func projectBidSummaries(ctx context.Context, tx pgx.Tx, tenantID, projectID string) ([]bidSummary, error) {
@@ -1260,6 +1264,24 @@ func marshalProjectMetadataJSON(value map[string]any, maxBytes int) ([]byte, err
 		return nil, ErrInvalidRequest
 	}
 	return raw, nil
+}
+
+func unmarshalProjectMetadataJSON(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return result, nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
 }
 
 func validateUUID(value string) error {

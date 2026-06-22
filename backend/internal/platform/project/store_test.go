@@ -2,6 +2,8 @@ package project
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -203,6 +205,54 @@ func TestMarshalProjectMetadataJSONRejectsInvalidAndOversizedValues(t *testing.T
 	}
 }
 
+func TestUnmarshalProjectMetadataJSONRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid syntax": []byte(`{"metadata":`),
+		"invalid shape":  []byte(`[{"metadata":true}]`),
+		"oversized":      []byte(`{"payload":"` + strings.Repeat("志", maxProjectLogMetadataBytes) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalProjectMetadataJSON(raw, maxProjectLogMetadataBytes); err == nil {
+				t.Fatal("expected invalid stored project metadata to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalProjectMetadataJSONNormalizesEmptyFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			metadata, err := unmarshalProjectMetadataJSON(raw, maxProjectLogMetadataBytes)
+			if err != nil {
+				t.Fatalf("expected empty metadata to normalize: %v", err)
+			}
+			if metadata == nil || len(metadata) != 0 {
+				t.Fatalf("expected empty metadata map, got %#v", metadata)
+			}
+		})
+	}
+}
+
+func TestScanActivityRejectsInvalidStoredMetadata(t *testing.T) {
+	if _, err := scanActivity(projectActivityScanRow([]byte(`{"metadata":`))); err == nil {
+		t.Fatal("expected invalid stored activity metadata to be rejected")
+	}
+}
+
+func TestScanActivityNormalizesEmptyStoredMetadata(t *testing.T) {
+	activity, err := scanActivity(projectActivityScanRow([]byte(" null ")))
+	if err != nil {
+		t.Fatalf("expected empty activity metadata to normalize: %v", err)
+	}
+	if activity.Metadata == nil || len(activity.Metadata) != 0 {
+		t.Fatalf("expected empty activity metadata, got %#v", activity.Metadata)
+	}
+}
+
 func TestWonCaseDocumentMetadataCopiesAndOverridesSystemFields(t *testing.T) {
 	original := map[string]any{
 		"source_project_id": "old-project",
@@ -294,5 +344,71 @@ func TestEnsureProjectMemberRemovalAllowedKeepsLastOwner(t *testing.T) {
 	}
 	if err := ensureProjectMemberRemovalAllowed("member", 0); err != nil {
 		t.Fatalf("expected non-owner removal to pass: %v", err)
+	}
+}
+
+type projectStoredScanRow []any
+
+func (row projectStoredScanRow) Scan(dest ...any) error {
+	if len(dest) != len(row) {
+		return fmt.Errorf("scan dest mismatch: got %d want %d", len(dest), len(row))
+	}
+	for i, value := range row {
+		if err := assignProjectScanValue(dest[i], value); err != nil {
+			return fmt.Errorf("scan dest %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func assignProjectScanValue(dest any, value any) error {
+	switch target := dest.(type) {
+	case *string:
+		typed, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", value)
+		}
+		*target = typed
+	case *[]byte:
+		switch typed := value.(type) {
+		case nil:
+			*target = nil
+		case []byte:
+			*target = typed
+		case string:
+			*target = []byte(typed)
+		default:
+			return fmt.Errorf("expected []byte, got %T", value)
+		}
+	case *sql.NullString:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullString{}
+		case sql.NullString:
+			*target = typed
+		case string:
+			*target = sql.NullString{String: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullString, got %T", value)
+		}
+	case *time.Time:
+		typed, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("expected time.Time, got %T", value)
+		}
+		*target = typed
+	default:
+		return fmt.Errorf("unsupported scan destination %T", dest)
+	}
+	return nil
+}
+
+func projectScanTime() time.Time {
+	return time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+}
+
+func projectActivityScanRow(metadataRaw []byte) projectStoredScanRow {
+	return projectStoredScanRow{
+		"activity-1", "project-1", sql.NullString{}, "系统", "updated", metadataRaw, projectScanTime(),
 	}
 }

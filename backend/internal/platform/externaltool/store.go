@@ -638,6 +638,24 @@ func marshalExternalToolMetadataJSON(value map[string]any, maxBytes int) ([]byte
 	return raw, nil
 }
 
+func unmarshalExternalToolMetadataJSON(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return result, nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return nil, ErrInvalidRequest
+	}
+	if err := json.Unmarshal(trimmed, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
+}
+
 func marshalExternalToolArgumentsJSON(arguments map[string]any) ([]byte, error) {
 	raw, err := json.Marshal(normalizeMetadata(arguments))
 	if err != nil || len(raw) > maxExternalToolArgumentsJSONBytes {
@@ -995,11 +1013,14 @@ func scanConfig(row pgx.Row) (Config, error) {
 		&item.Enabled, &item.AllowedTools, &item.TimeoutMS, &item.MonthlyBudget, &item.RedactionPolicy,
 		&metadataRaw, &item.CreatedAt, &item.UpdatedAt,
 	)
-	item.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	if err != nil {
+		return Config{}, err
 	}
-	return item, err
+	item.Metadata, err = unmarshalExternalToolMetadataJSON(metadataRaw, maxExternalToolConfigMetadataJSONBytes)
+	if err != nil {
+		return Config{}, err
+	}
+	return item, nil
 }
 
 func scanAuditLog(row pgx.Row) (AuditLog, error) {
@@ -1012,6 +1033,9 @@ func scanAuditLog(row pgx.Row) (AuditLog, error) {
 		&item.Status, &item.ErrorMessage, &item.EstimatedCost, &item.ResourceType,
 		&resourceID, &metadataRaw, &item.CreatedAt,
 	)
+	if err != nil {
+		return AuditLog{}, err
+	}
 	if userID.Valid {
 		item.UserID = &userID.String
 	}
@@ -1021,9 +1045,9 @@ func scanAuditLog(row pgx.Row) (AuditLog, error) {
 	if resourceID.Valid {
 		item.ResourceID = &resourceID.String
 	}
-	item.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	item.Metadata, err = unmarshalExternalToolMetadataJSON(metadataRaw, maxExternalToolAuditMetadataJSONBytes)
+	if err != nil {
+		return AuditLog{}, err
 	}
-	return item, err
+	return item, nil
 }

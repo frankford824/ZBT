@@ -3,8 +3,10 @@ package externaltool
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +104,66 @@ func TestMarshalExternalToolMetadataJSONRejectsInvalidAndOversizedValues(t *test
 	}
 	if raw, err := marshalExternalToolMetadataJSON(nil, maxExternalToolAuditMetadataJSONBytes); err != nil || string(raw) != "{}" {
 		t.Fatalf("expected nil metadata to normalize to empty JSON, raw=%q err=%v", raw, err)
+	}
+}
+
+func TestUnmarshalExternalToolMetadataJSONRejectsInvalidStoredFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"invalid syntax": []byte(`{"metadata":`),
+		"invalid shape":  []byte(`[{"metadata":true}]`),
+		"oversized":      []byte(`{"payload":"` + strings.Repeat("审", maxExternalToolAuditMetadataJSONBytes) + `"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := unmarshalExternalToolMetadataJSON(raw, maxExternalToolAuditMetadataJSONBytes); err == nil {
+				t.Fatal("expected invalid stored external tool metadata to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalExternalToolMetadataJSONNormalizesEmptyFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			metadata, err := unmarshalExternalToolMetadataJSON(raw, maxExternalToolConfigMetadataJSONBytes)
+			if err != nil {
+				t.Fatalf("expected empty metadata to normalize: %v", err)
+			}
+			if metadata == nil || len(metadata) != 0 {
+				t.Fatalf("expected empty metadata map, got %#v", metadata)
+			}
+		})
+	}
+}
+
+func TestScanExternalToolStoredMetadataRejectsInvalidJSON(t *testing.T) {
+	badObject := []byte(`{"metadata":`)
+	if _, err := scanConfig(externalToolConfigScanRow(badObject)); err == nil {
+		t.Fatal("expected invalid stored config metadata to be rejected")
+	}
+	if _, err := scanAuditLog(externalToolAuditLogScanRow(badObject)); err == nil {
+		t.Fatal("expected invalid stored audit metadata to be rejected")
+	}
+}
+
+func TestScanExternalToolStoredMetadataNormalizesEmptyJSON(t *testing.T) {
+	config, err := scanConfig(externalToolConfigScanRow(nil))
+	if err != nil {
+		t.Fatalf("expected empty config metadata to normalize: %v", err)
+	}
+	if config.Metadata == nil || len(config.Metadata) != 0 {
+		t.Fatalf("expected empty config metadata, got %#v", config.Metadata)
+	}
+
+	audit, err := scanAuditLog(externalToolAuditLogScanRow([]byte(" null ")))
+	if err != nil {
+		t.Fatalf("expected empty audit metadata to normalize: %v", err)
+	}
+	if audit.Metadata == nil || len(audit.Metadata) != 0 {
+		t.Fatalf("expected empty audit metadata, got %#v", audit.Metadata)
 	}
 }
 
@@ -466,5 +528,107 @@ func TestCallStreamableHTTPHonorsTimeout(t *testing.T) {
 	}, InvokeRequest{ToolName: "bid_search", Arguments: map[string]any{}})
 	if err == nil {
 		t.Fatal("expected timeout error")
+	}
+}
+
+type externalToolScanRow []any
+
+func (row externalToolScanRow) Scan(dest ...any) error {
+	if len(dest) != len(row) {
+		return fmt.Errorf("scan dest mismatch: got %d want %d", len(dest), len(row))
+	}
+	for i, value := range row {
+		if err := assignExternalToolScanValue(dest[i], value); err != nil {
+			return fmt.Errorf("scan dest %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func assignExternalToolScanValue(dest any, value any) error {
+	switch target := dest.(type) {
+	case *string:
+		typed, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", value)
+		}
+		*target = typed
+	case *bool:
+		typed, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("expected bool, got %T", value)
+		}
+		*target = typed
+	case *int:
+		typed, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("expected int, got %T", value)
+		}
+		*target = typed
+	case *float64:
+		typed, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("expected float64, got %T", value)
+		}
+		*target = typed
+	case *[]string:
+		typed, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("expected []string, got %T", value)
+		}
+		*target = typed
+	case *[]byte:
+		switch typed := value.(type) {
+		case nil:
+			*target = nil
+		case []byte:
+			*target = typed
+		case string:
+			*target = []byte(typed)
+		default:
+			return fmt.Errorf("expected []byte, got %T", value)
+		}
+	case *sql.NullString:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullString{}
+		case sql.NullString:
+			*target = typed
+		case string:
+			*target = sql.NullString{String: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullString, got %T", value)
+		}
+	case *time.Time:
+		typed, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("expected time.Time, got %T", value)
+		}
+		*target = typed
+	default:
+		return fmt.Errorf("unsupported scan destination %T", dest)
+	}
+	return nil
+}
+
+func externalToolScanTime() time.Time {
+	return time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+}
+
+func externalToolConfigScanRow(metadataRaw []byte) externalToolScanRow {
+	now := externalToolScanTime()
+	return externalToolScanRow{
+		"config-1", "handaas-bidding", "招投标数据", TransportStreamableHTTP,
+		"https://example.com/mcp", "", true, []string{"bid_search"}, 3000,
+		100.0, "default", metadataRaw, now, now,
+	}
+}
+
+func externalToolAuditLogScanRow(metadataRaw []byte) externalToolScanRow {
+	now := externalToolScanTime()
+	return externalToolScanRow{
+		"audit-1", sql.NullString{}, sql.NullString{}, "handaas-bidding", "bid_search",
+		"hash", "request", "response", 15, StatusSuccess, "", 0.5, "bid",
+		sql.NullString{}, metadataRaw, now,
 	}
 }

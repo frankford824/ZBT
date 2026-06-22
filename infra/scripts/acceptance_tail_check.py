@@ -319,6 +319,7 @@ def check_static_docs() -> None:
         "normalizeExternalToolArguments",
         "marshalExternalToolArgumentsJSON",
         "marshalExternalToolMetadataJSON",
+        "unmarshalExternalToolMetadataJSON",
         "readExternalToolResponseBody",
         "net.DefaultResolver.LookupNetIP",
         "CheckRedirect",
@@ -328,8 +329,9 @@ def check_static_docs() -> None:
         "raw, _ := json.Marshal(arguments)",
         "metadataRaw, _ := json.Marshal(normalized.Metadata)",
         "metadataRaw, _ := json.Marshal(input.Metadata)",
+        "_ = json.Unmarshal(metadataRaw, &item.Metadata)",
     ):
-        require(forbidden not in external_tool_store, f"External tool gateway still ignores metadata marshal failure: {forbidden}")
+        require(forbidden not in external_tool_store, f"External tool gateway still ignores metadata JSON failure: {forbidden}")
     require(
         "json.Marshal(value)" not in external_tool_store,
         "External tool audit summary still serializes raw response values",
@@ -351,6 +353,10 @@ def check_static_docs() -> None:
         "TestNormalizeConfigNormalizesCostMetadata",
         "TestNormalizeConfigRejectsInvalidExternalToolMoney",
         "TestMarshalExternalToolMetadataJSONRejectsInvalidAndOversizedValues",
+        "TestUnmarshalExternalToolMetadataJSONRejectsInvalidStoredFields",
+        "TestUnmarshalExternalToolMetadataJSONNormalizesEmptyFields",
+        "TestScanExternalToolStoredMetadataRejectsInvalidJSON",
+        "TestScanExternalToolStoredMetadataNormalizesEmptyJSON",
         "TestMarshalExternalToolArgumentsJSONAndRequestHashRejectInvalidValues",
         "TestCostPerCallIgnoresInvalidStoredMetadata",
         "TestNormalizeInvokeRequestRejectsOversizedAndNonJSONArguments",
@@ -585,6 +591,7 @@ def check_static_docs() -> None:
         "normalizeProjectName",
         "normalizeMilestoneWriteRequest",
         "marshalProjectMetadataJSON",
+        "unmarshalProjectMetadataJSON",
         "wonCaseDocumentMetadata",
         "validateProjectTextLength",
         "boundedProjectText",
@@ -594,8 +601,9 @@ def check_static_docs() -> None:
     for forbidden in (
         "metadataJSON, _ := json.Marshal(metadata)",
         "chunkMetadataJSON, _ := json.Marshal(chunkMetadata)",
+        "_ = json.Unmarshal(metadataRaw, &activity.Metadata)",
     ):
-        require(forbidden not in project_store, f"Project store still ignores metadata marshal failure: {forbidden}")
+        require(forbidden not in project_store, f"Project store still ignores metadata JSON failure: {forbidden}")
     project_store_tests = (ROOT / "backend/internal/platform/project/store_test.go").read_text(encoding="utf-8")
     for needle in (
         "TestProjectWriteRejectsOversizedNameBeforeDB",
@@ -604,6 +612,10 @@ def check_static_docs() -> None:
         "TestNormalizeMilestoneWriteRequestAcceptsBoundedUnicodeText",
         "TestBoundedProjectTextTrimsGeneratedFallbackNames",
         "TestMarshalProjectMetadataJSONRejectsInvalidAndOversizedValues",
+        "TestUnmarshalProjectMetadataJSONRejectsInvalidStoredFields",
+        "TestUnmarshalProjectMetadataJSONNormalizesEmptyFields",
+        "TestScanActivityRejectsInvalidStoredMetadata",
+        "TestScanActivityNormalizesEmptyStoredMetadata",
         "TestWonCaseDocumentMetadataCopiesAndOverridesSystemFields",
     ):
         require(needle in project_store_tests, f"Project store missing business input boundary regression test: {needle}")

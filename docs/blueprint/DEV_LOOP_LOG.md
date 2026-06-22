@@ -7910,3 +7910,50 @@ cd backend && go vet ./...
 
 1. 本轮治理的是 Go 知识库读取可靠性，没有新增真实 embedding/rerank Provider、OCR Provider、知识库 UI 或文档解析格式。
 2. 全工程仍有读取侧 `_ = json.Unmarshal` 残留，集中在 `externaltool/store.go` 和 `project/store.go`，应由后续 Loop 继续收敛。
+
+## Loop-165 / ExternalTool 与 Project metadata 读取边界收敛 - 2026-06-21
+
+### 本轮目标
+
+1. 继续收敛剩余 Go 平台读取链路，处理 ExternalTool 配置/调用审计 metadata 和 Project 活动日志 metadata 读取时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算 JSON 静默进入外部 MCP 工具配置、调用审计、项目动态和后续业务界面。
+3. 将 ExternalTool 与 Project metadata 读取边界固化进静态验收，完成 `backend/internal/platform` 范围内 `_ = json.Unmarshal` 残留清零。
+
+### 代码交付
+
+1. `backend/internal/platform/externaltool/store.go` 新增 `unmarshalExternalToolMetadataJSON()`，读取侧统一处理空/null 归一化、对象形状校验和配置/审计 metadata 字节预算。
+2. `scanConfig()` 与 `scanAuditLog()` 改为显式返回存储 JSON 解析错误，不再忽略 `json.Unmarshal` 失败。
+3. `backend/internal/platform/project/store.go` 新增 `unmarshalProjectMetadataJSON()`，`scanActivity()` 改为显式返回活动日志 metadata 解析错误。
+4. `backend/internal/platform/externaltool/store_test.go` 与 `backend/internal/platform/project/store_test.go` 新增 fake scanner 回归测试，覆盖坏 JSON、错形 JSON、超预算字段、空/null 字段归一化和 scan 读取侧错误传播。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 ExternalTool/Project metadata 读取 helper、测试名和旧式 `_ = json.Unmarshal(...)` 防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/externaltool/store.go internal/platform/externaltool/store_test.go internal/platform/project/store.go internal/platform/project/store_test.go
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+cd backend && go test ./internal/platform/externaltool ./internal/platform/project
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+rg -n "_ = json\\.Unmarshal" backend/internal/platform
+git diff --check
+cd backend && go test ./...
+cd backend && go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && go test ./internal/platform/externaltool ./internal/platform/project` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `rg -n "_ = json\\.Unmarshal" backend/internal/platform` 无输出，平台层静默 JSON 读取残留清零。
+4. `git diff --check` 通过。
+5. `cd backend && go test ./...` 通过。
+6. `cd backend && go vet ./...` 通过。
+7. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 平台读取可靠性，没有新增真实 AI Provider、OCR Provider、文档解析格式或 Word/PDF 母版排版能力。
+2. ExternalTool 网关仍需要在后续 loop 接真实外部能力成本回填、配额 enforcement 和可观测降级策略；本轮仅处理持久化 metadata 读取边界。
