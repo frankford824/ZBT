@@ -8659,3 +8659,50 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮强化的是最终放行门禁，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 production report 中全部通过，并且关键 artifact 均为 `json_status=passed`。
+
+## Loop-182 / 第一可用版 Artifact 语义证据门禁 - 2026-06-22
+
+### 本轮目标
+
+1. 防止最终第一可用版报告被“只有 `status=passed` 的伪 JSON”误放行。
+2. 让 production env audit、Provider canary、OCR canary 和工程1运行态 artifact 不只校验 JSON 状态，还校验关键业务证据语义。
+3. 在最终报告中直接输出 `semantic_status` 和 `semantic_issues`，让阻断原因可审查。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `artifact_semantic_issues()`，并按 artifact 类型分发到生产 env、Provider、OCR 和工程1运行态语义校验。
+2. `artifact_summary()` 现在除 `json_status`、`sha256` 外，还登记 `semantic_status` 与 `semantic_issues`。
+3. `artifact_has_passed()` 现在要求 `status=present`、`json_status=passed`、`semantic_status=passed` 同时成立。
+4. Provider canary 语义校验要求 `strict=true`、`call_provider=true`、`require_cost=true`，三条核心 route 均存在、非 Mock、已 resolve、包含 passed live call，并且 `estimated_cost>0`。
+5. OCR canary 语义校验要求 provider 支持、endpoint 已配置、`ocr.status`/`ocr.provider`/文本/表格/版面 bbox/表格 bbox/单元格 bbox 检查全部存在且通过，并有 OCR metadata。
+6. production env audit 语义校验要求三条核心 route、外部 Provider、模型、价格表匹配、Provider 凭据和 OCR endpoint 均可证明。
+7. 工程1运行态语义校验要求样本三文件、解析响应矩阵、知识处理、生成覆盖合规和 DOCX 导出四段证据完整。
+8. `infra/scripts/test_first_usable_release_report.py` 新增完整 artifact 样本与伪 passed Provider canary 负例，回归保护 `semantic_status` 门禁。
+9. README 与 `acceptance_tail_check.py --static-docs` 同步增加 `semantic_status`、`semantic_issues`、语义校验函数和关键检查锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，13 项测试覆盖脱敏、命令阻断、artifact hash、JSON 状态、语义状态、伪 passed Provider canary 拒绝、完整 Provider/OCR/工程1 artifact 接受、stale artifact 清理和 production canary artifact 索引。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 识别为 Loop-181，日志写入后再次运行通过并识别为 Loop-182。
+3. production 模板证据包仍正确生成 `loop_can_end=false`；`production_env_audit_json` 为 present、`json_status=failed`、`semantic_status=failed`，`semantic_issues` 明确列出占位凭据、缺 Provider 凭据和缺 OCR endpoint。
+4. production 模板报告中的 `provider_canary` 与 `ocr_provider_canary` 仍为 missing，不会复用旧 canary artifact。
+5. local 证据包仍正确生成 `loop_can_end=false`，阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收，且不误报生产 artifact。
+6. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是最终 artifact 证据语义校验，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 production report 中全部通过，并且关键 artifact 均为 `json_status=passed`、`semantic_status=passed`。

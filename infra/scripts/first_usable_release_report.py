@@ -32,6 +32,32 @@ PRODUCTION_REQUIRED_ARTIFACTS = (
 PROJECT1_REQUIRED_ARTIFACTS = (
     ("project1_runtime_acceptance", "project1 runtime artifact must be present and passed"),
 )
+REQUIRED_PROVIDER_ROUTES = ("chapter_generate", "knowledge_embedding", "knowledge_rerank")
+PROVIDER_ROUTE_KINDS = {
+    "chapter_generate": "llm",
+    "knowledge_embedding": "embedding",
+    "knowledge_rerank": "rerank",
+}
+ZERO_COST_PROVIDERS = {"mock", "local"}
+SUPPORTED_OCR_PROVIDERS = {"http_ocr", "mineru", "paddleocr"}
+REQUIRED_OCR_CHECKS = (
+    "provider.endpoint_configured",
+    "sample.exists",
+    "ocr.status",
+    "ocr.provider",
+    "ocr.text_chars",
+    "ocr.table_blocks",
+    "ocr.layout_bbox_count",
+    "ocr.table_bbox_count",
+    "ocr.cell_bbox_count",
+)
+PROJECT1_REQUIRED_STEPS = (
+    "parse_response_matrix",
+    "companion_knowledge",
+    "generation_coverage_compliance",
+    "docx_export",
+)
+PROJECT1_REQUIRED_SAMPLE_LABELS = ("tender_pdf", "response_docx", "boq_xlsx")
 
 
 class ReportError(RuntimeError):
@@ -182,6 +208,7 @@ def artifact_summary(name: str, path: Path) -> dict[str, Any]:
     content = path.read_bytes()
     parsed_status = "not_json"
     parsed_name = ""
+    semantic_issues: list[str] = ["artifact JSON must be an object"]
     try:
         parsed = json.loads(content.decode("utf-8"))
     except json.JSONDecodeError:
@@ -189,6 +216,7 @@ def artifact_summary(name: str, path: Path) -> dict[str, Any]:
     if isinstance(parsed, dict):
         parsed_status = str(parsed.get("status") or "unknown")
         parsed_name = str(parsed.get("name") or "")
+        semantic_issues = artifact_semantic_issues(name, parsed)
     return {
         "name": name,
         "path": str(path.relative_to(ROOT)),
@@ -197,7 +225,249 @@ def artifact_summary(name: str, path: Path) -> dict[str, Any]:
         "sha256": hashlib.sha256(content).hexdigest(),
         "json_name": parsed_name,
         "json_status": parsed_status,
+        "semantic_status": "passed" if not semantic_issues else "failed",
+        "semantic_issues": semantic_issues,
     }
+
+
+def artifact_semantic_issues(name: str, payload: dict[str, Any]) -> list[str]:
+    if name == "production_env_audit_json":
+        return production_env_artifact_issues(payload)
+    if name == "provider_canary":
+        return provider_canary_artifact_issues(payload)
+    if name == "ocr_provider_canary":
+        return ocr_canary_artifact_issues(payload)
+    if name == "project1_runtime_acceptance":
+        return project1_runtime_artifact_issues(payload)
+    return []
+
+
+def common_artifact_issues(payload: dict[str, Any], expected_name: str) -> list[str]:
+    issues: list[str] = []
+    if payload.get("name") != expected_name:
+        issues.append(f"artifact JSON name must be {expected_name}")
+    if payload.get("status") != "passed":
+        issues.append("artifact JSON status must be passed")
+    return issues
+
+
+def production_env_artifact_issues(payload: dict[str, Any]) -> list[str]:
+    issues = common_artifact_issues(payload, "production_env_audit")
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        return issues + ["production env audit evidence must be present"]
+
+    route_index = _index_dicts(evidence.get("routes"), "route")
+    for route, expected_kind in PROVIDER_ROUTE_KINDS.items():
+        target = route_index.get(route)
+        if not target:
+            issues.append(f"production env audit route {route} must be present")
+            continue
+        if target.get("kind") != expected_kind:
+            issues.append(f"production env audit route {route} kind must be {expected_kind}")
+        if str(target.get("provider") or "") in ZERO_COST_PROVIDERS:
+            issues.append(f"production env audit route {route} must use a real provider")
+        if not str(target.get("model") or "").strip():
+            issues.append(f"production env audit route {route} model must be present")
+
+    pricing_index = _index_dicts(evidence.get("pricing_matches"), "route")
+    for route in REQUIRED_PROVIDER_ROUTES:
+        pricing = pricing_index.get(route)
+        if not pricing or pricing.get("matched") is not True:
+            issues.append(f"production env audit route {route} pricing must match")
+
+    provider_requirements = _list_of_dicts(evidence.get("provider_requirements"))
+    if not provider_requirements:
+        issues.append("production env audit provider requirements must be present")
+    for requirement in provider_requirements:
+        provider = str(requirement.get("provider") or "")
+        if provider in ZERO_COST_PROVIDERS:
+            issues.append(f"production env audit provider {provider} must be external")
+        if requirement.get("issues"):
+            issues.append(f"production env audit provider {provider} must have no credential issues")
+        configured_envs = requirement.get("configured_envs")
+        if not isinstance(configured_envs, list) or not configured_envs:
+            issues.append(f"production env audit provider {provider} must have configured credentials")
+
+    ocr_provider = str(evidence.get("ocr_provider") or "")
+    if ocr_provider not in SUPPORTED_OCR_PROVIDERS:
+        issues.append("production env audit OCR provider must be supported")
+    ocr_requirement = evidence.get("ocr_requirement")
+    if not isinstance(ocr_requirement, dict):
+        issues.append("production env audit OCR requirement must be present")
+    else:
+        if ocr_requirement.get("issues"):
+            issues.append("production env audit OCR requirement must have no endpoint issues")
+        configured_envs = ocr_requirement.get("configured_envs")
+        if not isinstance(configured_envs, list) or not configured_envs:
+            issues.append("production env audit OCR endpoint must be configured")
+    return issues
+
+
+def provider_canary_artifact_issues(payload: dict[str, Any]) -> list[str]:
+    issues = common_artifact_issues(payload, "provider_canary")
+    if payload.get("strict") is not True:
+        issues.append("provider canary strict must be true")
+    if payload.get("call_provider") is not True:
+        issues.append("provider canary call_provider must be true")
+    if payload.get("require_cost") is not True:
+        issues.append("provider canary require_cost must be true")
+    issues.extend(check_count_issues(payload, "provider canary"))
+
+    route_index = _index_dicts(payload.get("routes"), "route")
+    for route, expected_kind in PROVIDER_ROUTE_KINDS.items():
+        result = route_index.get(route)
+        if not result:
+            issues.append(f"provider canary route {route} must be present")
+            continue
+        provider = str(result.get("provider") or "")
+        if result.get("kind") != expected_kind:
+            issues.append(f"provider canary route {route} kind must be {expected_kind}")
+        if result.get("resolved") is not True:
+            issues.append(f"provider canary route {route} must resolve")
+        if provider in ZERO_COST_PROVIDERS:
+            issues.append(f"provider canary route {route} must use a real provider")
+        if not str(result.get("model") or "").strip():
+            issues.append(f"provider canary route {route} model must be present")
+        call = result.get("call")
+        if not isinstance(call, dict) or call.get("passed") is not True:
+            issues.append(f"provider canary route {route} must include a passed live call")
+        accounting = result.get("accounting")
+        estimated_cost = float_value(accounting.get("estimated_cost") if isinstance(accounting, dict) else None)
+        if estimated_cost <= 0:
+            issues.append(f"provider canary route {route} estimated_cost must be positive")
+    return issues
+
+
+def ocr_canary_artifact_issues(payload: dict[str, Any]) -> list[str]:
+    issues = common_artifact_issues(payload, "ocr_provider_eval")
+    provider = str(payload.get("provider") or "")
+    if provider not in SUPPORTED_OCR_PROVIDERS:
+        issues.append("OCR canary provider must be supported")
+    issues.extend(check_count_issues(payload, "OCR canary"))
+
+    check_index = _index_dicts(payload.get("checks"), "name")
+    for check_name in REQUIRED_OCR_CHECKS:
+        check = check_index.get(check_name)
+        if not check:
+            issues.append(f"OCR canary check {check_name} must be present")
+        elif check.get("passed") is not True:
+            issues.append(f"OCR canary check {check_name} must pass")
+
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        issues.append("OCR canary metadata must be present")
+    else:
+        if int_value(metadata.get("table_block_count")) < 1:
+            issues.append("OCR canary metadata table_block_count must be positive")
+        ocr_metadata = metadata.get("ocr")
+        if not isinstance(ocr_metadata, dict):
+            issues.append("OCR canary OCR metadata must be present")
+        elif ocr_metadata.get("provider") != provider:
+            issues.append("OCR canary OCR metadata provider must match")
+    return issues
+
+
+def project1_runtime_artifact_issues(payload: dict[str, Any]) -> list[str]:
+    issues = common_artifact_issues(payload, "project1_runtime_acceptance")
+    labels = {
+        str(item.get("label") or "")
+        for item in _list_of_dicts(payload.get("sample_files"))
+    }
+    for label in PROJECT1_REQUIRED_SAMPLE_LABELS:
+        if label not in labels:
+            issues.append(f"project1 runtime sample {label} must be present")
+
+    steps = payload.get("steps")
+    if not isinstance(steps, dict):
+        return issues + ["project1 runtime steps must be present"]
+    for step in PROJECT1_REQUIRED_STEPS:
+        if not isinstance(steps.get(step), dict):
+            issues.append(f"project1 runtime step {step} must be present")
+
+    parse = steps.get("parse_response_matrix") if isinstance(steps.get("parse_response_matrix"), dict) else {}
+    if int_value(parse.get("requirements")) < 35:
+        issues.append("project1 runtime requirements must be at least 35")
+    if int_value(parse.get("expected_response")) < 35:
+        issues.append("project1 runtime expected_response must be at least 35")
+    if int_value(parse.get("mandatory")) < 20:
+        issues.append("project1 runtime mandatory requirements must be at least 20")
+    if int_value(parse.get("high_priority")) < 30:
+        issues.append("project1 runtime high priority requirements must be at least 30")
+    if int_value(parse.get("requirements_xlsx_bytes")) <= 1024:
+        issues.append("project1 runtime requirements XLSX export must be nontrivial")
+
+    knowledge = steps.get("companion_knowledge") if isinstance(steps.get("companion_knowledge"), dict) else {}
+    if knowledge.get("response_doc_status") != "processed":
+        issues.append("project1 runtime response doc must be processed")
+    if knowledge.get("boq_doc_status") != "processed":
+        issues.append("project1 runtime BOQ doc must be processed")
+    if int_value(knowledge.get("search_items")) <= 0:
+        issues.append("project1 runtime knowledge search must return items")
+    if knowledge.get("selected_ref_has_reference_id") is not True:
+        issues.append("project1 runtime selected ref must have reference id")
+    if knowledge.get("selected_ref_has_location") is not True:
+        issues.append("project1 runtime selected ref must have location")
+
+    generation = steps.get("generation_coverage_compliance") if isinstance(steps.get("generation_coverage_compliance"), dict) else {}
+    if int_value(generation.get("source_refs")) <= 0:
+        issues.append("project1 runtime generated chapter must have source refs")
+    if generation.get("compliance_result_status") != "pass":
+        issues.append("project1 runtime compliance must pass")
+    if int_value(generation.get("requirements")) <= 0:
+        issues.append("project1 runtime generation coverage requirements must be present")
+    if int_value(generation.get("coverage_rows")) <= 0:
+        issues.append("project1 runtime generation coverage rows must be present")
+
+    export = steps.get("docx_export") if isinstance(steps.get("docx_export"), dict) else {}
+    if export.get("download_ready") is not True:
+        issues.append("project1 runtime DOCX export download must be ready")
+    if not str(export.get("filename") or "").lower().endswith(".docx"):
+        issues.append("project1 runtime export filename must be docx")
+    return issues
+
+
+def check_count_issues(payload: dict[str, Any], label: str) -> list[str]:
+    issues: list[str] = []
+    total = int_value(payload.get("total_checks"))
+    passed = int_value(payload.get("passed_checks"))
+    failed = int_value(payload.get("failed_checks"))
+    if total <= 0:
+        issues.append(f"{label} total_checks must be positive")
+    if failed != 0:
+        issues.append(f"{label} failed_checks must be 0")
+    if total > 0 and passed != total:
+        issues.append(f"{label} passed_checks must equal total_checks")
+    for check in _list_of_dicts(payload.get("checks")):
+        if check.get("passed") is not True:
+            issues.append(f"{label} check {check.get('name') or '<unknown>'} must pass")
+    return issues
+
+
+def _index_dicts(value: Any, key: str) -> dict[str, dict[str, Any]]:
+    return {str(item.get(key) or ""): item for item in _list_of_dicts(value) if str(item.get(key) or "")}
+
+
+def _list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def int_value(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def float_value(value: Any) -> float:
+    if value is None or isinstance(value, bool):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def git_value(command: list[str]) -> str:
@@ -330,6 +600,7 @@ def artifact_has_passed(summary: dict[str, Any] | None) -> bool:
         summary
         and summary.get("status") == "present"
         and summary.get("json_status") == "passed"
+        and summary.get("semantic_status") == "passed"
     )
 
 

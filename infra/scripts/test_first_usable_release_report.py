@@ -15,6 +15,142 @@ from unittest.mock import patch
 import first_usable_release_report as report
 
 
+def valid_production_env_payload() -> dict[str, object]:
+    return {
+        "name": "production_env_audit",
+        "status": "passed",
+        "issues": [],
+        "evidence": {
+            "providers": ["openai_compatible_primary"],
+            "routes": [
+                {
+                    "route": "chapter_generate",
+                    "kind": "llm",
+                    "provider": "openai_compatible_primary",
+                    "model": "gpt-4o-mini",
+                },
+                {
+                    "route": "knowledge_embedding",
+                    "kind": "embedding",
+                    "provider": "openai_compatible_primary",
+                    "model": "text-embedding-3-large",
+                },
+                {
+                    "route": "knowledge_rerank",
+                    "kind": "rerank",
+                    "provider": "openai_compatible_primary",
+                    "model": "gpt-4o-mini",
+                },
+            ],
+            "ocr_provider": "http_ocr",
+            "provider_requirements": [
+                {
+                    "provider": "openai_compatible_primary",
+                    "configured_envs": ["OPENAI_API_KEY"],
+                    "issues": [],
+                }
+            ],
+            "ocr_requirement": {"provider": "http_ocr", "configured_envs": ["OCR_HTTP_ENDPOINT"], "issues": []},
+            "pricing_matches": [
+                {"route": "chapter_generate", "matched": True},
+                {"route": "knowledge_embedding", "matched": True},
+                {"route": "knowledge_rerank", "matched": True},
+            ],
+        },
+    }
+
+
+def valid_provider_canary_payload() -> dict[str, object]:
+    checks = [{"name": "router.load", "passed": True}]
+    routes = []
+    for route, kind in report.PROVIDER_ROUTE_KINDS.items():
+        routes.append(
+            {
+                "route": route,
+                "kind": kind,
+                "resolved": True,
+                "provider": "openai_compatible_primary",
+                "model": "gpt-4o-mini",
+                "call": {"passed": True},
+                "accounting": {"estimated_cost": 0.001},
+            }
+        )
+        checks.extend(
+            [
+                {"name": f"route.{route}.non_mock_provider", "passed": True},
+                {"name": f"route.{route}.call_provider", "passed": True},
+                {"name": f"route.{route}.estimated_cost", "passed": True},
+            ]
+        )
+    return {
+        "name": "provider_canary",
+        "status": "passed",
+        "strict": True,
+        "call_provider": True,
+        "require_cost": True,
+        "passed_checks": len(checks),
+        "failed_checks": 0,
+        "total_checks": len(checks),
+        "routes": routes,
+        "checks": checks,
+    }
+
+
+def valid_ocr_canary_payload() -> dict[str, object]:
+    checks = [
+        {"name": check_name, "passed": True}
+        for check_name in report.REQUIRED_OCR_CHECKS
+    ]
+    return {
+        "name": "ocr_provider_eval",
+        "status": "passed",
+        "provider": "http_ocr",
+        "passed_checks": len(checks),
+        "failed_checks": 0,
+        "total_checks": len(checks),
+        "checks": checks,
+        "metadata": {
+            "table_block_count": 1,
+            "ocr": {"provider": "http_ocr"},
+        },
+    }
+
+
+def valid_project1_runtime_payload() -> dict[str, object]:
+    return {
+        "name": "project1_runtime_acceptance",
+        "status": "passed",
+        "sample_files": [
+            {"label": "tender_pdf"},
+            {"label": "response_docx"},
+            {"label": "boq_xlsx"},
+        ],
+        "steps": {
+            "parse_response_matrix": {
+                "requirements": 35,
+                "expected_response": 35,
+                "mandatory": 20,
+                "high_priority": 30,
+                "requirements_xlsx_bytes": 2048,
+            },
+            "companion_knowledge": {
+                "response_doc_status": "processed",
+                "boq_doc_status": "processed",
+                "search_items": 1,
+                "selected_ref_has_reference_id": True,
+                "selected_ref_has_location": True,
+            },
+            "generation_coverage_compliance": {
+                "source_refs": 1,
+                "compliance_result_status": "pass",
+                "requirements": 1,
+                "coverage_rows": 1,
+            },
+            "docx_export": {"download_ready": True, "filename": "工程1.docx"},
+        },
+    }
+
+
 class FirstUsableReleaseReportTest(unittest.TestCase):
     def test_load_env_file_collects_sensitive_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -84,14 +220,65 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 "project1_runtime_acceptance": "passed",
             },
             [
-                {"name": "production_env_audit_json", "status": "present", "json_status": "passed"},
-                {"name": "provider_canary", "status": "present", "json_status": "passed"},
-                {"name": "ocr_provider_canary", "status": "present", "json_status": "passed"},
-                {"name": "project1_runtime_acceptance", "status": "present", "json_status": "passed"},
+                {
+                    "name": "production_env_audit_json",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "passed"},
+                {
+                    "name": "ocr_provider_canary",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {
+                    "name": "project1_runtime_acceptance",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
             ],
         )
 
         self.assertEqual(blocking, [])
+
+    def test_blocking_items_require_semantically_valid_artifacts(self) -> None:
+        args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
+        blocking = report.blocking_items(
+            args,
+            {
+                "static_readiness": "passed",
+                "production_env_audit": "passed",
+                "production_readiness": "passed",
+                "repo_wide_check": "passed",
+                "project1_runtime_acceptance": "passed",
+            },
+            [
+                {
+                    "name": "production_env_audit_json",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "failed"},
+                {
+                    "name": "ocr_provider_canary",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {
+                    "name": "project1_runtime_acceptance",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+            ],
+        )
+
+        self.assertEqual(blocking, ["production artifact provider_canary must be present and passed"])
 
     def test_blocking_items_require_production_artifacts_to_pass(self) -> None:
         args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
@@ -108,7 +295,12 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 {"name": "production_env_audit_json", "status": "present", "json_status": "failed"},
                 {"name": "provider_canary", "status": "missing"},
                 {"name": "ocr_provider_canary", "status": "present", "json_status": "not_json"},
-                {"name": "project1_runtime_acceptance", "status": "present", "json_status": "passed"},
+                {
+                    "name": "project1_runtime_acceptance",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
             ],
         )
 
@@ -133,10 +325,25 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 "project1_runtime_acceptance": "passed",
             },
             [
-                {"name": "production_env_audit_json", "status": "present", "json_status": "passed"},
-                {"name": "provider_canary", "status": "present", "json_status": "passed"},
-                {"name": "ocr_provider_canary", "status": "present", "json_status": "passed"},
-                {"name": "project1_runtime_acceptance", "status": "present", "json_status": "failed"},
+                {
+                    "name": "production_env_audit_json",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {"name": "provider_canary", "status": "present", "json_status": "passed", "semantic_status": "passed"},
+                {
+                    "name": "ocr_provider_canary",
+                    "status": "present",
+                    "json_status": "passed",
+                    "semantic_status": "passed",
+                },
+                {
+                    "name": "project1_runtime_acceptance",
+                    "status": "present",
+                    "json_status": "failed",
+                    "semantic_status": "failed",
+                },
             ],
         )
 
@@ -148,7 +355,7 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
             artifact = Path(directory) / "production_env_audit.json"
             artifact.write_text(
-                json.dumps({"name": "production_env_audit", "status": "passed"}),
+                json.dumps(valid_production_env_payload()),
                 encoding="utf-8",
             )
 
@@ -158,8 +365,45 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertEqual(summary["status"], "present")
         self.assertEqual(summary["json_name"], "production_env_audit")
         self.assertEqual(summary["json_status"], "passed")
+        self.assertEqual(summary["semantic_status"], "passed")
+        self.assertEqual(summary["semantic_issues"], [])
         self.assertGreater(summary["bytes"], 0)
         self.assertRegex(str(summary["sha256"]), r"^[0-9a-f]{64}$")
+
+    def test_artifact_summary_rejects_fake_passed_provider_canary(self) -> None:
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            artifact = Path(directory) / "provider_canary.json"
+            artifact.write_text(
+                json.dumps({"name": "provider_canary", "status": "passed", "routes": []}),
+                encoding="utf-8",
+            )
+
+            summary = report.artifact_summary("provider_canary", artifact)
+
+        self.assertEqual(summary["json_status"], "passed")
+        self.assertEqual(summary["semantic_status"], "failed")
+        self.assertIn("provider canary call_provider must be true", summary["semantic_issues"])
+        self.assertIn("provider canary route chapter_generate must be present", summary["semantic_issues"])
+
+    def test_artifact_summary_accepts_complete_provider_ocr_and_project1_artifacts(self) -> None:
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            artifact_specs = [
+                ("provider_canary", "provider_canary.json", valid_provider_canary_payload()),
+                ("ocr_provider_canary", "ocr_provider_canary.json", valid_ocr_canary_payload()),
+                ("project1_runtime_acceptance", "project1_runtime_acceptance.json", valid_project1_runtime_payload()),
+            ]
+            summaries = []
+            for name, filename, payload in artifact_specs:
+                artifact = Path(directory) / filename
+                artifact.write_text(json.dumps(payload), encoding="utf-8")
+                summaries.append(report.artifact_summary(name, artifact))
+
+        self.assertEqual([summary["semantic_status"] for summary in summaries], ["passed", "passed", "passed"])
+        self.assertTrue(all(summary["semantic_issues"] == [] for summary in summaries))
 
     def test_clear_artifact_removes_stale_json_before_new_evidence(self) -> None:
         tmp_root = report.ROOT / "tmp"
