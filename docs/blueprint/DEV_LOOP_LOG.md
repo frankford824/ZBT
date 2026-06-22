@@ -8170,3 +8170,44 @@ python3 infra/scripts/first_usable_release_check.py --run-canaries
 
 1. 本轮没有把生产 Provider/OCR 验收伪装为通过；当前本机仍缺真实 Provider key、`AI_MODEL_PRICING_JSON` 和 OCR endpoint，所以 production profile 仍应失败。
 2. readiness gate 解决的是 loop 收口证据分层，不替代 `acceptance_project1_check.py` 的运行态全链路验收。
+
+## Loop-171 / 生产收口环境审计 - 2026-06-22
+
+### 本轮目标
+
+1. 将第一可用版生产 profile 的失败点前移到环境审计，避免缺真实 Provider/OCR/secret 时才在 Provider canary 阶段发现 mock fallback。
+2. 支持 `--env-file .env.production`，让上线前可以用同一套收口脚本加载生产配置并执行真实 canary。
+3. 将 mock 禁用、Provider 凭据、OCR endpoint、成本表和生产 secret 纳入静态防回退检查。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_check.py` 新增 `--env-file`，支持简单 `.env` 格式、`export KEY=VALUE` 和引号包裹值，加载后再执行 readiness 检查。
+2. production profile 新增 `check_production_env`：要求 `USE_MOCK_PROVIDERS=false`、`ALLOW_MOCK_FALLBACK=false`，并校验 `JWT_SECRET`、`AI_SERVICE_HMAC_SECRET`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY` 不使用开发默认或短值。
+3. production profile 会按 `chapter_generate`、`knowledge_embedding`、`knowledge_rerank` 的实际 Provider 覆盖规则校验 OpenAI-compatible、DeepSeek、DashScope 或 Cloudflare AI Gateway 凭据，并要求 `AI_MODEL_PRICING_JSON` 对所选 provider/model 或 provider wildcard 有正向价格。
+4. production profile 会校验 `OCR_PROVIDER=http_ocr|mineru|paddleocr` 的 endpoint 配置；`OCR_PROVIDER` 为空时与 OCR canary 一致默认使用 `http_ocr`。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `--env-file`、mock 禁用、Provider key、OCR endpoint、HMAC secret 和 README `.env.production` 命令的防回退锚点。
+6. README 的第一可用版收口命令改为 `python3 infra/scripts/first_usable_release_check.py --profile production --env-file .env.production`，并列明生产最小必填项；运行态工程1验收仍使用 `python3 infra/scripts/acceptance_project1_check.py`。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+python3 infra/scripts/first_usable_release_check.py --profile production
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；Provider canary 本地 profile `skipped`，OCR canary 本地 profile `skipped`。
+2. `python3 infra/scripts/first_usable_release_check.py --profile production` 在本机无生产 env 时失败于 `production env USE_MOCK_PROVIDERS must be false`，已从“Provider canary 晚发现 mock fallback”前移为可操作环境缺项。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 包含 Provider canary、OCR canary、工程1运行态验收和 `.env.production` 收口证据锚点。
+4. `./infra/scripts/check.sh` 通过；继续覆盖 readiness gate、前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、Provider/OCR canary 本地跳过、工程1 golden、生成覆盖、导出格式和运行中容器 pytest。
+
+### 偏离蓝图
+
+1. 本轮仍没有把 production profile 伪装为通过；没有 `.env.production` 和真实 Provider/OCR 服务时，生产收口必须失败。
+2. 真实模型、真实 embedding/rerank 和真实 OCR 的非 skipped 验收仍是下一轮 Provider/OCR 接入任务；本轮交付的是生产门禁和失败形态，不替代真实外部服务可用性证明。

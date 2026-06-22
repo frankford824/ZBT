@@ -20,6 +20,32 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 AI_SERVICE = ROOT / "ai-service"
+FALSE_ENV_VALUES = {"0", "false", "no"}
+PRODUCTION_SECRET_DEFAULTS = {
+    "JWT_SECRET": "dev-only-zbt-jwt-secret",
+    "AI_SERVICE_HMAC_SECRET": "dev-only-zbt-ai-callback-secret",
+    "MINIO_ACCESS_KEY": "zbt_minio",
+    "MINIO_SECRET_KEY": "zbt_minio_secret",
+}
+PRODUCTION_ROUTE_DEFAULTS = {
+    "chapter_generate": ("LLM", "openai_compatible_primary", "gpt-4o-mini"),
+    "knowledge_embedding": ("EMBEDDING", "openai_compatible_primary", "text-embedding-3-large"),
+    "knowledge_rerank": ("RERANK", "openai_compatible_primary", "gpt-4o-mini"),
+}
+PRODUCTION_PROVIDER_ENV_GROUPS = {
+    "openai_compatible_primary": (("OPENAI_API_KEY",),),
+    "deepseek": (("DEEPSEEK_API_KEY",), ("DEEPSEEK_BASE_URL",)),
+    "dashscope": (("DASHSCOPE_API_KEY",), ("DASHSCOPE_BASE_URL",)),
+    "cloudflare_ai_gateway": (
+        ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_AI_GATEWAY_TOKEN"),
+        ("CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL"),
+    ),
+}
+PRODUCTION_OCR_PROVIDER_ENV_GROUPS = {
+    "http_ocr": (("OCR_HTTP_ENDPOINT",),),
+    "mineru": (("MINERU_HTTP_ENDPOINT", "OCR_HTTP_ENDPOINT"),),
+    "paddleocr": (("PADDLEOCR_HTTP_ENDPOINT", "OCR_HTTP_ENDPOINT"),),
+}
 
 
 class ReadinessError(RuntimeError):
@@ -33,6 +59,41 @@ def require(condition: bool, message: str) -> None:
 
 def ok(label: str, evidence: object) -> None:
     print(f"[ok] {label}: {evidence}")
+
+
+def env_value(key: str) -> str:
+    return os.getenv(key, "").strip()
+
+
+def env_is_false(key: str) -> bool:
+    return env_value(key).lower() in FALSE_ENV_VALUES
+
+
+def load_env_file(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    require(path.is_file(), f"env file does not exist: {path}")
+    loaded: dict[str, str] = {}
+    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        require("=" in line, f"env file {path}:{line_no} is not KEY=VALUE")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        require(
+            re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is not None,
+            f"env file {path}:{line_no} has invalid key: {key}",
+        )
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        loaded[key] = value
+        os.environ[key] = value
+    ok("env file loaded", {"path": str(path), "keys": len(loaded)})
+    return loaded
 
 
 def ai_python() -> str:
@@ -111,6 +172,115 @@ def check_static_release_evidence() -> None:
     ok("static first usable evidence", {"latest_loop": latest_heading, "files": len(required_files)})
 
 
+def require_env_group(label: str, alternatives: tuple[str, ...]) -> str:
+    matched = [key for key in alternatives if env_value(key)]
+    require(
+        bool(matched),
+        f"production env missing {label}: set one of {', '.join(alternatives)}",
+    )
+    return matched[0]
+
+
+def require_production_secret(key: str, default_value: str) -> None:
+    value = env_value(key)
+    require(bool(value), f"production env missing {key}")
+    require(value != default_value and len(value) >= 16, f"production env {key} must not use the development default or a short value")
+
+
+def production_route_target(route: str, route_kind: str, default_provider: str, default_model: str) -> dict[str, str]:
+    route_prefix = route.upper().replace("-", "_")
+    provider = env_value(f"{route_prefix}_PROVIDER") or env_value(f"AI_{route_kind}_PROVIDER") or default_provider
+    model = env_value(f"{route_prefix}_MODEL") or env_value(f"AI_{route_kind}_MODEL") or default_model
+    require(provider not in {"mock", "local"}, f"production route {route} must use a real external provider, got {provider}")
+    require(provider in PRODUCTION_PROVIDER_ENV_GROUPS, f"production route {route} uses unsupported provider {provider}")
+    require(bool(model), f"production route {route} is missing model")
+    return {"route": route, "kind": route_kind.lower(), "provider": provider, "model": model}
+
+
+def parse_pricing_config() -> dict[str, object]:
+    raw = env_value("AI_MODEL_PRICING_JSON")
+    require(bool(raw), "production env missing AI_MODEL_PRICING_JSON")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ReadinessError(f"production env AI_MODEL_PRICING_JSON is invalid JSON: {exc}") from exc
+    require(isinstance(parsed, dict) and bool(parsed), "production env AI_MODEL_PRICING_JSON must be a non-empty JSON object")
+    usable_rates = [
+        key
+        for key, value in parsed.items()
+        if isinstance(key, str)
+        and isinstance(value, dict)
+        and (positive_rate(value.get("input_per_1m")) > 0 or positive_rate(value.get("input_per_1k")) > 0)
+        and (positive_rate(value.get("output_per_1m")) > 0 or positive_rate(value.get("output_per_1k")) > 0)
+    ]
+    require(bool(usable_rates), "production env AI_MODEL_PRICING_JSON must include positive input/output rates")
+    return parsed
+
+
+def positive_rate(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if number <= 0:
+        return 0.0
+    return number
+
+
+def pricing_has_match(pricing: dict[str, object], provider: str, model: str) -> bool:
+    keys = [
+        f"{provider}/{model}",
+        model,
+        f"{provider}/*",
+        "*",
+        f"{provider.lower()}/{model.lower()}",
+        model.lower(),
+        f"{provider.lower()}/*",
+    ]
+    return any(key in pricing for key in keys)
+
+
+def check_production_env() -> None:
+    require(env_is_false("USE_MOCK_PROVIDERS"), "production env USE_MOCK_PROVIDERS must be false")
+    require(env_is_false("ALLOW_MOCK_FALLBACK"), "production env ALLOW_MOCK_FALLBACK must be false")
+
+    for key, default_value in PRODUCTION_SECRET_DEFAULTS.items():
+        require_production_secret(key, default_value)
+
+    pricing = parse_pricing_config()
+    targets = [
+        production_route_target(route, route_kind, default_provider, default_model)
+        for route, (route_kind, default_provider, default_model) in PRODUCTION_ROUTE_DEFAULTS.items()
+    ]
+    providers = sorted({target["provider"] for target in targets})
+    for provider in providers:
+        for group in PRODUCTION_PROVIDER_ENV_GROUPS[provider]:
+            require_env_group(f"{provider} credentials", group)
+    for target in targets:
+        require(
+            pricing_has_match(pricing, target["provider"], target["model"]),
+            "production env AI_MODEL_PRICING_JSON missing price for "
+            f"{target['provider']}/{target['model']} or {target['provider']}/*",
+        )
+
+    ocr_provider = env_value("OCR_PROVIDER") or "http_ocr"
+    require(ocr_provider in PRODUCTION_OCR_PROVIDER_ENV_GROUPS, f"production OCR_PROVIDER is unsupported: {ocr_provider}")
+    for group in PRODUCTION_OCR_PROVIDER_ENV_GROUPS[ocr_provider]:
+        require_env_group(f"{ocr_provider} endpoint", group)
+
+    ok(
+        "production env audit",
+        {
+            "providers": providers,
+            "routes": targets,
+            "ocr_provider": ocr_provider,
+            "pricing_entries": len(pricing),
+        },
+    )
+
+
 def run_json_command(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> tuple[int, dict[str, Any], str]:
     completed = subprocess.run(
         command,
@@ -156,12 +326,13 @@ def check_provider_canary(profile: str) -> None:
 
 
 def check_ocr_canary(profile: str) -> None:
+    ocr_provider = env_value("OCR_PROVIDER") or "http_ocr"
     command = [
         ai_python(),
         "-m",
         "app.evaluation.ocr_provider_eval",
         "--provider",
-        os.getenv("OCR_PROVIDER", "http_ocr"),
+        ocr_provider,
         "--sample",
         str(ROOT / "docs/ex/工程1/采购文件桥梁检查.pdf"),
         "--repo-root",
@@ -192,10 +363,14 @@ def check_ocr_canary(profile: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check first usable release readiness evidence.")
     parser.add_argument("--profile", choices=("local", "production"), default="local")
+    parser.add_argument("--env-file", type=Path, help="Load KEY=VALUE settings before running readiness checks.")
     parser.add_argument("--run-canaries", action="store_true", help="Run Provider/OCR canaries in addition to static checks.")
     args = parser.parse_args()
 
+    load_env_file(args.env_file)
     check_static_release_evidence()
+    if args.profile == "production":
+        check_production_env()
     if args.run_canaries or args.profile == "production":
         check_provider_canary(args.profile)
         check_ocr_canary(args.profile)
