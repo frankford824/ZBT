@@ -132,6 +132,7 @@ def latest_loop_section(text: str) -> tuple[str, str]:
 def check_static_release_evidence() -> None:
     required_files = [
         "infra/scripts/acceptance_project1_check.py",
+        "infra/scripts/test_acceptance_project1_check.py",
         "infra/scripts/acceptance_tail_check.py",
         "infra/scripts/check.sh",
         "infra/scripts/first_usable_release_report.py",

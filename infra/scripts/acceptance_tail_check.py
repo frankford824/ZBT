@@ -848,6 +848,10 @@ def check_static_docs() -> None:
         "Repo-wide check does not compile project1 runtime acceptance script",
     )
     require(
+        "test_acceptance_project1_check.py" in check_script,
+        "Repo-wide check does not run project1 runtime evidence regression tests",
+    )
+    require(
         "first_usable_release_check.py" in check_script
         and "first_usable_release_check.py\"" in check_script,
         "Repo-wide check does not run first usable release readiness gate",
@@ -880,6 +884,7 @@ def check_static_docs() -> None:
         "provider_canary_eval",
         "ocr_provider_eval",
         "acceptance_project1_check.py",
+        "test_acceptance_project1_check.py",
         "AI_MODEL_PRICING_JSON",
         "USE_MOCK_PROVIDERS",
         "ALLOW_MOCK_FALLBACK",
@@ -932,8 +937,26 @@ def check_static_docs() -> None:
         "/compliance/checks",
         "/compliance/issues/{issue['id']}/ignore",
         "\"export_type\": \"docx\"",
+        "--json-output",
+        "project1_runtime_acceptance",
+        "sample_files",
+        "sha256",
+        "parse_response_matrix",
+        "companion_knowledge",
+        "generation_coverage_compliance",
+        "docx_export",
+        "write_json_output",
     ):
         require(needle in project1_acceptance, f"Project1 runtime acceptance script missing gate: {needle}")
+    project1_acceptance_tests = (ROOT / "infra/scripts/test_acceptance_project1_check.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_write_json_output_records_runtime_evidence",
+        "project1_runtime_acceptance",
+        "parse_response_matrix",
+        "generation_coverage_compliance",
+        "docx_export",
+    ):
+        require(needle in project1_acceptance_tests, f"Project1 runtime acceptance tests missing regression: {needle}")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for needle in (
         "provider_canary_eval --allow-skip",
@@ -944,6 +967,7 @@ def check_static_docs() -> None:
         "first_usable_release_check.py --audit-production-env-json --env-file .env.production",
         "first_usable_release_check.py --profile production --env-file .env.production",
         "first_usable_release_report.py --profile production --env-file .env.production --include-repo-check --include-project1-runtime",
+        "project1_runtime_acceptance.json",
         "loop_can_end=true",
         ".env.production.example",
         ".env.production",
@@ -972,6 +996,7 @@ def check_static_docs() -> None:
         "--include-repo-check",
         "--include-project1-runtime",
         "project1_runtime_acceptance",
+        "tmp/project1_runtime_acceptance.json",
         "repo_wide_check",
         "production_readiness",
         "production_env_audit",

@@ -159,7 +159,12 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         steps.append(
             run_command(
                 "project1_runtime_acceptance",
-                [python, "infra/scripts/acceptance_project1_check.py"],
+                [
+                    python,
+                    "infra/scripts/acceptance_project1_check.py",
+                    "--json-output",
+                    "tmp/project1_runtime_acceptance.json",
+                ],
                 env=env,
                 timeout_s=args.timeout_s,
                 redact=redact,

@@ -8430,3 +8430,48 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮没有填入真实 `.env.production`，也没有调用真实 LLM/OCR endpoint；production profile 仍不能通过。
 2. 本轮解决的是 production 配置证据的可审计性和防漂移，不替代 Provider/OCR 真实运行态验收。
+
+## Loop-177 / 工程1运行态证据 JSON 化 - 2026-06-22
+
+### 本轮目标
+
+1. 将工程1运行态验收从终端日志升级为可保存的结构化证据文件，支撑最终第一可用版证据包审查。
+2. 保留原有 `python3 infra/scripts/acceptance_project1_check.py` 运行方式，同时允许成功后输出 `tmp/project1_runtime_acceptance.json`。
+3. 让最终 `first_usable_release_report.py --include-project1-runtime` 自动生成工程1运行态 JSON 证据，避免只依赖截断后的 stdout。
+
+### 代码交付
+
+1. `infra/scripts/acceptance_project1_check.py` 新增 `--json-output` 参数，成功后写入结构化 JSON。
+2. 工程1运行态证据包含：真实样本文件路径、大小、sha256，bid id，解析/响应矩阵数量，知识处理状态，检索来源可追溯性，生成覆盖，合规结果和 DOCX 导出状态。
+3. `first_usable_release_report.py` 在 `--include-project1-runtime` 时调用 `acceptance_project1_check.py --json-output tmp/project1_runtime_acceptance.json`。
+4. 新增 `infra/scripts/test_acceptance_project1_check.py`，回归保护 JSON 写入结构和关键步骤字段。
+5. `infra/scripts/check.sh` 纳入工程1运行态证据测试；`first_usable_release_check.py` 静态证据清单纳入该测试文件。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `--json-output`、`project1_runtime_acceptance`、`sample_files`、`sha256`、`parse_response_matrix`、`generation_coverage_compliance` 和 `docx_export` 防回退锚点。
+7. README 将运行态工程1验收命令更新为 `python3 infra/scripts/acceptance_project1_check.py --json-output tmp/project1_runtime_acceptance.json`，并说明最终证据包会保留该文件。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_acceptance_project1_check.py
+python3 -m py_compile infra/scripts/acceptance_project1_check.py infra/scripts/test_acceptance_project1_check.py infra/scripts/first_usable_release_report.py infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_acceptance_project1_check.py` 通过，验证 `project1_runtime_acceptance.json` 写入后包含运行态证据名称、状态、解析矩阵、生成覆盖和导出字段。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-177。
+3. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过，静态第一可用版证据文件数更新为 19，本地 Provider/OCR canary 继续显式 skipped。
+4. local 证据包仍生成 `loop_can_end=false`，阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收。
+5. `./infra/scripts/check.sh` 通过；新增工程1运行态证据测试、生产审计测试、证据包测试、静态文档、first usable local gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮没有启动本地 Docker 栈重新跑工程1运行态验收；新增的是成功验收后的结构化证据输出能力和总检回归。
+2. 第一可用版结束条件仍未满足：production profile 需要真实 `.env.production`、真实 Provider/OCR canary 通过，最终报告需要包含 repo-wide check 和工程1运行态验收并得到 `loop_can_end=true`。

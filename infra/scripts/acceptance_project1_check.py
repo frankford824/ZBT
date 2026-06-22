@@ -10,9 +10,13 @@ runtime services and persisted object storage.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 import mimetypes
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +46,32 @@ PROJECT1_DIR = ROOT / "docs/ex/工程1"
 TENDER_PDF = PROJECT1_DIR / "采购文件桥梁检查.pdf"
 RESPONSE_DOCX = PROJECT1_DIR / "响应文件格式.docx"
 BOQ_XLSX = PROJECT1_DIR / "清单（固化）(1).xlsx"
+
+
+def sample_file_record(label: str, path: Path) -> dict[str, Any]:
+    require(path.is_file(), f"sample file does not exist: {path}")
+    content = path.read_bytes()
+    return {
+        "label": label,
+        "path": str(path.relative_to(ROOT)),
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def project1_evidence_skeleton() -> dict[str, Any]:
+    return {
+        "name": "project1_runtime_acceptance",
+        "status": "running",
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "api_base": API_BASE,
+        "sample_files": [
+            sample_file_record("tender_pdf", TENDER_PDF),
+            sample_file_record("response_docx", RESPONSE_DOCX),
+            sample_file_record("boq_xlsx", BOQ_XLSX),
+        ],
+        "steps": {},
+    }
 
 
 def upload_binary_asset(token: str, path: Path, *, biz_type: str, biz_id: str = "") -> dict[str, Any]:
@@ -191,11 +221,13 @@ def run_project1_compliance_check(token: str, bid_id: str) -> dict[str, Any]:
     return compliance
 
 
-def check_project1_runtime() -> None:
+def check_project1_runtime() -> dict[str, Any]:
     check_runtime_stack()
     token, _session = login()
     bid = create_bid(token, "工程1桥梁检查运行态验收", "combined")
     bid_id = str(bid["id"])
+    evidence = project1_evidence_skeleton()
+    evidence["bid_id"] = bid_id
 
     tender_file = upload_binary_asset(token, TENDER_PDF, biz_type="bid_tender", biz_id=bid_id)
     attached = api("POST", f"/bids/{bid_id}/upload-tender-file", token=token, payload={"file_id": tender_file["id"]}, expected=(202,))
@@ -212,7 +244,13 @@ def check_project1_runtime() -> None:
     require(isinstance(requirements, list), "project1 requirements API did not return items")
     requirement_summary = require_requirement_items(requirements)
     xlsx_size = export_requirements_xlsx(token, bid_id)
-    ok("project1 parse and response matrix", {"bid": bid_id, **requirement_summary, "requirements_xlsx_bytes": xlsx_size})
+    evidence["steps"]["parse_response_matrix"] = {
+        "bid": bid_id,
+        **requirement_summary,
+        "requirements_xlsx_bytes": xlsx_size,
+        "tender_file_asset_id": tender_file["id"],
+    }
+    ok("project1 parse and response matrix", evidence["steps"]["parse_response_matrix"])
 
     response_doc = process_knowledge_sample(token, RESPONSE_DOCX)
     boq_doc = process_knowledge_sample(token, BOQ_XLSX)
@@ -223,7 +261,16 @@ def check_project1_runtime() -> None:
     selected_ref = source_refs[0] if isinstance(source_refs, list) and source_refs else items[0].get("source_ref")
     require(isinstance(selected_ref, dict), "project1 knowledge search missing source ref")
     api("PUT", f"/bids/{bid_id}/material-selection", token=token, payload={"selected_refs": [selected_ref], "notes": "工程1运行态验收"})
-    ok("project1 companion documents processed", {"response_doc": response_doc["id"], "boq_doc": boq_doc["id"], "search_items": len(items)})
+    evidence["steps"]["companion_knowledge"] = {
+        "response_doc": response_doc["id"],
+        "response_doc_status": response_doc.get("parse_status"),
+        "boq_doc": boq_doc["id"],
+        "boq_doc_status": boq_doc.get("parse_status"),
+        "search_items": len(items),
+        "selected_ref_has_reference_id": source_ref_has_reference_id(selected_ref),
+        "selected_ref_has_location": source_ref_has_location(selected_ref),
+    }
+    ok("project1 companion documents processed", evidence["steps"]["companion_knowledge"])
 
     outline = api("POST", f"/bids/{bid_id}/outline/generate", token=token, expected=(202,))
     chapters = outline.get("chapters") if isinstance(outline, dict) else None
@@ -243,17 +290,43 @@ def check_project1_runtime() -> None:
     coverage_spec = api("GET", f"/bids/{bid_id}/generation-coverage", token=token)
     coverage_summary = require_generation_coverage_contract(coverage_spec)
     compliance = run_project1_compliance_check(token, bid_id)
-    ok("project1 chapter generation, coverage, and compliance", {"chapter": chapter_id, "source_refs": len(chapter_refs), "compliance": compliance["id"], **coverage_summary})
+    evidence["steps"]["generation_coverage_compliance"] = {
+        "chapter": chapter_id,
+        "source_refs": len(chapter_refs),
+        "compliance": compliance["id"],
+        "compliance_result_status": compliance.get("result_status"),
+        **coverage_summary,
+    }
+    ok("project1 chapter generation, coverage, and compliance", evidence["steps"]["generation_coverage_compliance"])
 
     export_started = api("POST", f"/bids/{bid_id}/exports", token=token, payload={"export_type": "docx", "part_code": "combined_body"}, expected=(202,))
     require(isinstance(export_started, dict) and export_started.get("export", {}).get("id"), "project1 docx export did not return export id")
     export_done = poll_export(token, str(export_started["export"]["id"]), timeout=180)
-    ok("project1 docx export", {"export": export_done["export"]["id"], "filename": export_done["export"]["filename"]})
+    evidence["steps"]["docx_export"] = {
+        "export": export_done["export"]["id"],
+        "filename": export_done["export"]["filename"],
+        "download_ready": bool(export_done.get("download", {}).get("url")),
+    }
+    ok("project1 docx export", evidence["steps"]["docx_export"])
+    evidence["status"] = "passed"
     print("[ok] 工程1 runtime acceptance complete")
+    return evidence
+
+
+def write_json_output(evidence: dict[str, Any], output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(evidence, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ok("project1 runtime evidence json", {"path": str(output), "status": evidence.get("status")})
 
 
 def main() -> int:
-    check_project1_runtime()
+    parser = argparse.ArgumentParser(description="Run 工程1 runtime acceptance against a live local stack.")
+    parser.add_argument("--json-output", type=Path, help="Write structured runtime evidence to this JSON file on success.")
+    args = parser.parse_args()
+
+    evidence = check_project1_runtime()
+    if args.json_output:
+        write_json_output(evidence, args.json_output)
     return 0
 
 

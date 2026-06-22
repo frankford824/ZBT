@@ -6,11 +6,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 python3 -m py_compile \
   "$ROOT/infra/scripts/acceptance_core_check.py" \
   "$ROOT/infra/scripts/acceptance_project1_check.py" \
+  "$ROOT/infra/scripts/test_acceptance_project1_check.py" \
   "$ROOT/infra/scripts/first_usable_release_check.py" \
   "$ROOT/infra/scripts/test_first_usable_release_check.py" \
   "$ROOT/infra/scripts/first_usable_release_report.py" \
   "$ROOT/infra/scripts/test_first_usable_release_report.py" \
   "$ROOT/infra/scripts/acceptance_tail_check.py"
+python3 "$ROOT/infra/scripts/test_acceptance_project1_check.py"
 python3 "$ROOT/infra/scripts/test_first_usable_release_check.py"
 python3 "$ROOT/infra/scripts/test_first_usable_release_report.py"
 python3 "$ROOT/infra/scripts/acceptance_tail_check.py" --static-docs
