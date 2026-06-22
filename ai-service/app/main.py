@@ -1453,6 +1453,10 @@ def validate_production_config() -> None:
     if mock_routes:
         preview = ", ".join(mock_routes[:8])
         raise RuntimeError(f"MockProvider is not allowed in production model routes: {preview}")
+    route_issues = router.production_route_readiness_issues()
+    if route_issues:
+        preview = "; ".join(route_issues[:8])
+        raise RuntimeError(f"AI production routes are not ready: {preview}")
 
 
 def production_mode() -> bool:

@@ -588,6 +588,88 @@ def test_router_log_call_supports_configured_per_million_pricing() -> None:
     assert result["estimated_cost"] == 0.01
 
 
+def test_router_production_route_readiness_requires_available_real_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    router = ModelRouter(
+        {
+            "providers": {
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                },
+            },
+            "pricing": {"openai_compatible_primary/*": {"input_per_1m": 2, "output_per_1m": 8}},
+        }
+    )
+
+    issues = router.production_route_readiness_issues()
+
+    assert len(issues) == 1
+    assert issues[0].startswith("chapter_generate: no configured provider is available")
+
+
+def test_router_production_route_readiness_requires_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter(
+        {
+            "providers": {
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                },
+            },
+        }
+    )
+
+    assert router.production_route_readiness_issues() == [
+        "chapter_generate: missing pricing for openai_compatible_primary/real-model"
+    ]
+
+
+def test_router_production_route_readiness_accepts_priced_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    router = ModelRouter(
+        {
+            "providers": {
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                },
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "real-model"},
+                },
+            },
+            "pricing": {"openai_compatible_primary/*": {"input_per_1m": 2, "output_per_1m": 8}},
+        }
+    )
+
+    assert router.production_route_readiness_issues() == []
+
+
 def test_router_quota_supports_per_tenant_budget() -> None:
     router = ModelRouter(
         {

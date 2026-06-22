@@ -791,15 +791,36 @@ def check_static_docs() -> None:
     ):
         require(needle in ai_call_tests, f"AI call cost normalization missing regression test: {needle}")
     model_router = (ROOT / "ai-service/app/gateway/model_router.py").read_text(encoding="utf-8")
-    for needle in ("MAX_AI_ESTIMATED_COST", "_estimated_cost_or_zero", "round(value, 4)"):
+    for needle in (
+        "MAX_AI_ESTIMATED_COST",
+        "_estimated_cost_or_zero",
+        "round(value, 4)",
+        "production_route_readiness_issues",
+        "missing pricing for",
+    ):
         require(needle in model_router, f"ModelRouter cost normalization missing quota guard: {needle}")
     model_router_tests = (ROOT / "ai-service/app/tests/test_model_router.py").read_text(encoding="utf-8")
     for needle in (
         "test_router_log_call_ignores_oversized_estimated_cost",
         "test_router_log_call_rounds_estimated_cost_to_audit_scale",
         "test_router_pricing_ignores_oversized_computed_cost",
+        "test_router_production_route_readiness_requires_available_real_provider",
+        "test_router_production_route_readiness_requires_pricing",
+        "test_router_production_route_readiness_accepts_priced_routes",
     ):
         require(needle in model_router_tests, f"ModelRouter cost normalization missing regression test: {needle}")
+    ai_main = (ROOT / "ai-service/app/main.py").read_text(encoding="utf-8")
+    for needle in (
+        "production_route_readiness_issues",
+        "AI production routes are not ready",
+    ):
+        require(needle in ai_main, f"AI service production config missing cost gate: {needle}")
+    ai_main_tests = (ROOT / "ai-service/app/tests/test_main_security.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_validate_production_config_rejects_unpriced_real_routes",
+        "AI_MODEL_PRICING_JSON",
+    ):
+        require(needle in ai_main_tests, f"AI service production config tests missing cost gate: {needle}")
     openai_provider = (ROOT / "ai-service/app/gateway/openai_compatible_provider.py").read_text(encoding="utf-8")
     for needle in (
         "CloudflareAIGatewayProvider",

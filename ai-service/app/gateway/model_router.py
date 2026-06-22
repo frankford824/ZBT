@@ -193,6 +193,25 @@ class ModelRouter:
                     mock_routes.append(f"{task_type}.fallback[{index}]")
         return mock_routes
 
+    def production_route_readiness_issues(self, tenant_id: str = "production-config") -> list[str]:
+        issues: list[str] = []
+        route_names = sorted(self.LLM_ROUTES | self.EMBEDDING_ROUTES | self.RERANK_ROUTES)
+        configured_routes = self.config.get("routes", {})
+        for task_type in route_names:
+            if task_type not in configured_routes:
+                continue
+            try:
+                target = self.resolve(task_type, tenant_id=tenant_id)
+            except Exception as exc:  # noqa: BLE001 - production startup must expose route readiness failures.
+                issues.append(f"{task_type}: {exc}")
+                continue
+            if self._is_zero_cost_provider(target.provider):
+                issues.append(f"{task_type}: zero-cost provider {target.provider}")
+                continue
+            if self.estimate_cost(target.provider, target.model, 1000, 1000) <= 0:
+                issues.append(f"{task_type}: missing pricing for {target.provider}/{target.model}")
+        return issues
+
     def _route_target(self, task_type: str, route: dict[str, Any]) -> RouteTarget:
         provider = str(route["provider"]).strip()
         model = str(route.get("model") or "").strip()

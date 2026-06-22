@@ -8890,3 +8890,45 @@ PY
 
 1. 本轮关闭的是工程1运行态来源引用语义缺口，没有引入真实 `.env.production`，也没有接入真实 LLM、embedding 或 OCR endpoint。
 2. 第一可用版结束条件仍未满足：还需要真实 Provider/OCR production canary artifact、真实成本审计结果，以及 clean/synced production report 中 `loop_can_end=true`。
+
+## Loop-187 / AI 服务生产成本门禁前移 - 2026-06-22
+
+### 本轮目标
+
+1. 防止 AI 服务在 production 模式下使用真实 Provider 路由但缺少价格表，导致 `estimated_cost` 继续保持 0。
+2. 将真实 Provider 可用性和成本可审计性从最终报告阶段前移到 AI 服务启动校验。
+3. 保持本地开发和 local profile 的 Mock fallback 行为不变，只加强 production 模式。
+
+### 代码交付
+
+1. `ai-service/app/gateway/model_router.py` 新增 `production_route_readiness_issues()`。
+2. 新方法会遍历所有 LLM、embedding、rerank 路由；每条 production 路由必须解析到健康的非 zero-cost Provider，并且 `estimate_cost(provider, model, 1000, 1000)` 必须为正数。
+3. `ai-service/app/main.py` 的 `validate_production_config()` 新增 AI production route readiness 检查；production 模式下如果真实 Provider 不可用、落入 zero-cost Provider 或缺少价格表，会在服务启动阶段失败。
+4. `ai-service/app/tests/test_model_router.py` 新增 production route readiness 三类回归：缺 Provider key、缺价格表、价格表匹配通过。
+5. `ai-service/app/tests/test_main_security.py` 新增 `test_validate_production_config_rejects_unpriced_real_routes`，并让 production security 测试夹具带上可用 `AI_MODEL_PRICING_JSON`。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `production_route_readiness_issues`、缺价格表错误和新增测试名防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile app/gateway/model_router.py app/main.py
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+docker compose exec -T ai-service python -m pytest app/tests/test_model_router.py app/tests/test_main_security.py app/tests/test_provider_canary_eval.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. AI 服务 `model_router.py` 与 `main.py` 编译通过，`acceptance_tail_check.py` 编译通过。
+2. 容器内定向 pytest 通过 123 项，覆盖 ModelRouter production readiness、AI service production config 和 Provider canary。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 仍识别为 Loop-186，符合写日志前状态。
+4. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+5. AI pytest 已覆盖 295 项；local profile 下 Provider/OCR canary 在未配置真实外部 key/endpoint 时仍显式 skipped，不伪装为生产通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是 production 启动门禁和成本可审计性，没有提交真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产 Provider/OCR 配置、真实外部调用 canary、工程1运行态和 repo-wide check 同时进入 clean/synced production report，并得到 `loop_can_end=true`。
