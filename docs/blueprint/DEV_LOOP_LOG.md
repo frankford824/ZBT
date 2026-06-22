@@ -8475,3 +8475,50 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮没有启动本地 Docker 栈重新跑工程1运行态验收；新增的是成功验收后的结构化证据输出能力和总检回归。
 2. 第一可用版结束条件仍未满足：production profile 需要真实 `.env.production`、真实 Provider/OCR canary 通过，最终报告需要包含 repo-wide check 和工程1运行态验收并得到 `loop_can_end=true`。
+
+## Loop-178 / 最终证据包 Artifact 索引 - 2026-06-22
+
+### 本轮目标
+
+1. 让第一可用版最终报告不只保存命令 stdout，还能显式索引关键 JSON 证据文件。
+2. 将 production env JSON 矩阵纳入 `first_usable_release_report.py` 自动生成流程，避免 README 命令与最终报告分叉。
+3. 将工程1运行态 JSON 证据作为最终报告 artifact 登记，便于审查文件大小、sha256 和 JSON 状态。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `run_json_artifact_command()`，用于运行 JSON 证据命令并写入 artifact 文件。
+2. 新增 `artifact_summary()`，对 artifact 记录 `path`、`bytes`、`sha256`、`json_name` 和 `json_status`。
+3. production profile 或传入 `--env-file` 时，报告会运行 `first_usable_release_check.py --audit-production-env-json` 并写入 `tmp/production_env_audit.json`。
+4. 传入 `--include-project1-runtime` 时，报告仍运行 `acceptance_project1_check.py --json-output tmp/project1_runtime_acceptance.json`，并在最终 report 的 `artifacts` 中登记该文件。
+5. `infra/scripts/test_first_usable_release_report.py` 新增 artifact 摘要和长 JSON 输出回归测试，确认 JSON 状态、大小、sha256 被记录，且 artifact 文件不会使用截断后的 stdout。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `production_env_audit_json`、`tmp/production_env_audit.json`、`artifacts`、`artifact_summary` 和 `sha256` 防回退锚点。
+7. README 补充最终报告 `artifacts` 会登记 `tmp/production_env_audit.json` 与 `tmp/project1_runtime_acceptance.json`。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，6 项测试覆盖 env 解析、脱敏、阻断项、artifact 摘要和长 JSON 输出保存。
+2. production 模板证据包仍正确生成 `loop_can_end=false`，阻断项包含 production env audit、production Provider/OCR readiness、repo-wide check 和工程1运行态验收。
+3. 模板报告中出现 `production_env_audit_json` artifact，路径为 `tmp/production_env_audit.json`，`json_name=production_env_audit`，`json_status=failed`，并记录 sha256。
+4. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-178。
+5. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过，本地 Provider/OCR canary 继续显式 skipped。
+6. local 证据包仍生成 `loop_can_end=false`，`artifacts=[]`，阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收。
+7. `./infra/scripts/check.sh` 通过；工程1运行态证据测试、生产审计测试、证据包测试、静态文档、first usable local gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮仍没有真实 `.env.production`，因此 artifact 只能证明模板环境不会假通过，不能证明 production readiness 已完成。
+2. 工程1运行态 artifact 只有在真实服务栈执行 `--include-project1-runtime` 时才会生成并进入最终报告。

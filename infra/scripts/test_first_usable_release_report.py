@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,6 +85,56 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         )
 
         self.assertEqual(blocking, [])
+
+    def test_artifact_summary_records_json_status_and_hash(self) -> None:
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            artifact = Path(directory) / "production_env_audit.json"
+            artifact.write_text(
+                json.dumps({"name": "production_env_audit", "status": "passed"}),
+                encoding="utf-8",
+            )
+
+            summary = report.artifact_summary("production_env_audit_json", artifact)
+
+        self.assertEqual(summary["name"], "production_env_audit_json")
+        self.assertEqual(summary["status"], "present")
+        self.assertEqual(summary["json_name"], "production_env_audit")
+        self.assertEqual(summary["json_status"], "passed")
+        self.assertGreater(summary["bytes"], 0)
+        self.assertRegex(str(summary["sha256"]), r"^[0-9a-f]{64}$")
+
+    def test_json_artifact_command_preserves_full_output(self) -> None:
+        tmp_root = report.ROOT / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as directory:
+            artifact = Path(directory) / "production_env_audit.large.json"
+            payload = "x" * 9000
+
+            step = report.run_json_artifact_command(
+                "production_env_audit_json",
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import json; "
+                        f"print(json.dumps({{'name':'production_env_audit','status':'passed','payload':'{payload}'}}))"
+                    ),
+                ],
+                artifact,
+                env=os.environ.copy(),
+                timeout_s=30,
+                redact=lambda value: value,
+            )
+
+            saved = json.loads(artifact.read_text(encoding="utf-8"))
+
+        self.assertEqual(step["status"], "passed")
+        self.assertLessEqual(len(str(step["output"])), 8000)
+        self.assertEqual(saved["name"], "production_env_audit")
+        self.assertEqual(saved["status"], "passed")
+        self.assertEqual(saved["payload"], payload)
 
 
 if __name__ == "__main__":

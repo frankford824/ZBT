@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -19,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SENSITIVE_ENV_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|HMAC|JWT)", re.IGNORECASE)
 URL_WITH_PASSWORD_RE = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
+PROJECT1_RUNTIME_JSON = ROOT / "tmp/project1_runtime_acceptance.json"
 
 
 class ReportError(RuntimeError):
@@ -107,6 +110,80 @@ def run_command(name: str, command: list[str], *, env: dict[str, str], timeout_s
         }
 
 
+def run_json_artifact_command(
+    name: str,
+    command: list[str],
+    artifact: Path,
+    *,
+    env: dict[str, str],
+    timeout_s: int,
+    redact,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_s,
+            check=False,
+        )
+        output = completed.stdout.strip()
+        redacted_output = redact(output)
+        step = {
+            "name": name,
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "returncode": completed.returncode,
+            "duration_s": round(time.monotonic() - started, 3),
+            "command": redact(shlex.join(command)),
+            "output": redacted_output[-8000:],
+        }
+        if redacted_output:
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_text(redacted_output + "\n", encoding="utf-8")
+            step["artifact"] = artifact_summary(name, artifact)
+        return step
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "").strip() if isinstance(exc.stdout, str) else ""
+        redacted_output = redact(output)
+        return {
+            "name": name,
+            "status": "failed",
+            "returncode": None,
+            "duration_s": round(time.monotonic() - started, 3),
+            "command": redact(shlex.join(command)),
+            "output": redacted_output[-8000:],
+            "error": f"timed out after {timeout_s}s",
+        }
+
+
+def artifact_summary(name: str, path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {"name": name, "path": str(path.relative_to(ROOT)), "status": "missing"}
+    content = path.read_bytes()
+    parsed_status = "not_json"
+    parsed_name = ""
+    try:
+        parsed = json.loads(content.decode("utf-8"))
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        parsed_status = str(parsed.get("status") or "unknown")
+        parsed_name = str(parsed.get("name") or "")
+    return {
+        "name": name,
+        "path": str(path.relative_to(ROOT)),
+        "status": "present",
+        "bytes": len(content),
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "json_name": parsed_name,
+        "json_status": parsed_status,
+    }
+
+
 def git_value(command: list[str]) -> str:
     completed = subprocess.run(
         command,
@@ -136,6 +213,19 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         if args.env_file:
             audit_command.extend(["--env-file", str(args.env_file)])
         steps.append(run_command("production_env_audit", audit_command, env=env, timeout_s=args.timeout_s, redact=redact))
+        audit_json_command = [python, "infra/scripts/first_usable_release_check.py", "--audit-production-env-json"]
+        if args.env_file:
+            audit_json_command.extend(["--env-file", str(args.env_file)])
+        steps.append(
+            run_json_artifact_command(
+                "production_env_audit_json",
+                audit_json_command,
+                PRODUCTION_ENV_AUDIT_JSON,
+                env=env,
+                timeout_s=args.timeout_s,
+                redact=redact,
+            )
+        )
 
     if args.profile == "production":
         production_command = [python, "infra/scripts/first_usable_release_check.py", "--profile", "production"]
@@ -173,6 +263,18 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
 
     step_status = {step["name"]: step["status"] for step in steps}
     blocking_requirements = blocking_items(args, step_status)
+    artifacts = [
+        artifact
+        for artifact in (
+            artifact_summary("production_env_audit_json", PRODUCTION_ENV_AUDIT_JSON)
+            if args.env_file or args.profile == "production"
+            else None,
+            artifact_summary("project1_runtime_acceptance", PROJECT1_RUNTIME_JSON)
+            if args.include_project1_runtime
+            else None,
+        )
+        if artifact is not None
+    ]
     return {
         "name": "first_usable_release_report",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -184,6 +286,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "include_repo_check": args.include_repo_check,
         "include_project1_runtime": args.include_project1_runtime,
         "steps": steps,
+        "artifacts": artifacts,
         "blocking_requirements": blocking_requirements,
         "loop_can_end": not blocking_requirements,
     }
