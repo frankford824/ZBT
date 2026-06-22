@@ -8132,3 +8132,41 @@ python3 infra/scripts/acceptance_project1_check.py
 1. 本轮仍未把本地环境切换到真实外部大模型和真实 OCR endpoint；工程1运行态验收继续使用当前模型路由的可用 Provider/fallback 能力。
 2. 工程1运行态脚本依赖本地 Docker 服务栈和对象存储状态，不放入 `check.sh` 的默认运行链路；`check.sh` 只编译脚本并继续执行离线 golden 与 canary。
 3. 合规 gate 里现有 L4 `score_optimization` warn 规则会产生非阻断建议；脚本通过现有忽略建议 API 处理后再验证导出 gate，不绕过后端状态机。
+
+## Loop-170 / 第一可用版收口闸门 - 2026-06-22
+
+### 本轮目标
+
+1. 把“什么时候可以结束 loop”从口头判断固化为可执行的 readiness gate。
+2. 区分本地第一可用验收和生产 Provider/OCR 上线验收：本地允许外部 Provider 明确 skipped，生产 profile 必须非 skipped。
+3. 把工程1运行态验收、Provider canary、OCR canary、工程1 golden、导出格式和费用配置说明汇总为单一检查入口。
+
+### 代码交付
+
+1. 新增 `infra/scripts/first_usable_release_check.py`，默认执行静态收口检查，确认工程1真实样本、运行态验收脚本、Provider/OCR canary、三类工程1 golden、README 和最新 Loop 证据存在。
+2. `first_usable_release_check.py --run-canaries` 会实际调用 Provider canary 与 OCR canary；本地 profile 允许 skipped 但明确输出 skipped 状态。
+3. `first_usable_release_check.py --profile production` 会要求 Provider/OCR canary 非 skipped，Provider 必须非 Mock、真实调用成功，并通过 `AI_MODEL_PRICING_JSON` 得到正向 `estimated_cost`。
+4. `infra/scripts/check.sh` 将 readiness gate 纳入默认总检，先做静态收口检查，再继续跑前端、Go、AI、Provider/OCR canary 和工程1 golden。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 readiness gate 防回退锚点；README 增加本地和生产收口命令。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-169。
+2. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；静态收口证据 14 个文件齐全，Provider canary 本地 `skipped`，`passed=26/30`，OCR canary 本地 `skipped`，`passed=1/2`。
+3. `./infra/scripts/check.sh` 通过；新增 readiness gate、前端 build/lint、后端 go test/vet、AI compile/ruff/pytest `288 passed`、Provider canary 本地 skipped、OCR canary 本地 skipped、工程1解析评估 `117/117`、生成覆盖评估 `9/9`、导出格式评估 `23/23` 和运行中 `ai-service` 容器内 pytest `288 passed` 均通过。
+
+### 偏离蓝图
+
+1. 本轮没有把生产 Provider/OCR 验收伪装为通过；当前本机仍缺真实 Provider key、`AI_MODEL_PRICING_JSON` 和 OCR endpoint，所以 production profile 仍应失败。
+2. readiness gate 解决的是 loop 收口证据分层，不替代 `acceptance_project1_check.py` 的运行态全链路验收。

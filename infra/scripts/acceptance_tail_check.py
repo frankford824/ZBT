@@ -847,6 +847,23 @@ def check_static_docs() -> None:
         "acceptance_project1_check.py" in check_script,
         "Repo-wide check does not compile project1 runtime acceptance script",
     )
+    require(
+        "first_usable_release_check.py" in check_script
+        and "first_usable_release_check.py\"" in check_script,
+        "Repo-wide check does not run first usable release readiness gate",
+    )
+    first_usable_check = (ROOT / "infra/scripts/first_usable_release_check.py").read_text(encoding="utf-8")
+    for needle in (
+        "first usable release readiness",
+        "--profile",
+        "production",
+        "--run-canaries",
+        "provider_canary_eval",
+        "ocr_provider_eval",
+        "acceptance_project1_check.py",
+        "AI_MODEL_PRICING_JSON",
+    ):
+        require(needle in first_usable_check, f"First usable release check missing gate: {needle}")
     project1_acceptance = (ROOT / "infra/scripts/acceptance_project1_check.py").read_text(encoding="utf-8")
     for needle in (
         "docs/ex/工程1",
@@ -868,6 +885,8 @@ def check_static_docs() -> None:
     for needle in (
         "provider_canary_eval --allow-skip",
         "provider_canary_eval --strict --call-provider --require-cost",
+        "first_usable_release_check.py --run-canaries",
+        "first_usable_release_check.py --profile production",
         "--route chapter_generate --route knowledge_embedding --route knowledge_rerank",
         "app.evaluation.ocr_provider_eval",
         "--min-table-blocks 1",

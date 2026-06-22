@@ -194,3 +194,12 @@ cd ai-service
 docker compose up -d --build
 python3 infra/scripts/acceptance_project1_check.py
 ```
+
+第一可用版收口检查可使用：
+
+```bash
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+python3 infra/scripts/first_usable_release_check.py --profile production
+```
+
+本地 profile 允许 Provider/OCR 在未配置 endpoint 或密钥时显式 skipped；production profile 会要求 Provider/OCR canary 非 skipped、非 Mock、真实调用成功并具备正向 `estimated_cost`。
