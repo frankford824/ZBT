@@ -8296,3 +8296,46 @@ python3 infra/scripts/first_usable_release_check.py --run-canaries
 
 1. 本轮仍不伪造真实模型或真实 OCR；`--audit-production-env` 只证明生产配置没有明显缺项，不证明外部服务可调用。
 2. 结束 loop 的硬条件仍是：真实 `.env.production` 通过聚合审计，production profile 的 Provider canary/OCR canary 非 skipped 且 `estimated_cost` 为正，并且工程1运行态验收 `python3 infra/scripts/acceptance_project1_check.py` 通过。
+
+## Loop-174 / 第一可用版证据包 - 2026-06-22
+
+### 本轮目标
+
+1. 将“是否可以结束 loop”的最终判断固化为一份可归档、可审查的 JSON 证据包，而不是靠聊天记录人工拼接。
+2. 让证据包在本地/模板环境中明确 `loop_can_end=false`，避免把 skipped canary 或模板配置误判为第一可用版完成。
+3. 给真实生产 `.env.production` 准备好最终收口命令：生产 profile、repo-wide check 和工程1运行态验收全部通过才允许 `loop_can_end=true`。
+
+### 代码交付
+
+1. 新增 `infra/scripts/first_usable_release_report.py`，可生成 `first_usable_release_report` JSON，记录当前 commit、branch、remote、profile、env file、每个步骤命令、耗时、返回码、输出和阻断项。
+2. 证据包默认运行静态 readiness；local profile 会运行本地 Provider/OCR canary；production profile 会运行生产 env 聚合审计和 production readiness。
+3. `--include-repo-check` 会把 `./infra/scripts/check.sh` 纳入 `loop_can_end` 必要条件；`--include-project1-runtime` 会把 `python3 infra/scripts/acceptance_project1_check.py` 纳入必要条件。
+4. 证据包带脱敏逻辑：对 env file 中的 secret/token/password/api key/access key/HMAC/JWT、数据库 URL 密码和 Bearer token 做 `<redacted>` 处理。
+5. `infra/scripts/check.sh` 将新脚本纳入 Python 语法编译；`infra/scripts/acceptance_tail_check.py --static-docs` 增加报告脚本、`loop_can_end`、阻断条件、脱敏和 README 最终命令防回退锚点。
+6. README 增加最终证据包命令：`python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production --include-repo-check --include-project1-runtime --output tmp/first_usable_release_report.json`。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. local 证据包生成成功，`loop_can_end=false`，阻断项为 `report profile must be production`、`repo-wide check must be included`、`project1 runtime acceptance must be included`；步骤为 `static_readiness:passed` 和 `local_readiness_canaries:passed`。
+2. production 模板证据包生成成功，`loop_can_end=false`，阻断项包含 `production env audit must pass`、`production Provider/OCR readiness must pass`、`repo-wide check must be included` 和 `project1 runtime acceptance must be included`；模板占位值不会假通过。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 保留 `acceptance_project1_check.py`、`python3 infra/scripts/acceptance_project1_check.py`、Provider canary、OCR canary 和 `./infra/scripts/check.sh` 收口证据。
+4. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；本地 Provider/OCR canary 继续显式 skipped。
+5. `./infra/scripts/check.sh` 通过；继续覆盖 readiness gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、工程1 golden、生成覆盖、导出格式和容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮仍没有真实生产密钥或真实 OCR endpoint，因此证据包只能证明“未完成原因清晰”，不能证明第一可用版可结束。
+2. 结束 loop 的可审查证据改为：真实 `.env.production` 下运行最终证据包命令，并得到 `loop_can_end=true`。

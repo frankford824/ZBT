@@ -852,6 +852,10 @@ def check_static_docs() -> None:
         and "first_usable_release_check.py\"" in check_script,
         "Repo-wide check does not run first usable release readiness gate",
     )
+    require(
+        "first_usable_release_report.py" in check_script,
+        "Repo-wide check does not compile first usable release report script",
+    )
     first_usable_check = (ROOT / "infra/scripts/first_usable_release_check.py").read_text(encoding="utf-8")
     for needle in (
         "first usable release readiness",
@@ -924,6 +928,8 @@ def check_static_docs() -> None:
         "cp .env.production.example .env.production",
         "first_usable_release_check.py --audit-production-env --env-file .env.production",
         "first_usable_release_check.py --profile production --env-file .env.production",
+        "first_usable_release_report.py --profile production --env-file .env.production --include-repo-check --include-project1-runtime",
+        "loop_can_end=true",
         ".env.production.example",
         ".env.production",
         ".gitignore",
@@ -943,6 +949,22 @@ def check_static_docs() -> None:
         "--min-cell-bbox-count 1",
     ):
         require(needle in readme, f"README missing AI canary guidance: {needle}")
+    first_usable_report = (ROOT / "infra/scripts/first_usable_release_report.py").read_text(encoding="utf-8")
+    for needle in (
+        "first_usable_release_report",
+        "loop_can_end",
+        "blocking_requirements",
+        "--include-repo-check",
+        "--include-project1-runtime",
+        "project1_runtime_acceptance",
+        "repo_wide_check",
+        "production_readiness",
+        "production_env_audit",
+        "SENSITIVE_ENV_RE",
+        "<redacted>",
+        "Bearer",
+    ):
+        require(needle in first_usable_report, f"First usable release report missing evidence guard: {needle}")
     sample_docs_eval = (ROOT / "docs/blueprint/SAMPLE_DOCS_EVALUATION.md").read_text(encoding="utf-8")
     for needle in (
         "工程1 OCR canary",

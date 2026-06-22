@@ -133,6 +133,7 @@ def check_static_release_evidence() -> None:
         "infra/scripts/acceptance_project1_check.py",
         "infra/scripts/acceptance_tail_check.py",
         "infra/scripts/check.sh",
+        "infra/scripts/first_usable_release_report.py",
         "ai-service/app/evaluation/provider_canary_eval.py",
         "ai-service/app/evaluation/ocr_provider_eval.py",
         "ai-service/app/evaluation/tender_parse_eval.py",
@@ -172,6 +173,8 @@ def check_static_release_evidence() -> None:
         "app.evaluation.ocr_provider_eval",
         "BID_EXPORT_TEMPLATE_PATH",
         "AI_MODEL_PRICING_JSON",
+        "first_usable_release_report.py --profile production",
+        "--include-repo-check --include-project1-runtime",
     ):
         require(needle in readme, f"README missing first usable guidance: {needle}")
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
