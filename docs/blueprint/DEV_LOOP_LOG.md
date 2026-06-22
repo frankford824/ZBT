@@ -8793,3 +8793,45 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮强化的是最终证据包脱敏安全，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过。
+
+## Loop-185 / 第一可用版远端发布状态稳健校验 - 2026-06-22
+
+### 本轮目标
+
+1. 消除最终证据包在 SSH 远端读取偶发超时或噪声输出时的误阻断。
+2. 保持 `origin` 必须为 `git@github.com:frankford824/ZBT.git` 的发布约束不变。
+3. 让 production report 明确记录远端 HEAD 读取方法与失败明细，避免把 GitHub 连通性问题误判为代码未同步。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `EXPECTED_GITHUB_HTTPS_REMOTE`、`git_remote_check_env()`、`git_remote_head_candidates()` 和 `remote_head_from_ls_remote()`。
+2. 远端 HEAD 读取现在先走非交互 SSH origin，并设置 `GIT_TERMINAL_PROMPT=0` 与 `GIT_SSH_COMMAND=ssh -o BatchMode=yes ...`，避免 release report 卡在交互式认证或长时间 TCP 等待。
+3. 当 origin 为指定 SSH 仓库且本机已安装 `gh` 时，SSH 读取失败会用 `git -c credential.helper='!gh auth git-credential' ls-remote https://github.com/frankford824/ZBT.git refs/heads/main` 做只读兜底；不会修改 `origin`，也不会放宽 SSH origin 门禁。
+4. `remote_head_from_ls_remote()` 只接受目标 ref 对应的 40 位 SHA，拒绝 `Connection to github.com closed...` 这类 SSH 噪声，避免把非 hash 文本误记为 remote HEAD。
+5. `git_release_state` 新增 `remote_check_method` 与 `remote_check_errors`，让最终 JSON 证据能说明用了 origin 还是 `github_https_gh` 兜底。
+6. `infra/scripts/test_first_usable_release_report.py` 新增 SSH 噪声解析和 gh HTTPS 兜底回归测试；README 与 `acceptance_tail_check.py --static-docs` 同步新增发布状态兜底说明和防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --timeout-s 60 --output tmp/first_usable_release_report.production-template.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，18 项测试覆盖脱敏、artifact 语义、Git release clean/synced 状态、remote HEAD 可读性、SSH 噪声过滤和 gh HTTPS 兜底。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 识别为 Loop-184，日志写入后再次运行通过并识别为 Loop-185。
+3. production 模板证据包仍正确生成 `loop_can_end=false`；`git_release_state.remote_head=2797a5f19950185c8ad44fe0fbaa56a620ff01cf`，`remote_check_method=origin`，`remote_check_errors=[]`，`head_matches_remote=true`。
+4. production 模板证据包不再误报 `git remote main HEAD must be readable` 或 `git HEAD must match origin/main`；当前仍因本轮未提交显示 `git worktree must be clean`，符合发布门禁预期。
+5. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮修复的是最终发布证据读取链路，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过。

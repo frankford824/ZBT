@@ -164,6 +164,8 @@ def valid_git_release_state() -> dict[str, object]:
         "remote_ref": f"refs/heads/{report.EXPECTED_RELEASE_BRANCH}",
         "remote_head": commit,
         "remote_error": "",
+        "remote_check_method": "origin",
+        "remote_check_errors": [],
         "head_matches_remote": True,
         "remote_checked": True,
     }
@@ -364,6 +366,51 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         blocking = report.git_release_state_blocking_items(args, git_state)
 
         self.assertEqual(blocking, ["git remote main HEAD must be readable"])
+
+    def test_remote_head_from_ls_remote_ignores_ssh_noise(self) -> None:
+        commit = "a" * 40
+
+        parsed = report.remote_head_from_ls_remote(
+            f"Connection to github.com closed by remote host.\n{commit}\trefs/heads/main\n",
+            "refs/heads/main",
+        )
+
+        self.assertEqual(parsed, commit)
+        self.assertEqual(report.remote_head_from_ls_remote("Connection closed\n", "refs/heads/main"), "")
+
+    def test_collect_git_release_state_uses_gh_https_fallback_for_remote_head(self) -> None:
+        commit = "b" * 40
+
+        def fake_git_value(command: list[str], **_: object) -> str:
+            if command == ["git", "rev-parse", "HEAD"]:
+                return commit
+            if command == ["git", "branch", "--show-current"]:
+                return report.EXPECTED_RELEASE_BRANCH
+            if command == ["git", "remote", "get-url", "origin"]:
+                return report.EXPECTED_ORIGIN_REMOTE
+            if command == ["git", "status", "--porcelain"]:
+                return ""
+            raise AssertionError(f"unexpected git value command: {command}")
+
+        with (
+            patch.object(report, "git_value", side_effect=fake_git_value),
+            patch.object(report.shutil, "which", return_value="/home/wsfwk/.local/bin/gh"),
+            patch.object(
+                report,
+                "git_value_with_error",
+                side_effect=[
+                    ("", "timed out after 30s"),
+                    (f"{commit}\trefs/heads/{report.EXPECTED_RELEASE_BRANCH}", ""),
+                ],
+            ) as remote_call,
+        ):
+            state = report.collect_git_release_state(include_remote=True, timeout_s=60)
+
+        self.assertEqual(state["remote_head"], commit)
+        self.assertEqual(state["remote_check_method"], "github_https_gh")
+        self.assertEqual(state["remote_check_errors"], [{"method": "origin", "error": "timed out after 30s"}])
+        self.assertTrue(state["head_matches_remote"])
+        self.assertEqual(remote_call.call_count, 2)
 
     def test_blocking_items_require_semantically_valid_artifacts(self) -> None:
         args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)

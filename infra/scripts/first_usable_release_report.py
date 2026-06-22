@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import time
@@ -20,12 +21,14 @@ ROOT = Path(__file__).resolve().parents[2]
 SENSITIVE_ENV_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|HMAC|JWT)", re.IGNORECASE)
 URL_WITH_PASSWORD_RE = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SENSITIVE_URL_ENV_KEYS = {"DATABASE_URL", "MIGRATION_DATABASE_URL", "REDIS_URL"}
 PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
 PROVIDER_CANARY_JSON = ROOT / "tmp/provider_canary.json"
 OCR_CANARY_JSON = ROOT / "tmp/ocr_provider_canary.json"
 PROJECT1_RUNTIME_JSON = ROOT / "tmp/project1_runtime_acceptance.json"
 EXPECTED_ORIGIN_REMOTE = "git@github.com:frankford824/ZBT.git"
+EXPECTED_GITHUB_HTTPS_REMOTE = "https://github.com/frankford824/ZBT.git"
 EXPECTED_RELEASE_BRANCH = "main"
 PRODUCTION_REQUIRED_ARTIFACTS = (
     ("production_env_audit_json", "production artifact production_env_audit_json must be present and passed"),
@@ -497,11 +500,12 @@ def git_value(command: list[str], *, timeout_s: int | None = None) -> str:
     return completed.stdout.strip()
 
 
-def git_value_with_error(command: list[str], *, timeout_s: int) -> tuple[str, str]:
+def git_value_with_error(command: list[str], *, timeout_s: int, env: dict[str, str] | None = None) -> tuple[str, str]:
     try:
         completed = subprocess.run(
             command,
             cwd=str(ROOT),
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -511,6 +515,47 @@ def git_value_with_error(command: list[str], *, timeout_s: int) -> tuple[str, st
     except subprocess.TimeoutExpired:
         return "", f"timed out after {timeout_s}s"
     return completed.stdout.strip(), "" if completed.returncode == 0 else completed.stdout.strip()
+
+
+def git_remote_check_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.setdefault(
+        "GIT_SSH_COMMAND",
+        "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=2",
+    )
+    return env
+
+
+def git_remote_head_candidates(remote: str, remote_ref: str) -> list[tuple[str, list[str], dict[str, str]]]:
+    env = git_remote_check_env()
+    candidates = [("origin", ["git", "ls-remote", "origin", remote_ref], env)]
+    if remote == EXPECTED_ORIGIN_REMOTE and shutil.which("gh"):
+        candidates.append(
+            (
+                "github_https_gh",
+                [
+                    "git",
+                    "-c",
+                    "credential.helper=",
+                    "-c",
+                    "credential.helper=!gh auth git-credential",
+                    "ls-remote",
+                    EXPECTED_GITHUB_HTTPS_REMOTE,
+                    remote_ref,
+                ],
+                env,
+            )
+        )
+    return candidates
+
+
+def remote_head_from_ls_remote(output: str, remote_ref: str) -> str:
+    for line in output.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[1] == remote_ref and GIT_SHA_RE.fullmatch(parts[0]):
+            return parts[0]
+    return ""
 
 
 def collect_git_release_state(*, include_remote: bool, timeout_s: int) -> dict[str, Any]:
@@ -533,13 +578,27 @@ def collect_git_release_state(*, include_remote: bool, timeout_s: int) -> dict[s
         "remote_checked": include_remote,
     }
     if include_remote:
-        remote_head, remote_error = git_value_with_error(
-            ["git", "ls-remote", "origin", f"refs/heads/{EXPECTED_RELEASE_BRANCH}"],
-            timeout_s=min(max(timeout_s, 1), 60),
-        )
-        state["remote_error"] = remote_error
-        if remote_head:
-            state["remote_head"] = remote_head.split()[0]
+        remote_ref = f"refs/heads/{EXPECTED_RELEASE_BRANCH}"
+        state["remote_check_method"] = ""
+        state["remote_check_errors"] = []
+        per_attempt_timeout = min(max(timeout_s, 1), 30)
+        for method, command, env in git_remote_head_candidates(remote, remote_ref):
+            remote_output, remote_error = git_value_with_error(
+                command,
+                timeout_s=per_attempt_timeout,
+                env=env,
+            )
+            remote_head = remote_head_from_ls_remote(remote_output, remote_ref)
+            if remote_head:
+                state["remote_head"] = remote_head
+                state["remote_check_method"] = method
+                state["remote_error"] = ""
+                break
+            if remote_output and not remote_error:
+                remote_error = f"remote output did not include a valid {remote_ref} SHA: {remote_output[-1000:]}"
+            if remote_error:
+                state["remote_check_errors"].append({"method": method, "error": remote_error[-1000:]})
+                state["remote_error"] = remote_error
         state["head_matches_remote"] = bool(commit and state["remote_head"] == commit)
     return state
 
