@@ -1061,6 +1061,8 @@ def check_static_docs() -> None:
         "production_readiness",
         "production_env_audit",
         "SENSITIVE_ENV_RE",
+        "SENSITIVE_URL_ENV_KEYS",
+        "sensitive_values_from_env",
         "<redacted>",
         "Bearer",
     ):
@@ -1083,6 +1085,7 @@ def check_static_docs() -> None:
     for needle in (
         "test_load_env_file_collects_sensitive_values",
         "test_redactor_masks_secrets_urls_and_bearer_tokens",
+        "test_build_report_redacts_sensitive_process_environment_values",
         "test_blocking_items_require_production_repo_check_and_project1_runtime",
         "test_blocking_items_allow_complete_production_evidence",
         "test_blocking_items_require_clean_synced_git_release_state",

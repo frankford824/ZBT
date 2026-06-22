@@ -8750,3 +8750,46 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮强化的是最终发布状态门禁，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过。
+
+## Loop-184 / 第一可用版证据包进程环境脱敏 - 2026-06-22
+
+### 本轮目标
+
+1. 防止最终第一可用版报告在 CI 或生产终端使用进程环境变量注入密钥时泄露真实 key。
+2. 让 `.env.production` 文件和 `os.environ` 中的敏感值走同一套脱敏规则。
+3. 保持最终 report 的 command output 与 JSON artifact 都只写入脱敏后的内容。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `SENSITIVE_URL_ENV_KEYS`、`is_sensitive_env_key()` 和 `sensitive_values_from_env()`。
+2. `load_env_file()` 改为复用 `is_sensitive_env_key()`，避免文件 env 与进程 env 的敏感 key 判断分叉。
+3. `build_report()` 现在将 `.env.production` 中收集到的敏感值与当前进程环境变量中的敏感值合并后创建 redactor。
+4. `infra/scripts/test_first_usable_release_report.py` 新增 `test_build_report_redacts_sensitive_process_environment_values`，验证 `OPENAI_API_KEY` 和 `DATABASE_URL` 只来自进程环境时仍会在 report step output 中脱敏。
+5. README 补充说明最终证据包会同时使用 `.env.production` 和进程环境变量中的敏感值对命令输出与 JSON artifact 做脱敏。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `SENSITIVE_URL_ENV_KEYS`、`sensitive_values_from_env` 与新测试名防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，16 项测试覆盖脱敏、进程环境变量敏感值脱敏、命令阻断、artifact 语义、Git release 状态、remote HEAD 可读性、stale artifact 清理和 production canary artifact 索引。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 识别为 Loop-183，日志写入后再次运行通过并识别为 Loop-184。
+3. production 模板证据包仍正确生成 `loop_can_end=false`；当前工作区未提交时仍包含 `git worktree must be clean` 阻断，证明 Git release 门禁没有被本轮改动放松。
+4. local 证据包仍正确生成 `loop_can_end=false`，阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收。
+5. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是最终证据包脱敏安全，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过。

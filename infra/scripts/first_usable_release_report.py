@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SENSITIVE_ENV_RE = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|ACCESS_KEY|HMAC|JWT)", re.IGNORECASE)
 URL_WITH_PASSWORD_RE = re.compile(r"([a-z][a-z0-9+.-]*://[^:/@\s]+:)([^@\s]+)(@)", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+SENSITIVE_URL_ENV_KEYS = {"DATABASE_URL", "MIGRATION_DATABASE_URL", "REDIS_URL"}
 PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
 PROVIDER_CANARY_JSON = ROOT / "tmp/provider_canary.json"
 OCR_CANARY_JSON = ROOT / "tmp/ocr_provider_canary.json"
@@ -94,9 +95,17 @@ def load_env_file(path: Path | None) -> tuple[dict[str, str], list[str]]:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
         loaded[key] = value
-        if value and (SENSITIVE_ENV_RE.search(key) or key in {"DATABASE_URL", "MIGRATION_DATABASE_URL", "REDIS_URL"}):
+        if is_sensitive_env_key(key) and value:
             sensitive_values.append(value)
     return loaded, sensitive_values
+
+
+def is_sensitive_env_key(key: str) -> bool:
+    return bool(SENSITIVE_ENV_RE.search(key) or key in SENSITIVE_URL_ENV_KEYS)
+
+
+def sensitive_values_from_env(env: dict[str, str]) -> list[str]:
+    return [value for key, value in env.items() if value and is_sensitive_env_key(key)]
 
 
 def redactor(values: list[str]):
@@ -555,10 +564,10 @@ def git_release_state_blocking_items(args: argparse.Namespace, state: dict[str, 
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
-    loaded_env, sensitive_values = load_env_file(args.env_file)
+    loaded_env, file_sensitive_values = load_env_file(args.env_file)
     env = os.environ.copy()
     env.update(loaded_env)
-    redact = redactor(sensitive_values)
+    redact = redactor([*file_sensitive_values, *sensitive_values_from_env(env)])
 
     python = "python3"
     steps: list[dict[str, Any]] = []

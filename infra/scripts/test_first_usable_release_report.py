@@ -210,6 +210,43 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
         self.assertIn("postgres://zbt:<redacted>@example.com/zbt", output)
         self.assertIn("Bearer <redacted>", output)
 
+    def test_build_report_redacts_sensitive_process_environment_values(self) -> None:
+        args = argparse.Namespace(
+            profile="local",
+            env_file=None,
+            include_repo_check=False,
+            include_project1_runtime=False,
+            timeout_s=30,
+        )
+
+        def fake_run_command(name: str, _: list[str], **kwargs: object) -> dict[str, object]:
+            redact = kwargs["redact"]
+            assert callable(redact)
+            output = redact(
+                "OPENAI_API_KEY=sk-env-secret "
+                "DATABASE_URL=postgres://zbt:db-password@example.com/zbt"
+            )
+            return {"name": name, "status": "passed", "returncode": 0, "output": output}
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "sk-env-secret",
+                    "DATABASE_URL": "postgres://zbt:db-password@example.com/zbt",
+                },
+            ),
+            patch.object(report, "run_command", side_effect=fake_run_command),
+            patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
+        ):
+            generated = report.build_report(args)
+
+        combined_output = "\n".join(str(step.get("output") or "") for step in generated["steps"])
+        self.assertNotIn("sk-env-secret", combined_output)
+        self.assertNotIn("db-password", combined_output)
+        self.assertIn("OPENAI_API_KEY=<redacted>", combined_output)
+        self.assertIn("DATABASE_URL=<redacted>", combined_output)
+
     def test_blocking_items_require_production_repo_check_and_project1_runtime(self) -> None:
         args = argparse.Namespace(profile="local", include_repo_check=False, include_project1_runtime=False)
         blocking = report.blocking_items(
