@@ -173,11 +173,13 @@ type SearchRequest struct {
 }
 
 type SourceRef struct {
-	ChunkID    string `json:"chunk_id"`
-	DocumentID string `json:"document_id"`
-	Title      string `json:"title"`
-	PageStart  *int   `json:"page_start"`
-	PageEnd    *int   `json:"page_end"`
+	CitationID  string `json:"citation_id"`
+	ReferenceID string `json:"reference_id"`
+	ChunkID     string `json:"chunk_id"`
+	DocumentID  string `json:"document_id"`
+	Title       string `json:"title"`
+	PageStart   *int   `json:"page_start"`
+	PageEnd     *int   `json:"page_end"`
 }
 
 type SearchResult struct {
@@ -2176,14 +2178,32 @@ func scanSearchResult(row scanner) (SearchResult, error) {
 		return SearchResult{}, err
 	}
 	result.Document = document
+	citationID := knowledgeSourceCitationID(result.DocumentID, result.ChunkID)
 	result.SourceRef = SourceRef{
-		ChunkID:    result.ChunkID,
-		DocumentID: result.DocumentID,
-		Title:      result.Title,
-		PageStart:  result.PageStart,
-		PageEnd:    result.PageEnd,
+		CitationID:  citationID,
+		ReferenceID: citationID,
+		ChunkID:     result.ChunkID,
+		DocumentID:  result.DocumentID,
+		Title:       result.Title,
+		PageStart:   result.PageStart,
+		PageEnd:     result.PageEnd,
 	}
 	return result, nil
+}
+
+func knowledgeSourceCitationID(documentID, chunkID string) string {
+	documentID = strings.TrimSpace(documentID)
+	chunkID = strings.TrimSpace(chunkID)
+	if documentID == "" && chunkID == "" {
+		return ""
+	}
+	if documentID == "" {
+		return "knowledge:" + chunkID
+	}
+	if chunkID == "" {
+		return "knowledge:" + documentID
+	}
+	return "knowledge:" + documentID + ":" + chunkID
 }
 
 func scanDocumentReference(row scanner) (DocumentReference, error) {

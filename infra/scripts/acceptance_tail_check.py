@@ -966,6 +966,9 @@ def check_static_docs() -> None:
         "sha256",
         "parse_response_matrix",
         "companion_knowledge",
+        "select_traceable_knowledge_source_ref",
+        "selected_ref_has_reference_id",
+        "selected_ref_has_location",
         "generation_coverage_compliance",
         "docx_export",
         "write_json_output",
@@ -974,6 +977,8 @@ def check_static_docs() -> None:
     project1_acceptance_tests = (ROOT / "infra/scripts/test_acceptance_project1_check.py").read_text(encoding="utf-8")
     for needle in (
         "test_write_json_output_records_runtime_evidence",
+        "test_select_traceable_knowledge_source_ref_prefers_ref_with_id_and_location",
+        "test_select_traceable_knowledge_source_ref_rejects_refs_without_reference_id",
         "project1_runtime_acceptance",
         "parse_response_matrix",
         "generation_coverage_compliance",
@@ -1228,6 +1233,9 @@ def check_static_docs() -> None:
     for needle in (
         "maxKnowledgeTemplateNameRunes",
         "maxKnowledgeTemplateContentJSONBytes",
+        "CitationID",
+        "ReferenceID",
+        "knowledgeSourceCitationID",
         "normalizeDocumentTemplateRequest",
         "normalizeDocumentTemplateContent",
         "maxKnowledgeCategoryNameRunes",
@@ -1290,6 +1298,7 @@ def check_static_docs() -> None:
         "TestUnmarshalKnowledgeStoredBusinessJSONNormalizesEmptyFields",
         "TestScanKnowledgeStoredBusinessJSONFieldsRejectInvalidJSON",
         "TestScanKnowledgeStoredBusinessJSONFieldsNormalizeEmptyJSON",
+        "TestScanSearchResultAddsTraceableSourceReferenceIDs",
         "TestNormalizeKnowledgeCallbackBoundsDocumentFields",
         "TestKnowledgeCallbackRejectsInvalidDoneChunksBeforeDB",
         "TestNormalizeAcceptedKnowledgeTaskRejectsOversizedRoute",

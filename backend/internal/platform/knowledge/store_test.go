@@ -642,6 +642,23 @@ func TestScanKnowledgeStoredBusinessJSONFieldsNormalizeEmptyJSON(t *testing.T) {
 	}
 }
 
+func TestScanSearchResultAddsTraceableSourceReferenceIDs(t *testing.T) {
+	result, err := scanSearchResult(knowledgeSearchResultScanRow([]byte(`{}`), []byte(`{}`), []byte(`[]`)))
+	if err != nil {
+		t.Fatalf("scan search result: %v", err)
+	}
+	expected := "knowledge:document-1:chunk-1"
+	if result.SourceRef.CitationID != expected {
+		t.Fatalf("expected citation id %q, got %q", expected, result.SourceRef.CitationID)
+	}
+	if result.SourceRef.ReferenceID != expected {
+		t.Fatalf("expected reference id %q, got %q", expected, result.SourceRef.ReferenceID)
+	}
+	if result.SourceRef.ChunkID != result.ChunkID || result.SourceRef.DocumentID != result.DocumentID {
+		t.Fatalf("source ref location mismatch: result=%+v ref=%+v", result, result.SourceRef)
+	}
+}
+
 func TestNormalizeKnowledgeCallbackBoundsDocumentFields(t *testing.T) {
 	for name, payload := range map[string]CallbackPayload{
 		"oversized processed title": {

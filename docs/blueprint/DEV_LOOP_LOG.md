@@ -8835,3 +8835,58 @@ python3 infra/scripts/first_usable_release_report.py --profile production --env-
 
 1. 本轮修复的是最终发布证据读取链路，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过。
+
+## Loop-186 / 工程1运行态来源引用语义闭环 - 2026-06-22
+
+### 本轮目标
+
+1. 让工程1运行态验收产物不仅脚本通过，也能被第一可用版最终报告判定为 `semantic_status=passed`。
+2. 防止知识库检索素材选择回退到“只有位置、没有稳定引用 ID”的弱来源引用。
+3. 将运行态验收脚本、Go 检索返回结构、API 文档和静态防回退锚点保持一致。
+
+### 代码交付
+
+1. `backend/internal/platform/knowledge/store.go` 的 `SourceRef` 新增 `citation_id` 与 `reference_id` 字段。
+2. `scanSearchResult()` 通过 `knowledgeSourceCitationID(document_id, chunk_id)` 为知识检索结果生成稳定 `knowledge:<document_id>:<chunk_id>` 引用 ID，并同时写入 `citation_id` 与 `reference_id`。
+3. `backend/internal/platform/knowledge/store_test.go` 新增 `TestScanSearchResultAddsTraceableSourceReferenceIDs`，覆盖检索扫描结果的稳定来源引用。
+4. `infra/scripts/acceptance_project1_check.py` 新增 `select_traceable_knowledge_source_ref()`，工程1运行态素材选择必须找到同时具备引用 ID 与位置的知识库 `source_ref`，否则直接失败。
+5. `infra/scripts/test_acceptance_project1_check.py` 新增正反两类测试，覆盖优先选择可追溯引用以及拒绝无引用 ID 来源。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加运行态来源引用、验收 helper、Go 字段和 Go 单测防回退锚点。
+7. `docs/blueprint/API_SPEC.md` 补充 `POST /knowledge/search` 的 `source_refs` 契约：每条来源引用必须带稳定 `citation_id` / `reference_id`，并保留 chunk、document、标题和页码定位。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_acceptance_project1_check.py
+python3 -m py_compile infra/scripts/acceptance_project1_check.py infra/scripts/test_acceptance_project1_check.py infra/scripts/acceptance_tail_check.py
+go test ./internal/platform/knowledge
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/acceptance_project1_check.py --json-output tmp/project1_runtime_acceptance.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path('infra/scripts').resolve()))
+import first_usable_release_report as report
+summary = report.artifact_summary('project1_runtime_acceptance', Path('tmp/project1_runtime_acceptance.json').resolve())
+print(json.dumps(summary, ensure_ascii=False, indent=2))
+PY
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_acceptance_project1_check.py` 通过 3 项测试，覆盖运行态 JSON 写入与可追溯知识来源选择。
+2. `go test ./internal/platform/knowledge` 通过，新增检索来源引用 ID 单测通过。
+3. 日志写入前 `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 仍识别为 Loop-185，符合写日志前状态。
+4. 工程1运行态验收通过；`parse_response_matrix` 识别 40 条 requirements、40 条 expected_response、24 条 mandatory、32 条 high_priority，`companion_knowledge.selected_ref_has_reference_id=true` 且 `selected_ref_has_location=true`。
+5. 第一可用版报告的 artifact 语义检查通过，`tmp/project1_runtime_acceptance.json` 的 `semantic_status=passed`，`semantic_issues=[]`。
+6. `./infra/scripts/check.sh` 通过；覆盖 first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest。
+7. 日志写入后再次运行 `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-186。
+
+### 偏离蓝图
+
+1. 本轮关闭的是工程1运行态来源引用语义缺口，没有引入真实 `.env.production`，也没有接入真实 LLM、embedding 或 OCR endpoint。
+2. 第一可用版结束条件仍未满足：还需要真实 Provider/OCR production canary artifact、真实成本审计结果，以及 clean/synced production report 中 `loop_can_end=true`。

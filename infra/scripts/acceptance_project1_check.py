@@ -161,6 +161,22 @@ def require_requirement_items(items: list[Any]) -> dict[str, int]:
     }
 
 
+def select_traceable_knowledge_source_ref(items: list[Any], source_refs: object) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    if isinstance(source_refs, list):
+        candidates.extend(ref for ref in source_refs if isinstance(ref, dict))
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source_ref = item.get("source_ref")
+        if isinstance(source_ref, dict):
+            candidates.append(source_ref)
+    for candidate in candidates:
+        if source_ref_has_reference_id(candidate) and source_ref_has_location(candidate):
+            return candidate
+    raise AcceptanceError("project1 knowledge search did not return a source ref with both reference id and location")
+
+
 def process_knowledge_sample(token: str, path: Path) -> dict[str, Any]:
     file_asset = upload_binary_asset(token, path, biz_type="knowledge")
     document = api("POST", "/knowledge/documents", token=token, payload={"file_id": file_asset["id"]}, expected=(201,))
@@ -258,8 +274,7 @@ def check_project1_runtime() -> dict[str, Any]:
     items = search.get("items") if isinstance(search, dict) else None
     source_refs = search.get("source_refs") if isinstance(search, dict) else None
     require(isinstance(items, list) and items, "project1 knowledge search did not return chunks")
-    selected_ref = source_refs[0] if isinstance(source_refs, list) and source_refs else items[0].get("source_ref")
-    require(isinstance(selected_ref, dict), "project1 knowledge search missing source ref")
+    selected_ref = select_traceable_knowledge_source_ref(items, source_refs)
     api("PUT", f"/bids/{bid_id}/material-selection", token=token, payload={"selected_refs": [selected_ref], "notes": "工程1运行态验收"})
     evidence["steps"]["companion_knowledge"] = {
         "response_doc": response_doc["id"],
