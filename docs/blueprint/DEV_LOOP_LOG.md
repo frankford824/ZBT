@@ -8253,3 +8253,46 @@ python3 infra/scripts/first_usable_release_check.py --run-canaries
 
 1. 本轮仍没有真实生产密钥和真实 OCR endpoint，因此不能把 active goal 标记为完成。
 2. `.env.production.example` 是交接模板，不是生产配置；production profile 只有在真实 `.env.production` 填完并通过真实 Provider/OCR canary 后才可作为 loop 收口证据。
+
+## Loop-173 / 生产环境聚合阻断报告 - 2026-06-22
+
+### 本轮目标
+
+1. 将生产环境审计从“遇到第一个缺项即退出”改为一次性列出全部阻断项，减少填写 `.env.production` 时的反复试错。
+2. 增加只审计生产环境、不调用外部模型/OCR 的命令，便于真实密钥交接前先完成基础配置检查。
+3. 把生产模式、数据库、Redis、AI 服务、回调地址和对象存储基础变量纳入第一可用版生产收口门禁。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_check.py` 新增 `--audit-production-env`，会加载 `--env-file`、执行静态证据检查和生产 env 聚合审计，然后跳过 Provider canary 与 OCR canary。
+2. production env 审计新增聚合阻断报告：空环境会一次输出生产模式、`DATABASE_URL`、`MIGRATION_DATABASE_URL`、`REDIS_URL`、`AI_SERVICE_URL`、`AI_CALLBACK_URL`、MinIO/R2、mock 禁用、JWT/HMAC、Provider key、OCR endpoint 和 `AI_MODEL_PRICING_JSON` 的全部缺项。
+3. `.env.production.example` 的占位模板误用仍会被拒绝，但现在一次输出所有占位项，而不是只提示第一个 secret。
+4. `infra/scripts/first_usable_release_check.py` 的模板静态检查新增生产模式、数据库、Redis、AI 服务、回调地址和对象存储字段。
+5. README 的第一可用版收口命令新增 `python3 infra/scripts/first_usable_release_check.py --audit-production-env --env-file .env.production`，并说明该模式不会调用外部模型/OCR。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `--audit-production-env`、生产运行态必填变量和聚合审计 helper 的防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/first_usable_release_check.py --audit-production-env
+python3 infra/scripts/first_usable_release_check.py --audit-production-env --env-file .env.production.example
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/first_usable_release_check.py --audit-production-env` 在空环境中一次列出生产模式、数据库、Redis、对象存储、mock 禁用、secret、成本表、Provider key 和 OCR endpoint 缺项。
+2. `python3 infra/scripts/first_usable_release_check.py --audit-production-env --env-file .env.production.example` 正常加载模板，并一次列出模板中的数据库、Redis、对象存储、JWT、HMAC、Provider key 和 OCR endpoint 占位值。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 保留 `acceptance_project1_check.py`、`python3 infra/scripts/acceptance_project1_check.py`、Provider canary、OCR canary 和 `./infra/scripts/check.sh` 收口证据。
+4. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；本地 Provider canary/OCR canary 继续显式 skipped。
+5. `./infra/scripts/check.sh` 通过；继续覆盖 readiness gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、工程1 golden、生成覆盖、导出格式和容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮仍不伪造真实模型或真实 OCR；`--audit-production-env` 只证明生产配置没有明显缺项，不证明外部服务可调用。
+2. 结束 loop 的硬条件仍是：真实 `.env.production` 通过聚合审计，production profile 的 Provider canary/OCR canary 非 skipped 且 `estimated_cost` 为正，并且工程1运行态验收 `python3 infra/scripts/acceptance_project1_check.py` 通过。

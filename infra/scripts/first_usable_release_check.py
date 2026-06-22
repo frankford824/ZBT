@@ -22,6 +22,18 @@ ROOT = Path(__file__).resolve().parents[2]
 AI_SERVICE = ROOT / "ai-service"
 FALSE_ENV_VALUES = {"0", "false", "no"}
 PRODUCTION_PLACEHOLDER_MARKERS = ("<replace-", "replace-with", "changeme", "todo", "placeholder")
+PRODUCTION_MODE_ENV_KEYS = ("APP_ENV", "ZBT_ENV", "ENVIRONMENT", "GIN_MODE")
+PRODUCTION_MODE_VALUES = {"prod", "production", "release"}
+PRODUCTION_REQUIRED_RUNTIME_ENVS = (
+    "DATABASE_URL",
+    "MIGRATION_DATABASE_URL",
+    "REDIS_URL",
+    "AI_SERVICE_URL",
+    "AI_CALLBACK_URL",
+    "MINIO_ENDPOINT",
+    "MINIO_PUBLIC_ENDPOINT",
+    "MINIO_BUCKET",
+)
 PRODUCTION_SECRET_DEFAULTS = {
     "JWT_SECRET": "dev-only-zbt-jwt-secret",
     "AI_SERVICE_HMAC_SECRET": "dev-only-zbt-ai-callback-secret",
@@ -167,6 +179,14 @@ def check_static_release_evidence() -> None:
     production_template = (ROOT / ".env.production.example").read_text(encoding="utf-8")
     for needle in (
         "APP_ENV=production",
+        "DATABASE_URL=",
+        "MIGRATION_DATABASE_URL=",
+        "REDIS_URL=",
+        "AI_SERVICE_URL=",
+        "AI_CALLBACK_URL=",
+        "MINIO_ENDPOINT=",
+        "MINIO_PUBLIC_ENDPOINT=",
+        "MINIO_BUCKET=",
         "USE_MOCK_PROVIDERS=false",
         "ALLOW_MOCK_FALLBACK=false",
         "AI_MODEL_PRICING_JSON=",
@@ -192,44 +212,68 @@ def check_static_release_evidence() -> None:
     ok("static first usable evidence", {"latest_loop": latest_heading, "files": len(required_files)})
 
 
-def require_env_group(label: str, alternatives: tuple[str, ...]) -> str:
+def env_group_issue(label: str, alternatives: tuple[str, ...]) -> tuple[str | None, str | None]:
     configured = [key for key in alternatives if env_value(key)]
     placeholder = [key for key in configured if env_is_placeholder(env_value(key))]
     matched = [key for key in configured if key not in placeholder]
-    if not matched and placeholder:
-        raise ReadinessError(f"production env {placeholder[0]} still uses a placeholder value")
-    require(
-        bool(matched),
-        f"production env missing {label}: set one of {', '.join(alternatives)}",
-    )
-    return matched[0]
+    if matched:
+        return matched[0], None
+    if placeholder:
+        return None, f"production env {placeholder[0]} still uses a placeholder value"
+    return None, f"production env missing {label}: set one of {', '.join(alternatives)}"
 
 
-def require_production_secret(key: str, default_value: str) -> None:
+def required_env_issue(key: str) -> str | None:
     value = env_value(key)
-    require(bool(value), f"production env missing {key}")
-    require(not env_is_placeholder(value), f"production env {key} still uses a placeholder value")
-    require(value != default_value and len(value) >= 16, f"production env {key} must not use the development default or a short value")
+    if not value:
+        return f"production env missing {key}"
+    if env_is_placeholder(value):
+        return f"production env {key} still uses a placeholder value"
+    return None
+
+
+def production_mode_issue() -> str | None:
+    configured = [(key, env_value(key)) for key in PRODUCTION_MODE_ENV_KEYS if env_value(key)]
+    placeholder = [key for key, value in configured if env_is_placeholder(value)]
+    if placeholder:
+        return f"production env {placeholder[0]} still uses a placeholder value"
+    valid = [key for key, value in configured if value.lower() in PRODUCTION_MODE_VALUES]
+    if valid:
+        return None
+    return "production env must set APP_ENV, ZBT_ENV, ENVIRONMENT or GIN_MODE to prod/production/release"
+
+
+def production_secret_issue(key: str, default_value: str) -> str | None:
+    value = env_value(key)
+    if not value:
+        return f"production env missing {key}"
+    if env_is_placeholder(value):
+        return f"production env {key} still uses a placeholder value"
+    if value == default_value or len(value) < 16:
+        return f"production env {key} must not use the development default or a short value"
+    return None
 
 
 def production_route_target(route: str, route_kind: str, default_provider: str, default_model: str) -> dict[str, str]:
     route_prefix = route.upper().replace("-", "_")
     provider = env_value(f"{route_prefix}_PROVIDER") or env_value(f"AI_{route_kind}_PROVIDER") or default_provider
     model = env_value(f"{route_prefix}_MODEL") or env_value(f"AI_{route_kind}_MODEL") or default_model
-    require(provider not in {"mock", "local"}, f"production route {route} must use a real external provider, got {provider}")
-    require(provider in PRODUCTION_PROVIDER_ENV_GROUPS, f"production route {route} uses unsupported provider {provider}")
-    require(bool(model), f"production route {route} is missing model")
     return {"route": route, "kind": route_kind.lower(), "provider": provider, "model": model}
 
 
-def parse_pricing_config() -> dict[str, object]:
+def pricing_config() -> tuple[dict[str, object], list[str]]:
+    issues: list[str] = []
     raw = env_value("AI_MODEL_PRICING_JSON")
-    require(bool(raw), "production env missing AI_MODEL_PRICING_JSON")
+    if not raw:
+        return {}, ["production env missing AI_MODEL_PRICING_JSON"]
+    if env_is_placeholder(raw):
+        return {}, ["production env AI_MODEL_PRICING_JSON still uses a placeholder value"]
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ReadinessError(f"production env AI_MODEL_PRICING_JSON is invalid JSON: {exc}") from exc
-    require(isinstance(parsed, dict) and bool(parsed), "production env AI_MODEL_PRICING_JSON must be a non-empty JSON object")
+        return {}, [f"production env AI_MODEL_PRICING_JSON is invalid JSON: {exc}"]
+    if not isinstance(parsed, dict) or not parsed:
+        return {}, ["production env AI_MODEL_PRICING_JSON must be a non-empty JSON object"]
     usable_rates = [
         key
         for key, value in parsed.items()
@@ -238,8 +282,9 @@ def parse_pricing_config() -> dict[str, object]:
         and (positive_rate(value.get("input_per_1m")) > 0 or positive_rate(value.get("input_per_1k")) > 0)
         and (positive_rate(value.get("output_per_1m")) > 0 or positive_rate(value.get("output_per_1k")) > 0)
     ]
-    require(bool(usable_rates), "production env AI_MODEL_PRICING_JSON must include positive input/output rates")
-    return parsed
+    if not usable_rates:
+        issues.append("production env AI_MODEL_PRICING_JSON must include positive input/output rates")
+    return parsed, issues
 
 
 def positive_rate(value: object) -> float:
@@ -268,42 +313,71 @@ def pricing_has_match(pricing: dict[str, object], provider: str, model: str) -> 
 
 
 def check_production_env() -> None:
-    require(env_is_false("USE_MOCK_PROVIDERS"), "production env USE_MOCK_PROVIDERS must be false")
-    require(env_is_false("ALLOW_MOCK_FALLBACK"), "production env ALLOW_MOCK_FALLBACK must be false")
+    issues: list[str] = []
+    issue = production_mode_issue()
+    if issue:
+        issues.append(issue)
+    for key in PRODUCTION_REQUIRED_RUNTIME_ENVS:
+        issue = required_env_issue(key)
+        if issue:
+            issues.append(issue)
+    if not env_is_false("USE_MOCK_PROVIDERS"):
+        issues.append("production env USE_MOCK_PROVIDERS must be false")
+    if not env_is_false("ALLOW_MOCK_FALLBACK"):
+        issues.append("production env ALLOW_MOCK_FALLBACK must be false")
 
     for key, default_value in PRODUCTION_SECRET_DEFAULTS.items():
-        require_production_secret(key, default_value)
+        issue = production_secret_issue(key, default_value)
+        if issue:
+            issues.append(issue)
 
-    pricing = parse_pricing_config()
+    pricing, pricing_issues = pricing_config()
+    issues.extend(pricing_issues)
     targets = [
         production_route_target(route, route_kind, default_provider, default_model)
         for route, (route_kind, default_provider, default_model) in PRODUCTION_ROUTE_DEFAULTS.items()
     ]
     providers = sorted({target["provider"] for target in targets})
     for provider in providers:
+        if provider in {"mock", "local"}:
+            issues.append(f"production routes must use real external providers, got {provider}")
+            continue
+        if provider not in PRODUCTION_PROVIDER_ENV_GROUPS:
+            issues.append(f"production route uses unsupported provider {provider}")
+            continue
         for group in PRODUCTION_PROVIDER_ENV_GROUPS[provider]:
-            require_env_group(f"{provider} credentials", group)
+            _, issue = env_group_issue(f"{provider} credentials", group)
+            if issue:
+                issues.append(issue)
     for target in targets:
-        require(
-            pricing_has_match(pricing, target["provider"], target["model"]),
-            "production env AI_MODEL_PRICING_JSON missing price for "
-            f"{target['provider']}/{target['model']} or {target['provider']}/*",
-        )
+        if not target["model"]:
+            issues.append(f"production route {target['route']} is missing model")
+            continue
+        if pricing and target["provider"] in PRODUCTION_PROVIDER_ENV_GROUPS and not pricing_has_match(pricing, target["provider"], target["model"]):
+            issues.append(
+                "production env AI_MODEL_PRICING_JSON missing price for "
+                f"{target['provider']}/{target['model']} or {target['provider']}/*"
+            )
 
     ocr_provider = env_value("OCR_PROVIDER") or "http_ocr"
-    require(ocr_provider in PRODUCTION_OCR_PROVIDER_ENV_GROUPS, f"production OCR_PROVIDER is unsupported: {ocr_provider}")
-    for group in PRODUCTION_OCR_PROVIDER_ENV_GROUPS[ocr_provider]:
-        require_env_group(f"{ocr_provider} endpoint", group)
+    if ocr_provider not in PRODUCTION_OCR_PROVIDER_ENV_GROUPS:
+        issues.append(f"production OCR_PROVIDER is unsupported: {ocr_provider}")
+    else:
+        for group in PRODUCTION_OCR_PROVIDER_ENV_GROUPS[ocr_provider]:
+            _, issue = env_group_issue(f"{ocr_provider} endpoint", group)
+            if issue:
+                issues.append(issue)
 
-    ok(
-        "production env audit",
-        {
-            "providers": providers,
-            "routes": targets,
-            "ocr_provider": ocr_provider,
-            "pricing_entries": len(pricing),
-        },
-    )
+    evidence = {
+        "providers": providers,
+        "routes": targets,
+        "ocr_provider": ocr_provider,
+        "pricing_entries": len(pricing),
+    }
+    if issues:
+        joined = "\n- ".join(dict.fromkeys(issues))
+        raise ReadinessError(f"production env audit failed:\n- {joined}")
+    ok("production env audit", evidence)
 
 
 def run_json_command(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> tuple[int, dict[str, Any], str]:
@@ -389,13 +463,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Check first usable release readiness evidence.")
     parser.add_argument("--profile", choices=("local", "production"), default="local")
     parser.add_argument("--env-file", type=Path, help="Load KEY=VALUE settings before running readiness checks.")
+    parser.add_argument("--audit-production-env", action="store_true", help="Only audit production env settings and skip live Provider/OCR canaries.")
     parser.add_argument("--run-canaries", action="store_true", help="Run Provider/OCR canaries in addition to static checks.")
     args = parser.parse_args()
 
     load_env_file(args.env_file)
     check_static_release_evidence()
-    if args.profile == "production":
+    if args.audit_production_env or args.profile == "production":
         check_production_env()
+    if args.audit_production_env:
+        print("[ok] production env audit-only")
+        return 0
     if args.run_canaries or args.profile == "production":
         check_provider_canary(args.profile)
         check_ocr_canary(args.profile)
