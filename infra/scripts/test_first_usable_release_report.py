@@ -300,6 +300,52 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
             ],
         )
 
+    def test_first_usable_mode_implies_full_production_evidence_bundle(self) -> None:
+        args = argparse.Namespace(
+            profile="local",
+            first_usable=True,
+            env_file=None,
+            include_repo_check=False,
+            include_project1_runtime=False,
+            timeout_s=30,
+        )
+        commands: list[tuple[str, list[str]]] = []
+
+        def fake_run_command(name: str, command: list[str], **_: object) -> dict[str, object]:
+            commands.append((name, command))
+            return {"name": name, "status": "passed", "returncode": 0}
+
+        def fake_json_artifact_command(name: str, _: list[str], __: Path, **___: object) -> dict[str, object]:
+            return {"name": name, "status": "passed", "returncode": 0}
+
+        def fake_artifact_summary(name: str, path: Path) -> dict[str, object]:
+            return {
+                "name": name,
+                "path": str(path.relative_to(report.ROOT)),
+                "status": "present",
+                "json_status": "passed",
+                "semantic_status": "passed",
+            }
+
+        with (
+            patch.object(report, "load_env_file", return_value=({}, [])),
+            patch.object(report, "run_command", side_effect=fake_run_command),
+            patch.object(report, "run_json_artifact_command", side_effect=fake_json_artifact_command),
+            patch.object(report, "artifact_summary", side_effect=fake_artifact_summary),
+            patch.object(report, "collect_git_release_state", return_value=valid_git_release_state()),
+        ):
+            generated = report.build_report(args)
+
+        command_names = [name for name, _ in commands]
+        self.assertEqual(generated["profile"], "production")
+        self.assertTrue(generated["first_usable_mode"])
+        self.assertTrue(generated["include_repo_check"])
+        self.assertTrue(generated["include_project1_runtime"])
+        self.assertIn("production_readiness", command_names)
+        self.assertIn("repo_wide_check", command_names)
+        self.assertIn("project1_runtime_acceptance", command_names)
+        self.assertEqual(generated["blocking_requirements"], [])
+
     def test_blocking_items_allow_complete_production_evidence(self) -> None:
         args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
         blocking = report.blocking_items(

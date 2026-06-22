@@ -9070,3 +9070,49 @@ python3 infra/scripts/first_usable_release_report.py --profile production --env-
 
 1. 本轮增强的是生产失败证据结构化，没有提交真实 `.env.production`，也没有让真实 Provider/OCR canary 通过。
 2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。
+
+## Loop-191 / 第一可用验收入口收口 - 2026-06-22
+
+### 本轮目标
+
+1. 防止最终第一可用版报告因人工漏传 `--include-repo-check` 或 `--include-project1-runtime` 而生成不完整证据包。
+2. 将终局验收入口收敛为 `first_usable_release_report.py --first-usable`。
+3. 保持原有 production artifact、Git 发布状态、导出保真和脱敏硬门禁不放松。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `--first-usable` 参数。
+2. `apply_first_usable_mode()` 会在构建报告前自动切换到 `profile=production`，并强制启用 `include_repo_check` 与 `include_project1_runtime`。
+3. 报告 JSON 新增 `first_usable_mode` 字段，便于最终证据包明确记录是否使用终局验收入口。
+4. `infra/scripts/test_first_usable_release_report.py` 新增 `test_first_usable_mode_implies_full_production_evidence_bundle`，验证该模式会运行 production readiness、repo-wide check 与工程1运行态验收。
+5. README 将终局命令更新为 `python3 infra/scripts/first_usable_release_report.py --first-usable --env-file .env.production --output tmp/first_usable_release_report.json`。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 与 `infra/scripts/first_usable_release_check.py` 同步更新静态锚点，防止 README 或报告脚本回退到旧的易漏参数写法。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/first_usable_release_check.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json --timeout-s 120
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json --timeout-s 120
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 四个脚本均编译通过。
+2. `test_first_usable_release_report.py` 通过 20 项，新增 `--first-usable` 入口收口回归。
+3. `acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-191，静态文档和防回退锚点已识别新命令。
+4. `first_usable_release_check.py` local profile 通过，第一可用基础证据仍完整。
+5. production-template report 成功写入 `tmp/first_usable_release_report.production-template.json`，`loop_can_end=false`；阻断项仍集中在模板生产配置、真实 Provider/OCR artifact、工作区未提交、repo-wide check 和工程1运行态验收未纳入。
+6. local report 成功写入 `tmp/first_usable_release_report.local.json`，`loop_can_end=false`；阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收。
+7. `./infra/scripts/check.sh` 通过；覆盖 first usable 测试、静态文档、前端 build/lint、Go test、AI compile/ruff、AI pytest `302 passed`、Provider/OCR local canary skipped、工程1 parse/generation/export 和容器内 AI pytest `291 passed`。
+
+### 偏离蓝图
+
+1. 本轮收口的是最终验收入口，没有提交真实 `.env.production`，也没有让真实 Provider/OCR production canary 通过。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 clean/synced production report 中全部通过，并得到 `loop_can_end=true`。

@@ -191,8 +191,7 @@ def check_static_release_evidence() -> None:
         "tmp/export_format_eval.json",
         "--require-pdf",
         "AI_MODEL_PRICING_JSON",
-        "first_usable_release_report.py --profile production",
-        "--include-repo-check --include-project1-runtime",
+        "first_usable_release_report.py --first-usable",
     ):
         require(needle in readme, f"README missing first usable guidance: {needle}")
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")

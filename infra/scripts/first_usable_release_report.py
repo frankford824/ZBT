@@ -714,6 +714,7 @@ def git_release_state_blocking_items(args: argparse.Namespace, state: dict[str, 
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
+    apply_first_usable_mode(args)
     loaded_env, file_sensitive_values = load_env_file(args.env_file)
     env = os.environ.copy()
     env.update(loaded_env)
@@ -845,6 +846,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "remote": git_release_state["remote"],
         "git_release_state": git_release_state,
         "env_file": str(args.env_file) if args.env_file else None,
+        "first_usable_mode": bool(getattr(args, "first_usable", False)),
         "include_repo_check": args.include_repo_check,
         "include_project1_runtime": args.include_project1_runtime,
         "steps": steps,
@@ -852,6 +854,14 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "blocking_requirements": blocking_requirements,
         "loop_can_end": not blocking_requirements,
     }
+
+
+def apply_first_usable_mode(args: argparse.Namespace) -> None:
+    if not bool(getattr(args, "first_usable", False)):
+        return
+    args.profile = "production"
+    args.include_repo_check = True
+    args.include_project1_runtime = True
 
 
 def artifact_has_passed(summary: dict[str, Any] | None) -> bool:
@@ -928,6 +938,11 @@ def main() -> int:
     parser.add_argument("--profile", choices=("local", "production"), default="local")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--output", type=Path, help="Write JSON report to this path. Prints JSON when omitted.")
+    parser.add_argument(
+        "--first-usable",
+        action="store_true",
+        help="Run the full first-usable production evidence bundle; implies production, repo check, and project1 runtime.",
+    )
     parser.add_argument("--include-repo-check", action="store_true", help="Run ./infra/scripts/check.sh and include it in loop_can_end.")
     parser.add_argument("--include-project1-runtime", action="store_true", help="Run docs/ex/工程1 runtime HTTP acceptance and include it in loop_can_end.")
     parser.add_argument("--timeout-s", type=int, default=1800)
