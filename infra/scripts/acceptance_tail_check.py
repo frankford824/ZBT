@@ -832,13 +832,38 @@ def check_static_docs() -> None:
         "app.evaluation.provider_canary_eval --allow-skip" in check_script,
         "Repo-wide check does not run provider canary in local skip mode",
     )
+    for needle in (
+        "app.evaluation.ocr_provider_eval",
+        "--provider \"${OCR_PROVIDER:-http_ocr}\"",
+        "docs/ex/工程1/采购文件桥梁检查.pdf",
+        "--min-table-blocks 1",
+        "--min-layout-bbox-count 1",
+        "--min-table-bbox-count 1",
+        "--min-cell-bbox-count 1",
+        "--allow-skip",
+    ):
+        require(needle in check_script, f"Repo-wide check does not run OCR provider canary gate: {needle}")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for needle in (
         "provider_canary_eval --allow-skip",
         "provider_canary_eval --strict --call-provider --require-cost",
         "--route chapter_generate --route knowledge_embedding --route knowledge_rerank",
+        "app.evaluation.ocr_provider_eval",
+        "--min-table-blocks 1",
+        "--min-layout-bbox-count 1",
+        "--min-table-bbox-count 1",
+        "--min-cell-bbox-count 1",
     ):
-        require(needle in readme, f"README missing Provider canary guidance: {needle}")
+        require(needle in readme, f"README missing AI canary guidance: {needle}")
+    sample_docs_eval = (ROOT / "docs/blueprint/SAMPLE_DOCS_EVALUATION.md").read_text(encoding="utf-8")
+    for needle in (
+        "工程1 OCR canary",
+        "--allow-skip",
+        "版面 bbox",
+        "表格 bbox",
+        "单元格 bbox",
+    ):
+        require(needle in sample_docs_eval, f"SAMPLE_DOCS_EVALUATION missing OCR canary guidance: {needle}")
 
     common_schema = (ROOT / "ai-service/app/schemas/common.py").read_text(encoding="utf-8")
     for needle in (

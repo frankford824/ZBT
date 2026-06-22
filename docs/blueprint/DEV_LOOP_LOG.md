@@ -8003,3 +8003,43 @@ git diff --check
 
 1. 本轮没有调用真实外部模型 API，因为本机环境未配置生产密钥；交付的是可重复的生产 canary 入口和严格验收门槛。
 2. `--strict --call-provider --require-cost` 需要真实 Provider key、模型名和 `AI_MODEL_PRICING_JSON` 后才能作为上线硬门槛运行。
+
+## Loop-167 / 工程1 OCR Provider canary 纳入总验收 - 2026-06-21
+
+### 本轮目标
+
+1. 将 OCR Provider 从“有独立评测脚本”推进到仓库总检查的一部分，避免扫描件能力只停留在文档说明。
+2. 继续围绕 `docs/ex/工程1` 标准招投标文件建立第一可用版验收边界：本地无 OCR endpoint 可重复跳过，配置真实 OCR 后必须输出文本、表格块和坐标级版面证据。
+3. 把 OCR canary 防回退写入静态验收，确保后续不会从 `check.sh` 中移除。
+
+### 代码交付
+
+1. `infra/scripts/check.sh` 新增 `app.evaluation.ocr_provider_eval`，默认使用 `OCR_PROVIDER` 或 `http_ocr`，样本固定为 `docs/ex/工程1/采购文件桥梁检查.pdf`。
+2. OCR canary 在总检查中开启 `--allow-skip`，本地无 endpoint 时不阻塞；配置真实 endpoint 后要求 `--min-table-blocks 1`、`--min-layout-bbox-count 1`、`--min-table-bbox-count 1` 和 `--min-cell-bbox-count 1`。
+3. `README.md` 增加生产 OCR 验收命令，明确需要 OCR 文本、表格块、版面 bbox、表格 bbox 和单元格 bbox。
+4. `docs/blueprint/SAMPLE_DOCS_EVALUATION.md` 同步说明 `check.sh` 会运行工程1 OCR canary，以及本地 skipped 与生产严格验收的区别。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `check.sh` OCR canary 命令、阈值和 README/SAMPLE_DOCS 文档防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval --provider http_ocr --sample ../docs/ex/工程1/采购文件桥梁检查.pdf --repo-root .. --min-text-chars 20 --min-table-blocks 1 --min-layout-bbox-count 1 --min-table-bbox-count 1 --min-cell-bbox-count 1 --allow-skip
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m app.evaluation.ocr_provider_eval ... --allow-skip` 在本机无 `OCR_HTTP_ENDPOINT` 时返回 skipped，明确输出缺少 endpoint，不伪装为通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、Provider canary 本地跳过、OCR canary 本地跳过、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮没有调用真实 OCR endpoint，因为本机未配置 `OCR_HTTP_ENDPOINT`、`MINERU_HTTP_ENDPOINT` 或 `PADDLEOCR_HTTP_ENDPOINT`；交付的是总验收入口和坐标级证据门槛。
+2. 生产环境仍需使用真实 OCR Provider 跑非 skipped 结果，才能证明扫描件 OCR 能力闭环。

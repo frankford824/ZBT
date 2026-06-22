@@ -33,6 +33,16 @@ fi
 }
 "$AI_PYTHON" -m pytest app/tests -q -s
 "$AI_PYTHON" -m app.evaluation.provider_canary_eval --allow-skip
+"$AI_PYTHON" -m app.evaluation.ocr_provider_eval \
+  --provider "${OCR_PROVIDER:-http_ocr}" \
+  --sample "$ROOT/docs/ex/工程1/采购文件桥梁检查.pdf" \
+  --repo-root "$ROOT" \
+  --min-text-chars 20 \
+  --min-table-blocks 1 \
+  --min-layout-bbox-count 1 \
+  --min-table-bbox-count 1 \
+  --min-cell-bbox-count 1 \
+  --allow-skip
 "$AI_PYTHON" -m app.evaluation.tender_parse_eval \
   --golden "$ROOT/docs/sample_docs/golden/工程1.parse.json"
 "$AI_PYTHON" -m app.evaluation.generation_coverage_eval \

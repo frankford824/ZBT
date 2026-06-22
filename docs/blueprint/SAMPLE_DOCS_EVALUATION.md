@@ -68,7 +68,7 @@ cd ai-service
 
 导出评测会临时生成 DOCX、ZIP 和 PDF，并检查 DOCX 可打开性、目录域、自动更新域、页码域、页眉页脚、表格、ZIP manifest、ZIP 内 DOCX 可打开性、PDF 可打开性、文本层和首屏非空。`pdf.allow_skip=true` 时，无 LibreOffice 的本地环境会显式记录 skipped；生产验收可把该值改为 `false` 作为硬门槛。
 
-MinerU / PaddleOCR 真实 Provider 可使用独立 OCR 验收入口。默认会把 `docs/ex/工程1/采购文件桥梁检查.pdf` 第一页渲染为 PNG 后走 OCR Provider，避免只验证 PDF 文本层：
+`./infra/scripts/check.sh` 会运行工程1 OCR canary。无真实 endpoint 的本地环境可 `--allow-skip`，报告会显示 skipped；配置 endpoint 后会检查 OCR 文本、表格块、版面 bbox、表格 bbox 和单元格 bbox。MinerU / PaddleOCR 真实 Provider 也可使用独立 OCR 验收入口。默认会把 `docs/ex/工程1/采购文件桥梁检查.pdf` 第一页渲染为 PNG 后走 OCR Provider，避免只验证 PDF 文本层：
 
 ```bash
 cd ai-service
