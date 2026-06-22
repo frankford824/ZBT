@@ -65,7 +65,7 @@ class FirstUsableReleaseCheckTest(unittest.TestCase):
                 "AI_EMBEDDING_PROVIDER": "cloudflare_ai_gateway",
                 "AI_EMBEDDING_MODEL": "@cf/baai/bge-large-en-v1.5",
                 "AI_RERANK_PROVIDER": "cloudflare_ai_gateway",
-                "AI_RERANK_MODEL": "openai/gpt-4.1",
+                "AI_RERANK_MODEL": "@cf/baai/bge-reranker-base",
                 "CLOUDFLARE_API_TOKEN": "unit-test-cloudflare-token",
                 "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
                 "AI_MODEL_PRICING_JSON": json.dumps(
@@ -88,6 +88,40 @@ class FirstUsableReleaseCheckTest(unittest.TestCase):
         )
         self.assertTrue(all(item["matched"] for item in audit["evidence"]["pricing_matches"]))
         self.assertEqual(audit["evidence"]["ocr_requirement"]["configured_envs"], ["OCR_HTTP_ENDPOINT"])
+
+    def test_production_env_audit_requires_cloudflare_ai_run_models_for_embedding_and_rerank(self) -> None:
+        env = valid_production_env()
+        env.update(
+            {
+                "AI_EMBEDDING_PROVIDER": "cloudflare_ai_gateway",
+                "AI_EMBEDDING_MODEL": "openai/text-embedding-3-large",
+                "AI_RERANK_PROVIDER": "cloudflare_ai_gateway",
+                "AI_RERANK_MODEL": "openai/gpt-4.1",
+                "CLOUDFLARE_API_TOKEN": "unit-test-cloudflare-token",
+                "CLOUDFLARE_ACCOUNT_ID": "0123456789abcdef0123456789abcdef",
+                "AI_MODEL_PRICING_JSON": json.dumps(
+                    {
+                        "openai_compatible_primary/*": {"input_per_1m": 2, "output_per_1m": 8},
+                        "cloudflare_ai_gateway/*": {"input_per_1m": 2, "output_per_1m": 8},
+                    }
+                ),
+            }
+        )
+
+        with patch.dict(os.environ, env, clear=True):
+            audit = check.production_env_audit()
+
+        self.assertEqual(audit["status"], "failed")
+        self.assertIn(
+            "production route knowledge_embedding uses cloudflare_ai_gateway for embedding "
+            "and must use a Workers AI @cf/ model for /ai/run support",
+            audit["issues"],
+        )
+        self.assertIn(
+            "production route knowledge_rerank uses cloudflare_ai_gateway for rerank "
+            "and must use a Workers AI @cf/ model for /ai/run support",
+            audit["issues"],
+        )
 
     def test_production_env_audit_fails_when_pricing_misses_selected_provider(self) -> None:
         env = valid_production_env()

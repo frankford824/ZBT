@@ -104,12 +104,12 @@ AI_LLM_MODEL=openai/gpt-4.1
 AI_EMBEDDING_PROVIDER=cloudflare_ai_gateway
 AI_EMBEDDING_MODEL=@cf/baai/bge-large-en-v1.5
 AI_RERANK_PROVIDER=cloudflare_ai_gateway
-AI_RERANK_MODEL=openai/gpt-4.1
+AI_RERANK_MODEL=@cf/baai/bge-reranker-base
 USE_MOCK_PROVIDERS=false
 ALLOW_MOCK_FALLBACK=false
 ```
 
-`cloudflare_ai_gateway` 默认使用 Cloudflare 当前 REST API 基址 `https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1`，并发送 `Authorization: Bearer <CLOUDFLARE_API_TOKEN>`。需要指定某个 AI Gateway 时设置 `CLOUDFLARE_AI_GATEWAY_ID`，服务会发送 `cf-aig-gateway-id` 请求头；若部署环境必须使用自定义 OpenAI-compatible 基址，可设置 `CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL` 覆盖默认值。需要传递 metadata、cache 等附加头时，可用 JSON 对象配置 `CLOUDFLARE_AI_GATEWAY_HEADERS`，例如 `{"cf-aig-metadata":"{\"tenant\":\"prod\"}"}`。
+`cloudflare_ai_gateway` 默认使用 Cloudflare 当前 REST API 基址 `https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1`，LLM 走 `/chat/completions`，Workers AI embedding/rerank 模型必须使用 `@cf/...` 并走 `/ai/run/<model>`。所有请求发送 `Authorization: Bearer <CLOUDFLARE_API_TOKEN>`；需要指定某个 AI Gateway 时设置 `CLOUDFLARE_AI_GATEWAY_ID`，服务会发送 `cf-aig-gateway-id` 请求头；若部署环境必须使用自定义 OpenAI-compatible 基址，可设置 `CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL` 覆盖默认值。需要传递 metadata、cache 等附加头时，可用 JSON 对象配置 `CLOUDFLARE_AI_GATEWAY_HEADERS`，例如 `{"cf-aig-metadata":"{\"tenant\":\"prod\"}"}`。
 
 OpenAI-compatible Provider 成功响应默认最多读取 8 MB，可用 `OPENAI_COMPATIBLE_MAX_RESPONSE_BYTES` 调整；超限响应会被拒绝且不会把模型返回内容写入错误信息。
 

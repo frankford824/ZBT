@@ -159,9 +159,9 @@ def _evaluate_route(
             call_result.get("actual"),
         )
         if isinstance(call_result.get("input_tokens"), int):
-            call_tokens["input_tokens"] = int(call_result["input_tokens"])
+            call_tokens["input_tokens"] = max(call_tokens["input_tokens"], int(call_result["input_tokens"]))
         if isinstance(call_result.get("output_tokens"), int):
-            call_tokens["output_tokens"] = int(call_result["output_tokens"])
+            call_tokens["output_tokens"] = max(call_tokens["output_tokens"], int(call_result["output_tokens"]))
 
     accounting = router.log_call(
         tenant_id=tenant_id,

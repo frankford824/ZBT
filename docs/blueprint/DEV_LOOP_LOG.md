@@ -8566,3 +8566,52 @@ python3 infra/scripts/first_usable_release_report.py --profile production --env-
 
 1. 本轮仍没有真实 `.env.production`，所以 Provider/OCR canary JSON 输出路径已接入，但没有真实 production canary 成功样本。
 2. 第一可用版结束条件仍未满足：真实生产配置、真实 Provider/OCR canary、repo-wide check 和工程1运行态验收需要在同一份 production report 中全部通过并得到 `loop_can_end=true`。
+
+## Loop-180 / Cloudflare Workers AI Embedding 与 Rerank 生产适配 - 2026-06-22
+
+### 本轮目标
+
+1. 让可选的 `cloudflare_ai_gateway` 不只覆盖 LLM chat completion，也能覆盖第一可用版必需的 embedding 与 rerank canary。
+2. 将 Cloudflare Workers AI 的 `@cf/...` embedding/rerank 模型接到官方 `/ai/run/<model>` REST 路径。
+3. 避免生产审计允许 Cloudflare embedding/rerank 配置成非 `@cf/` 模型后到 live canary 才失败。
+
+### 代码交付
+
+1. `CloudflareAIGatewayProvider` 新增 `embed_batch()` 与 `rerank()` 覆盖：`@cf/...` 模型走 `https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/run/<model>`，非 `@cf/...` 模型仍走 OpenAI-compatible 父类路径。
+2. 新增 `_post_ai_run()`、`_cloudflare_embedding_vectors()`、`_cloudflare_rerank_indexes()` 等解析函数，支持 Cloudflare REST wrapper 的 `result.data`、`result.response` 结构。
+3. Provider canary 在真实调用后不会用过小 prompt token 数覆盖成本验证下限，避免低单价真实模型因为 4 位小数记账被误判 `estimated_cost=0`。
+4. `first_usable_release_check.py` 新增 `cloudflare_route_model_issue()`，要求 `cloudflare_ai_gateway` 用作 embedding/rerank 时模型必须以 `@cf/` 开头。
+5. `.env.production.example` 与 README 将 Cloudflare rerank 示例更新为 `@cf/baai/bge-reranker-base`，并说明 LLM 走 `/ai/v1/chat/completions`、Workers AI embedding/rerank 走 `/ai/run/<model>`。
+6. 新增 AI 服务测试覆盖 Cloudflare Workers AI embedding、rerank 和 provider canary 三路线真实调用模拟；新增生产 env 审计负例覆盖非 `@cf/` 的 Cloudflare embedding/rerank 配置。
+7. `acceptance_tail_check.py --static-docs` 增加 Cloudflare `/ai/run`、BGE 模型、审计负例和 Provider 测试锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_openai_compatible_provider.py app/tests/test_model_router.py app/tests/test_provider_canary_eval.py -q -s
+cd ai-service && .venv/bin/python -m pytest app/tests -q -s
+python3 infra/scripts/test_first_usable_release_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --audit-production-env-json --env-file .env.production.example
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+env APP_ENV=production ... AI_LLM_PROVIDER=cloudflare_ai_gateway AI_EMBEDDING_MODEL=@cf/baai/bge-large-en-v1.5 AI_RERANK_MODEL=@cf/baai/bge-reranker-base python3 infra/scripts/first_usable_release_check.py --audit-production-env-json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. 目标 AI 测试通过，95 项覆盖 OpenAI-compatible Provider、ModelRouter 和 Provider canary。
+2. AI 服务全量 pytest 通过，291 项覆盖解析、OCR、导出、Provider、路由和安全回归。
+3. `python3 infra/scripts/test_first_usable_release_check.py` 通过，5 项测试覆盖生产 env 矩阵、Cloudflare 成功路径、Cloudflare embedding/rerank 非 `@cf/` 负例、价格表缺失和 canary JSON 输出。
+4. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-180。
+5. production 模板审计仍正确失败于占位值；模板默认 OpenAI-compatible 路由价格表匹配为 true。
+6. Cloudflare 全路线生产 env audit 模拟通过，`providers=["cloudflare_ai_gateway"]`，LLM=`openai/gpt-4.1`，embedding=`@cf/baai/bge-large-en-v1.5`，rerank=`@cf/baai/bge-reranker-base`，价格表匹配均为 true。
+7. production 模板报告仍正确生成 `loop_can_end=false`，阻断项为 production env audit、production Provider/OCR readiness、repo-wide check 和工程1运行态验收。
+8. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮使用模拟 HTTP 响应验证 Cloudflare REST 适配，没有真实 Cloudflare API token，因此还没有真实 Cloudflare production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实 `.env.production`、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 production report 中全部通过。

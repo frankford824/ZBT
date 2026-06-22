@@ -113,6 +113,92 @@ def test_cloudflare_ai_gateway_provider_rejects_duplicate_gateway_id_header(monk
         provider._headers()
 
 
+def test_cloudflare_workers_ai_embedding_uses_ai_run_for_cf_model(monkeypatch) -> None:
+    provider = CloudflareAIGatewayProvider(
+        target=OpenAICompatibleTarget(model="@cf/baai/bge-large-en-v1.5"),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            _ = size
+            return json.dumps(
+                {"success": True, "result": {"data": [[1, 2], [3, 4]], "shape": [2, 2]}},
+            ).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["authorization"] = req.headers.get("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    vectors = provider.embed_batch(["first", "second"])
+
+    assert vectors == [[1.0, 2.0], [3.0, 4.0]]
+    assert captured["url"].endswith("/ai/run/@cf/baai/bge-large-en-v1.5")
+    assert captured["body"] == {"text": ["first", "second"]}
+    assert captured["authorization"] == "Bearer cf-token"
+
+
+def test_cloudflare_workers_ai_rerank_uses_ai_run_response_scores(monkeypatch) -> None:
+    provider = CloudflareAIGatewayProvider(
+        target=OpenAICompatibleTarget(model="@cf/baai/bge-reranker-base"),
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            _ = size
+            return json.dumps(
+                {
+                    "success": True,
+                    "result": {
+                        "response": [
+                            {"id": 0, "score": 0.25},
+                            {"id": 1, "score": 0.92},
+                        ],
+                    },
+                },
+            ).encode("utf-8")
+
+    def fake_urlopen(req, timeout):
+        _ = timeout
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    indexes = provider.rerank("bridge inspection", ["general notice", "bridge methods"])
+
+    assert indexes == [1, 0]
+    assert captured["url"].endswith("/ai/run/@cf/baai/bge-reranker-base")
+    assert captured["body"] == {
+        "query": "bridge inspection",
+        "contexts": [{"text": "general notice"}, {"text": "bridge methods"}],
+        "top_k": 2,
+    }
+
+
 @pytest.mark.parametrize(
     "base_url",
     [

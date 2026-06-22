@@ -324,12 +324,140 @@ class CloudflareAIGatewayProvider(OpenAICompatibleProvider):
             headers["cf-aig-gateway-id"] = _safe_header_value(gateway_id)
         return headers
 
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        model = self._model()
+        if not _is_cloudflare_workers_ai_model(model):
+            return super().embed_batch(texts)
+        data = self._post_ai_run(model, {"text": texts})
+        return _cloudflare_embedding_vectors(data, len(texts), self.name)
+
+    def rerank(self, query: str, documents: list[str]) -> list[int]:
+        model = self._model()
+        if not _is_cloudflare_workers_ai_model(model):
+            return super().rerank(query, documents)
+        data = self._post_ai_run(
+            model,
+            {
+                "query": query,
+                "contexts": [{"text": document[:2400]} for document in documents],
+                "top_k": len(documents),
+            },
+        )
+        return _cloudflare_rerank_indexes(data, len(documents), self.name)
+
+    def _post_ai_run(self, model: str, payload: dict[str, object]) -> dict[str, Any]:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            self._ai_run_url(model),
+            data=body,
+            method="POST",
+            headers=self._headers(),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout()) as response:
+                parsed = json.loads(_read_limited_response(response, self._max_response_bytes()).decode("utf-8"))
+                if not isinstance(parsed, dict):
+                    raise RuntimeError(f"{self.name} /ai/run returned non-object JSON")
+                return _cloudflare_result(parsed, self.name)
+        except OpenAICompatibleResponseTooLargeError as exc:
+            raise RuntimeError(f"{self.name} /ai/run response is too large") from exc
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"{self.name} /ai/run returned HTTP {exc.code}") from exc
+
+    def _ai_run_url(self, model: str) -> str:
+        safe_model = _safe_cloudflare_model(model, self.name)
+        account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+        if not _CLOUDFLARE_ACCOUNT_ID_RE.fullmatch(account_id):
+            raise RuntimeError(f"{self.name} /ai/run requires CLOUDFLARE_ACCOUNT_ID")
+        return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{safe_model}"
+
 
 def _read_limited_response(response: object, max_bytes: int) -> bytes:
     content = response.read(max_bytes + 1)
     if len(content) > max_bytes:
         raise OpenAICompatibleResponseTooLargeError
     return content
+
+
+def _is_cloudflare_workers_ai_model(model: str) -> bool:
+    return model.strip().startswith("@cf/")
+
+
+def _safe_cloudflare_model(model: str, provider_name: str) -> str:
+    value = model.strip()
+    if not _is_cloudflare_workers_ai_model(value):
+        raise RuntimeError(f"{provider_name} /ai/run model must start with @cf/")
+    if _contains_url_unsafe_character(value) or any(char in value for char in "?#"):
+        raise RuntimeError(f"{provider_name} /ai/run model is invalid")
+    return value
+
+
+def _cloudflare_result(data: dict[str, Any], provider_name: str) -> dict[str, Any]:
+    if data.get("success") is False:
+        raise RuntimeError(f"{provider_name} /ai/run returned success=false")
+    result = data.get("result")
+    if isinstance(result, dict):
+        return result
+    return data
+
+
+def _cloudflare_embedding_vectors(data: dict[str, Any], expected_count: int, provider_name: str) -> list[list[float]]:
+    items = data.get("data")
+    if isinstance(items, list) and len(items) == expected_count and all(isinstance(item, dict) for item in items):
+        return _embedding_vectors_from_response(data, expected_count, provider_name)
+    if isinstance(items, list) and expected_count == 1 and items and all(isinstance(item, (int, float)) for item in items):
+        return [_embedding_vector(items, provider_name)]
+    if not isinstance(items, list) or len(items) != expected_count:
+        raise RuntimeError(f"{provider_name} Workers AI embedding response data count mismatch")
+    return [_embedding_vector(item, provider_name) for item in items]
+
+
+def _cloudflare_rerank_indexes(data: dict[str, Any], document_count: int, provider_name: str) -> list[int]:
+    items = data.get("response")
+    if not isinstance(items, list):
+        items = data.get("data")
+    if not isinstance(items, list):
+        raise RuntimeError(f"{provider_name} Workers AI rerank response must include response or data")
+    if all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in items):
+        scored = [(index, float(score), index) for index, score in enumerate(items[:document_count])]
+        return [index for index, _score, _order in sorted(scored, key=lambda item: (-item[1], item[2]))]
+
+    ranked: list[tuple[int, float, int]] = []
+    for order, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        index = _parse_rank_index(
+            item.get("index", item.get("id", item.get("document_index"))),
+            document_count,
+        )
+        if index is None:
+            index = order if order < document_count else None
+        if index is None:
+            continue
+        score = _finite_score(
+            item.get("score", item.get("relevance_score", item.get("similarity"))),
+            default=float(document_count - order),
+        )
+        ranked.append((index, score, order))
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for index, _score, _order in sorted(ranked, key=lambda item: (-item[1], item[2])):
+        if index in seen:
+            continue
+        seen.add(index)
+        ordered.append(index)
+    ordered.extend(index for index in range(document_count) if index not in seen)
+    return ordered
+
+
+def _finite_score(value: object, *, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return default
+    return score if math.isfinite(score) else default
 
 
 def _safe_base_url(value: str, provider_name: str, env_name: str) -> str:

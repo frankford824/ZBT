@@ -319,6 +319,19 @@ def pricing_has_match(pricing: dict[str, object], provider: str, model: str) -> 
     return any(key in pricing for key in keys)
 
 
+def cloudflare_route_model_issue(target: dict[str, str]) -> str | None:
+    if target["provider"] != "cloudflare_ai_gateway":
+        return None
+    if target["kind"] not in {"embedding", "rerank"}:
+        return None
+    if target["model"].startswith("@cf/"):
+        return None
+    return (
+        f"production route {target['route']} uses cloudflare_ai_gateway for {target['kind']} "
+        "and must use a Workers AI @cf/ model for /ai/run support"
+    )
+
+
 def production_env_audit() -> dict[str, Any]:
     issues: list[str] = []
     issue = production_mode_issue()
@@ -390,6 +403,9 @@ def production_env_audit() -> dict[str, Any]:
             issues.append(f"production route {target['route']} is missing model")
             pricing_matches.append({**target, "matched": False})
             continue
+        route_issue = cloudflare_route_model_issue(target)
+        if route_issue:
+            issues.append(route_issue)
         matched = bool(pricing and pricing_has_match(pricing, target["provider"], target["model"]))
         pricing_matches.append({**target, "matched": matched})
         if pricing and target["provider"] in PRODUCTION_PROVIDER_ENV_GROUPS and not matched:

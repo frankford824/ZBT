@@ -800,6 +800,23 @@ def check_static_docs() -> None:
         "test_router_pricing_ignores_oversized_computed_cost",
     ):
         require(needle in model_router_tests, f"ModelRouter cost normalization missing regression test: {needle}")
+    openai_provider = (ROOT / "ai-service/app/gateway/openai_compatible_provider.py").read_text(encoding="utf-8")
+    for needle in (
+        "CloudflareAIGatewayProvider",
+        "_post_ai_run",
+        "_cloudflare_embedding_vectors",
+        "_cloudflare_rerank_indexes",
+        "/ai/run",
+    ):
+        require(needle in openai_provider, f"OpenAI-compatible provider missing Cloudflare Workers AI support: {needle}")
+    openai_provider_tests = (ROOT / "ai-service/app/tests/test_openai_compatible_provider.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_cloudflare_workers_ai_embedding_uses_ai_run_for_cf_model",
+        "test_cloudflare_workers_ai_rerank_uses_ai_run_response_scores",
+        "@cf/baai/bge-large-en-v1.5",
+        "@cf/baai/bge-reranker-base",
+    ):
+        require(needle in openai_provider_tests, f"OpenAI-compatible provider tests missing Cloudflare regression: {needle}")
     provider_canary = (ROOT / "ai-service/app/evaluation/provider_canary_eval.py").read_text(encoding="utf-8")
     for needle in (
         "evaluate_provider_canary",
@@ -824,6 +841,7 @@ def check_static_docs() -> None:
         "test_provider_canary_skips_without_real_provider_config",
         "test_provider_canary_passes_production_routes_without_mock_fallback",
         "test_provider_canary_can_call_openai_compatible_llm",
+        "test_provider_canary_can_call_cloudflare_workers_ai_embedding_and_rerank",
         "test_provider_canary_require_cost_fails_without_pricing",
     ):
         require(needle in provider_canary_tests, f"Provider canary missing regression test: {needle}")
@@ -894,6 +912,7 @@ def check_static_docs() -> None:
         "AI_SERVICE_HMAC_SECRET",
         "OPENAI_API_KEY",
         "CLOUDFLARE_API_TOKEN",
+        "cloudflare_route_model_issue",
         "OCR_HTTP_ENDPOINT",
         ".env.production.example",
         "PRODUCTION_PLACEHOLDER_MARKERS",
@@ -921,6 +940,7 @@ def check_static_docs() -> None:
         "ALLOW_MOCK_FALLBACK=false",
         "AI_MODEL_PRICING_JSON=",
         "OPENAI_API_KEY=<replace-with-openai-api-key>",
+        "# AI_RERANK_MODEL=@cf/baai/bge-reranker-base",
         "OCR_HTTP_ENDPOINT=<replace-with-ocr-http-endpoint>",
         "AI_SERVICE_HMAC_SECRET=<replace-with-strong-ai-callback-secret-at-least-16-chars>",
     ):
@@ -989,6 +1009,9 @@ def check_static_docs() -> None:
         "--route chapter_generate --route knowledge_embedding --route knowledge_rerank",
         "app.evaluation.ocr_provider_eval",
         "OCR_HTTP_ENDPOINT",
+        "@cf/baai/bge-large-en-v1.5",
+        "@cf/baai/bge-reranker-base",
+        "/ai/run/<model>",
         "--min-table-blocks 1",
         "--min-layout-bbox-count 1",
         "--min-table-bbox-count 1",
@@ -1026,10 +1049,12 @@ def check_static_docs() -> None:
     for needle in (
         "test_production_env_audit_reports_missing_inputs_as_matrix",
         "test_production_env_audit_accepts_cloudflare_gateway_matrix",
+        "test_production_env_audit_requires_cloudflare_ai_run_models_for_embedding_and_rerank",
         "test_production_env_audit_fails_when_pricing_misses_selected_provider",
         "test_canary_json_outputs_are_written_before_status_gate",
         "cloudflare_ai_gateway/*",
         "CLOUDFLARE_API_TOKEN",
+        "@cf/baai/bge-reranker-base",
         "OCR_HTTP_ENDPOINT",
         "pricing_matches",
     ):
