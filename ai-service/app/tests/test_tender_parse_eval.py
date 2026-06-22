@@ -44,6 +44,9 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
                     ],
                     "requirements": {
                         "min_count": 5,
+                        "min_expected_response_count": 5,
+                        "min_mandatory_count": 3,
+                        "min_high_priority_count": 4,
                         "require_traceable_source_refs": True,
                         "require_reference_ids": True,
                         "require_source_locations": True,
@@ -54,9 +57,32 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
                             "invalid_risk",
                             "annex",
                         ],
+                        "required_types": [
+                            "qualification",
+                            "scoring",
+                            "submission",
+                            "invalid_risk",
+                            "annex",
+                        ],
                         "must_contain": [
-                            {"module": "qualification", "text": "安全资质证书"},
-                            {"module": "invalid_risk", "text": "投标有效期不足"},
+                            {
+                                "module": "qualification",
+                                "type": "qualification",
+                                "text": "安全资质证书",
+                                "priority": "high",
+                                "mandatory": True,
+                                "expected_response_contains": "资质",
+                                "source_contains": "资格要求",
+                            },
+                            {
+                                "module": "invalid_risk",
+                                "type": "invalid_risk",
+                                "text": "投标有效期不足",
+                                "priority": "high",
+                                "mandatory": True,
+                                "expected_response_contains": "否决",
+                                "source_contains": "无效投标",
+                            },
                         ],
                     },
                     "evidence": {
@@ -77,6 +103,74 @@ def test_evaluate_golden_passes_for_complete_text_sample(tmp_path) -> None:
 
     assert result["status"] == "passed"
     assert result["failed_checks"] == 0
+
+
+def test_evaluate_golden_fails_when_requirement_response_quality_is_missing(tmp_path, monkeypatch) -> None:
+    import app.evaluation.tender_parse_eval as tender_parse_eval
+
+    sample = tmp_path / "sample.txt"
+    sample.write_text("项目名称：智慧交通平台建设\n资格要求：具备营业执照", encoding="utf-8")
+    golden = tmp_path / "golden.json"
+    golden.write_text(
+        json.dumps(
+            {
+                "documents": [{"id": "tender", "path": "sample.txt", "content_type": "text/plain"}],
+                "tender_parse": {
+                    "document_id": "tender",
+                    "filename": "sample.txt",
+                    "content_type": "text/plain",
+                    "requirements": {
+                        "min_count": 1,
+                        "min_expected_response_count": 1,
+                        "min_mandatory_count": 1,
+                        "min_high_priority_count": 1,
+                        "required_types": ["qualification"],
+                        "must_contain": [
+                            {
+                                "module": "qualification",
+                                "type": "qualification",
+                                "text": "营业执照",
+                                "priority": "high",
+                                "mandatory": True,
+                                "expected_response_contains": "资质",
+                            }
+                        ],
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_structured_result(*_args, **_kwargs):
+        return {
+            "requirement_items": [
+                {
+                    "id": "qualification-001",
+                    "module": "qualification",
+                    "type": "qualification",
+                    "requirement": "具备营业执照",
+                    "priority": "medium",
+                    "mandatory": False,
+                    "expected_response": "",
+                    "source_ref": {},
+                }
+            ],
+            "field_evidence": [],
+        }
+
+    monkeypatch.setattr(tender_parse_eval, "build_tender_structured_result", fake_structured_result)
+
+    result = evaluate_golden(golden, repo_root=tmp_path)
+
+    assert result["status"] == "failed"
+    failed_names = {check["name"] for check in result["checks"] if not check["passed"]}
+    assert "tender_parse.requirements.expected_response_count" in failed_names
+    assert "tender_parse.requirements.mandatory_count" in failed_names
+    assert "tender_parse.requirements.high_priority_count" in failed_names
+    assert "tender_parse.requirements.must_contain[1]" in failed_names
+    assert "tender_parse.requirements.type.qualification" not in failed_names
 
 
 def test_evaluate_golden_fails_when_source_refs_are_not_traceable(tmp_path) -> None:

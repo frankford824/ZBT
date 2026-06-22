@@ -864,6 +864,46 @@ def check_static_docs() -> None:
         "单元格 bbox",
     ):
         require(needle in sample_docs_eval, f"SAMPLE_DOCS_EVALUATION missing OCR canary guidance: {needle}")
+    tender_parse_eval = (ROOT / "ai-service/app/evaluation/tender_parse_eval.py").read_text(encoding="utf-8")
+    for needle in (
+        "min_expected_response_count",
+        "min_mandatory_count",
+        "min_high_priority_count",
+        "required_types",
+        "expected_response_contains",
+        "source_contains",
+        "_requirement_matches",
+        "_requirement_type_counts",
+    ):
+        require(needle in tender_parse_eval, f"Tender parse eval missing response-question quality gate: {needle}")
+    tender_parse_eval_tests = (ROOT / "ai-service/app/tests/test_tender_parse_eval.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_evaluate_golden_fails_when_requirement_response_quality_is_missing",
+        "tender_parse.requirements.expected_response_count",
+        "tender_parse.requirements.mandatory_count",
+        "tender_parse.requirements.high_priority_count",
+    ):
+        require(needle in tender_parse_eval_tests, f"Tender parse eval missing response-question regression test: {needle}")
+    project1_parse_golden = (ROOT / "docs/sample_docs/golden/工程1.parse.json").read_text(encoding="utf-8")
+    for needle in (
+        "\"min_expected_response_count\": 35",
+        "\"min_mandatory_count\": 20",
+        "\"min_high_priority_count\": 30",
+        "\"required_types\"",
+        "\"expected_response_contains\"",
+        "\"source_contains\"",
+    ):
+        require(needle in project1_parse_golden, f"工程1 parse golden missing response-question quality gate: {needle}")
+    for needle in (
+        "响应问题清单验收",
+        "expected_response",
+        "117 项检查",
+    ):
+        require(needle in sample_docs_eval, f"SAMPLE_DOCS_EVALUATION missing response-question guidance: {needle}")
+    require(
+        "响应问题清单质量" in readme and "expected_response" in readme,
+        "README missing response-question validation guidance",
+    )
 
     common_schema = (ROOT / "ai-service/app/schemas/common.py").read_text(encoding="utf-8")
     for needle in (

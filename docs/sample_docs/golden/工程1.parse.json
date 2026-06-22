@@ -175,6 +175,9 @@
     ],
     "requirements": {
       "min_count": 35,
+      "min_expected_response_count": 35,
+      "min_mandatory_count": 20,
+      "min_high_priority_count": 30,
       "require_traceable_source_refs": true,
       "require_reference_ids": true,
       "require_source_locations": true,
@@ -185,30 +188,67 @@
         "invalid_risk",
         "annex"
       ],
+      "required_types": [
+        "qualification",
+        "scoring",
+        "submission",
+        "invalid_risk",
+        "annex"
+      ],
       "must_contain": [
         {
           "module": "qualification",
-          "text": "营业执照"
+          "type": "qualification",
+          "text": "营业执照",
+          "priority": "high",
+          "mandatory": true,
+          "expected_response_contains": "资质",
+          "source_contains": "营业执照"
         },
         {
           "module": "qualification",
-          "text": "不接受联合体"
+          "type": "qualification",
+          "text": "不接受联合体",
+          "priority": "high",
+          "mandatory": true,
+          "expected_response_contains": "资质",
+          "source_contains": "联合体"
         },
         {
           "module": "evaluation",
-          "text": "评审办法"
+          "type": "scoring",
+          "text": "评审办法",
+          "priority": "high",
+          "mandatory": false,
+          "expected_response_contains": "评分点",
+          "source_contains": "评审办法"
         },
         {
           "module": "submission",
-          "text": "电子采购平台"
+          "type": "submission",
+          "text": "电子采购平台",
+          "priority": "high",
+          "mandatory": true,
+          "expected_response_contains": "递交",
+          "source_contains": "电子采购平台"
         },
         {
           "module": "invalid_risk",
-          "text": "否决"
+          "type": "invalid_risk",
+          "text": "否决",
+          "priority": "high",
+          "mandatory": true,
+          "expected_response_contains": "否决",
+          "source_contains": "否决"
         },
         {
           "module": "annex",
-          "text": "工程量清单"
+          "type": "annex",
+          "text": "工程量清单",
+          "priority": "medium",
+          "mandatory": false,
+          "expected_response_contains": "附件格式",
+          "source_contains": "工程量清单"
         }
       ]
     },

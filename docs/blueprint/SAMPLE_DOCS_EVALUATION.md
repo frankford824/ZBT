@@ -108,5 +108,6 @@ OCR 验收会检查 provider 是否配置、样本是否存在、OCR 状态是�
 5. 表格块结构验收：`table_blocks` 会检查来源类型、总行数、具备 `rows` 的块数量、PDF 表级 bbox 数量、PDF 单元格 bbox 数量、`md_table` 存在性和关键单元格文本，避免表格被降级成普通正文或丢失版面证据。
 6. 来源引用结构验收：字段证据和要求项 `source_ref` 均要求具备可追溯原文、引用号或定位码，并能提供页码、chunk、文件或文档定位，避免 AutoRFP 式来源引用退化成普通摘要。
 7. 六模块质量摘要：`quality_gates.interpret.module_quality` 和 `parse_metadata.module_quality` 会记录每个模块字段数、证据数、要求项数、低置信、缺来源和待复核数量；`review_modules` 用于定位需要人工复核的模块。
+8. 响应问题清单验收：`requirement_items` 会检查问题类型、强制项数量、高优先级数量、`expected_response` 响应建议和单条问题的来源原文，确保解析结果可直接进入响应矩阵和章节生成。
 
-当前解析门槛为 109 项检查全部通过；生成覆盖门槛为 9 项检查全部通过；导出格式门槛为 23 项检查全部通过。失败时 CLI 返回非 0，并输出失败项的 expected/actual。
+当前解析门槛为 117 项检查全部通过；生成覆盖门槛为 9 项检查全部通过；导出格式门槛为 23 项检查全部通过。失败时 CLI 返回非 0，并输出失败项的 expected/actual。

@@ -8043,3 +8043,46 @@ git diff --check
 
 1. 本轮没有调用真实 OCR endpoint，因为本机未配置 `OCR_HTTP_ENDPOINT`、`MINERU_HTTP_ENDPOINT` 或 `PADDLEOCR_HTTP_ENDPOINT`；交付的是总验收入口和坐标级证据门槛。
 2. 生产环境仍需使用真实 OCR Provider 跑非 skipped 结果，才能证明扫描件 OCR 能力闭环。
+
+## Loop-168 / 工程1响应问题清单质量门槛 - 2026-06-21
+
+### 本轮目标
+
+1. 将工程1解析验收从“字段和关键字能抽到”推进到“可进入响应矩阵和章节生成”的质量门槛。
+2. 围绕 AutoRFP 式问题抽取与来源引用，要求 `requirement_items` 具备类型、强制性、优先级、响应建议和可追溯来源。
+3. 把新增门槛写入单测、golden、README、样本文档评测和静态验收，防止后续回退。
+
+### 代码交付
+
+1. `ai-service/app/evaluation/tender_parse_eval.py` 新增 `min_expected_response_count`、`min_mandatory_count`、`min_high_priority_count` 和 `required_types` 检查。
+2. `requirements.must_contain` 支持校验 `type`、`priority`、`mandatory`、`expected_response_contains` 和 `source_contains`，单条要求必须同时满足业务分类、响应建议和来源原文。
+3. `ai-service/app/tests/test_tender_parse_eval.py` 增加响应问题清单质量回归：完整文本样本通过新门槛，缺失响应建议/强制项/高优先级时失败。
+4. `docs/sample_docs/golden/工程1.parse.json` 将工程1解析门槛提升到 117 项，新增五类问题类型、35 条响应建议、20 条强制项、30 条高优先级项，以及六条关键响应问题的来源与响应建议校验。
+5. `README.md` 和 `docs/blueprint/SAMPLE_DOCS_EVALUATION.md` 说明工程1解析会验收响应问题清单质量。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加评估器、测试、golden 和文档的防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_parse_eval.py -q -s
+cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd ai-service && .venv/bin/python -m pytest app/tests/test_tender_parse_eval.py -q -s` 通过，6 项通过。
+2. `cd ai-service && .venv/bin/python -m app.evaluation.tender_parse_eval --golden ../docs/sample_docs/golden/工程1.parse.json` 通过，117/117 项通过。
+3. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+4. `git diff --check` 通过。
+5. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、Provider canary 本地跳过、OCR canary 本地跳过、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+
+### 偏离蓝图
+
+1. 本轮仍未解决真实 OCR 非 skipped 闭环，因为本机未配置真实 OCR endpoint。
+2. 本轮未新增前端交互；交付集中在解析输出质量和验收门槛，保障后续响应矩阵与章节生成可用。

@@ -329,6 +329,42 @@ def _evaluate_requirements(
             f">={expected}",
             len(requirements),
         )
+    if "min_expected_response_count" in requirements_spec:
+        expected = int(requirements_spec["min_expected_response_count"])
+        actual = sum(
+            1
+            for item in requirements
+            if isinstance(item, dict) and str(item.get("expected_response") or "").strip()
+        )
+        _add_check(
+            checks,
+            "tender_parse.requirements.expected_response_count",
+            actual >= expected,
+            f">={expected}",
+            actual,
+        )
+    if "min_mandatory_count" in requirements_spec:
+        expected = int(requirements_spec["min_mandatory_count"])
+        actual = sum(1 for item in requirements if isinstance(item, dict) and item.get("mandatory") is True)
+        _add_check(
+            checks,
+            "tender_parse.requirements.mandatory_count",
+            actual >= expected,
+            f">={expected}",
+            actual,
+        )
+    if "min_high_priority_count" in requirements_spec:
+        expected = int(requirements_spec["min_high_priority_count"])
+        actual = sum(
+            1 for item in requirements if isinstance(item, dict) and item.get("priority") == "high"
+        )
+        _add_check(
+            checks,
+            "tender_parse.requirements.high_priority_count",
+            actual >= expected,
+            f">={expected}",
+            actual,
+        )
     for module in _string_list(requirements_spec.get("required_modules")):
         _add_check(
             checks,
@@ -337,23 +373,24 @@ def _evaluate_requirements(
             "present",
             _requirement_module_counts(requirements),
         )
+    for requirement_type in _string_list(requirements_spec.get("required_types")):
+        _add_check(
+            checks,
+            f"tender_parse.requirements.type.{requirement_type}",
+            any(isinstance(item, dict) and item.get("type") == requirement_type for item in requirements),
+            "present",
+            _requirement_type_counts(requirements),
+        )
     for index, item_spec in enumerate(requirements_spec.get("must_contain") or [], start=1):
         if not isinstance(item_spec, dict):
             continue
-        module = str(item_spec.get("module") or "").strip()
-        text = str(item_spec.get("text") or "").strip()
-        matched = any(
-            isinstance(item, dict)
-            and (not module or item.get("module") == module)
-            and text in str(item.get("requirement") or "")
-            for item in requirements
-        )
+        matched = any(_requirement_matches(item, item_spec) for item in requirements)
         _add_check(
             checks,
             f"tender_parse.requirements.must_contain[{index}]",
             matched,
             item_spec,
-            _requirements_excerpt(requirements, module),
+            _requirements_excerpt(requirements, str(item_spec.get("module") or "").strip()),
         )
     if requirements_spec.get("require_traceable_source_refs") is True:
         missing = _missing_source_ref_indexes(
@@ -551,6 +588,43 @@ def _requirement_module_counts(requirements: list[Any]) -> dict[str, int]:
         module = str(item.get("module") or "")
         counts[module] = counts.get(module, 0) + 1
     return counts
+
+
+def _requirement_type_counts(requirements: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in requirements:
+        if not isinstance(item, dict):
+            continue
+        requirement_type = str(item.get("type") or "")
+        counts[requirement_type] = counts.get(requirement_type, 0) + 1
+    return counts
+
+
+def _requirement_matches(item: Any, item_spec: dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    module = str(item_spec.get("module") or "").strip()
+    if module and item.get("module") != module:
+        return False
+    requirement_type = str(item_spec.get("type") or "").strip()
+    if requirement_type and item.get("type") != requirement_type:
+        return False
+    text = str(item_spec.get("text") or "").strip()
+    if text and text not in str(item.get("requirement") or ""):
+        return False
+    expected_response = str(item_spec.get("expected_response_contains") or "").strip()
+    if expected_response and expected_response not in str(item.get("expected_response") or ""):
+        return False
+    priority = str(item_spec.get("priority") or "").strip()
+    if priority and item.get("priority") != priority:
+        return False
+    if "mandatory" in item_spec and bool(item.get("mandatory")) is not bool(item_spec.get("mandatory")):
+        return False
+    source_ref = item.get("source_ref")
+    if not isinstance(source_ref, dict):
+        return not _string_list(item_spec.get("source_contains"))
+    source_text = str(source_ref.get("source_text") or "")
+    return all(expected_text in source_text for expected_text in _string_list(item_spec.get("source_contains")))
 
 
 def _requirements_excerpt(requirements: list[Any], module: str) -> list[str]:
