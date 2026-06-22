@@ -87,7 +87,7 @@ def env_is_placeholder(value: str) -> bool:
     return any(marker in normalized for marker in PRODUCTION_PLACEHOLDER_MARKERS)
 
 
-def load_env_file(path: Path | None) -> dict[str, str]:
+def load_env_file(path: Path | None, *, quiet: bool = False) -> dict[str, str]:
     if path is None:
         return {}
     require(path.is_file(), f"env file does not exist: {path}")
@@ -110,7 +110,8 @@ def load_env_file(path: Path | None) -> dict[str, str]:
             value = value[1:-1]
         loaded[key] = value
         os.environ[key] = value
-    ok("env file loaded", {"path": str(path), "keys": len(loaded)})
+    if not quiet:
+        ok("env file loaded", {"path": str(path), "keys": len(loaded)})
     return loaded
 
 
@@ -134,6 +135,7 @@ def check_static_release_evidence() -> None:
         "infra/scripts/acceptance_tail_check.py",
         "infra/scripts/check.sh",
         "infra/scripts/first_usable_release_report.py",
+        "infra/scripts/test_first_usable_release_check.py",
         "infra/scripts/test_first_usable_release_report.py",
         "ai-service/app/evaluation/provider_canary_eval.py",
         "ai-service/app/evaluation/ocr_provider_eval.py",
@@ -316,7 +318,7 @@ def pricing_has_match(pricing: dict[str, object], provider: str, model: str) -> 
     return any(key in pricing for key in keys)
 
 
-def check_production_env() -> None:
+def production_env_audit() -> dict[str, Any]:
     issues: list[str] = []
     issue = production_mode_issue()
     if issue:
@@ -342,46 +344,111 @@ def check_production_env() -> None:
         for route, (route_kind, default_provider, default_model) in PRODUCTION_ROUTE_DEFAULTS.items()
     ]
     providers = sorted({target["provider"] for target in targets})
+    provider_requirements: list[dict[str, object]] = []
     for provider in providers:
+        provider_record: dict[str, object] = {
+            "provider": provider,
+            "type": "external",
+            "required_env_groups": [],
+            "configured_envs": [],
+            "issues": [],
+        }
         if provider in {"mock", "local"}:
-            issues.append(f"production routes must use real external providers, got {provider}")
+            issue = f"production routes must use real external providers, got {provider}"
+            issues.append(issue)
+            provider_record["type"] = "zero_cost"
+            provider_record["issues"] = [issue]
+            provider_requirements.append(provider_record)
             continue
         if provider not in PRODUCTION_PROVIDER_ENV_GROUPS:
-            issues.append(f"production route uses unsupported provider {provider}")
+            issue = f"production route uses unsupported provider {provider}"
+            issues.append(issue)
+            provider_record["type"] = "unsupported"
+            provider_record["issues"] = [issue]
+            provider_requirements.append(provider_record)
             continue
+        provider_issues: list[str] = []
+        configured_envs: list[str] = []
+        required_groups: list[list[str]] = []
         for group in PRODUCTION_PROVIDER_ENV_GROUPS[provider]:
-            _, issue = env_group_issue(f"{provider} credentials", group)
+            required_groups.append(list(group))
+            matched_env, issue = env_group_issue(f"{provider} credentials", group)
             if issue:
                 issues.append(issue)
+                provider_issues.append(issue)
+            elif matched_env:
+                configured_envs.append(matched_env)
+        provider_record["required_env_groups"] = required_groups
+        provider_record["configured_envs"] = configured_envs
+        provider_record["issues"] = provider_issues
+        provider_requirements.append(provider_record)
+
+    pricing_matches: list[dict[str, object]] = []
     for target in targets:
         if not target["model"]:
             issues.append(f"production route {target['route']} is missing model")
+            pricing_matches.append({**target, "matched": False})
             continue
-        if pricing and target["provider"] in PRODUCTION_PROVIDER_ENV_GROUPS and not pricing_has_match(pricing, target["provider"], target["model"]):
+        matched = bool(pricing and pricing_has_match(pricing, target["provider"], target["model"]))
+        pricing_matches.append({**target, "matched": matched})
+        if pricing and target["provider"] in PRODUCTION_PROVIDER_ENV_GROUPS and not matched:
             issues.append(
                 "production env AI_MODEL_PRICING_JSON missing price for "
                 f"{target['provider']}/{target['model']} or {target['provider']}/*"
             )
 
     ocr_provider = env_value("OCR_PROVIDER") or "http_ocr"
+    ocr_requirement: dict[str, object] = {
+        "provider": ocr_provider,
+        "required_env_groups": [],
+        "configured_envs": [],
+        "issues": [],
+    }
     if ocr_provider not in PRODUCTION_OCR_PROVIDER_ENV_GROUPS:
-        issues.append(f"production OCR_PROVIDER is unsupported: {ocr_provider}")
+        issue = f"production OCR_PROVIDER is unsupported: {ocr_provider}"
+        issues.append(issue)
+        ocr_requirement["issues"] = [issue]
     else:
+        ocr_issues: list[str] = []
+        configured_envs: list[str] = []
+        required_groups: list[list[str]] = []
         for group in PRODUCTION_OCR_PROVIDER_ENV_GROUPS[ocr_provider]:
-            _, issue = env_group_issue(f"{ocr_provider} endpoint", group)
+            required_groups.append(list(group))
+            matched_env, issue = env_group_issue(f"{ocr_provider} endpoint", group)
             if issue:
                 issues.append(issue)
+                ocr_issues.append(issue)
+            elif matched_env:
+                configured_envs.append(matched_env)
+        ocr_requirement["required_env_groups"] = required_groups
+        ocr_requirement["configured_envs"] = configured_envs
+        ocr_requirement["issues"] = ocr_issues
 
     evidence = {
         "providers": providers,
         "routes": targets,
         "ocr_provider": ocr_provider,
         "pricing_entries": len(pricing),
+        "provider_requirements": provider_requirements,
+        "ocr_requirement": ocr_requirement,
+        "pricing_matches": pricing_matches,
     }
+    deduped_issues = list(dict.fromkeys(issues))
+    return {
+        "name": "production_env_audit",
+        "status": "passed" if not deduped_issues else "failed",
+        "issues": deduped_issues,
+        "evidence": evidence,
+    }
+
+
+def check_production_env() -> None:
+    audit = production_env_audit()
+    issues = audit["issues"]
     if issues:
-        joined = "\n- ".join(dict.fromkeys(issues))
+        joined = "\n- ".join(issues)
         raise ReadinessError(f"production env audit failed:\n- {joined}")
-    ok("production env audit", evidence)
+    ok("production env audit", audit["evidence"])
 
 
 def run_json_command(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> tuple[int, dict[str, Any], str]:
@@ -468,8 +535,19 @@ def main() -> int:
     parser.add_argument("--profile", choices=("local", "production"), default="local")
     parser.add_argument("--env-file", type=Path, help="Load KEY=VALUE settings before running readiness checks.")
     parser.add_argument("--audit-production-env", action="store_true", help="Only audit production env settings and skip live Provider/OCR canaries.")
+    parser.add_argument(
+        "--audit-production-env-json",
+        action="store_true",
+        help="Emit a machine-readable production env matrix without printing secrets.",
+    )
     parser.add_argument("--run-canaries", action="store_true", help="Run Provider/OCR canaries in addition to static checks.")
     args = parser.parse_args()
+
+    if args.audit_production_env_json:
+        load_env_file(args.env_file, quiet=True)
+        audit = production_env_audit()
+        print(json.dumps(audit, ensure_ascii=False, indent=2))
+        return 0 if audit["status"] == "passed" else 1
 
     load_env_file(args.env_file)
     check_static_release_evidence()

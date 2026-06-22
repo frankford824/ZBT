@@ -8383,3 +8383,50 @@ python3 infra/scripts/first_usable_release_report.py --profile local --output tm
 
 1. 本轮仍没有真实生产 `.env.production`，所以不能运行最终 `loop_can_end=true` 证据包。
 2. 第一可用版完成判定现在已被测试保护；剩余外部条件仍是填入真实生产配置并跑通 production profile、repo-wide check 和工程1运行态验收。
+
+## Loop-176 / 生产配置矩阵与审计回归 - 2026-06-22
+
+### 本轮目标
+
+1. 将 production readiness 的环境阻断项从纯文本错误提升为机器可读矩阵，便于填入真实密钥后定位 route、Provider、OCR 和价格表是否闭环。
+2. 覆盖 Cloudflare AI Gateway 生产接入路径，确保 LLM、embedding、rerank 全部切到同一真实 Provider 时能被审计为完整。
+3. 把生产配置审计自身纳入回归测试和总检，防止后续放宽 mock 禁用、价格匹配或 OCR endpoint 要求。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_check.py` 新增 `production_env_audit()`，返回不含密钥值的 `provider_requirements`、`ocr_requirement`、`pricing_matches` 和 route 列表。
+2. 新增 `--audit-production-env-json`，只输出 JSON 审计矩阵，可保存为生产证据包的辅助文件；占位值、缺失 key、缺失 OCR endpoint 和价格表不匹配仍返回失败。
+3. `check_production_env()` 复用同一份审计结果，避免文本审计与 JSON 审计规则分叉。
+4. 新增 `infra/scripts/test_first_usable_release_check.py`，覆盖空生产环境阻断矩阵、Cloudflare AI Gateway 完整配置通过、价格表与所选 Provider/model 不匹配失败。
+5. `infra/scripts/check.sh` 将生产审计回归测试纳入默认总检；`first_usable_release_check.py` 的静态证据清单纳入该测试文件。
+6. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 `--audit-production-env-json`、矩阵字段和测试函数名防回退锚点。
+7. README 增加 `--audit-production-env-json --env-file .env.production > tmp/production_env_audit.json` 收口命令，并说明该 JSON 不含密钥值。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_check.py
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_check.py infra/scripts/test_first_usable_release_check.py infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/first_usable_release_check.py --audit-production-env-json --env-file .env.production.example
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_check.py --run-canaries
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_check.py` 通过，3 项测试覆盖生产矩阵阻断、Cloudflare AI Gateway 成功路径和价格表失败路径。
+2. `python3 infra/scripts/first_usable_release_check.py --audit-production-env-json --env-file .env.production.example` 按预期失败于模板占位值，同时输出 `routes`、`provider_requirements`、`ocr_requirement` 和 `pricing_matches` 矩阵，价格表匹配为 true，密钥值未输出。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过，最新 Loop 识别为 Loop-176。
+4. `python3 infra/scripts/first_usable_release_check.py --run-canaries` 通过；静态第一可用版证据文件数为 18，本地 Provider/OCR canary 继续显式 skipped。
+5. local 证据包仍生成 `loop_can_end=false`，阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收。
+6. `./infra/scripts/check.sh` 通过；新增生产审计测试、证据包测试、静态文档、first usable local gate、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮没有填入真实 `.env.production`，也没有调用真实 LLM/OCR endpoint；production profile 仍不能通过。
+2. 本轮解决的是 production 配置证据的可审计性和防漂移，不替代 Provider/OCR 真实运行态验收。

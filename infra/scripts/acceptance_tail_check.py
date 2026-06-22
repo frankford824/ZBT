@@ -857,6 +857,10 @@ def check_static_docs() -> None:
         "Repo-wide check does not compile first usable release report script",
     )
     require(
+        "test_first_usable_release_check.py" in check_script,
+        "Repo-wide check does not run first usable release check regression tests",
+    )
+    require(
         "test_first_usable_release_report.py" in check_script,
         "Repo-wide check does not run first usable release report regression tests",
     )
@@ -866,8 +870,13 @@ def check_static_docs() -> None:
         "--profile",
         "--env-file",
         "--audit-production-env",
+        "--audit-production-env-json",
         "production",
         "--run-canaries",
+        "production_env_audit",
+        "provider_requirements",
+        "pricing_matches",
+        "ocr_requirement",
         "provider_canary_eval",
         "ocr_provider_eval",
         "acceptance_project1_check.py",
@@ -876,6 +885,7 @@ def check_static_docs() -> None:
         "ALLOW_MOCK_FALLBACK",
         "AI_SERVICE_HMAC_SECRET",
         "OPENAI_API_KEY",
+        "CLOUDFLARE_API_TOKEN",
         "OCR_HTTP_ENDPOINT",
         ".env.production.example",
         "PRODUCTION_PLACEHOLDER_MARKERS",
@@ -931,6 +941,7 @@ def check_static_docs() -> None:
         "first_usable_release_check.py --run-canaries",
         "cp .env.production.example .env.production",
         "first_usable_release_check.py --audit-production-env --env-file .env.production",
+        "first_usable_release_check.py --audit-production-env-json --env-file .env.production",
         "first_usable_release_check.py --profile production --env-file .env.production",
         "first_usable_release_report.py --profile production --env-file .env.production --include-repo-check --include-project1-runtime",
         "loop_can_end=true",
@@ -969,6 +980,17 @@ def check_static_docs() -> None:
         "Bearer",
     ):
         require(needle in first_usable_report, f"First usable release report missing evidence guard: {needle}")
+    first_usable_check_tests = (ROOT / "infra/scripts/test_first_usable_release_check.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_production_env_audit_reports_missing_inputs_as_matrix",
+        "test_production_env_audit_accepts_cloudflare_gateway_matrix",
+        "test_production_env_audit_fails_when_pricing_misses_selected_provider",
+        "cloudflare_ai_gateway/*",
+        "CLOUDFLARE_API_TOKEN",
+        "OCR_HTTP_ENDPOINT",
+        "pricing_matches",
+    ):
+        require(needle in first_usable_check_tests, f"First usable release check tests missing regression: {needle}")
     first_usable_report_tests = (ROOT / "infra/scripts/test_first_usable_release_report.py").read_text(encoding="utf-8")
     for needle in (
         "test_load_env_file_collects_sensitive_values",
