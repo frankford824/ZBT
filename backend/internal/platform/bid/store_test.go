@@ -332,6 +332,166 @@ func TestScanTaskNormalizesEmptyStoredJSONFields(t *testing.T) {
 	}
 }
 
+func TestUnmarshalBidStoredBusinessJSONRejectsInvalidFields(t *testing.T) {
+	for name, check := range map[string]func() error{
+		"invalid object syntax": func() error {
+			_, err := unmarshalBidBusinessJSONObject([]byte(`{"metadata":`), maxBidPartMetadataJSONBytes)
+			return err
+		},
+		"object shape mismatch": func() error {
+			_, err := unmarshalBidBusinessJSONObject([]byte(`[{"metadata":true}]`), maxBidPartMetadataJSONBytes)
+			return err
+		},
+		"object oversized": func() error {
+			_, err := unmarshalBidBusinessJSONObject([]byte(`{"payload":"`+strings.Repeat("部", maxBidPartMetadataJSONBytes)+`"}`), maxBidPartMetadataJSONBytes)
+			return err
+		},
+		"array shape mismatch": func() error {
+			_, err := unmarshalBidBusinessJSONArray([]byte(`{"chunk_id":"chunk-1"}`), maxBidChapterSourceRefsJSONBytes)
+			return err
+		},
+		"string array type mismatch": func() error {
+			_, err := unmarshalBidStringArrayJSON([]byte(`[1]`), maxBidChapterNeedsHumanInputJSONBytes)
+			return err
+		},
+		"int map type mismatch": func() error {
+			_, err := unmarshalBidIntMapJSON([]byte(`{"prompt_tokens":1.5}`), maxBidChapterTokenUsageJSONBytes)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); err == nil {
+				t.Fatal("expected invalid stored bid JSON to be rejected")
+			}
+		})
+	}
+}
+
+func TestUnmarshalBidStoredBusinessJSONNormalizesEmptyFields(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"nil":   nil,
+		"blank": []byte("   "),
+		"null":  []byte(" null "),
+	} {
+		t.Run(name, func(t *testing.T) {
+			object, err := unmarshalBidBusinessJSONObject(raw, maxBidPartMetadataJSONBytes)
+			if err != nil || object == nil || len(object) != 0 {
+				t.Fatalf("expected empty object, got object=%#v err=%v", object, err)
+			}
+			array, err := unmarshalBidBusinessJSONArray(raw, maxBidChapterSourceRefsJSONBytes)
+			if err != nil || array == nil || len(array) != 0 {
+				t.Fatalf("expected empty array, got array=%#v err=%v", array, err)
+			}
+			strings, err := unmarshalBidStringArrayJSON(raw, maxBidChapterNeedsHumanInputJSONBytes)
+			if err != nil || strings == nil || len(strings) != 0 {
+				t.Fatalf("expected empty string array, got strings=%#v err=%v", strings, err)
+			}
+			ints, err := unmarshalBidIntMapJSON(raw, maxBidChapterTokenUsageJSONBytes)
+			if err != nil || ints == nil || len(ints) != 0 {
+				t.Fatalf("expected empty int map, got ints=%#v err=%v", ints, err)
+			}
+		})
+	}
+}
+
+func TestScanBidStoredBusinessJSONFieldsRejectInvalidJSON(t *testing.T) {
+	badObject := []byte(`{"metadata":`)
+	badArray := []byte(`{"chunk_id":"chunk-1"}`)
+	badStringArray := []byte(`[1]`)
+	badTokenUsage := []byte(`{"prompt_tokens":1.5}`)
+
+	for name, check := range map[string]func() error{
+		"template content": func() error {
+			_, err := scanBidTemplate(bidTemplateScanRow(badObject))
+			return err
+		},
+		"part metadata": func() error {
+			_, err := scanPart(bidPartScanRow(badObject))
+			return err
+		},
+		"chapter content": func() error {
+			_, err := scanChapter(bidChapterScanRow(badObject, []byte(`[]`), []byte(`[]`)))
+			return err
+		},
+		"chapter source refs": func() error {
+			_, err := scanChapter(bidChapterScanRow([]byte(`{}`), badArray, []byte(`[]`)))
+			return err
+		},
+		"chapter needs human input": func() error {
+			_, err := scanChapter(bidChapterScanRow([]byte(`{}`), []byte(`[]`), badStringArray))
+			return err
+		},
+		"chapter version model metadata": func() error {
+			_, err := scanChapterVersion(bidChapterVersionScanRow([]byte(`{}`), []byte(`[]`), []byte(`[]`), badObject, []byte(`{}`)))
+			return err
+		},
+		"chapter version token usage": func() error {
+			_, err := scanChapterVersion(bidChapterVersionScanRow([]byte(`{}`), []byte(`[]`), []byte(`[]`), []byte(`{}`), badTokenUsage))
+			return err
+		},
+		"export metadata": func() error {
+			_, err := scanExport(bidExportScanRow(badObject))
+			return err
+		},
+		"generation step metadata": func() error {
+			_, err := scanGenerationStep(bidGenerationStepScanRow(badObject))
+			return err
+		},
+		"parse structured result": func() error {
+			_, err := scanParseResult(bidParseResultScanRow(badObject))
+			return err
+		},
+		"requirement source ref": func() error {
+			_, err := scanRequirementItem(bidRequirementItemScanRow(badObject, []byte(`{}`)))
+			return err
+		},
+		"requirement metadata": func() error {
+			_, err := scanRequirementItem(bidRequirementItemScanRow([]byte(`{}`), badObject))
+			return err
+		},
+		"coverage source refs": func() error {
+			_, err := scanRequirementCoverageEvent(bidRequirementCoverageEventScanRow(badArray, []byte(`{}`)))
+			return err
+		},
+		"coverage metadata": func() error {
+			_, err := scanRequirementCoverageEvent(bidRequirementCoverageEventScanRow([]byte(`[]`), badObject))
+			return err
+		},
+		"pipeline gate metadata": func() error {
+			_, err := scanPipelineGate(bidPipelineGateScanRow(badObject))
+			return err
+		},
+		"material selection refs": func() error {
+			_, err := scanMaterialSelection(bidMaterialSelectionScanRow(badArray))
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := check(); err == nil {
+				t.Fatal("expected invalid stored bid JSON field to be rejected")
+			}
+		})
+	}
+}
+
+func TestScanBidStoredBusinessJSONFieldsNormalizeEmptyJSON(t *testing.T) {
+	chapter, err := scanChapter(bidChapterScanRow(nil, []byte(`null`), []byte(`   `)))
+	if err != nil {
+		t.Fatalf("expected empty chapter JSON fields to normalize: %v", err)
+	}
+	if chapter.Content == nil || len(chapter.Content) != 0 || chapter.SourceRefs == nil || len(chapter.SourceRefs) != 0 || chapter.NeedsHumanInput == nil || len(chapter.NeedsHumanInput) != 0 {
+		t.Fatalf("expected empty chapter fields, got content=%#v source_refs=%#v needs=%#v", chapter.Content, chapter.SourceRefs, chapter.NeedsHumanInput)
+	}
+
+	version, err := scanChapterVersion(bidChapterVersionScanRow(nil, nil, nil, nil, nil))
+	if err != nil {
+		t.Fatalf("expected empty chapter version JSON fields to normalize: %v", err)
+	}
+	if version.Content == nil || version.SourceRefs == nil || version.NeedsHumanInput == nil || version.ModelMetadata == nil || version.TokenUsage == nil {
+		t.Fatalf("expected empty version JSON containers, got %#v", version)
+	}
+}
+
 func TestMarshalBidBusinessJSONRejectsInvalidAndOversizedValues(t *testing.T) {
 	for name, value := range map[string]any{
 		"invalid number": map[string]any{"bad": math.NaN()},
@@ -1629,4 +1789,178 @@ func (row bidTaskScanRow) Scan(dest ...any) error {
 	*(dest[12].(*time.Time)) = now
 	*(dest[13].(*time.Time)) = now
 	return nil
+}
+
+type bidStoredJSONScanRow []any
+
+func (row bidStoredJSONScanRow) Scan(dest ...any) error {
+	if len(dest) != len(row) {
+		return fmt.Errorf("scan dest mismatch: got %d want %d", len(dest), len(row))
+	}
+	for i, value := range row {
+		if err := assignBidScanValue(dest[i], value); err != nil {
+			return fmt.Errorf("scan dest %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func assignBidScanValue(dest any, value any) error {
+	switch target := dest.(type) {
+	case *string:
+		typed, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", value)
+		}
+		*target = typed
+	case *int:
+		typed, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("expected int, got %T", value)
+		}
+		*target = typed
+	case *bool:
+		typed, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("expected bool, got %T", value)
+		}
+		*target = typed
+	case *time.Time:
+		typed, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("expected time.Time, got %T", value)
+		}
+		*target = typed
+	case *[]byte:
+		switch typed := value.(type) {
+		case nil:
+			*target = nil
+		case []byte:
+			*target = typed
+		case string:
+			*target = []byte(typed)
+		default:
+			return fmt.Errorf("expected []byte, got %T", value)
+		}
+	case *sql.NullString:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullString{}
+		case sql.NullString:
+			*target = typed
+		case string:
+			*target = sql.NullString{String: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullString, got %T", value)
+		}
+	case *sql.NullFloat64:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullFloat64{}
+		case sql.NullFloat64:
+			*target = typed
+		case float64:
+			*target = sql.NullFloat64{Float64: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullFloat64, got %T", value)
+		}
+	case *sql.NullTime:
+		switch typed := value.(type) {
+		case nil:
+			*target = sql.NullTime{}
+		case sql.NullTime:
+			*target = typed
+		case time.Time:
+			*target = sql.NullTime{Time: typed, Valid: true}
+		default:
+			return fmt.Errorf("expected sql.NullTime, got %T", value)
+		}
+	default:
+		return fmt.Errorf("unsupported scan destination %T", dest)
+	}
+	return nil
+}
+
+func bidScanTime() time.Time {
+	return time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+}
+
+func bidTemplateScanRow(contentRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{"template-1", "默认模板", "combined", "default", "desc", "v1", contentRaw, 0, "active", now, now}
+}
+
+func bidPartScanRow(metadataRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{"part-1", "bid-1", "tech", "技术标", 10, "draft", metadataRaw, now, now}
+}
+
+func bidChapterScanRow(contentRaw, sourceRefsRaw, needsHumanInputRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{"chapter-1", "bid-1", "part-1", "总体方案", contentRaw, "正文", "draft", 10, sourceRefsRaw, needsHumanInputRaw, now, now}
+}
+
+func bidChapterVersionScanRow(contentRaw, sourceRefsRaw, needsHumanInputRaw, modelMetadataRaw, tokenUsageRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"version-1", "chapter-1", "bid-1", "part-1", 1, "总体方案",
+		contentRaw, "正文", "done", sourceRefsRaw, needsHumanInputRaw, "init",
+		modelMetadataRaw, tokenUsageRaw, sql.NullString{}, now, now,
+	}
+}
+
+func bidExportScanRow(metadataRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"export-1", "bid-1", sql.NullString{}, "docx", "tech", "done",
+		sql.NullString{}, "投标文件.docx", metadataRaw, sql.NullString{}, sql.NullTime{}, now, now,
+	}
+}
+
+func bidGenerationStepScanRow(metadataRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"step-1", "job-1", "bid-1", "part-1", "chapter-1", "总体方案", 10, "done",
+		sql.NullString{}, sql.NullString{}, sql.NullString{}, metadataRaw, sql.NullTime{}, sql.NullTime{}, now, now,
+	}
+}
+
+func bidParseResultScanRow(structuredRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"parse-1", "bid-1", sql.NullString{}, "ready", structuredRaw,
+		sql.NullString{}, sql.NullString{}, sql.NullTime{}, now, now,
+	}
+}
+
+func bidRequirementItemScanRow(sourceRaw, metadataRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"requirement-1", "bid-1", sql.NullString{}, "qualification-1",
+		"qualification", "qualification", "提供资质证明", "high",
+		true, sql.NullFloat64{}, "附证书", "needs_review", sourceRaw, false, 10,
+		metadataRaw, now, now,
+	}
+}
+
+func bidRequirementCoverageEventScanRow(sourceRefsRaw, metadataRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"event-1", "bid-1", "requirement-1", "qualification-1",
+		sql.NullString{}, sql.NullString{}, "manual", "covered", false,
+		"已响应", sourceRefsRaw, metadataRaw, now,
+	}
+}
+
+func bidPipelineGateScanRow(metadataRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{
+		"gate-1", "bid-1", "generate", "passed",
+		sql.NullString{}, sql.NullTime{}, "ok", metadataRaw, now, now,
+	}
+}
+
+func bidMaterialSelectionScanRow(selectedRaw []byte) bidStoredJSONScanRow {
+	now := bidScanTime()
+	return bidStoredJSONScanRow{"selection-1", "bid-1", selectedRaw, "notes", sql.NullString{}, now, now}
 }

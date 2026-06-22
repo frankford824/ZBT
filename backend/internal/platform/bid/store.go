@@ -4419,9 +4419,15 @@ func generationCoverageChaptersForBid(ctx context.Context, tx pgx.Tx, tenantID, 
 		chapter.SourceRefs = []any{}
 		chapter.ModelMetadata = map[string]any{}
 		chapter.NeedsHumanInput = []string{}
-		_ = json.Unmarshal(sourceRefsRaw, &chapter.SourceRefs)
-		_ = json.Unmarshal(modelMetadataRaw, &chapter.ModelMetadata)
-		_ = json.Unmarshal(needsHumanInputRaw, &chapter.NeedsHumanInput)
+		if chapter.SourceRefs, err = unmarshalBidBusinessJSONArray(sourceRefsRaw, maxBidChapterSourceRefsJSONBytes); err != nil {
+			return nil, err
+		}
+		if chapter.ModelMetadata, err = unmarshalBidBusinessJSONObject(modelMetadataRaw, maxBidChapterModelMetadataJSONBytes); err != nil {
+			return nil, err
+		}
+		if chapter.NeedsHumanInput, err = unmarshalBidStringArrayJSON(needsHumanInputRaw, maxBidChapterNeedsHumanInputJSONBytes); err != nil {
+			return nil, err
+		}
 		chapter.RequirementCoverage = requirementCoverageFromModelMetadata(chapter.ModelMetadata)
 		chapters = append(chapters, chapter)
 	}
@@ -5908,11 +5914,14 @@ func scanBidTemplate(row scanner) (BidTemplate, error) {
 		&template.ID, &template.Name, &template.BidType, &template.Category, &template.Description,
 		&template.Version, &contentRaw, &template.UsageCount, &template.Status, &template.CreatedAt, &template.UpdatedAt,
 	)
-	template.Content = map[string]any{}
-	if len(contentRaw) > 0 {
-		_ = json.Unmarshal(contentRaw, &template.Content)
+	if err != nil {
+		return BidTemplate{}, err
 	}
-	return template, err
+	template.Content, err = unmarshalBidBusinessJSONObject(contentRaw, maxBidChapterContentJSONBytes)
+	if err != nil {
+		return BidTemplate{}, err
+	}
+	return template, nil
 }
 
 func scanPart(row scanner) (Part, error) {
@@ -5922,11 +5931,14 @@ func scanPart(row scanner) (Part, error) {
 		&part.ID, &part.BidDocumentID, &part.Code, &part.Title, &part.SortOrder,
 		&part.Status, &metadataRaw, &part.CreatedAt, &part.UpdatedAt,
 	)
-	part.Metadata = map[string]any{}
-	if len(metadataRaw) > 0 {
-		_ = json.Unmarshal(metadataRaw, &part.Metadata)
+	if err != nil {
+		return Part{}, err
 	}
-	return part, err
+	part.Metadata, err = unmarshalBidBusinessJSONObject(metadataRaw, maxBidPartMetadataJSONBytes)
+	if err != nil {
+		return Part{}, err
+	}
+	return part, nil
 }
 
 func scanChapter(row scanner) (Chapter, error) {
@@ -5937,13 +5949,22 @@ func scanChapter(row scanner) (Chapter, error) {
 		&chapter.PlainText, &chapter.Status, &chapter.SortOrder, &sourceRefsRaw, &needsHumanInputRaw,
 		&chapter.CreatedAt, &chapter.UpdatedAt,
 	)
-	chapter.Content = map[string]any{}
-	chapter.SourceRefs = []any{}
-	chapter.NeedsHumanInput = []string{}
-	_ = json.Unmarshal(contentRaw, &chapter.Content)
-	_ = json.Unmarshal(sourceRefsRaw, &chapter.SourceRefs)
-	_ = json.Unmarshal(needsHumanInputRaw, &chapter.NeedsHumanInput)
-	return chapter, err
+	if err != nil {
+		return Chapter{}, err
+	}
+	chapter.Content, err = unmarshalBidBusinessJSONObject(contentRaw, maxBidChapterContentJSONBytes)
+	if err != nil {
+		return Chapter{}, err
+	}
+	chapter.SourceRefs, err = unmarshalBidBusinessJSONArray(sourceRefsRaw, maxBidChapterSourceRefsJSONBytes)
+	if err != nil {
+		return Chapter{}, err
+	}
+	chapter.NeedsHumanInput, err = unmarshalBidStringArrayJSON(needsHumanInputRaw, maxBidChapterNeedsHumanInputJSONBytes)
+	if err != nil {
+		return Chapter{}, err
+	}
+	return chapter, nil
 }
 
 func scanChapterVersion(row scanner) (ChapterVersion, error) {
@@ -5959,17 +5980,30 @@ func scanChapterVersion(row scanner) (ChapterVersion, error) {
 	if createdBy.Valid {
 		version.CreatedBy = &createdBy.String
 	}
-	version.Content = map[string]any{}
-	version.SourceRefs = []any{}
-	version.NeedsHumanInput = []string{}
-	version.ModelMetadata = map[string]any{}
-	version.TokenUsage = map[string]int{}
-	_ = json.Unmarshal(contentRaw, &version.Content)
-	_ = json.Unmarshal(sourceRefsRaw, &version.SourceRefs)
-	_ = json.Unmarshal(needsHumanInputRaw, &version.NeedsHumanInput)
-	_ = json.Unmarshal(modelMetadataRaw, &version.ModelMetadata)
-	_ = json.Unmarshal(tokenUsageRaw, &version.TokenUsage)
-	return version, err
+	if err != nil {
+		return ChapterVersion{}, err
+	}
+	version.Content, err = unmarshalBidBusinessJSONObject(contentRaw, maxBidChapterContentJSONBytes)
+	if err != nil {
+		return ChapterVersion{}, err
+	}
+	version.SourceRefs, err = unmarshalBidBusinessJSONArray(sourceRefsRaw, maxBidChapterSourceRefsJSONBytes)
+	if err != nil {
+		return ChapterVersion{}, err
+	}
+	version.NeedsHumanInput, err = unmarshalBidStringArrayJSON(needsHumanInputRaw, maxBidChapterNeedsHumanInputJSONBytes)
+	if err != nil {
+		return ChapterVersion{}, err
+	}
+	version.ModelMetadata, err = unmarshalBidBusinessJSONObject(modelMetadataRaw, maxBidChapterModelMetadataJSONBytes)
+	if err != nil {
+		return ChapterVersion{}, err
+	}
+	version.TokenUsage, err = unmarshalBidIntMapJSON(tokenUsageRaw, maxBidChapterTokenUsageJSONBytes)
+	if err != nil {
+		return ChapterVersion{}, err
+	}
+	return version, nil
 }
 
 func scanExport(row scanner) (Export, error) {
@@ -5994,9 +6028,14 @@ func scanExport(row scanner) (Export, error) {
 	if completedAt.Valid {
 		export.CompletedAt = &completedAt.Time
 	}
-	export.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &export.Metadata)
-	return export, err
+	if err != nil {
+		return Export{}, err
+	}
+	export.Metadata, err = unmarshalBidBusinessJSONObject(metadataRaw, maxBidTaskResultJSONBytes)
+	if err != nil {
+		return Export{}, err
+	}
+	return export, nil
 }
 
 func scanTask(row scanner) (Task, error) {
@@ -6084,8 +6123,13 @@ func scanGenerationStep(row scanner) (GenerationStep, error) {
 	if errorMessage.Valid {
 		step.ErrorMessage = &errorMessage.String
 	}
-	step.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &step.Metadata)
+	if err != nil {
+		return GenerationStep{}, err
+	}
+	step.Metadata, err = unmarshalBidBusinessJSONObject(metadataRaw, maxBidTaskRouteJSONBytes)
+	if err != nil {
+		return GenerationStep{}, err
+	}
 	if startedAt.Valid {
 		step.StartedAt = &startedAt.Time
 	}
@@ -6126,9 +6170,14 @@ func scanParseResult(row scanner) (ParseResult, error) {
 	if confirmedAt.Valid {
 		result.ConfirmedAt = &confirmedAt.Time
 	}
-	result.StructuredResult = map[string]any{}
-	_ = json.Unmarshal(structuredRaw, &result.StructuredResult)
-	return result, err
+	if err != nil {
+		return ParseResult{}, err
+	}
+	result.StructuredResult, err = unmarshalBidBusinessJSONObject(structuredRaw, maxBidParseStructuredJSONBytes)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	return result, nil
 }
 
 func scanRequirementItem(row scanner) (RequirementItem, error) {
@@ -6149,11 +6198,18 @@ func scanRequirementItem(row scanner) (RequirementItem, error) {
 	if score.Valid {
 		item.Score = &score.Float64
 	}
-	item.SourceRef = map[string]any{}
-	_ = json.Unmarshal(sourceRaw, &item.SourceRef)
-	item.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &item.Metadata)
-	return item, err
+	if err != nil {
+		return RequirementItem{}, err
+	}
+	item.SourceRef, err = unmarshalBidBusinessJSONObject(sourceRaw, maxBidRequirementItemSourceRefJSONBytes)
+	if err != nil {
+		return RequirementItem{}, err
+	}
+	item.Metadata, err = unmarshalBidBusinessJSONObject(metadataRaw, maxBidRequirementItemMetadataJSONBytes)
+	if err != nil {
+		return RequirementItem{}, err
+	}
+	return item, nil
 }
 
 func scanRequirementCoverageEvent(row scanner) (RequirementCoverageEvent, error) {
@@ -6171,11 +6227,18 @@ func scanRequirementCoverageEvent(row scanner) (RequirementCoverageEvent, error)
 	if actorUserID.Valid {
 		event.ActorUserID = &actorUserID.String
 	}
-	event.SourceRefs = []any{}
-	_ = json.Unmarshal(sourceRefsRaw, &event.SourceRefs)
-	event.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &event.Metadata)
-	return event, err
+	if err != nil {
+		return RequirementCoverageEvent{}, err
+	}
+	event.SourceRefs, err = unmarshalBidBusinessJSONArray(sourceRefsRaw, maxBidRequirementCoverageRefsJSONBytes)
+	if err != nil {
+		return RequirementCoverageEvent{}, err
+	}
+	event.Metadata, err = unmarshalBidBusinessJSONObject(metadataRaw, maxBidRequirementCoverageJSONBytes)
+	if err != nil {
+		return RequirementCoverageEvent{}, err
+	}
+	return event, nil
 }
 
 func scanPipelineGate(row scanner) (PipelineGate, error) {
@@ -6194,9 +6257,14 @@ func scanPipelineGate(row scanner) (PipelineGate, error) {
 	if reviewedAt.Valid {
 		gate.ReviewedAt = &reviewedAt.Time
 	}
-	gate.Metadata = map[string]any{}
-	_ = json.Unmarshal(metadataRaw, &gate.Metadata)
-	return gate, err
+	if err != nil {
+		return PipelineGate{}, err
+	}
+	gate.Metadata, err = unmarshalBidBusinessJSONObject(metadataRaw, maxBidPipelineGateMetadataJSONBytes)
+	if err != nil {
+		return PipelineGate{}, err
+	}
+	return gate, nil
 }
 
 func scanMaterialSelection(row scanner) (MaterialSelection, error) {
@@ -6210,9 +6278,14 @@ func scanMaterialSelection(row scanner) (MaterialSelection, error) {
 	if updatedBy.Valid {
 		selection.UpdatedBy = &updatedBy.String
 	}
-	selection.SelectedRefs = []any{}
-	_ = json.Unmarshal(selectedRaw, &selection.SelectedRefs)
-	return selection, err
+	if err != nil {
+		return MaterialSelection{}, err
+	}
+	selection.SelectedRefs, err = unmarshalBidBusinessJSONArray(selectedRaw, maxBidMaterialSelectionJSONBytes)
+	if err != nil {
+		return MaterialSelection{}, err
+	}
+	return selection, nil
 }
 
 func tiptapFromPlainText(text string) map[string]any {
@@ -6899,6 +6972,61 @@ func unmarshalBidTaskJSON(raw []byte, maxBytes int) (map[string]any, error) {
 		result = map[string]any{}
 	}
 	return result, nil
+}
+
+func unmarshalBidBusinessJSONObject(raw []byte, maxBytes int) (map[string]any, error) {
+	result := map[string]any{}
+	if err := unmarshalBidBusinessJSON(raw, maxBytes, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, nil
+}
+
+func unmarshalBidBusinessJSONArray(raw []byte, maxBytes int) ([]any, error) {
+	result := []any{}
+	if err := unmarshalBidBusinessJSON(raw, maxBytes, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []any{}
+	}
+	return result, nil
+}
+
+func unmarshalBidStringArrayJSON(raw []byte, maxBytes int) ([]string, error) {
+	result := []string{}
+	if err := unmarshalBidBusinessJSON(raw, maxBytes, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []string{}
+	}
+	return result, nil
+}
+
+func unmarshalBidIntMapJSON(raw []byte, maxBytes int) (map[string]int, error) {
+	result := map[string]int{}
+	if err := unmarshalBidBusinessJSON(raw, maxBytes, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = map[string]int{}
+	}
+	return result, nil
+}
+
+func unmarshalBidBusinessJSON(raw []byte, maxBytes int, dest any) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	if maxBytes <= 0 || len(trimmed) > maxBytes {
+		return ErrInvalidRequest
+	}
+	return json.Unmarshal(trimmed, dest)
 }
 
 func marshalBidBusinessJSON(value any, maxBytes int) ([]byte, error) {

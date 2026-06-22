@@ -7819,3 +7819,48 @@ cd backend && GOTOOLCHAIN=local go vet ./...
 
 1. 本轮治理的是 Go 成本 metadata 读取可靠性，没有新增成本模型、AI Provider 或前端成本视图。
 2. 项目 metadata 读取预算按现有 AI 建议写入规模设置；如果后续 AI 建议继续膨胀，应改为文件资产或明细表，而不是继续扩大 metadata JSON。
+
+## Loop-163 / 标书生成与导出 JSON 读取边界收敛 - 2026-06-21
+
+### 本轮目标
+
+1. 继续审查标书模块读取链路，处理章节、版本、导出、生成步骤、解析结果、需求覆盖、材料选择等 Bid 核心对象读取时仍忽略 `json.Unmarshal` 错误的问题。
+2. 避免损坏、错形或超预算 JSON 静默进入标书生成、导出、来源引用、人工输入标记、模型元数据和 token usage。
+3. 将 Bid 业务 JSON 读取边界固化进静态验收，防止后续回退到 `_ = json.Unmarshal(...)`。
+
+### 代码交付
+
+1. `backend/internal/platform/bid/store.go` 新增 `unmarshalBidBusinessJSONObject()`、`unmarshalBidBusinessJSONArray()`、`unmarshalBidStringArrayJSON()`、`unmarshalBidIntMapJSON()` 和 `unmarshalBidBusinessJSON()`，读取侧统一处理空/null 归一化、对象/数组形状校验和字节预算。
+2. `generationCoverageChaptersForBid()`、`scanBidTemplate()`、`scanPart()`、`scanChapter()`、`scanChapterVersion()`、`scanExport()`、`scanGenerationStep()`、`scanParseResult()`、`scanRequirementItem()`、`scanRequirementCoverageEvent()`、`scanPipelineGate()`、`scanMaterialSelection()` 改为显式返回存储 JSON 解析错误。
+3. `backend/internal/platform/bid/store_test.go` 新增 fake scanner 回归测试，覆盖坏对象、坏数组、坏字符串数组、坏 token usage、空/null 字段归一化，以及所有 Bid 主要 scan 对象的读取侧错误传播。
+4. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 Bid 业务 JSON 读取边界 helper、测试名和所有剩余 Bid `_ = json.Unmarshal(...)` 防回退检查。
+
+### 检查结果
+
+已运行：
+
+```bash
+cd backend && gofmt -w internal/platform/bid/store.go internal/platform/bid/store_test.go
+cd backend && go test ./internal/platform/bid
+python3 -m py_compile infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+git diff --check
+cd backend && go test ./...
+cd backend && go vet ./...
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `cd backend && go test ./internal/platform/bid` 通过。
+2. `python3 -m py_compile infra/scripts/acceptance_tail_check.py && python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过。
+3. `git diff --check` 通过。
+4. `cd backend && go test ./...` 通过。
+5. `cd backend && go vet ./...` 通过。
+6. `./infra/scripts/check.sh` 通过；前端 build/lint、后端 go test/vet、AI compile/ruff/pytest、工程1解析评估、生成覆盖评估和工程1导出评估均通过；本机 `ai-service` 容器未运行，脚本按设计跳过容器内 pytest。
+7. `backend/internal/platform/bid/store.go` 已无 `_ = json.Unmarshal` 残留。
+
+### 偏离蓝图
+
+1. 本轮治理的是 Go 标书模块读取可靠性，没有新增真实 AI Provider、OCR Provider、文档解析格式或 Word/PDF 母版排版能力。
+2. 全工程仍有读取侧 `_ = json.Unmarshal` 残留，集中在 `knowledge/store.go`、`externaltool/store.go` 和 `project/store.go`，应由后续 Loop 继续收敛。
