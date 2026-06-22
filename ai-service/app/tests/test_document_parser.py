@@ -9,7 +9,13 @@ from openpyxl import Workbook
 from pptx import Presentation
 
 from app.pipelines.parse import document_parser
-from app.pipelines.parse.document_parser import _env_int, _extract_pdf_tables, _libreoffice_convert_executable, parse_document
+from app.pipelines.parse.document_parser import (
+    _env_int,
+    _extract_pdf_tables,
+    _libreoffice_convert_executable,
+    ocr_provider_readiness_issues,
+    parse_document,
+)
 from app.schemas.knowledge import KnowledgeProcessRequest
 
 
@@ -221,6 +227,48 @@ def test_image_parser_clears_ocr_required_after_successful_ocr(monkeypatch) -> N
     assert result.metadata["ocr_required"] is False
     assert result.metadata["ocr"]["status"] == "done"
     assert "图片识别文本" in text
+
+
+def test_ocr_provider_readiness_rejects_unsupported_provider(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "mock")
+
+    assert ocr_provider_readiness_issues() == [
+        "OCR_PROVIDER must be one of http_ocr, mineru, paddleocr, got mock"
+    ]
+
+
+def test_ocr_provider_readiness_requires_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "paddleocr")
+    monkeypatch.delenv("PADDLEOCR_HTTP_ENDPOINT", raising=False)
+    monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
+
+    assert ocr_provider_readiness_issues() == [
+        "paddleocr OCR endpoint is not configured: set PADDLEOCR_HTTP_ENDPOINT or OCR_HTTP_ENDPOINT"
+    ]
+
+
+def test_ocr_provider_readiness_accepts_generic_endpoint_fallback(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "mineru")
+    monkeypatch.delenv("MINERU_HTTP_ENDPOINT", raising=False)
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
+    monkeypatch.setenv("OCR_API_KEY", "ocr-token")
+    monkeypatch.setenv("OCR_POLL_ENDPOINT", "https://ocr.example.test/poll")
+
+    assert ocr_provider_readiness_issues() == []
+
+
+def test_ocr_provider_readiness_rejects_invalid_endpoint_key_and_poll(monkeypatch) -> None:
+    monkeypatch.setenv("OCR_PROVIDER", "http_ocr")
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://token@ocr.example.test/parse")
+    monkeypatch.setenv("OCR_API_KEY", "bad\nkey")
+    monkeypatch.setenv("OCR_POLL_ENDPOINT", "file:///tmp/poll")
+
+    issues = ocr_provider_readiness_issues()
+
+    assert len(issues) == 3
+    assert issues[0].startswith("http_ocr OCR endpoint is invalid")
+    assert issues[1] == "http_ocr OCR API key is invalid: OCR header value is invalid"
+    assert issues[2].startswith("http_ocr OCR poll endpoint is invalid")
 
 
 def test_ocr_success_response_is_normalized(monkeypatch) -> None:

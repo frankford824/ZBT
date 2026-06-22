@@ -8932,3 +8932,46 @@ python3 infra/scripts/acceptance_tail_check.py --static-docs
 
 1. 本轮强化的是 production 启动门禁和成本可审计性，没有提交真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实生产 Provider/OCR 配置、真实外部调用 canary、工程1运行态和 repo-wide check 同时进入 clean/synced production report，并得到 `loop_can_end=true`。
+
+## Loop-188 / OCR 生产端点门禁前移 - 2026-06-22
+
+### 本轮目标
+
+1. 防止 AI 服务在 production 模式下缺少 OCR endpoint 仍可启动，导致最终 OCR canary 才暴露问题。
+2. 将 OCR Provider 支持范围、endpoint、可选 API key 和 poll endpoint 的安全性校验前移到 AI 服务启动阶段。
+3. 保持 local profile 未配置 OCR endpoint 时显式 skipped 的开发体验不变。
+
+### 代码交付
+
+1. `ai-service/app/pipelines/parse/document_parser.py` 新增 `PRODUCTION_OCR_PROVIDERS` 和 `ocr_provider_readiness_issues()`。
+2. OCR readiness 会拒绝 unsupported `OCR_PROVIDER`，要求 production OCR provider 必须为 `http_ocr`、`mineru` 或 `paddleocr`。
+3. OCR readiness 会要求当前 Provider 的 endpoint 已配置，并复用解析管线的安全 URL 校验拒绝凭据注入、非 HTTP(S)、query/fragment、控制字符和非法端口。
+4. OCR readiness 会校验可选 `OCR_API_KEY` / Provider 专属 key 不含换行，并校验可选 poll endpoint 是安全 HTTP(S) URL。
+5. `ai-service/app/main.py` 的 `validate_production_config()` 新增 OCR production readiness 检查；production 模式下 OCR 缺 endpoint、provider 不支持或 OCR 配置不安全会启动失败。
+6. `ai-service/app/tests/test_document_parser.py` 新增 OCR readiness 正反测试，覆盖 unsupported provider、缺 endpoint、通用 endpoint fallback、非法 endpoint/key/poll。
+7. `ai-service/app/tests/test_main_security.py` 新增 production config 缺 OCR endpoint 与非法 OCR endpoint 回归，并让 production 安全夹具包含有效 `OCR_HTTP_ENDPOINT`。
+8. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 OCR readiness 函数、错误文案和新增测试名防回退锚点。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 -m py_compile ai-service/app/pipelines/parse/document_parser.py ai-service/app/main.py infra/scripts/acceptance_tail_check.py
+docker compose exec -T ai-service python -m pytest app/tests/test_document_parser.py app/tests/test_main_security.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `document_parser.py`、`main.py` 与 `acceptance_tail_check.py` 编译通过。
+2. 容器内定向 pytest 通过 118 项，覆盖 OCR readiness、文档解析和 AI service production config。
+3. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 仍识别为 Loop-187，符合写日志前状态。
+4. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+5. AI pytest 已覆盖 301 项；local profile 下无 `OCR_HTTP_ENDPOINT` 时 OCR canary 仍显式 skipped，不伪装为生产通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是 OCR production 启动门禁，没有提交真实 `.env.production`，也没有生成真实 OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：还需要真实 OCR endpoint、真实 Provider key、真实外部 canary artifact，以及包含 repo-wide check 与工程1运行态验收的 clean/synced production report 达到 `loop_can_end=true`。

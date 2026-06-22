@@ -813,11 +813,31 @@ def check_static_docs() -> None:
     for needle in (
         "production_route_readiness_issues",
         "AI production routes are not ready",
+        "ocr_provider_readiness_issues",
+        "OCR production provider is not ready",
     ):
         require(needle in ai_main, f"AI service production config missing cost gate: {needle}")
+    document_parser = (ROOT / "ai-service/app/pipelines/parse/document_parser.py").read_text(encoding="utf-8")
+    for needle in (
+        "PRODUCTION_OCR_PROVIDERS",
+        "ocr_provider_readiness_issues",
+        "OCR_PROVIDER must be one of",
+        "_ocr_endpoint_hint",
+    ):
+        require(needle in document_parser, f"Document parser missing production OCR readiness guard: {needle}")
+    document_parser_tests = (ROOT / "ai-service/app/tests/test_document_parser.py").read_text(encoding="utf-8")
+    for needle in (
+        "test_ocr_provider_readiness_rejects_unsupported_provider",
+        "test_ocr_provider_readiness_requires_endpoint",
+        "test_ocr_provider_readiness_accepts_generic_endpoint_fallback",
+        "test_ocr_provider_readiness_rejects_invalid_endpoint_key_and_poll",
+    ):
+        require(needle in document_parser_tests, f"Document parser tests missing production OCR readiness guard: {needle}")
     ai_main_tests = (ROOT / "ai-service/app/tests/test_main_security.py").read_text(encoding="utf-8")
     for needle in (
         "test_validate_production_config_rejects_unpriced_real_routes",
+        "test_validate_production_config_rejects_missing_ocr_endpoint",
+        "test_validate_production_config_rejects_invalid_ocr_endpoint",
         "AI_MODEL_PRICING_JSON",
     ):
         require(needle in ai_main_tests, f"AI service production config tests missing cost gate: {needle}")

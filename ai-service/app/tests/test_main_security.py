@@ -1857,6 +1857,68 @@ def test_validate_production_config_rejects_unpriced_real_routes(monkeypatch) ->
         validate_production_config()
 
 
+def test_validate_production_config_rejects_missing_ocr_endpoint(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+    monkeypatch.delenv("OCR_HTTP_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        "app.main.router",
+        ModelRouter(
+            {
+                "providers": {
+                    "openai_compatible_primary": {
+                        "type": "openai_compatible",
+                        "base_url_env": "OPENAI_BASE_URL",
+                        "api_key_env": "OPENAI_API_KEY",
+                        "default_base_url": "https://example.test/v1",
+                    }
+                },
+                "routes": {
+                    "chapter_generate": {
+                        "primary": {"provider": "openai_compatible_primary", "model": "real-model"}
+                    }
+                },
+                "pricing": {"openai_compatible_primary/*": {"input_per_1m": 2, "output_per_1m": 8}},
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="OCR production provider is not ready"):
+        validate_production_config()
+
+
+def test_validate_production_config_rejects_invalid_ocr_endpoint(monkeypatch) -> None:
+    _set_production_security_env(monkeypatch)
+    monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
+    monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://token@ocr.example.test/parse")
+    monkeypatch.setattr(
+        "app.main.router",
+        ModelRouter(
+            {
+                "providers": {
+                    "openai_compatible_primary": {
+                        "type": "openai_compatible",
+                        "base_url_env": "OPENAI_BASE_URL",
+                        "api_key_env": "OPENAI_API_KEY",
+                        "default_base_url": "https://example.test/v1",
+                    }
+                },
+                "routes": {
+                    "chapter_generate": {
+                        "primary": {"provider": "openai_compatible_primary", "model": "real-model"}
+                    }
+                },
+                "pricing": {"openai_compatible_primary/*": {"input_per_1m": 2, "output_per_1m": 8}},
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="OCR production provider is not ready"):
+        validate_production_config()
+
+
 def test_validate_production_config_allows_explicit_production_config(monkeypatch) -> None:
     _set_production_security_env(monkeypatch)
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
@@ -1962,6 +2024,7 @@ def _set_production_security_env(monkeypatch) -> None:
         "AI_MODEL_PRICING_JSON",
         '{"openai_compatible_primary/*":{"input_per_1m":2,"output_per_1m":8}}',
     )
+    monkeypatch.setenv("OCR_HTTP_ENDPOINT", "https://ocr.example.test/parse")
 
 
 def signed_headers(body: bytes) -> dict[str, str]:

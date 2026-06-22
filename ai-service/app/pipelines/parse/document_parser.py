@@ -30,6 +30,7 @@ LEGACY_OFFICE_TARGETS = {
 }
 DEFAULT_OCR_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 SUPPORTED_OCR_PROVIDERS = {"http_ocr", "http", "mineru", "paddleocr"}
+PRODUCTION_OCR_PROVIDERS = {"http_ocr", "mineru", "paddleocr"}
 
 
 class OCRResponseTooLargeError(Exception):
@@ -49,6 +50,43 @@ class OCRProviderConfig:
     poll_endpoint_env: str
     poll_interval_s: float
     max_attempts: int
+
+
+def ocr_provider_readiness_issues() -> list[str]:
+    configured_provider = os.getenv("OCR_PROVIDER", "http_ocr").strip().lower() or "http_ocr"
+    if configured_provider not in PRODUCTION_OCR_PROVIDERS:
+        supported = ", ".join(sorted(PRODUCTION_OCR_PROVIDERS))
+        return [f"OCR_PROVIDER must be one of {supported}, got {configured_provider}"]
+
+    config = _ocr_provider_config()
+    issues: list[str] = []
+    if not config.endpoint:
+        issues.append(f"{config.provider} OCR endpoint is not configured: set {_ocr_endpoint_hint(config.provider)}")
+    else:
+        try:
+            _safe_ocr_endpoint(config.endpoint)
+        except RuntimeError as exc:
+            issues.append(f"{config.provider} OCR endpoint is invalid: {exc}")
+
+    if config.api_key:
+        try:
+            _safe_ocr_header_value(config.api_key)
+        except RuntimeError as exc:
+            issues.append(f"{config.provider} OCR API key is invalid: {exc}")
+
+    if config.poll_endpoint:
+        try:
+            _safe_ocr_endpoint(config.poll_endpoint)
+        except RuntimeError as exc:
+            issues.append(f"{config.provider} OCR poll endpoint is invalid: {exc}")
+    return issues
+
+
+def _ocr_endpoint_hint(provider: str) -> str:
+    endpoint_env = _ocr_endpoint_env(provider)
+    if endpoint_env == "OCR_HTTP_ENDPOINT":
+        return endpoint_env
+    return f"{endpoint_env} or OCR_HTTP_ENDPOINT"
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:

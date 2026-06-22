@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse
 
 from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
-from app.pipelines.parse.document_parser import parse_document
+from app.pipelines.parse.document_parser import ocr_provider_readiness_issues, parse_document
 from app.pipelines.parse.tender_parser import (
     MODULE_ORDER,
     build_tender_module_prompt,
@@ -1457,6 +1457,10 @@ def validate_production_config() -> None:
     if route_issues:
         preview = "; ".join(route_issues[:8])
         raise RuntimeError(f"AI production routes are not ready: {preview}")
+    ocr_issues = ocr_provider_readiness_issues()
+    if ocr_issues:
+        preview = "; ".join(ocr_issues[:8])
+        raise RuntimeError(f"OCR production provider is not ready: {preview}")
 
 
 def production_mode() -> bool:
