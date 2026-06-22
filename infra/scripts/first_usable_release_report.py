@@ -24,6 +24,14 @@ PRODUCTION_ENV_AUDIT_JSON = ROOT / "tmp/production_env_audit.json"
 PROVIDER_CANARY_JSON = ROOT / "tmp/provider_canary.json"
 OCR_CANARY_JSON = ROOT / "tmp/ocr_provider_canary.json"
 PROJECT1_RUNTIME_JSON = ROOT / "tmp/project1_runtime_acceptance.json"
+PRODUCTION_REQUIRED_ARTIFACTS = (
+    ("production_env_audit_json", "production artifact production_env_audit_json must be present and passed"),
+    ("provider_canary", "production artifact provider_canary must be present and passed"),
+    ("ocr_provider_canary", "production artifact ocr_provider_canary must be present and passed"),
+)
+PROJECT1_REQUIRED_ARTIFACTS = (
+    ("project1_runtime_acceptance", "project1 runtime artifact must be present and passed"),
+)
 
 
 class ReportError(RuntimeError):
@@ -280,8 +288,6 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
 
-    step_status = {step["name"]: step["status"] for step in steps}
-    blocking_requirements = blocking_items(args, step_status)
     artifacts = [
         artifact
         for artifact in (
@@ -300,6 +306,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         )
         if artifact is not None
     ]
+    step_status = {step["name"]: step["status"] for step in steps}
+    blocking_requirements = blocking_items(args, step_status, artifacts)
     return {
         "name": "first_usable_release_report",
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -317,7 +325,31 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def blocking_items(args: argparse.Namespace, step_status: dict[str, str]) -> list[str]:
+def artifact_has_passed(summary: dict[str, Any] | None) -> bool:
+    return bool(
+        summary
+        and summary.get("status") == "present"
+        and summary.get("json_status") == "passed"
+    )
+
+
+def required_artifact_statuses(
+    artifacts: list[dict[str, Any]] | None,
+    required: tuple[tuple[str, str], ...],
+) -> list[str]:
+    indexed = {str(artifact.get("name")): artifact for artifact in artifacts or []}
+    return [
+        message
+        for name, message in required
+        if not artifact_has_passed(indexed.get(name))
+    ]
+
+
+def blocking_items(
+    args: argparse.Namespace,
+    step_status: dict[str, str],
+    artifacts: list[dict[str, Any]] | None = None,
+) -> list[str]:
     blocking: list[str] = []
     if step_status.get("static_readiness") != "passed":
         blocking.append("static readiness gate must pass")
@@ -328,6 +360,7 @@ def blocking_items(args: argparse.Namespace, step_status: dict[str, str]) -> lis
             blocking.append("production env audit must pass")
         if step_status.get("production_readiness") != "passed":
             blocking.append("production Provider/OCR readiness must pass")
+        blocking.extend(required_artifact_statuses(artifacts, PRODUCTION_REQUIRED_ARTIFACTS))
     if not args.include_repo_check:
         blocking.append("repo-wide check must be included")
     elif step_status.get("repo_wide_check") != "passed":
@@ -336,6 +369,8 @@ def blocking_items(args: argparse.Namespace, step_status: dict[str, str]) -> lis
         blocking.append("project1 runtime acceptance must be included")
     elif step_status.get("project1_runtime_acceptance") != "passed":
         blocking.append("project1 runtime acceptance must pass")
+    else:
+        blocking.extend(required_artifact_statuses(artifacts, PROJECT1_REQUIRED_ARTIFACTS))
     return blocking
 
 

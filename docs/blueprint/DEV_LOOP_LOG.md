@@ -8615,3 +8615,47 @@ env APP_ENV=production ... AI_LLM_PROVIDER=cloudflare_ai_gateway AI_EMBEDDING_MO
 
 1. 本轮使用模拟 HTTP 响应验证 Cloudflare REST 适配，没有真实 Cloudflare API token，因此还没有真实 Cloudflare production canary artifact。
 2. 第一可用版结束条件仍未满足：仍需要真实 `.env.production`、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 production report 中全部通过。
+
+## Loop-181 / 第一可用版 Artifact 状态硬门禁 - 2026-06-22
+
+### 本轮目标
+
+1. 防止最终第一可用版报告只因为命令状态通过就误判 `loop_can_end=true`。
+2. 将生产 env audit、Provider canary、OCR canary 和工程1运行态 JSON artifact 的 `json_status=passed` 纳入硬性结束条件。
+3. 让模板环境和本地环境继续明确 `loop_can_end=false`，并把缺失/失败 artifact 直接列为阻断项。
+
+### 代码交付
+
+1. `infra/scripts/first_usable_release_report.py` 新增 `PRODUCTION_REQUIRED_ARTIFACTS`、`PROJECT1_REQUIRED_ARTIFACTS`、`artifact_has_passed()` 和 `required_artifact_statuses()`。
+2. `build_report()` 现在先汇总 `artifacts`，再调用 `blocking_items(args, step_status, artifacts)`，避免阻断逻辑看不到 artifact 摘要。
+3. production profile 下，`production_env_audit_json`、`provider_canary` 和 `ocr_provider_canary` 必须存在且 `json_status=passed`；启用 `--include-project1-runtime` 时，`project1_runtime_acceptance` 也必须存在且 `json_status=passed`。
+4. `infra/scripts/test_first_usable_release_report.py` 新增回归测试，覆盖生产步骤全通过但 artifact failed/missing/not_json 仍阻断，以及工程1运行态 artifact failed 仍阻断。
+5. `infra/scripts/acceptance_tail_check.py --static-docs` 增加 artifact 硬门禁函数、阻断文案和新增测试名锚点。
+6. README 将 `loop_can_end=true` 条件更新为 production readiness、repo-wide check、工程1运行态验收和关键 artifact `json_status=passed` 同时成立。
+
+### 检查结果
+
+已运行：
+
+```bash
+python3 infra/scripts/test_first_usable_release_report.py
+python3 -m py_compile infra/scripts/first_usable_release_report.py infra/scripts/test_first_usable_release_report.py infra/scripts/acceptance_tail_check.py
+python3 infra/scripts/acceptance_tail_check.py --static-docs
+python3 infra/scripts/first_usable_release_report.py --profile production --env-file .env.production.example --output tmp/first_usable_release_report.production-template.json
+python3 infra/scripts/first_usable_release_report.py --profile local --output tmp/first_usable_release_report.local.json
+./infra/scripts/check.sh
+```
+
+结果：
+
+1. `python3 infra/scripts/test_first_usable_release_report.py` 通过，10 项测试覆盖脱敏、命令阻断、artifact 摘要、stale artifact 清理、长 JSON 保存、production canary artifact 索引和 artifact 硬门禁。
+2. `python3 infra/scripts/acceptance_tail_check.py --static-docs` 通过；日志写入前最新 Loop 识别为 Loop-180，日志写入后再次运行通过并识别为 Loop-181。
+3. production 模板证据包仍正确生成 `loop_can_end=false`，阻断项新增 `production artifact production_env_audit_json must be present and passed`、`production artifact provider_canary must be present and passed` 和 `production artifact ocr_provider_canary must be present and passed`。
+4. production 模板报告中 `production_env_audit_json` 为 present 且 `json_status=failed`；`provider_canary` 与 `ocr_provider_canary` 为 missing，不会因为 readiness 命令失败而复用旧证据。
+5. local 证据包仍正确生成 `loop_can_end=false`，阻断项为非 production、未包含 repo-wide check、未包含工程1运行态验收，且不误报生产 artifact。
+6. `./infra/scripts/check.sh` 通过；first usable 测试、静态文档、前端 build/lint、Go test/vet、AI compile/ruff/pytest、Provider/OCR local canary、工程1 parse/generation/export 和容器内 pytest 均通过。
+
+### 偏离蓝图
+
+1. 本轮强化的是最终放行门禁，没有引入真实 `.env.production`，也没有生成真实 Provider/OCR production canary artifact。
+2. 第一可用版结束条件仍未满足：仍需要真实生产配置、真实 Provider/OCR endpoint、repo-wide check 与工程1运行态验收在同一份 production report 中全部通过，并且关键 artifact 均为 `json_status=passed`。

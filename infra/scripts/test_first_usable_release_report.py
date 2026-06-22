@@ -83,9 +83,64 @@ class FirstUsableReleaseReportTest(unittest.TestCase):
                 "repo_wide_check": "passed",
                 "project1_runtime_acceptance": "passed",
             },
+            [
+                {"name": "production_env_audit_json", "status": "present", "json_status": "passed"},
+                {"name": "provider_canary", "status": "present", "json_status": "passed"},
+                {"name": "ocr_provider_canary", "status": "present", "json_status": "passed"},
+                {"name": "project1_runtime_acceptance", "status": "present", "json_status": "passed"},
+            ],
         )
 
         self.assertEqual(blocking, [])
+
+    def test_blocking_items_require_production_artifacts_to_pass(self) -> None:
+        args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
+        blocking = report.blocking_items(
+            args,
+            {
+                "static_readiness": "passed",
+                "production_env_audit": "passed",
+                "production_readiness": "passed",
+                "repo_wide_check": "passed",
+                "project1_runtime_acceptance": "passed",
+            },
+            [
+                {"name": "production_env_audit_json", "status": "present", "json_status": "failed"},
+                {"name": "provider_canary", "status": "missing"},
+                {"name": "ocr_provider_canary", "status": "present", "json_status": "not_json"},
+                {"name": "project1_runtime_acceptance", "status": "present", "json_status": "passed"},
+            ],
+        )
+
+        self.assertEqual(
+            blocking,
+            [
+                "production artifact production_env_audit_json must be present and passed",
+                "production artifact provider_canary must be present and passed",
+                "production artifact ocr_provider_canary must be present and passed",
+            ],
+        )
+
+    def test_blocking_items_require_project1_runtime_artifact_to_pass(self) -> None:
+        args = argparse.Namespace(profile="production", include_repo_check=True, include_project1_runtime=True)
+        blocking = report.blocking_items(
+            args,
+            {
+                "static_readiness": "passed",
+                "production_env_audit": "passed",
+                "production_readiness": "passed",
+                "repo_wide_check": "passed",
+                "project1_runtime_acceptance": "passed",
+            },
+            [
+                {"name": "production_env_audit_json", "status": "present", "json_status": "passed"},
+                {"name": "provider_canary", "status": "present", "json_status": "passed"},
+                {"name": "ocr_provider_canary", "status": "present", "json_status": "passed"},
+                {"name": "project1_runtime_acceptance", "status": "present", "json_status": "failed"},
+            ],
+        )
+
+        self.assertEqual(blocking, ["project1 runtime artifact must be present and passed"])
 
     def test_artifact_summary_records_json_status_and_hash(self) -> None:
         tmp_root = report.ROOT / "tmp"
