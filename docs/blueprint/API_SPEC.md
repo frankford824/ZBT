@@ -70,7 +70,7 @@ GET /cost-projects、POST /cost-projects、GET /cost-projects/:id、PATCH /cost-
 
 ## Approval / Notification / File
 
-覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底；合规检查当前返回 202 + 检查快照，后续异步化时复用同一 SSE 事件结构。Go 调用 Python AI 服务时携带 `X-ZBT-Timestamp` 和 `X-ZBT-Signature`，Python AI 服务除 `/healthz` 和 `/models/health` 外均强制验签；开发环境未显式配置 `AI_SERVICE_HMAC_SECRET` 时使用随仓开发密钥，生产环境必须设置非开发密钥。
+覆盖 x.md 第 14 节列出的其余审批、通知、文件和 AI task 接口。所有 AI、OCR、解析、向量化、导出和逐章生成接口返回 202 + task_id，并通过 SSE 加轮询兜底；合规检查当前返回 202 + 检查快照，后续异步化时复用同一 SSE 事件结构。Go 调用 Python AI 服务时携带 `X-ZBT-Timestamp` 和 `X-ZBT-Signature`，Python AI 服务除 `/healthz` 外均强制验签；开发环境未显式配置 `AI_SERVICE_HMAC_SECRET` 时使用随仓开发密钥，生产环境必须设置非开发密钥。
 
 审批一期已落地 `approval_chains`、`approval_instances`、`approval_actions` 和 `comments` RLS 表。`GET /approval-chains` / `POST /approval-chains` / `PATCH /approval-chains/:id` / `DELETE /approval-chains/:id` 管理标书审批链，steps 保存角色、级次、是否必选和条件说明。`POST /bids/:id/submit-for-approval` 创建审批实例、保存审批链快照、将标书置为 `in_review` 并通知当前审批角色；`GET /approvals` / `GET /approvals/:id` 返回审批列表和动作流水；`POST /approvals/:id/approve` 会推进下一级或完成审批并将标书置为 `approved`；`POST /approvals/:id/reject` 会完成驳回并将标书退回 `editing`。`POST /notifications/read` 支持批量或全部标记已读，`GET /notifications/stream` 返回 notifications SSE 快照。前端 `/team` 已接入真实成员、审批链、审批实例、审批动作、通知和通知已读。
 

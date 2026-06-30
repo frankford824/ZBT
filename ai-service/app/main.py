@@ -71,7 +71,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0", lifespan=lifespan)
 router = ModelRouter.from_yaml(CONFIG_PATH)
-PUBLIC_PATHS = {"/healthz", "/models/health"}
+PUBLIC_PATHS = {"/healthz"}
 DEFAULT_AI_HMAC_SECRET = "dev-only-zbt-ai-callback-secret"
 DEFAULT_MINIO_ACCESS_KEY = "zbt_minio"
 DEFAULT_MINIO_SECRET_KEY = "zbt_minio_secret"
@@ -222,7 +222,98 @@ async def healthz() -> HealthResponse:
 
 @app.get("/models/health")
 async def model_health() -> dict[str, object]:
-    return {"status": "ok", "providers": router.health_check()}
+    providers = router.health_check()
+    ocr_provider, ocr_endpoint = _ocr_runtime_config()
+    providers[ocr_provider] = len(ocr_provider_readiness_issues()) == 0
+    return {
+        "status": "ok",
+        "providers": providers,
+        "active": _active_runtime_model_set(ocr_provider, ocr_endpoint),
+        "secrets": _ai_secret_statuses(),
+        "runtime_pricing_keys": router.runtime_pricing_keys(),
+        "mock_fallback_allowed": router.mock_fallback_allowed(),
+        "mock_providers_enabled": router.mock_providers_enabled(),
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _active_runtime_model_set(ocr_provider: str, ocr_endpoint: str) -> dict[str, str]:
+    llm = _runtime_route_target("chapter_generate")
+    embedding = _runtime_route_target("knowledge_embedding")
+    rerank = _runtime_route_target("knowledge_rerank")
+    return {
+        "llm_provider": llm.provider if llm else "",
+        "llm_model": llm.model if llm else "",
+        "embedding_provider": embedding.provider if embedding else "",
+        "embedding_model": embedding.model if embedding else "",
+        "rerank_provider": rerank.provider if rerank else "",
+        "rerank_model": rerank.model if rerank else "",
+        "ocr_provider": ocr_provider,
+        "ocr_endpoint": ocr_endpoint,
+    }
+
+
+def _runtime_route_target(task_type: str) -> RouteTarget | None:
+    return router.runtime_route_target(task_type)
+
+
+def _ai_secret_statuses() -> list[dict[str, object]]:
+    return [
+        {
+            "key": "OPENAI_API_KEY",
+            "name": "主模型服务密钥",
+            "provider": "openai_compatible_primary",
+            "configured": _env_configured("OPENAI_API_KEY"),
+        },
+        {
+            "key": "CLOUDFLARE_API_TOKEN",
+            "name": "Cloudflare 网关密钥",
+            "provider": "cloudflare_ai_gateway",
+            "configured": _env_configured("CLOUDFLARE_API_TOKEN") or _env_configured("CLOUDFLARE_AI_GATEWAY_TOKEN"),
+        },
+        {
+            "key": "CLOUDFLARE_ACCOUNT_ID",
+            "name": "Cloudflare 账户",
+            "provider": "cloudflare_ai_gateway",
+            "configured": _env_configured("CLOUDFLARE_ACCOUNT_ID") or _env_configured("CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL"),
+        },
+        {
+            "key": "DEEPSEEK_API_KEY",
+            "name": "DeepSeek 密钥",
+            "provider": "deepseek",
+            "configured": _env_configured("DEEPSEEK_API_KEY"),
+        },
+        {
+            "key": "DASHSCOPE_API_KEY",
+            "name": "通义千问密钥",
+            "provider": "dashscope",
+            "configured": _env_configured("DASHSCOPE_API_KEY"),
+        },
+        {
+            "key": "OCR_API_KEY",
+            "name": "OCR 服务密钥",
+            "provider": "ocr",
+            "configured": _env_configured("OCR_API_KEY")
+            or _env_configured("MINERU_API_KEY")
+            or _env_configured("PADDLEOCR_API_KEY"),
+        },
+    ]
+
+
+def _ocr_runtime_config() -> tuple[str, str]:
+    provider = os.getenv("OCR_PROVIDER", "http_ocr").strip().lower() or "http_ocr"
+    if provider not in {"http_ocr", "http", "mineru", "paddleocr"}:
+        provider = "http_ocr"
+    endpoint_env = {
+        "mineru": "MINERU_HTTP_ENDPOINT",
+        "paddleocr": "PADDLEOCR_HTTP_ENDPOINT",
+    }.get(provider, "OCR_HTTP_ENDPOINT")
+    endpoint = os.getenv(endpoint_env, "").strip() or os.getenv("OCR_HTTP_ENDPOINT", "").strip()
+    return provider, endpoint
+
+
+def _env_configured(key: str) -> bool:
+    return bool(os.getenv(key, "").strip())
 
 
 @app.post("/tasks/tender-parse", response_model=TaskAccepted, status_code=202)

@@ -6,6 +6,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
+  RobotOutlined,
   SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
@@ -29,13 +30,15 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   approveApproval,
+  checkAIConfig,
   createApprovalChain,
   deleteApprovalChain,
   deleteMember,
   fetchAICallLogs,
+  fetchAIConfig,
   fetchApprovalChains,
   fetchApprovals,
   fetchExternalToolAuditLogs,
@@ -48,9 +51,14 @@ import {
   inviteMember,
   markNotificationsRead,
   rejectApproval,
+  updateAIConfig,
   updateExternalToolConfig,
   updateMember,
   updateApprovalChain,
+  type AIConfigCheckResultDTO,
+  type AIConfigDTO,
+  type AIConfigOverviewDTO,
+  type AIModelPricingRateDTO,
   type ApprovalChainDTO,
   type ApprovalStepDTO,
   type ExternalToolAuditLogDTO,
@@ -63,10 +71,12 @@ import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/St
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 
-const teamTabs = ['members', 'approvals', 'external-tools', 'logs', 'notifications'] as const
+const teamTabs = ['members', 'approvals', 'external-tools', 'ai-config', 'logs', 'notifications'] as const
 type TeamTab = (typeof teamTabs)[number]
 const MAX_EXTERNAL_TOOL_MONTHLY_BUDGET = 10000000
 const MAX_EXTERNAL_TOOL_COST_PER_CALL = 100000
+const MAX_AI_MONTHLY_BUDGET = 10000000
+const MAX_AI_MODEL_RATE = 1000000
 
 function normalizeTeamTab(value: string | null): TeamTab {
   return teamTabs.includes(value as TeamTab) ? (value as TeamTab) : 'members'
@@ -168,6 +178,29 @@ type ExternalToolRow = {
   config?: ExternalToolConfigDTO
 }
 
+type AIConfigPricingRow = {
+  key?: string
+  display_name?: string
+  input_per_1m?: number
+  output_per_1m?: number
+  currency?: string
+}
+
+type AIConfigFormValues = {
+  enabled?: boolean
+  llm_provider: string
+  llm_model: string
+  embedding_provider: string
+  embedding_model: string
+  rerank_provider: string
+  rerank_model: string
+  ocr_provider: string
+  ocr_endpoint?: string
+  monthly_budget?: number
+  mock_fallback_allowed?: boolean
+  pricing_items?: AIConfigPricingRow[]
+}
+
 function formatTime(value?: string | null) {
   return formatDateTime(value)
 }
@@ -190,6 +223,126 @@ function formatEstimatedCost(value: number) {
   const cost = Number(value || 0)
   if (!cost) return '-'
   return `¥${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}`
+}
+
+function formatProviderModel(provider: string, model: string, overview?: AIConfigOverviewDTO) {
+  const providerName = formatAIProvider(provider, overview)
+  const modelName = String(model || '').trim()
+  return modelName ? `${providerName} / ${modelName}` : providerName
+}
+
+function formatAIProvider(provider: string, overview?: AIConfigOverviewDTO) {
+  return overview?.provider_catalog.find((item) => item.provider_key === provider)?.name || provider || '-'
+}
+
+function formatOCRProvider(provider: string, overview?: AIConfigOverviewDTO) {
+  return overview?.ocr_catalog.find((item) => item.provider_key === provider)?.name || formatAIProvider(provider, overview)
+}
+
+function aiCheckStatusTag(status: string) {
+  if (status === 'passed') return <Tag color="green">通过</Tag>
+  if (status === 'failed') return <Tag color="red">需处理</Tag>
+  return <Tag color="gold">需关注</Tag>
+}
+
+function aiRouteStatusTag(row: { active_provider: string; active_model: string; saved_provider: string; saved_model: string }, enabled: boolean) {
+  if (!enabled) return <Tag>未启用</Tag>
+  if (row.active_provider === row.saved_provider && row.active_model === row.saved_model) {
+    return <Tag color="green">一致</Tag>
+  }
+  return <Tag color="gold">待切换</Tag>
+}
+
+function aiConfigStatusTag(overview: AIConfigOverviewDTO) {
+  if (!overview.config.enabled) return <Tag>未启用</Tag>
+  if (overview.runtime.saved_config_active) return <Tag color="green">已生效</Tag>
+  return <Tag color="gold">待切换</Tag>
+}
+
+function aiServiceStatusTag(overview: AIConfigOverviewDTO) {
+  return overview.runtime.service_reachable ? <Tag color="green">服务可达</Tag> : <Tag color="red">服务不可达</Tag>
+}
+
+function aiFallbackStatusTag(overview: AIConfigOverviewDTO) {
+  return overview.runtime.mock_fallback_allowed || overview.runtime.mock_providers_enabled || overview.config.mock_fallback_allowed ? (
+    <Tag color="gold">允许演练回退</Tag>
+  ) : (
+    <Tag color="green">生产回退关闭</Tag>
+  )
+}
+
+function pricingRowsFromConfig(config: AIConfigDTO): AIConfigPricingRow[] {
+  const rows = Object.entries(config.pricing || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, rate]) => ({
+      key,
+      display_name: rate.display_name || '',
+      input_per_1m: rate.input_per_1m || (rate.input_per_1k ? rate.input_per_1k * 1000 : undefined),
+      output_per_1m: rate.output_per_1m || (rate.output_per_1k ? rate.output_per_1k * 1000 : undefined),
+      currency: rate.currency || 'CNY',
+    }))
+  if (rows.length) return rows
+  return [
+    {
+      key: `${config.llm_provider}/*`,
+      display_name: '通用模型',
+      currency: 'CNY',
+    },
+  ]
+}
+
+function aiConfigFormValues(overview: AIConfigOverviewDTO): AIConfigFormValues {
+  const config = overview.config
+  return {
+    enabled: config.enabled,
+    llm_provider: config.llm_provider,
+    llm_model: config.llm_model,
+    embedding_provider: config.embedding_provider,
+    embedding_model: config.embedding_model,
+    rerank_provider: config.rerank_provider,
+    rerank_model: config.rerank_model,
+    ocr_provider: config.ocr_provider,
+    ocr_endpoint: config.ocr_endpoint,
+    monthly_budget: config.monthly_budget || undefined,
+    mock_fallback_allowed: config.mock_fallback_allowed,
+    pricing_items: pricingRowsFromConfig(config),
+  }
+}
+
+function pricingFromRows(rows: AIConfigPricingRow[] | undefined): Record<string, AIModelPricingRateDTO> {
+  const pricing: Record<string, AIModelPricingRateDTO> = {}
+  for (const row of rows ?? []) {
+    const key = String(row.key || '').trim()
+    if (!key) continue
+    const input = Number(row.input_per_1m || 0)
+    const output = Number(row.output_per_1m || 0)
+    if (input <= 0 && output <= 0) continue
+    pricing[key] = {
+      input_per_1m: input > 0 ? input : undefined,
+      output_per_1m: output > 0 ? output : undefined,
+      currency: row.currency || 'CNY',
+      display_name: row.display_name?.trim() || undefined,
+    }
+  }
+  return pricing
+}
+
+function aiConfigPayloadFromForm(values: AIConfigFormValues) {
+  return {
+    enabled: Boolean(values.enabled),
+    llm_provider: values.llm_provider,
+    llm_model: values.llm_model?.trim() || 'gpt-4o-mini',
+    embedding_provider: values.embedding_provider,
+    embedding_model: values.embedding_model?.trim() || 'text-embedding-3-large',
+    rerank_provider: values.rerank_provider,
+    rerank_model: values.rerank_model?.trim() || 'gpt-4o-mini',
+    ocr_provider: values.ocr_provider,
+    ocr_endpoint: values.ocr_endpoint?.trim() || '',
+    monthly_budget: values.monthly_budget || 0,
+    mock_fallback_allowed: Boolean(values.mock_fallback_allowed),
+    pricing: pricingFromRows(values.pricing_items),
+    metadata: {},
+  }
 }
 
 function formatExternalToolName(value: string) {
@@ -327,10 +480,13 @@ export function TeamPage() {
   const [editingMember, setEditingMember] = useState<MemberDTO | null>(null)
   const [externalToolOpen, setExternalToolOpen] = useState(false)
   const [editingExternalTool, setEditingExternalTool] = useState<ExternalToolRow | null>(null)
+  const [aiConfigCheckResult, setAIConfigCheckResult] = useState<AIConfigCheckResultDTO | null>(null)
+  const aiConfigFormInitialized = useRef(false)
   const [inviteForm] = Form.useForm()
   const [chainForm] = Form.useForm()
   const [memberForm] = Form.useForm()
   const [externalToolForm] = Form.useForm()
+  const [aiConfigForm] = Form.useForm<AIConfigFormValues>()
 
   const membersQuery = useQuery({ queryKey: ['team', 'members'], queryFn: fetchMembers })
   const rolesQuery = useQuery({ queryKey: ['team', 'roles'], queryFn: fetchRoles })
@@ -338,6 +494,7 @@ export function TeamPage() {
   const approvalsQuery = useQuery({ queryKey: ['team', 'approvals'], queryFn: () => fetchApprovals() })
   const chainsQuery = useQuery({ queryKey: ['team', 'approval-chains'], queryFn: fetchApprovalChains })
   const aiLogsQuery = useQuery({ queryKey: ['team', 'ai-call-logs'], queryFn: () => fetchAICallLogs(50) })
+  const aiConfigQuery = useQuery({ queryKey: ['team', 'ai-config'], queryFn: fetchAIConfig })
   const externalCatalogQuery = useQuery({ queryKey: ['team', 'external-tools', 'catalog'], queryFn: fetchExternalToolCatalog })
   const externalToolsQuery = useQuery({ queryKey: ['team', 'external-tools'], queryFn: fetchExternalTools })
   const externalToolAuditQuery = useQuery({
@@ -373,6 +530,21 @@ export function TeamPage() {
     }
     return map
   }, [externalCatalogQuery.data, externalToolsQuery.data])
+  const aiProviderOptions = useMemo(
+    () => (aiConfigQuery.data?.provider_catalog ?? []).map((item) => ({ value: item.provider_key, label: item.name })),
+    [aiConfigQuery.data?.provider_catalog],
+  )
+  const aiOCROptions = useMemo(
+    () => (aiConfigQuery.data?.ocr_catalog ?? []).map((item) => ({ value: item.provider_key, label: item.name })),
+    [aiConfigQuery.data?.ocr_catalog],
+  )
+
+  useEffect(() => {
+    if (aiConfigQuery.data && (!aiConfigFormInitialized.current || !aiConfigForm.isFieldsTouched(true))) {
+      aiConfigForm.setFieldsValue(aiConfigFormValues(aiConfigQuery.data))
+      aiConfigFormInitialized.current = true
+    }
+  }, [aiConfigForm, aiConfigQuery.data])
 
   const inviteMutation = useMutation({
     mutationFn: inviteMember,
@@ -500,6 +672,27 @@ export function TeamPage() {
     onError: (error) => message.error(getApiErrorMessage(error, '外部数据源保存失败')),
   })
 
+  const aiConfigMutation = useMutation({
+    mutationFn: (values: AIConfigFormValues) => updateAIConfig(aiConfigPayloadFromForm(values)),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['team', 'ai-config'], result)
+      aiConfigForm.setFieldsValue(aiConfigFormValues(result))
+      aiConfigFormInitialized.current = true
+      setAIConfigCheckResult(null)
+      message.success('智能配置已保存')
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '智能配置保存失败')),
+  })
+
+  const aiConfigCheckMutation = useMutation({
+    mutationFn: checkAIConfig,
+    onSuccess: (result) => {
+      setAIConfigCheckResult(result)
+      message.success('检查完成')
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '检查失败')),
+  })
+
   const createChain = (values: {
     name: string
     description?: string
@@ -543,12 +736,309 @@ export function TeamPage() {
     setExternalToolOpen(true)
   }
 
+  const renderAIConfigCenter = () => {
+    if (aiConfigQuery.isLoading) return <LoadingBlock />
+    if (aiConfigQuery.isError || !aiConfigQuery.data) return <ErrorBlock />
+    const overview = aiConfigQuery.data
+    return (
+      <Space direction="vertical" size={16} className="full-width">
+        <div className="ai-config-summary-grid">
+          <div className="ai-config-summary-item">
+            <Space size={8}>
+              <RobotOutlined />
+              <Typography.Text strong>运行连接</Typography.Text>
+            </Space>
+            <div>{aiServiceStatusTag(overview)}</div>
+            <Typography.Text type="secondary">
+              {overview.runtime.service_reachable ? '智能服务响应正常' : overview.runtime.error_message || '智能服务暂不可达'}
+            </Typography.Text>
+          </div>
+          <div className="ai-config-summary-item">
+            <Typography.Text strong>保存配置</Typography.Text>
+            <div>{aiConfigStatusTag(overview)}</div>
+            <Typography.Text type="secondary">
+              {overview.runtime.pending_deploy_fields.length
+                ? `待切换 ${overview.runtime.pending_deploy_fields.length} 项`
+                : overview.config.enabled
+                  ? '当前配置一致'
+                  : '保存后可统一切换'}
+            </Typography.Text>
+          </div>
+          <div className="ai-config-summary-item">
+            <Typography.Text strong>本月费用</Typography.Text>
+            <Typography.Text className="data-mono">{formatEstimatedCost(overview.summary.estimated_cost)}</Typography.Text>
+            <Typography.Text type="secondary">
+              {overview.summary.monthly_budget ? `预算 ${formatEstimatedCost(overview.summary.monthly_budget)}` : '未设置预算'}
+            </Typography.Text>
+          </div>
+          <div className="ai-config-summary-item">
+            <Typography.Text strong>回退策略</Typography.Text>
+            <div>{aiFallbackStatusTag(overview)}</div>
+            <Typography.Text type="secondary">生产环境建议关闭演练回退</Typography.Text>
+          </div>
+        </div>
+
+        <Form
+          form={aiConfigForm}
+          layout="vertical"
+          onFinish={aiConfigMutation.mutate}
+          onValuesChange={() => setAIConfigCheckResult(null)}
+        >
+          <Space direction="vertical" size={16} className="full-width">
+            <Typography.Title level={4}>能力选择</Typography.Title>
+            <Row gutter={[16, 0]}>
+              <Col xs={24} md={8}>
+                <Form.Item label="启用保存配置" name="enabled" valuePropName="checked">
+                  <Switch disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="月度预算" name="monthly_budget">
+                  <InputNumber
+                    min={0}
+                    max={MAX_AI_MONTHLY_BUDGET}
+                    step={10}
+                    addonAfter="元"
+                    className="full-width"
+                    disabled={!canWrite}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="允许演练回退" name="mock_fallback_allowed" valuePropName="checked">
+                  <Switch disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Row gutter={[16, 0]}>
+              <Col xs={24} md={12}>
+                <Form.Item label="文件理解服务" name="llm_provider" rules={[{ required: true, message: '请选择服务' }]}>
+                  <Select options={aiProviderOptions} disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="文件理解模型" name="llm_model" rules={[{ required: true, message: '请输入模型名称' }]}>
+                  <Input placeholder="gpt-4o-mini" disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="资料整理服务" name="embedding_provider" rules={[{ required: true, message: '请选择服务' }]}>
+                  <Select options={aiProviderOptions} disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="资料整理模型" name="embedding_model" rules={[{ required: true, message: '请输入模型名称' }]}>
+                  <Input placeholder="text-embedding-3-large" disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="资料匹配服务" name="rerank_provider" rules={[{ required: true, message: '请选择服务' }]}>
+                  <Select options={aiProviderOptions} disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="资料匹配模型" name="rerank_model" rules={[{ required: true, message: '请输入模型名称' }]}>
+                  <Input placeholder="gpt-4o-mini" disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="扫描件识别服务" name="ocr_provider" rules={[{ required: true, message: '请选择服务' }]}>
+                  <Select options={aiOCROptions} disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item label="扫描件识别地址" name="ocr_endpoint">
+                  <Input placeholder="https://ocr.example.com" disabled={!canWrite} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Typography.Title level={4}>能力路由</Typography.Title>
+            <Table
+              rowKey="task_type"
+              dataSource={overview.runtime.routes}
+              pagination={false}
+              scroll={{ x: 920 }}
+              columns={[
+                { title: '能力', dataIndex: 'name', width: 150 },
+                { title: '用途', dataIndex: 'capability', width: 120 },
+                {
+                  title: '当前使用',
+                  width: 260,
+                  render: (_, row) =>
+                    row.track === 'ocr'
+                      ? formatOCRProvider(row.active_provider, overview)
+                      : formatProviderModel(row.active_provider, row.active_model, overview),
+                },
+                {
+                  title: '保存配置',
+                  width: 260,
+                  render: (_, row) =>
+                    row.track === 'ocr'
+                      ? formatOCRProvider(row.saved_provider, overview)
+                      : formatProviderModel(row.saved_provider, row.saved_model, overview),
+                },
+                {
+                  title: '状态',
+                  width: 100,
+                  render: (_, row) => aiRouteStatusTag(row, overview.config.enabled),
+                },
+              ]}
+            />
+
+            <Typography.Title level={4}>费用估算</Typography.Title>
+            <Form.List name="pricing_items">
+              {(fields, { add, remove }) => (
+                <Space direction="vertical" size={8} className="full-width">
+                  {fields.map((field) => (
+                    <Row key={field.key} gutter={[8, 0]} className="ai-config-pricing-row">
+                      <Col xs={24} md={7}>
+                        <Form.Item
+                          {...field}
+                          label="计费对象"
+                          name={[field.name, 'key']}
+                          rules={[{ required: true, message: '请输入计费对象' }]}
+                        >
+                          <Input placeholder="provider/model 或 provider/*" disabled={!canWrite} />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={24} md={5}>
+                        <Form.Item {...field} label="显示名称" name={[field.name, 'display_name']}>
+                          <Input placeholder="模型名称" disabled={!canWrite} />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={12} md={4}>
+                        <Form.Item {...field} label="输入/百万" name={[field.name, 'input_per_1m']}>
+                          <InputNumber
+                            min={0}
+                            max={MAX_AI_MODEL_RATE}
+                            step={0.01}
+                            className="full-width"
+                            disabled={!canWrite}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={12} md={4}>
+                        <Form.Item {...field} label="输出/百万" name={[field.name, 'output_per_1m']}>
+                          <InputNumber
+                            min={0}
+                            max={MAX_AI_MODEL_RATE}
+                            step={0.01}
+                            className="full-width"
+                            disabled={!canWrite}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={16} md={2}>
+                        <Form.Item {...field} label="币种" name={[field.name, 'currency']}>
+                          <Select
+                            disabled={!canWrite}
+                            options={[
+                              { value: 'CNY', label: 'CNY' },
+                              { value: 'USD', label: 'USD' },
+                            ]}
+                          />
+                        </Form.Item>
+                      </Col>
+                      <Col xs={8} md={2}>
+                        <Form.Item label="操作">
+                          <Button danger disabled={!canWrite} onClick={() => remove(field.name)}>
+                            删除
+                          </Button>
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                  ))}
+                  <Button disabled={!canWrite} icon={<PlusOutlined />} onClick={() => add({ currency: 'CNY' })}>
+                    添加单价
+                  </Button>
+                </Space>
+              )}
+            </Form.List>
+
+            <Typography.Title level={4}>授权状态</Typography.Title>
+            <Table
+              rowKey="key"
+              dataSource={overview.runtime.secrets}
+              pagination={false}
+              scroll={{ x: 620 }}
+              columns={[
+                { title: '授权项', dataIndex: 'name', width: 220 },
+                {
+                  title: '状态',
+                  dataIndex: 'configured',
+                  width: 100,
+                  render: (configured) => (configured ? <Tag color="green">已配置</Tag> : <Tag>未配置</Tag>),
+                },
+                {
+                  title: '适用服务',
+                  dataIndex: 'provider',
+                  width: 200,
+                  render: (provider) => (provider === 'ocr' ? '扫描件识别' : formatAIProvider(provider, overview)),
+                },
+              ]}
+            />
+
+            {aiConfigCheckResult ? (
+              <>
+                <Typography.Title level={4}>检查结果</Typography.Title>
+                <Table
+                  rowKey="key"
+                  dataSource={aiConfigCheckResult.checks}
+                  pagination={false}
+                  scroll={{ x: 720 }}
+                  columns={[
+                    { title: '检查项', dataIndex: 'name', width: 180 },
+                    { title: '结果', dataIndex: 'status', width: 100, render: aiCheckStatusTag },
+                    { title: '说明', dataIndex: 'message', width: 320 },
+                  ]}
+                />
+              </>
+            ) : null}
+
+            <Typography.Title level={4}>本月用量</Typography.Title>
+            <Table
+              rowKey={(row) => `${row.provider}/${row.model}`}
+              dataSource={overview.summary.provider_usage}
+              pagination={false}
+              locale={{ emptyText: <EmptyBlock /> }}
+              scroll={{ x: 720 }}
+              columns={[
+                {
+                  title: '服务',
+                  width: 240,
+                  render: (_, row) => formatProviderModel(row.provider, row.model, overview),
+                },
+                { title: '调用次数', dataIndex: 'calls', width: 100 },
+                { title: '预估费用', dataIndex: 'estimated_cost', width: 120, render: formatEstimatedCost },
+              ]}
+            />
+
+            <Space wrap>
+              <Button
+                icon={<RobotOutlined />}
+                onClick={() => aiConfigCheckMutation.mutate()}
+                loading={aiConfigCheckMutation.isPending}
+              >
+                检查配置
+              </Button>
+              <Button type="primary" htmlType="submit" disabled={!canWrite} loading={aiConfigMutation.isPending}>
+                保存配置
+              </Button>
+            </Space>
+          </Space>
+        </Form>
+      </Space>
+    )
+  }
+
   return (
     <PageFrame
       module="企业管理"
       title="团队协作"
-      subtitle="成员、审批流程、待办审批、使用记录和通知"
-      tags={['团队协作', '审批通知']}
+      subtitle="成员、审批流程、外部数据源、智能配置、使用记录和通知"
+      tags={['团队协作', '智能配置']}
       actions={[
         canWrite ? <Button key="chain" icon={<PlusOutlined />} onClick={() => setChainOpen(true)}>
           审批流程
@@ -858,6 +1348,11 @@ export function TeamPage() {
                   )}
                 </Space>
               ),
+          },
+          {
+            key: 'ai-config',
+            label: '智能配置',
+            children: renderAIConfigCenter(),
           },
           {
             key: 'logs',

@@ -398,6 +398,158 @@ export type AICallLogDTO = {
   created_at: string
 }
 
+export type AIModelPricingRateDTO = {
+  input_per_1k?: number
+  output_per_1k?: number
+  input_per_1m?: number
+  output_per_1m?: number
+  currency?: string
+  display_name?: string
+  last_reviewed?: string
+}
+
+export type AIConfigDTO = {
+  id: string
+  enabled: boolean
+  llm_provider: string
+  llm_model: string
+  embedding_provider: string
+  embedding_model: string
+  rerank_provider: string
+  rerank_model: string
+  ocr_provider: string
+  ocr_endpoint: string
+  monthly_budget: number
+  pricing: Record<string, AIModelPricingRateDTO>
+  mock_fallback_allowed: boolean
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export type AIConfigPayload = {
+  enabled: boolean
+  llm_provider: string
+  llm_model: string
+  embedding_provider: string
+  embedding_model: string
+  rerank_provider: string
+  rerank_model: string
+  ocr_provider: string
+  ocr_endpoint?: string
+  monthly_budget?: number
+  pricing?: Record<string, AIModelPricingRateDTO>
+  mock_fallback_allowed?: boolean
+  metadata?: Record<string, unknown>
+}
+
+export type AIProviderOptionDTO = {
+  provider_key: string
+  name: string
+  category: string
+  capabilities: string[]
+  secret_keys: string[]
+}
+
+export type AIOCRProviderOptionDTO = {
+  provider_key: string
+  name: string
+  endpoint_key: string
+}
+
+export type AIRouteOptionDTO = {
+  task_type: string
+  name: string
+  capability: string
+  track: string
+}
+
+export type AIRuntimeModelSetDTO = {
+  llm_provider: string
+  llm_model: string
+  embedding_provider: string
+  embedding_model: string
+  rerank_provider: string
+  rerank_model: string
+  ocr_provider: string
+  ocr_endpoint: string
+}
+
+export type AIRuntimeRouteDTO = {
+  task_type: string
+  name: string
+  capability: string
+  track: string
+  active_provider: string
+  active_model: string
+  saved_provider: string
+  saved_model: string
+}
+
+export type AISecretStatusDTO = {
+  key: string
+  name: string
+  provider: string
+  configured: boolean
+}
+
+export type AIRuntimeStatusDTO = {
+  service_reachable: boolean
+  service_status: string
+  provider_health: Record<string, boolean>
+  active: AIRuntimeModelSetDTO
+  routes: AIRuntimeRouteDTO[]
+  secrets: AISecretStatusDTO[]
+  runtime_pricing_keys: string[]
+  mock_fallback_allowed: boolean
+  mock_providers_enabled: boolean
+  saved_config_enabled: boolean
+  saved_config_active: boolean
+  pending_deploy_fields: string[]
+  error_message: string
+  checked_at: string
+}
+
+export type AIProviderUsageDTO = {
+  provider: string
+  model: string
+  calls: number
+  estimated_cost: number
+}
+
+export type AICostSummaryDTO = {
+  total_calls: number
+  successful_calls: number
+  failed_calls: number
+  input_tokens: number
+  output_tokens: number
+  estimated_cost: number
+  monthly_budget: number
+  currency: string
+  provider_usage: AIProviderUsageDTO[]
+}
+
+export type AIConfigOverviewDTO = {
+  config: AIConfigDTO
+  runtime: AIRuntimeStatusDTO
+  summary: AICostSummaryDTO
+  provider_catalog: AIProviderOptionDTO[]
+  ocr_catalog: AIOCRProviderOptionDTO[]
+  route_catalog: AIRouteOptionDTO[]
+}
+
+export type AIConfigCheckDTO = {
+  key: string
+  name: string
+  status: 'passed' | 'warning' | 'failed'
+  message: string
+}
+
+export type AIConfigCheckResultDTO = {
+  runtime: AIRuntimeStatusDTO
+  checks: AIConfigCheckDTO[]
+}
+
 export type TenderDTO = {
   id: string
   source_id: string | null
@@ -1208,6 +1360,21 @@ export async function fetchNotifications(): Promise<NotificationDTO[]> {
 export async function fetchAICallLogs(limit = 50): Promise<AICallLogDTO[]> {
   const { data } = await apiClient.get<{ items: AICallLogDTO[] }>('/ai-call-logs', { params: { limit } })
   return data.items
+}
+
+export async function fetchAIConfig(): Promise<AIConfigOverviewDTO> {
+  const { data } = await apiClient.get<AIConfigOverviewDTO>('/ai-config')
+  return data
+}
+
+export async function updateAIConfig(payload: AIConfigPayload): Promise<AIConfigOverviewDTO> {
+  const { data } = await apiClient.put<AIConfigOverviewDTO>('/ai-config', payload)
+  return data
+}
+
+export async function checkAIConfig(): Promise<AIConfigCheckResultDTO> {
+  const { data } = await apiClient.post<AIConfigCheckResultDTO>('/ai-config/health-check')
+  return data
 }
 
 export async function markNotificationsRead(ids?: string[]): Promise<{ updated: number }> {

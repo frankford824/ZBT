@@ -97,6 +97,8 @@ def test_verify_request_signature_rejects_invalid_or_expired_signature() -> None
 
 def test_ai_service_middleware_keeps_only_public_paths_unsigned() -> None:
     assert asyncio.run(middleware_status("GET", "/healthz")) == 209
+    assert asyncio.run(middleware_status("GET", "/models/health")) == 401
+    assert asyncio.run(middleware_status("GET", "/models/health", signed_headers(b""))) == 209
     assert asyncio.run(middleware_status("GET", "/not-found")) == 401
     assert asyncio.run(middleware_status("GET", "/not-found", signed_headers(b""))) == 209
     body = b'{"task":"demo"}'

@@ -179,6 +179,21 @@ class ModelRouter:
     def health_check(self) -> dict[str, bool]:
         return {name: provider.health_check() for name, provider in self.providers.items()}
 
+    def runtime_route_target(self, task_type: str, tenant_id: str = "runtime-status") -> RouteTarget | None:
+        try:
+            return self.resolve(task_type, tenant_id=tenant_id)
+        except Exception:  # noqa: BLE001 - runtime status must remain best-effort.
+            return None
+
+    def runtime_pricing_keys(self) -> list[str]:
+        return sorted(str(key) for key in self._pricing_config().keys())
+
+    def mock_providers_enabled(self) -> bool:
+        return os.getenv("USE_MOCK_PROVIDERS", "true").strip().lower() not in {"0", "false", "no"}
+
+    def mock_fallback_allowed(self) -> bool:
+        return self._allow_mock_fallback()
+
     def provider_backed_mock_routes(self) -> list[str]:
         provider_backed_routes = self.LLM_ROUTES | self.EMBEDDING_ROUTES | self.RERANK_ROUTES | self.OCR_ROUTES
         mock_routes: list[str] = []

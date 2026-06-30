@@ -3,7 +3,11 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -78,6 +82,54 @@ func TestRespondStatusMapsApprovalForbiddenToForbidden(t *testing.T) {
 	}
 	if body.Code != "permission_denied" {
 		t.Fatalf("expected permission_denied response code, got %q", body.Code)
+	}
+}
+
+func TestFetchAIRuntimeSnapshotSignsModelHealthRequest(t *testing.T) {
+	const sharedSecret = "test-ai-service-hmac-secret"
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/models/health" {
+			t.Fatalf("unexpected AI service request %s %s", r.Method, r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read AI service request body: %v", err)
+		}
+		timestamp := r.Header.Get("X-ZBT-Timestamp")
+		signature := r.Header.Get("X-ZBT-Signature")
+		if timestamp == "" || signature == "" {
+			t.Fatal("expected AI service request to include HMAC headers")
+		}
+		mac := hmac.New(sha256.New, []byte(sharedSecret))
+		mac.Write([]byte(timestamp))
+		mac.Write([]byte("."))
+		mac.Write(body)
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(signature), []byte(expected)) {
+			t.Fatalf("AI service signature mismatch: got %q want %q", signature, expected)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status":"ok",
+			"providers":{"mock":true},
+			"active":{"llm_provider":"mock","llm_model":"demo","embedding_provider":"mock","embedding_model":"demo","rerank_provider":"mock","rerank_model":"demo","ocr_provider":"http_ocr","ocr_endpoint":"http://ocr.example.test"},
+			"secrets":[{"key":"OPENAI_API_KEY","name":"主模型服务密钥","provider":"openai_compatible_primary","configured":false}],
+			"runtime_pricing_keys":["mock/*"],
+			"mock_fallback_allowed":true,
+			"mock_providers_enabled":false,
+			"checked_at":"2026-06-23T12:00:00Z"
+		}`))
+	}))
+	defer upstream.Close()
+
+	s := &server{cfg: config.Config{AIServiceURL: upstream.URL, AIServiceHMACSecret: sharedSecret}}
+	snapshot, err := s.fetchAIRuntimeSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("expected signed AI runtime snapshot request to succeed: %v", err)
+	}
+	if !snapshot.Providers["mock"] || snapshot.Active.LLMProvider != "mock" || len(snapshot.RuntimePricingKeys) != 1 {
+		t.Fatalf("unexpected runtime snapshot: %+v", snapshot)
 	}
 }
 
@@ -806,6 +858,30 @@ func TestRouteInfosExposeExternalToolsAsTeamRoutes(t *testing.T) {
 		route, ok := routeInfoByKey(tc.method, tc.path)
 		if !ok {
 			t.Fatalf("expected external tool route %s %s metadata to be present", tc.method, tc.path)
+		}
+		if route.Module != "team" || route.Required != tc.required {
+			t.Fatalf("expected %s %s to require team %s, got %+v", tc.method, tc.path, tc.required, route)
+		}
+		if route.Async {
+			t.Fatalf("expected %s %s to be synchronous", tc.method, tc.path)
+		}
+	}
+}
+
+func TestRouteInfosExposeAIConfigCenterAsTeamRoutes(t *testing.T) {
+	cases := []struct {
+		method   string
+		path     string
+		required rbac.Level
+	}{
+		{http.MethodGet, "/ai-config", rbac.LevelRead},
+		{http.MethodPut, "/ai-config", rbac.LevelFull},
+		{http.MethodPost, "/ai-config/health-check", rbac.LevelRead},
+	}
+	for _, tc := range cases {
+		route, ok := routeInfoByKey(tc.method, tc.path)
+		if !ok {
+			t.Fatalf("expected AI config route %s %s metadata to be present", tc.method, tc.path)
 		}
 		if route.Module != "team" || route.Required != tc.required {
 			t.Fatalf("expected %s %s to require team %s, got %+v", tc.method, tc.path, tc.required, route)

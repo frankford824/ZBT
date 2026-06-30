@@ -1,4 +1,3 @@
-import ReactECharts from 'echarts-for-react'
 import {
   App as AntApp,
   Button,
@@ -33,6 +32,7 @@ import {
   getUserFacingErrorMessage,
   type CostItemPayload,
 } from '../../shared/api/client'
+import { ZBTChart } from '../../shared/charts/ZBTChart'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 import { useCanAccess } from '../../shared/permissions/permissions'
@@ -254,7 +254,7 @@ export function CostDetailPage() {
             {analysis.isLoading && <LoadingBlock />}
             {analysis.isError && <ErrorBlock />}
             {!analysis.isLoading && !analysis.isError && (
-              <ReactECharts
+              <ZBTChart
                 style={{ height: 260 }}
                 option={{
                   tooltip: { trigger: 'item' },

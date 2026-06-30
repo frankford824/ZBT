@@ -8,6 +8,8 @@ HTTP APIs that a developer would use while validating the SaaS prototype.
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import os
 import sys
 import time
@@ -20,6 +22,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[2]
 API_BASE = os.getenv("ZBT_API_BASE", "http://127.0.0.1:5173/api/v1").rstrip("/")
 AI_BASE = os.getenv("ZBT_AI_BASE", "http://127.0.0.1:8000").rstrip("/")
+AI_SERVICE_HMAC_SECRET = os.getenv("AI_SERVICE_HMAC_SECRET", "dev-only-zbt-ai-callback-secret")
 TENANT_ID = os.getenv("ZBT_ACCEPTANCE_TENANT_ID", "00000000-0000-4000-8000-000000000001")
 EMAIL = os.getenv("ZBT_ACCEPTANCE_EMAIL", "admin@zbt.local")
 PASSWORD = os.getenv("ZBT_ACCEPTANCE_PASSWORD", "demo-password")
@@ -29,9 +32,18 @@ class AcceptanceError(RuntimeError):
     pass
 
 
-def request_json(method: str, url: str, token: str | None = None, payload: object | None = None, expected: tuple[int, ...] = (200,)) -> object:
+def request_json(
+    method: str,
+    url: str,
+    token: str | None = None,
+    payload: object | None = None,
+    expected: tuple[int, ...] = (200,),
+    extra_headers: dict[str, str] | None = None,
+) -> object:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = Request(url, data=data, headers=headers, method=method)
@@ -53,7 +65,24 @@ def api(method: str, path: str, token: str | None = None, payload: object | None
 
 
 def ai(method: str, path: str, payload: object | None = None, expected: tuple[int, ...] = (200,)) -> object:
-    return request_json(method, f"{AI_BASE}{path}", payload=payload, expected=expected)
+    return request_json(
+        method,
+        f"{AI_BASE}{path}",
+        payload=payload,
+        expected=expected,
+        extra_headers=ai_signature_headers(payload),
+    )
+
+
+def ai_signature_headers(payload: object | None) -> dict[str, str]:
+    body = b"" if payload is None else json.dumps(payload).encode("utf-8")
+    timestamp = str(int(time.time()))
+    signature = hmac.new(
+        AI_SERVICE_HMAC_SECRET.encode("utf-8"),
+        timestamp.encode("utf-8") + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return {"X-ZBT-Timestamp": timestamp, "X-ZBT-Signature": signature}
 
 
 def require(condition: bool, message: str) -> None:
@@ -744,7 +773,7 @@ def check_static_docs() -> None:
 
     api_spec = (ROOT / "docs/blueprint/API_SPEC.md").read_text(encoding="utf-8")
     require("stateless JWT" not in api_spec, "API_SPEC.md still describes logout as stateless JWT")
-    for needle in ("session_revoked_at", "未被撤销", "除 `/healthz` 和 `/models/health` 外均强制验签"):
+    for needle in ("session_revoked_at", "未被撤销", "除 `/healthz` 外均强制验签"):
         require(needle in api_spec, f"API_SPEC.md missing current auth/HMAC behavior: {needle}")
 
     ai_call_store = (ROOT / "backend/internal/platform/aicall/store.go").read_text(encoding="utf-8")

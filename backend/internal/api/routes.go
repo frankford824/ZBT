@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
+	"github.com/frankford824/ZBT/backend/internal/platform/aiconfig"
 	platformapproval "github.com/frankford824/ZBT/backend/internal/platform/approval"
 	"github.com/frankford824/ZBT/backend/internal/platform/audit"
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
@@ -77,6 +78,7 @@ type server struct {
 	approvalStore     *platformapproval.Store
 	dashboardStore    *platformdashboard.Store
 	aiCallStore       *aicall.Store
+	aiConfigStore     *aiconfig.Store
 	externalToolStore *externaltool.Store
 }
 
@@ -99,6 +101,9 @@ var routeSpecs = []routeSpec{
 	{"PUT", "/external-tools/:providerKey", "team", false},
 	{"POST", "/external-tools/:providerKey/invoke", "team", false},
 	{"GET", "/external-tools/audit", "team", false},
+	{"GET", "/ai-config", "team", false},
+	{"PUT", "/ai-config", "team", false},
+	{"POST", "/ai-config/health-check", "team", false},
 	{"GET", "/tenders", "tender", false},
 	{"POST", "/tenders", "tender", false},
 	{"GET", "/tenders/:id", "tender", false},
@@ -239,6 +244,7 @@ var routeLevelOverrides = map[string]rbac.Level{
 	"DELETE /tenders/:id/favorite": rbac.LevelRead,
 	"POST /knowledge/search":       rbac.LevelRead,
 	"POST /notifications/read":     rbac.LevelRead,
+	"POST /ai-config/health-check": rbac.LevelRead,
 }
 
 var routeAdditionalRequirements = map[string][]routeRequirement{
@@ -250,11 +256,11 @@ var routeAdditionalRequirements = map[string][]routeRequirement{
 const maxCallbackTaskIDLength = 256
 const maxBearerTokenLength = 8 * 1024
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, externalToolStore *externaltool.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, aiConfigStore *aiconfig.Store, externalToolStore *externaltool.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware(), limitRequestBody(maxRequestBodyBytes()))
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, externalToolStore: externalToolStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, aiConfigStore: aiConfigStore, externalToolStore: externalToolStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -662,6 +668,9 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PUT("/external-tools/:providerKey", rbac.Require("team", rbac.LevelFull), s.upsertExternalTool)
 	group.POST("/external-tools/:providerKey/invoke", rbac.Require("team", rbac.LevelFull), s.invokeExternalTool)
 	group.GET("/external-tools/audit", rbac.Require("team", rbac.LevelRead), s.listExternalToolAuditLogs)
+	group.GET("/ai-config", rbac.Require("team", rbac.LevelRead), s.getAIConfig)
+	group.PUT("/ai-config", rbac.Require("team", rbac.LevelFull), s.upsertAIConfig)
+	group.POST("/ai-config/health-check", rbac.Require("team", rbac.LevelRead), s.checkAIConfig)
 	group.GET("/notifications", rbac.Require("team", rbac.LevelRead), s.listNotifications)
 	group.GET("/knowledge", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeHome)
 	group.GET("/knowledge/categories", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeCategories)
@@ -765,6 +774,9 @@ func customRouteSet() map[string]bool {
 		"PUT /external-tools/:providerKey":                  true,
 		"POST /external-tools/:providerKey/invoke":          true,
 		"GET /external-tools/audit":                         true,
+		"GET /ai-config":                                    true,
+		"PUT /ai-config":                                    true,
+		"POST /ai-config/health-check":                      true,
 		"GET /notifications":                                true,
 		"GET /tenders":                                      true,
 		"POST /tenders":                                     true,
@@ -3001,7 +3013,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusForbidden, apiError("permission_denied", "当前账号没有此操作权限"))
 		return
 	}
-	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) {
+	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, aiconfig.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
 	}

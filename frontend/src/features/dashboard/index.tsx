@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import ReactECharts from 'echarts-for-react'
 import { Button, Card, Col, List, Row, Skeleton, Space, Statistic, Table, Tag } from 'antd'
 import { Link } from 'react-router-dom'
 import { fetchPlatformSummary } from '../../shared/api/client'
+import { ZBTChart } from '../../shared/charts/ZBTChart'
 import { IconfontGlyph, type IconfontGlyphName } from '../../shared/components/IconfontGlyph'
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock } from '../../shared/components/StateBlocks'
@@ -77,7 +77,7 @@ export function DashboardPage() {
           ))}
           <Col xs={24} xl={14}>
             <Card title="投标趋势">
-              <ReactECharts
+              <ZBTChart
                 style={{ height: 260 }}
                 option={{
                   color: ['#2C5FA8', '#B08530'],

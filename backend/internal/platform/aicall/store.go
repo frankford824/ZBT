@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/aiconfig"
 	"github.com/frankford824/ZBT/backend/internal/platform/taskstatus"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -121,6 +122,11 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 	input.BizRef = bizRef
 	var log Log
 	err = s.withTenant(ctx, input.TenantID, func(tx pgx.Tx) error {
+		if input.EstimatedCost == 0 && (input.InputTokens > 0 || input.OutputTokens > 0) {
+			if cost, ok := s.tenantConfiguredCost(ctx, tx, input.TenantID, input.Provider, input.Model, input.InputTokens, input.OutputTokens); ok {
+				input.EstimatedCost = cost
+			}
+		}
 		created, err := scanLog(tx.QueryRow(ctx, `
 			insert into ai_call_logs (
 				tenant_id, user_id, trace_id, task_type, provider, model,
@@ -200,6 +206,18 @@ func (s *Store) Record(ctx context.Context, input RecordInput) (Log, error) {
 		return nil
 	})
 	return log, err
+}
+
+func (s *Store) tenantConfiguredCost(ctx context.Context, tx pgx.Tx, tenantID, provider, model string, inputTokens, outputTokens int) (float64, bool) {
+	pricing, err := aiconfig.ScanTenantPricing(tx.QueryRow(ctx, `
+		select pricing
+		from ai_model_configs
+		where tenant_id = $1
+	`, tenantID))
+	if err != nil {
+		return 0, false
+	}
+	return aiconfig.EstimateCostFromPricing(pricing, provider, model, inputTokens, outputTokens)
 }
 
 func (s *Store) RecordTaskCallback(ctx context.Context, tenantID, externalTaskID string, callbackResult map[string]any, callbackStatus, callbackError string) (Log, error) {
