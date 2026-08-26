@@ -62,6 +62,8 @@ services:
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
       MINIO_BUCKET: ${MINIO_BUCKET:-zbt-files}
       MINIO_ENSURE_BUCKET: ${MINIO_ENSURE_BUCKET:-true}
+      COLLECTOR_HMAC_SECRET: ${COLLECTOR_HMAC_SECRET:-}
+      PLATFORM_TENDER_POOL_PUBLIC: ${PLATFORM_TENDER_POOL_PUBLIC:-false}
     depends_on:
       postgres:
         condition: service_healthy

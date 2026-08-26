@@ -1494,6 +1494,71 @@ export async function createBidFromTender(tenderId: string): Promise<CreateBidFr
   return data
 }
 
+export type PlatformTenderDTO = {
+  id: string
+  external_source: 'zbcg' | 'iccec' | string
+  external_id: string
+  title: string
+  purchaser: string
+  region: string
+  notice_type_name: string
+  publish_date: string | null
+  deadline: string | null
+  source_url: string
+  budget_text: string
+  budget_amount: number | null
+  raw_content_preview: string
+  requirement_dims: Record<string, unknown>
+  timeline: Record<string, unknown>
+  attachments: Record<string, unknown>
+  review_result: Record<string, unknown>
+  risk_flags: string[]
+  status: TenderDTO['status']
+  collected_at: string
+  updated_at: string
+}
+
+export type PlatformCollectorRunDTO = {
+  id: string
+  external_source: string
+  status: 'ok' | 'partial' | 'failed' | 'blocked' | string
+  fetched_count: number
+  ingested_count: number
+  message: string
+  started_at: string
+  finished_at: string
+}
+
+export type PlatformTenderListDTO = {
+  items: PlatformTenderDTO[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function fetchPlatformTenders(params?: {
+  q?: string
+  source?: string
+  limit?: number
+  offset?: number
+}): Promise<PlatformTenderListDTO> {
+  const { data } = await apiClient.get<PlatformTenderListDTO>('/platform/tenders', { params })
+  return {
+    items: data.items ?? [],
+    total: data.total ?? 0,
+    limit: data.limit ?? params?.limit ?? 50,
+    offset: data.offset ?? params?.offset ?? 0,
+  }
+}
+
+export async function fetchPlatformCollectorRuns(params?: {
+  source?: string
+  limit?: number
+}): Promise<PlatformCollectorRunDTO[]> {
+  const { data } = await apiClient.get<{ items: PlatformCollectorRunDTO[] }>('/platform/collector-runs', { params })
+  return data.items ?? []
+}
+
 export async function fetchTenderSources(): Promise<TenderSourceDTO[]> {
   const { data } = await apiClient.get<{ items: TenderSourceDTO[] }>('/tender-sources')
   return data.items

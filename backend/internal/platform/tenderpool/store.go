@@ -243,16 +243,21 @@ func (s *Store) Ingest(ctx context.Context, req IngestRequest) (IngestResult, er
 	return result, nil
 }
 
-func (s *Store) List(ctx context.Context, filter ListFilter) ([]PlatformTender, error) {
+type ListResult struct {
+	Items []PlatformTender
+	Total int
+}
+
+func (s *Store) List(ctx context.Context, filter ListFilter) (ListResult, error) {
 	source, err := normalizeOptionalExternalSource(filter.Source)
 	if err != nil {
-		return nil, err
+		return ListResult{}, err
 	}
 	args := []any{}
 	conditions := []string{"true"}
 	if search := strings.TrimSpace(filter.Search); search != "" {
 		if err := validateTextLength(search, maxShortTextRunes); err != nil {
-			return nil, err
+			return ListResult{}, err
 		}
 		args = append(args, "%"+search+"%")
 		conditions = append(conditions, fmt.Sprintf("(title ilike $%d or purchaser ilike $%d)", len(args), len(args)))
@@ -261,7 +266,14 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]PlatformTender, 
 		args = append(args, source)
 		conditions = append(conditions, fmt.Sprintf("external_source = $%d", len(args)))
 	}
-	args = append(args, clampListLimit(filter.Limit), clampListOffset(filter.Offset))
+	where := strings.Join(conditions, " and ")
+	var total int
+	if err := s.pool.QueryRow(ctx, "select count(*) from platform_tenders where "+where, args...).Scan(&total); err != nil {
+		return ListResult{}, err
+	}
+	limit := clampListLimit(filter.Limit)
+	offset := clampListOffset(filter.Offset)
+	queryArgs := append(append([]any{}, args...), limit, offset)
 	query := fmt.Sprintf(`
 		select id::text, external_source, external_id, title, purchaser, region, notice_type_name,
 			publish_date, deadline, source_url, budget_text, budget_amount::float8,
@@ -271,21 +283,21 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]PlatformTender, 
 		where %s
 		order by collected_at desc, id
 		limit $%d offset $%d
-	`, rawContentPreviewRunes, strings.Join(conditions, " and "), len(args)-1, len(args))
-	rows, err := s.pool.Query(ctx, query, args...)
+	`, rawContentPreviewRunes, where, len(queryArgs)-1, len(queryArgs))
+	rows, err := s.pool.Query(ctx, query, queryArgs...)
 	if err != nil {
-		return nil, err
+		return ListResult{}, err
 	}
 	defer rows.Close()
 	tenders := []PlatformTender{}
 	for rows.Next() {
 		tender, err := scanPlatformTender(rows)
 		if err != nil {
-			return nil, err
+			return ListResult{}, err
 		}
 		tenders = append(tenders, tender)
 	}
-	return tenders, rows.Err()
+	return ListResult{Items: tenders, Total: total}, rows.Err()
 }
 
 func (s *Store) ListRuns(ctx context.Context, source string, limit int) ([]CollectorRun, error) {

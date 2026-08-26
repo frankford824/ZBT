@@ -3,7 +3,7 @@
 | 页面 ID | 页面 | 路由 | 模块 |
 | --- | --- | --- | --- |
 | page-dashboard | 工作台 | /dashboard | 工作台 |
-| page-tender | 标讯大厅 | /tenders?tab=全部\|智能推荐\|可投标\|收藏\|外部标讯\|监控设置 | 标讯大厅 |
+| page-tender | 标讯大厅 | /tenders?tab=全部\|智能推荐\|可投标\|收藏\|公共标讯池\|外部标讯\|监控设置 | 标讯大厅 |
 | page-generate | 标书生成 7 步向导 | /bids/:bidId/wizard?step=1..7 | 标书生成 |
 | page-compliance | 合规检查 | /compliance | 合规检查 |
 | page-project | 项目管理 | /projects?view=board\|list | 项目管理 |

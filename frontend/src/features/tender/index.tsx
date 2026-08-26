@@ -17,7 +17,7 @@ import {
 } from 'antd'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   createBidFromTender,
   createProjectFromTender,
@@ -38,6 +38,14 @@ import {
 import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 import { useCanAccess } from '../../shared/permissions/permissions'
+import { PlatformPoolPanel } from './PlatformPoolPanel'
+
+const hallTabs = ['全部', '智能推荐', '可投标', '收藏', '公共标讯池', '外部标讯', '监控设置'] as const
+type HallTab = (typeof hallTabs)[number]
+
+function isHallTab(value: string | null): value is HallTab {
+  return Boolean(value && (hallTabs as readonly string[]).includes(value))
+}
 
 const tabParams: Record<string, Parameters<typeof fetchTenders>[0]> = {
   全部: {},
@@ -299,7 +307,8 @@ export function TendersPage() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
   const canWrite = useCanAccess('tender', 'full')
-  const [activeTab, setActiveTab] = useState('全部')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab: HallTab = isHallTab(searchParams.get('tab')) ? (searchParams.get('tab') as HallTab) : '全部'
   const [keyword, setKeyword] = useState('')
   const [sourceForm] = Form.useForm()
   const [externalSearchForm] = Form.useForm<ExternalTenderSearchValues>()
@@ -628,16 +637,23 @@ export function TendersPage() {
     <PageFrame
       module="投标准备"
       title="标讯大厅"
-      subtitle="标讯搜索、智能推荐、收藏和来源管理"
+      subtitle="租户标讯、采集公共池、第三方检索和来源管理"
       tags={['标讯列表']}
     >
       <Tabs
         activeKey={activeTab}
-        onChange={setActiveTab}
-        items={['全部', '智能推荐', '可投标', '收藏', '外部标讯', '监控设置'].map((label) => ({
+        onChange={(tab) => setSearchParams(tab === '全部' ? {} : { tab })}
+        items={hallTabs.map((label) => ({
           key: label,
           label,
-          children: label === '监控设置' ? sourcePanel() : label === '外部标讯' ? externalSearchPanel() : tenderTable(),
+          children:
+            label === '监控设置'
+              ? sourcePanel()
+              : label === '外部标讯'
+                ? externalSearchPanel()
+                : label === '公共标讯池'
+                  ? <PlatformPoolPanel />
+                  : tenderTable(),
         }))}
       />
     </PageFrame>

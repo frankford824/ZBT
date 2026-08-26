@@ -1104,7 +1104,11 @@ func (s *server) listPlatformTenders(c *gin.Context) {
 		Limit:  limit,
 		Offset: offset,
 	})
-	respond(c, gin.H{"items": result, "limit": limit, "offset": offset}, err)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	respond(c, gin.H{"items": result.Items, "total": result.Total, "limit": limit, "offset": offset}, nil)
 }
 
 func (s *server) listPlatformCollectorRuns(c *gin.Context) {
