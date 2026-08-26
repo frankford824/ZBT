@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
+	"github.com/frankford824/ZBT/backend/internal/platform/tenderpool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -1110,5 +1112,180 @@ func TestRequireAITaskAccessDeniesUnknownTaskType(t *testing.T) {
 	}
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for unknown task access, got %d", recorder.Code)
+	}
+}
+
+const collectorTestSecret = "test-collector-hmac-secret"
+
+func signZBTRequest(secret, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func newPlatformTenderRouter(cfg config.Config) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	s := &server{cfg: cfg, tenderPoolStore: tenderpool.NewStore(nil)}
+	router.POST("/platform/tenders/ingest", s.ingestPlatformTenders)
+	router.GET("/platform/tenders", s.listPlatformTenders)
+	router.GET("/platform/collector-runs", s.listPlatformCollectorRuns)
+	return router
+}
+
+func TestVerifyCollectorSignatureAcceptsSignedPush(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zbcg"}}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	s := &server{cfg: config.Config{CollectorHMACSecret: collectorTestSecret}}
+
+	if !s.verifyCollectorSignature(timestamp, signZBTRequest(collectorTestSecret, timestamp, body), body) {
+		t.Fatal("expected correctly signed collector push to be accepted")
+	}
+}
+
+func TestVerifyCollectorSignatureRejectsWrongSignature(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zbcg"}}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	s := &server{cfg: config.Config{CollectorHMACSecret: collectorTestSecret}}
+
+	if s.verifyCollectorSignature(timestamp, signZBTRequest("other-secret", timestamp, body), body) {
+		t.Fatal("expected signature from a different secret to be rejected")
+	}
+	if s.verifyCollectorSignature(timestamp, signZBTRequest(collectorTestSecret, timestamp, []byte(`{}`)), body) {
+		t.Fatal("expected signature over a different body to be rejected")
+	}
+	if s.verifyCollectorSignature(timestamp, "not-hex", body) {
+		t.Fatal("expected malformed signature to be rejected")
+	}
+}
+
+func TestVerifyCollectorSignatureRejectsStaleTimestamp(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zbcg"}}`)
+	s := &server{cfg: config.Config{CollectorHMACSecret: collectorTestSecret}}
+
+	for _, timestamp := range []string{
+		strconv.FormatInt(time.Now().Add(-6*time.Minute).Unix(), 10),
+		strconv.FormatInt(time.Now().Add(6*time.Minute).Unix(), 10),
+		"not-a-timestamp",
+	} {
+		if s.verifyCollectorSignature(timestamp, signZBTRequest(collectorTestSecret, timestamp, body), body) {
+			t.Fatalf("expected timestamp %q outside the 5 minute window to be rejected", timestamp)
+		}
+	}
+}
+
+func TestVerifyCollectorSignatureRejectsUnconfiguredSecret(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zbcg"}}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	s := &server{cfg: config.Config{AIServiceHMACSecret: collectorTestSecret}}
+
+	if s.verifyCollectorSignature(timestamp, signZBTRequest(collectorTestSecret, timestamp, body), body) {
+		t.Fatal("expected collector pushes to be rejected when COLLECTOR_HMAC_SECRET is unset")
+	}
+}
+
+func TestPlatformTenderIngestReturnsUnavailableWithoutCollectorSecret(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zbcg","status":"ok","started_at":"2026-08-25T13:00:00Z"},"tenders":[]}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	router := newPlatformTenderRouter(config.Config{AIServiceHMACSecret: collectorTestSecret})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/platform/tenders/ingest", bytes.NewReader(body))
+	request.Header.Set("X-ZBT-Timestamp", timestamp)
+	request.Header.Set("X-ZBT-Signature", signZBTRequest(collectorTestSecret, timestamp, body))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when collector ingest is not configured, got %d", recorder.Code)
+	}
+	var payload struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode disabled ingest response: %v", err)
+	}
+	if payload.Code != "collector_ingest_disabled" {
+		t.Fatalf("expected collector_ingest_disabled code, got %q", payload.Code)
+	}
+}
+
+func TestPlatformTenderIngestRejectsInvalidSignature(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zbcg","status":"ok","started_at":"2026-08-25T13:00:00Z"},"tenders":[]}`)
+	router := newPlatformTenderRouter(config.Config{CollectorHMACSecret: collectorTestSecret})
+
+	for name, headers := range map[string]map[string]string{
+		"missing headers": {},
+		"wrong signature": {
+			"X-ZBT-Timestamp": strconv.FormatInt(time.Now().Unix(), 10),
+			"X-ZBT-Signature": strings.Repeat("0", 64),
+		},
+		"stale timestamp": {
+			"X-ZBT-Timestamp": strconv.FormatInt(time.Now().Add(-6*time.Minute).Unix(), 10),
+			"X-ZBT-Signature": signZBTRequest(collectorTestSecret, strconv.FormatInt(time.Now().Add(-6*time.Minute).Unix(), 10), body),
+		},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/platform/tenders/ingest", bytes.NewReader(body))
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for collector push with %s, got %d", name, recorder.Code)
+		}
+	}
+}
+
+// 用一个签名正确但内容非法的推送验证请求确实通过了 HMAC 校验：
+// 拿到 400（入库前的输入校验）而不是 401/503，说明签名这一关放行了。
+func TestPlatformTenderIngestValidatesPayloadAfterSignaturePasses(t *testing.T) {
+	body := []byte(`{"run":{"external_source":"zfcg","status":"ok","started_at":"2026-08-25T13:00:00Z"},"tenders":[]}`)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	router := newPlatformTenderRouter(config.Config{CollectorHMACSecret: collectorTestSecret})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/platform/tenders/ingest", bytes.NewReader(body))
+	request.Header.Set("X-ZBT-Timestamp", timestamp)
+	request.Header.Set("X-ZBT-Signature", signZBTRequest(collectorTestSecret, timestamp, body))
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected signed push with unsupported source to be rejected as 400, got %d", recorder.Code)
+	}
+}
+
+func TestPlatformTenderPoolReadRoutesAreDisabledByDefault(t *testing.T) {
+	router := newPlatformTenderRouter(config.Config{})
+
+	for _, path := range []string{"/platform/tenders", "/platform/collector-runs"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("expected %s to be gated behind PLATFORM_TENDER_POOL_PUBLIC, got %d", path, recorder.Code)
+		}
+		var payload struct {
+			Code string `json:"code"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode gated response for %s: %v", path, err)
+		}
+		if payload.Code != "platform_tender_pool_disabled" {
+			t.Fatalf("expected platform_tender_pool_disabled code for %s, got %q", path, payload.Code)
+		}
+	}
+}
+
+func TestPlatformTenderPoolVisibleWhenFlagEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	s := &server{cfg: config.Config{PlatformTenderPoolPublic: true}}
+
+	if !s.platformTenderPoolVisible(context) {
+		t.Fatal("expected PLATFORM_TENDER_POOL_PUBLIC=true to expose the platform tender pool")
 	}
 }

@@ -37,6 +37,12 @@ type Config struct {
 	JWTSecret            string
 	JWTAccessTTL         time.Duration
 	DefaultTenantID      string
+
+	// CollectorHMACSecret 为空表示未启用采集接入：POST /api/v1/platform/tenders/ingest
+	// 直接返回 503 且不做任何写入。故意不设开发默认值，没配密钥就等于没开这个入口。
+	CollectorHMACSecret string
+	// PlatformTenderPoolPublic 控制公共标讯池只读接口是否对租户可见，测试期打开、上线前收回。
+	PlatformTenderPoolPublic bool
 }
 
 func Load() Config {
@@ -59,6 +65,9 @@ func Load() Config {
 		JWTSecret:            env("JWT_SECRET", DefaultJWTSecret),
 		JWTAccessTTL:         envDuration("JWT_ACCESS_TTL", DefaultJWTAccessTTL, minJWTAccessTTL, maxJWTAccessTTL),
 		DefaultTenantID:      env("DEFAULT_TENANT_ID", "00000000-0000-4000-8000-000000000001"),
+
+		CollectorHMACSecret:      env("COLLECTOR_HMAC_SECRET", ""),
+		PlatformTenderPoolPublic: envBool("PLATFORM_TENDER_POOL_PUBLIC", false),
 	}
 }
 

@@ -38,6 +38,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
 	platformtender "github.com/frankford824/ZBT/backend/internal/platform/tender"
+	"github.com/frankford824/ZBT/backend/internal/platform/tenderpool"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/google/uuid"
@@ -72,6 +73,7 @@ type server struct {
 	knowledgeStore    *knowledge.Store
 	bidStore          *bid.Store
 	tenderStore       *platformtender.Store
+	tenderPoolStore   *tenderpool.Store
 	projectStore      *platformproject.Store
 	costStore         *platformcost.Store
 	complianceStore   *platformcompliance.Store
@@ -117,6 +119,8 @@ var routeSpecs = []routeSpec{
 	{"PATCH", "/tender-sources/:id", "tender", false},
 	{"DELETE", "/tender-sources/:id", "tender", false},
 	{"POST", "/tender-sources/:id/verify", "tender", false},
+	{"GET", "/platform/tenders", "tender", false},
+	{"GET", "/platform/collector-runs", "tender", false},
 	{"GET", "/projects", "project", false},
 	{"POST", "/projects", "project", false},
 	{"GET", "/projects/:id", "project", false},
@@ -255,12 +259,13 @@ var routeAdditionalRequirements = map[string][]routeRequirement{
 
 const maxCallbackTaskIDLength = 256
 const maxBearerTokenLength = 8 * 1024
+const maxPlatformTenderOffset = 100_000
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, aiConfigStore *aiconfig.Store, externalToolStore *externaltool.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, tenderPoolStore *tenderpool.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, aiConfigStore *aiconfig.Store, externalToolStore *externaltool.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware(), limitRequestBody(maxRequestBodyBytes()))
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, aiConfigStore: aiConfigStore, externalToolStore: externalToolStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, tenderPoolStore: tenderPoolStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, aiConfigStore: aiConfigStore, externalToolStore: externalToolStore}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -275,6 +280,7 @@ func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.S
 	public.POST("/auth/login", s.login)
 	public.POST("/auth/refresh", s.refresh)
 	public.POST("/ai/callbacks/tasks", s.aiTaskCallback)
+	public.POST("/platform/tenders/ingest", s.ingestPlatformTenders)
 
 	api := router.Group("/api/v1", s.authenticate(), tenant.Middleware())
 	api.POST("/auth/logout", s.logout)
@@ -320,6 +326,22 @@ func boundedQueryLimit(c *gin.Context, defaultLimit, maxLimit int) (int, bool) {
 	}
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || value <= 0 || value > maxLimit {
+		respondBadRequest(c)
+		return 0, false
+	}
+	return value, true
+}
+
+func boundedQueryOffset(c *gin.Context, maxOffset int) (int, bool) {
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	raw, exists := c.GetQuery("offset")
+	if !exists {
+		return 0, true
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value < 0 || value > maxOffset {
 		respondBadRequest(c)
 		return 0, false
 	}
@@ -614,6 +636,8 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.updateTenderSource)
 	group.DELETE("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.deleteTenderSource)
 	group.POST("/tender-sources/:id/verify", rbac.Require("tender", rbac.LevelFull), s.verifyTenderSource)
+	group.GET("/platform/tenders", rbac.Require("tender", rbac.LevelRead), s.listPlatformTenders)
+	group.GET("/platform/collector-runs", rbac.Require("tender", rbac.LevelRead), s.listPlatformCollectorRuns)
 	group.GET("/projects", rbac.Require("project", rbac.LevelRead), s.listProjects)
 	group.POST("/projects", rbac.Require("project", rbac.LevelFull), s.createProject)
 	group.GET("/projects/:id", rbac.Require("project", rbac.LevelRead), s.getProject)
@@ -791,6 +815,8 @@ func customRouteSet() map[string]bool {
 		"PATCH /tender-sources/:id":                         true,
 		"DELETE /tender-sources/:id":                        true,
 		"POST /tender-sources/:id/verify":                   true,
+		"GET /platform/tenders":                             true,
+		"GET /platform/collector-runs":                      true,
 		"GET /projects":                                     true,
 		"POST /projects":                                    true,
 		"GET /projects/:id":                                 true,
@@ -1033,6 +1059,74 @@ func (s *server) deleteTenderSource(c *gin.Context) {
 func (s *server) verifyTenderSource(c *gin.Context) {
 	result, err := s.tenderStore.VerifySource(c.Request.Context(), tenant.FromContext(c.Request.Context()), c.Param("id"))
 	respond(c, result, err)
+}
+
+// ingestPlatformTenders 是采集器的公开入口，用 COLLECTOR_HMAC_SECRET 做 HMAC 校验，不走 JWT。
+// 密钥未配置时直接 503，不做任何写入。
+func (s *server) ingestPlatformTenders(c *gin.Context) {
+	if strings.TrimSpace(s.cfg.CollectorHMACSecret) == "" {
+		c.JSON(http.StatusServiceUnavailable, apiError("collector_ingest_disabled", "采集接入未启用"))
+		return
+	}
+	body, err := c.GetRawData()
+	if err != nil {
+		respondBodyReadError(c, err)
+		return
+	}
+	if !s.verifyCollectorSignature(c.GetHeader("X-ZBT-Timestamp"), c.GetHeader("X-ZBT-Signature"), body) {
+		c.JSON(http.StatusUnauthorized, apiError("invalid_signature", "采集推送签名校验失败"))
+		return
+	}
+	var req tenderpool.IngestRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		respondBadRequest(c)
+		return
+	}
+	result, err := s.tenderPoolStore.Ingest(c.Request.Context(), req)
+	respond(c, result, err)
+}
+
+func (s *server) listPlatformTenders(c *gin.Context) {
+	if !s.platformTenderPoolVisible(c) {
+		return
+	}
+	limit, ok := boundedQueryLimit(c, 50, 200)
+	if !ok {
+		return
+	}
+	offset, ok := boundedQueryOffset(c, maxPlatformTenderOffset)
+	if !ok {
+		return
+	}
+	result, err := s.tenderPoolStore.List(c.Request.Context(), tenderpool.ListFilter{
+		Search: c.Query("q"),
+		Source: c.Query("source"),
+		Limit:  limit,
+		Offset: offset,
+	})
+	respond(c, gin.H{"items": result, "limit": limit, "offset": offset}, err)
+}
+
+func (s *server) listPlatformCollectorRuns(c *gin.Context) {
+	if !s.platformTenderPoolVisible(c) {
+		return
+	}
+	limit, ok := boundedQueryLimit(c, 50, 200)
+	if !ok {
+		return
+	}
+	result, err := s.tenderPoolStore.ListRuns(c.Request.Context(), c.Query("source"), limit)
+	respond(c, gin.H{"items": result}, err)
+}
+
+// platformTenderPoolVisible 由 PLATFORM_TENDER_POOL_PUBLIC 控制，默认关闭。
+// 路由始终注册（否则 assertRouteSpecsHandled 会 panic），开关只在这里生效。
+func (s *server) platformTenderPoolVisible(c *gin.Context) bool {
+	if s.cfg.PlatformTenderPoolPublic {
+		return true
+	}
+	c.AbortWithStatusJSON(http.StatusForbidden, apiError("platform_tender_pool_disabled", "平台公共标讯池当前未开放"))
+	return false
 }
 
 func (s *server) listProjects(c *gin.Context) {
@@ -2878,7 +2972,15 @@ func (s *server) recordTaskCallback(c *gin.Context, tenantID, taskID string, res
 }
 
 func (s *server) verifyCallbackSignature(timestampHeader, signatureHeader string, body []byte) bool {
-	if s.cfg.AIServiceHMACSecret == "" || timestampHeader == "" || signatureHeader == "" {
+	return verifySignedRequest(s.cfg.AIServiceHMACSecret, timestampHeader, signatureHeader, body)
+}
+
+func (s *server) verifyCollectorSignature(timestampHeader, signatureHeader string, body []byte) bool {
+	return verifySignedRequest(s.cfg.CollectorHMACSecret, timestampHeader, signatureHeader, body)
+}
+
+func verifySignedRequest(secret, timestampHeader, signatureHeader string, body []byte) bool {
+	if secret == "" || timestampHeader == "" || signatureHeader == "" {
 		return false
 	}
 	timestamp, err := strconv.ParseInt(timestampHeader, 10, 64)
@@ -2888,7 +2990,7 @@ func (s *server) verifyCallbackSignature(timestampHeader, signatureHeader string
 	if time.Since(time.Unix(timestamp, 0)).Abs() > 5*time.Minute {
 		return false
 	}
-	mac := hmac.New(sha256.New, []byte(s.cfg.AIServiceHMACSecret))
+	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(timestampHeader))
 	mac.Write([]byte("."))
 	mac.Write(body)
@@ -3013,7 +3115,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusForbidden, apiError("permission_denied", "当前账号没有此操作权限"))
 		return
 	}
-	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, aiconfig.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) {
+	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, tenderpool.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, aiconfig.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
 	}
