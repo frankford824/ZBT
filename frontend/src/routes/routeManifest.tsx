@@ -8,6 +8,7 @@ import {
   FileTextOutlined,
   FolderOpenOutlined,
   FormOutlined,
+  IdcardOutlined,
   ProjectOutlined,
   SafetyCertificateOutlined,
   SearchOutlined,
@@ -117,6 +118,15 @@ export const navGroups: NavGroup[] = [
   {
     title: '企业管理',
     items: [
+      {
+        // 权限暂挂在 team 下：后端 /company/* 四个路由都要求 team 权限，
+        // 这里若单列一个 qualification 模块，菜单会出现在无权访问的角色面前。
+        key: 'qualification',
+        label: '企业资质',
+        path: '/qualification',
+        module: 'team',
+        icon: <IdcardOutlined />,
+      },
       {
         key: 'cost',
         label: '成本管理',

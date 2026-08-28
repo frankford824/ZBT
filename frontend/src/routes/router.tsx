@@ -35,6 +35,9 @@ const KnowledgeTemplatesPage = lazy(() =>
 const KnowledgeTagsPage = lazy(() => import('../features/knowledge').then((mod) => ({ default: mod.KnowledgeTagsPage })))
 const FilePreviewPage = lazy(() => import('../features/knowledge').then((mod) => ({ default: mod.FilePreviewPage })))
 const TeamPage = lazy(() => import('../features/team').then((mod) => ({ default: mod.TeamPage })))
+const QualificationPage = lazy(() =>
+  import('../features/qualification').then((mod) => ({ default: mod.QualificationPage })),
+)
 
 function RequireAuth() {
   const isAuthenticated = useSessionStore((state) => state.isAuthenticated)
@@ -124,6 +127,7 @@ export function AppRouter() {
             </Route>
             <Route element={<RequirePermission module="team" />}>
               <Route path="/team" element={page(<TeamPage />)} />
+              <Route path="/qualification" element={page(<QualificationPage />)} />
             </Route>
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>

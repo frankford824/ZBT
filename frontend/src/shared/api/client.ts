@@ -2391,3 +2391,151 @@ export async function fetchPlatformSummary(): Promise<PlatformSummaryDTO> {
   const { data } = await apiClient.get<PlatformSummaryDTO>('/dashboard/summary')
   return data
 }
+
+// 企业资质档案。数据来自局域网资质库（zizhi-api）同步，原件仍在公司 NAS 上。
+export type QualificationSourceDTO = {
+  configured: boolean
+  reachable?: boolean
+  reason?: string
+  total_files?: number
+  by_category?: Record<string, number>
+  expired_files?: number
+  people?: number
+  indexing?: boolean
+  extracting?: boolean
+}
+
+export type VerifyStatus = 'pending_review' | 'confirmed' | 'rejected'
+
+export type CompanyCertificateDTO = {
+  id: string
+  cert_category: string
+  cert_name: string
+  cert_level: string
+  cert_level_rank: number
+  cert_no: string
+  issuer: string
+  issued_at: string | null
+  expires_at: string | null
+  expired: boolean
+  source_ref: string
+  verify_status: VerifyStatus | string
+  extracted_by: string
+  extract_confidence: number | null
+  extract_evidence: Record<string, unknown>
+  updated_at: string
+}
+
+export type CompanyPersonnelDTO = {
+  id: string
+  person_name: string
+  cert_type: string
+  cert_level: string
+  major: string
+  reg_no: string
+  expires_at: string | null
+  expired: boolean
+  in_service: boolean
+  source_ref: string
+  verify_status: VerifyStatus | string
+  extracted_by: string
+  extract_confidence: number | null
+  extract_evidence: Record<string, unknown>
+  updated_at: string
+}
+
+export type CompanyLedgerListDTO<T> = {
+  items: T[]
+  total: number
+  limit: number
+}
+
+export type QualificationSyncCountsDTO = {
+  inserted: number
+  updated: number
+  skipped: number
+}
+
+export type QualificationSyncResultDTO = {
+  certificates: QualificationSyncCountsDTO
+  personnel: QualificationSyncCountsDTO
+  pending_review: number
+  warnings: string[]
+}
+
+export async function fetchQualificationSource(): Promise<QualificationSourceDTO> {
+  const { data } = await apiClient.get<QualificationSourceDTO>('/company/qualification/source')
+  return data
+}
+
+export async function fetchCompanyCertificates(params?: {
+  verify_status?: string
+  limit?: number
+  offset?: number
+}): Promise<CompanyLedgerListDTO<CompanyCertificateDTO>> {
+  const { data } = await apiClient.get<CompanyLedgerListDTO<CompanyCertificateDTO>>('/company/certificates', {
+    params,
+  })
+  return { items: data.items ?? [], total: data.total ?? 0, limit: data.limit ?? params?.limit ?? 50 }
+}
+
+export async function fetchCompanyPersonnel(params?: {
+  verify_status?: string
+  limit?: number
+  offset?: number
+}): Promise<CompanyLedgerListDTO<CompanyPersonnelDTO>> {
+  const { data } = await apiClient.get<CompanyLedgerListDTO<CompanyPersonnelDTO>>('/company/personnel', {
+    params,
+  })
+  return { items: data.items ?? [], total: data.total ?? 0, limit: data.limit ?? params?.limit ?? 50 }
+}
+
+// 审核提交。字段省略表示不改动，传空串表示清空——把 OCR 抽错的证号删掉
+// 是常规操作，所以这两种情况必须区分。
+export type CertificateReviewPayload = {
+  verify_status: VerifyStatus
+  cert_category?: string
+  cert_name?: string
+  cert_level?: string
+  cert_no?: string
+  issuer?: string
+  issued_at?: string
+  expires_at?: string
+}
+
+export type PersonnelReviewPayload = {
+  verify_status: VerifyStatus
+  person_name?: string
+  cert_type?: string
+  cert_level?: string
+  major?: string
+  reg_no?: string
+  expires_at?: string
+  in_service?: boolean
+}
+
+export async function reviewCompanyCertificate(
+  id: string,
+  payload: CertificateReviewPayload,
+): Promise<CompanyCertificateDTO> {
+  const { data } = await apiClient.patch<CompanyCertificateDTO>(`/company/certificates/${id}`, payload)
+  return data
+}
+
+export async function reviewCompanyPersonnel(
+  id: string,
+  payload: PersonnelReviewPayload,
+): Promise<CompanyPersonnelDTO> {
+  const { data } = await apiClient.patch<CompanyPersonnelDTO>(`/company/personnel/${id}`, payload)
+  return data
+}
+
+// 一次同步要遍历十余个分类并逐条 upsert，远超默认的 15 秒。
+export async function syncQualificationFromZizhi(): Promise<QualificationSyncResultDTO> {
+  const { data } = await apiClient.post<QualificationSyncResultDTO>(
+    '/company/qualification/sync',
+    undefined,
+    { timeout: 300_000 },
+  )
+  return data
+}

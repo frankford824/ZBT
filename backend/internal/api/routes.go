@@ -38,6 +38,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
 	platformtender "github.com/frankford824/ZBT/backend/internal/platform/tender"
+	"github.com/frankford824/ZBT/backend/internal/company/qualification"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenderpool"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
@@ -82,6 +83,10 @@ type server struct {
 	aiCallStore       *aicall.Store
 	aiConfigStore     *aiconfig.Store
 	externalToolStore *externaltool.Store
+
+	qualificationStore *qualification.Store
+	// zizhiClient 为 nil 表示未配置资质库接入，相关接口返回 503。
+	zizhiClient *qualification.ZizhiClient
 }
 
 var routeSpecs = []routeSpec{
@@ -121,6 +126,14 @@ var routeSpecs = []routeSpec{
 	{"POST", "/tender-sources/:id/verify", "tender", false},
 	{"GET", "/platform/tenders", "tender", false},
 	{"GET", "/platform/collector-runs", "tender", false},
+	// 企业资质档案挂在 team 模块下：它是企业主体信息的一部分，
+	// 由公司管理员维护，与团队/租户设置同权限域。
+	{"GET", "/company/certificates", "team", false},
+	{"PATCH", "/company/certificates/:id", "team", false},
+	{"GET", "/company/personnel", "team", false},
+	{"PATCH", "/company/personnel/:id", "team", false},
+	{"GET", "/company/qualification/source", "team", false},
+	{"POST", "/company/qualification/sync", "team", false},
 	{"GET", "/projects", "project", false},
 	{"POST", "/projects", "project", false},
 	{"GET", "/projects/:id", "project", false},
@@ -261,11 +274,14 @@ const maxCallbackTaskIDLength = 256
 const maxBearerTokenLength = 8 * 1024
 const maxPlatformTenderOffset = 100_000
 
-func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, tenderPoolStore *tenderpool.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, aiConfigStore *aiconfig.Store, externalToolStore *externaltool.Store) *gin.Engine {
+func NewRouter(cfg config.Config, store *saas.Store, fileService *platformfile.Service, knowledgeStore *knowledge.Store, bidStore *bid.Store, tenderStore *platformtender.Store, tenderPoolStore *tenderpool.Store, projectStore *platformproject.Store, costStore *platformcost.Store, complianceStore *platformcompliance.Store, approvalStore *platformapproval.Store, dashboardStore *platformdashboard.Store, aiCallStore *aicall.Store, aiConfigStore *aiconfig.Store, externalToolStore *externaltool.Store, qualificationStore *qualification.Store) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery(), audit.Middleware(), limitRequestBody(maxRequestBodyBytes()))
-	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, tenderPoolStore: tenderPoolStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, aiConfigStore: aiConfigStore, externalToolStore: externalToolStore}
+	s := &server{cfg: cfg, store: store, fileService: fileService, knowledgeStore: knowledgeStore, bidStore: bidStore, tenderStore: tenderStore, tenderPoolStore: tenderPoolStore, projectStore: projectStore, costStore: costStore, complianceStore: complianceStore, approvalStore: approvalStore, dashboardStore: dashboardStore, aiCallStore: aiCallStore, aiConfigStore: aiConfigStore, externalToolStore: externalToolStore, qualificationStore: qualificationStore}
+	if cfg.ZizhiAPIURL != "" && cfg.ZizhiAPIKey != "" {
+		s.zizhiClient = qualification.NewZizhiClient(cfg.ZizhiAPIURL, cfg.ZizhiAPIKey)
+	}
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -636,8 +652,15 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.updateTenderSource)
 	group.DELETE("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.deleteTenderSource)
 	group.POST("/tender-sources/:id/verify", rbac.Require("tender", rbac.LevelFull), s.verifyTenderSource)
-	group.GET("/platform/tenders", rbac.Require("tender", rbac.LevelRead), s.listPlatformTenders)
-	group.GET("/platform/collector-runs", rbac.Require("tender", rbac.LevelRead), s.listPlatformCollectorRuns)
+		group.GET("/platform/tenders", rbac.Require("tender", rbac.LevelRead), s.listPlatformTenders)
+		group.GET("/platform/collector-runs", rbac.Require("tender", rbac.LevelRead), s.listPlatformCollectorRuns)
+
+	group.GET("/company/certificates", rbac.Require("team", rbac.LevelRead), s.listCompanyCertificates)
+	group.PATCH("/company/certificates/:id", rbac.Require("team", rbac.LevelFull), s.reviewCompanyCertificate)
+	group.GET("/company/personnel", rbac.Require("team", rbac.LevelRead), s.listCompanyPersonnel)
+	group.PATCH("/company/personnel/:id", rbac.Require("team", rbac.LevelFull), s.reviewCompanyPersonnel)
+		group.GET("/company/qualification/source", rbac.Require("team", rbac.LevelRead), s.qualificationSourceStatus)
+		group.POST("/company/qualification/sync", rbac.Require("team", rbac.LevelFull), s.syncQualificationFromZizhi)
 	group.GET("/projects", rbac.Require("project", rbac.LevelRead), s.listProjects)
 	group.POST("/projects", rbac.Require("project", rbac.LevelFull), s.createProject)
 	group.GET("/projects/:id", rbac.Require("project", rbac.LevelRead), s.getProject)
@@ -817,6 +840,12 @@ func customRouteSet() map[string]bool {
 		"POST /tender-sources/:id/verify":                   true,
 		"GET /platform/tenders":                             true,
 		"GET /platform/collector-runs":                      true,
+		"GET /company/certificates":                         true,
+		"PATCH /company/certificates/:id":                   true,
+		"GET /company/personnel":                            true,
+		"PATCH /company/personnel/:id":                      true,
+		"GET /company/qualification/source":                 true,
+		"POST /company/qualification/sync":                  true,
 		"GET /projects":                                     true,
 		"POST /projects":                                    true,
 		"GET /projects/:id":                                 true,
@@ -3111,7 +3140,7 @@ func respondInternal(c *gin.Context) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
-	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) || errors.Is(err, externaltool.ErrNotFound) {
+	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) || errors.Is(err, externaltool.ErrNotFound) || errors.Is(err, qualification.ErrNotFound) {
 		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return
 	}
@@ -3119,7 +3148,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		c.JSON(http.StatusForbidden, apiError("permission_denied", "当前账号没有此操作权限"))
 		return
 	}
-	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, tenderpool.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, aiconfig.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) {
+	if errors.Is(err, saas.ErrInvalidRequest) || errors.Is(err, platformfile.ErrInvalidRequest) || errors.Is(err, knowledge.ErrInvalidRequest) || errors.Is(err, bid.ErrInvalidRequest) || errors.Is(err, platformtender.ErrInvalidRequest) || errors.Is(err, tenderpool.ErrInvalidRequest) || errors.Is(err, platformproject.ErrInvalidRequest) || errors.Is(err, platformcost.ErrInvalidRequest) || errors.Is(err, platformcompliance.ErrInvalidRequest) || errors.Is(err, platformapproval.ErrInvalidRequest) || errors.Is(err, aicall.ErrInvalidRequest) || errors.Is(err, aiconfig.ErrInvalidRequest) || errors.Is(err, externaltool.ErrInvalidRequest) || errors.Is(err, qualification.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
 	}

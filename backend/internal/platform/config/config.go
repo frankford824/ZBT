@@ -43,6 +43,12 @@ type Config struct {
 	CollectorHMACSecret string
 	// PlatformTenderPoolPublic 控制公共标讯池只读接口是否对租户可见，测试期打开、上线前收回。
 	PlatformTenderPoolPublic bool
+
+	// ZizhiAPIURL / ZizhiAPIKey 指向局域网内的资质库检索服务（zizhi-api）。
+	// 两者任一为空即视为未接入，资质同步接口返回 503 而不是静默失败。
+	// 该服务只被读取，资质原件的权威副本始终在公司 NAS 上。
+	ZizhiAPIURL string
+	ZizhiAPIKey string
 }
 
 func Load() Config {
@@ -68,6 +74,9 @@ func Load() Config {
 
 		CollectorHMACSecret:      env("COLLECTOR_HMAC_SECRET", ""),
 		PlatformTenderPoolPublic: envBool("PLATFORM_TENDER_POOL_PUBLIC", false),
+
+		ZizhiAPIURL: env("ZIZHI_API_URL", ""),
+		ZizhiAPIKey: env("ZIZHI_API_KEY", ""),
 	}
 }
 
