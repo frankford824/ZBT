@@ -550,6 +550,14 @@ export type AIConfigCheckResultDTO = {
   checks: AIConfigCheckDTO[]
 }
 
+export type AIAvailableModelsDTO = {
+  provider: string
+  models: string[]
+  reachable: boolean
+  error: string
+  checked_at: string
+}
+
 export type TenderDTO = {
   id: string
   source_id: string | null
@@ -1374,6 +1382,14 @@ export async function updateAIConfig(payload: AIConfigPayload): Promise<AIConfig
 
 export async function checkAIConfig(): Promise<AIConfigCheckResultDTO> {
   const { data } = await apiClient.post<AIConfigCheckResultDTO>('/ai-config/health-check')
+  return data
+}
+
+export async function fetchAvailableModels(provider: string): Promise<AIAvailableModelsDTO> {
+  const { data } = await apiClient.get<AIAvailableModelsDTO>('/ai-config/models', {
+    params: { provider },
+    timeout: 20000,
+  })
   return data
 }
 

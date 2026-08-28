@@ -27,6 +27,9 @@ class MockProvider:
     def health_check(self) -> bool:
         return True
 
+    def list_models(self) -> list[str]:
+        return []
+
     def embed_text(self, text: str) -> list[float]:
         dimensions = self.get_dimensions()
         vector = [0.0] * dimensions

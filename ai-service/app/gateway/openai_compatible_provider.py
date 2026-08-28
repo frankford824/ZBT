@@ -83,6 +83,20 @@ class OpenAICompatibleProvider:
             return False
         return True
 
+    def list_models(self) -> list[str]:
+        payload = self._get_json("/models")
+        data = payload.get("data")
+        if not isinstance(data, list):
+            return []
+        models: set[str] = set()
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id")
+            if isinstance(model_id, str) and model_id.strip():
+                models.add(model_id.strip())
+        return sorted(models)
+
     def complete(self, prompt: str) -> str:
         data = self._post_json(
             "/chat/completions",
@@ -255,6 +269,23 @@ class OpenAICompatibleProvider:
             self._base_url() + path,
             data=body,
             method="POST",
+            headers=self._headers(),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout()) as response:
+                parsed = json.loads(_read_limited_response(response, self._max_response_bytes()).decode("utf-8"))
+                if not isinstance(parsed, dict):
+                    raise RuntimeError(f"{self.name} {path} returned non-object JSON")
+                return parsed
+        except OpenAICompatibleResponseTooLargeError as exc:
+            raise RuntimeError(f"{self.name} {path} response is too large") from exc
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(f"{self.name} {path} returned HTTP {exc.code}") from exc
+
+    def _get_json(self, path: str) -> dict[str, Any]:
+        req = urllib.request.Request(
+            self._base_url() + path,
+            method="GET",
             headers=self._headers(),
         )
         try:

@@ -111,6 +111,7 @@ var routeSpecs = []routeSpec{
 	{"GET", "/ai-config", "team", false},
 	{"PUT", "/ai-config", "team", false},
 	{"POST", "/ai-config/health-check", "team", false},
+	{"GET", "/ai-config/models", "team", false},
 	{"GET", "/tenders", "tender", false},
 	{"POST", "/tenders", "tender", false},
 	{"GET", "/tenders/:id", "tender", false},
@@ -718,6 +719,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.GET("/ai-config", rbac.Require("team", rbac.LevelRead), s.getAIConfig)
 	group.PUT("/ai-config", rbac.Require("team", rbac.LevelFull), s.upsertAIConfig)
 	group.POST("/ai-config/health-check", rbac.Require("team", rbac.LevelRead), s.checkAIConfig)
+	group.GET("/ai-config/models", rbac.Require("team", rbac.LevelRead), s.listAIProviderModels)
 	group.GET("/notifications", rbac.Require("team", rbac.LevelRead), s.listNotifications)
 	group.GET("/knowledge", rbac.Require("knowledge", rbac.LevelRead), s.knowledgeHome)
 	group.GET("/knowledge/categories", rbac.Require("knowledge", rbac.LevelRead), s.listKnowledgeCategories)
@@ -824,6 +826,7 @@ func customRouteSet() map[string]bool {
 		"GET /ai-config":                                    true,
 		"PUT /ai-config":                                    true,
 		"POST /ai-config/health-check":                      true,
+	"GET /ai-config/models":                             true,
 		"GET /notifications":                                true,
 		"GET /tenders":                                      true,
 		"POST /tenders":                                     true,

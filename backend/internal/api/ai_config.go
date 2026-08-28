@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"sort"
 	"strings"
 	"time"
@@ -81,6 +82,14 @@ type aiConfigCheck struct {
 	Message string `json:"message"`
 }
 
+type aiAvailableModels struct {
+	Provider  string    `json:"provider"`
+	Models    []string  `json:"models"`
+	Reachable bool      `json:"reachable"`
+	Error     string    `json:"error"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
 type aiRuntimeSnapshot struct {
 	Status               string            `json:"status"`
 	Providers            map[string]bool   `json:"providers"`
@@ -118,6 +127,75 @@ func (s *server) checkAIConfig(c *gin.Context) {
 	}
 	runtime := s.aiRuntimeStatus(c.Request.Context(), config)
 	respond(c, aiConfigCheckResult{Runtime: runtime, Checks: aiReadinessChecks(config, runtime)}, nil)
+}
+
+func (s *server) listAIProviderModels(c *gin.Context) {
+	provider := strings.TrimSpace(c.Query("provider"))
+	if provider == "" {
+		respond(c, nil, fmt.Errorf("%w: provider 不能为空", aiconfig.ErrInvalidRequest))
+		return
+	}
+	if !aiProviderInCatalog(provider) {
+		respond(c, nil, fmt.Errorf("%w: 未知的服务 %s", aiconfig.ErrInvalidRequest, provider))
+		return
+	}
+	result, err := s.fetchAvailableModels(c.Request.Context(), provider)
+	if err != nil {
+		respond(c, aiAvailableModels{
+			Provider:  provider,
+			Models:    []string{},
+			Reachable: false,
+			Error:     "智能服务暂不可达",
+			CheckedAt: time.Now().UTC(),
+		}, nil)
+		return
+	}
+	respond(c, result, nil)
+}
+
+func aiProviderInCatalog(provider string) bool {
+	for _, option := range aiconfig.ProviderCatalog() {
+		if option.ProviderKey == provider {
+			return true
+		}
+	}
+	for _, option := range aiconfig.OCRCatalog() {
+		if option.ProviderKey == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) fetchAvailableModels(ctx context.Context, provider string) (aiAvailableModels, error) {
+	// Probing a third-party endpoint is slower than the local health snapshot.
+	callCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	endpoint := strings.TrimRight(s.cfg.AIServiceURL, "/") + "/models/available?provider=" + neturl.QueryEscape(provider)
+	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return aiAvailableModels{}, err
+	}
+	aihttp.Sign(req, nil, s.cfg.AIServiceHMACSecret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return aiAvailableModels{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return aiAvailableModels{}, fmt.Errorf("AI service returned HTTP %d", resp.StatusCode)
+	}
+	var payload aiAvailableModels
+	if err := aihttp.DecodeJSONLimit(resp.Body, &payload, 256*1024); err != nil {
+		return aiAvailableModels{}, err
+	}
+	if payload.Models == nil {
+		payload.Models = []string{}
+	}
+	if payload.CheckedAt.IsZero() {
+		payload.CheckedAt = time.Now().UTC()
+	}
+	return payload, nil
 }
 
 func (s *server) aiConfigOverview(ctx context.Context, tenantID string) (aiConfigOverview, error) {

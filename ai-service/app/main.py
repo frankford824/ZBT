@@ -237,6 +237,39 @@ async def model_health() -> dict[str, object]:
     }
 
 
+@app.get("/models/available")
+async def available_models(provider: str = "") -> dict[str, object]:
+    name = provider.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="provider is required")
+    try:
+        models = router.list_models(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {name}")
+    except Exception as exc:  # noqa: BLE001 - a probe failure is a result, not a server fault.
+        return {
+            "provider": name,
+            "models": [],
+            "reachable": False,
+            "error": _truncate_probe_error(str(exc)),
+            "checked_at": datetime.now(UTC).isoformat(),
+        }
+    return {
+        "provider": name,
+        "models": models,
+        "reachable": True,
+        "error": "",
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def _truncate_probe_error(message: str, limit: int = 300) -> str:
+    collapsed = " ".join(message.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit] + "…"
+
+
 def _active_runtime_model_set(ocr_provider: str, ocr_endpoint: str) -> dict[str, str]:
     llm = _runtime_route_target("chapter_generate")
     embedding = _runtime_route_target("knowledge_embedding")

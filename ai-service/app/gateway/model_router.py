@@ -23,6 +23,9 @@ class LocalPipelineProvider:
     def health_check(self) -> bool:
         return True
 
+    def list_models(self) -> list[str]:
+        return []
+
     def bind(self, target: Any) -> "LocalPipelineProvider":
         _ = target
         return self
@@ -178,6 +181,18 @@ class ModelRouter:
 
     def health_check(self) -> dict[str, bool]:
         return {name: provider.health_check() for name, provider in self.providers.items()}
+
+    def provider_names(self) -> list[str]:
+        return sorted(self.providers.keys())
+
+    def list_models(self, provider_name: str) -> list[str]:
+        provider = self.providers.get(provider_name)
+        if provider is None:
+            raise KeyError(provider_name)
+        lister = getattr(provider, "list_models", None)
+        if not callable(lister):
+            return []
+        return list(lister())
 
     def runtime_route_target(self, task_type: str, tenant_id: str = "runtime-status") -> RouteTarget | None:
         try:

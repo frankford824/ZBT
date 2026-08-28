@@ -6,16 +6,21 @@ import {
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
+  QuestionCircleOutlined,
   RobotOutlined,
   SettingOutlined,
+  SyncOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import {
+  Alert,
   App as AntApp,
+  AutoComplete,
   Button,
   Col,
+  Collapse,
   Form,
   Input,
   InputNumber,
@@ -28,7 +33,9 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
+  type FormInstance,
 } from 'antd'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -39,6 +46,7 @@ import {
   deleteMember,
   fetchAICallLogs,
   fetchAIConfig,
+  fetchAvailableModels,
   fetchApprovalChains,
   fetchApprovals,
   fetchExternalToolAuditLogs,
@@ -55,6 +63,7 @@ import {
   updateExternalToolConfig,
   updateMember,
   updateApprovalChain,
+  type AIAvailableModelsDTO,
   type AIConfigCheckResultDTO,
   type AIConfigDTO,
   type AIConfigOverviewDTO,
@@ -469,7 +478,7 @@ function externalToolFormValues(preset: ExternalToolProviderPresetDTO, config?: 
 }
 
 export function TeamPage() {
-  const { message } = AntApp.useApp()
+  const { message, modal } = AntApp.useApp()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = normalizeTeamTab(searchParams.get('tab'))
@@ -736,10 +745,189 @@ export function TeamPage() {
     setExternalToolOpen(true)
   }
 
+  const confirmFallbackEnabled = () => {
+    modal.confirm({
+      title: '确认允许演练回退？',
+      content:
+        '开启后，模型服务调不通时系统会返回预置的示例内容，而不是报错。这些内容看起来像正常结果，但不是对你文件的真实分析，容易被当成可用结论提交出去。',
+      okText: '我了解，仍然开启',
+      okButtonProps: { danger: true },
+      cancelText: '保持关闭',
+      onCancel: () => aiConfigForm.setFieldValue('mock_fallback_allowed', false),
+    })
+  }
+
   const renderAIConfigCenter = () => {
     if (aiConfigQuery.isLoading) return <LoadingBlock />
     if (aiConfigQuery.isError || !aiConfigQuery.data) return <ErrorBlock />
     const overview = aiConfigQuery.data
+    const advancedPanels = [
+      {
+        key: 'routes',
+        label: '能力路由',
+        extra: <Typography.Text type="secondary">每项功能实际用了哪个模型</Typography.Text>,
+        children: (
+          <Table
+            rowKey="task_type"
+            dataSource={overview.runtime.routes}
+            pagination={false}
+            scroll={{ x: 920 }}
+            columns={[
+              { title: '能力', dataIndex: 'name', width: 150 },
+              { title: '用途', dataIndex: 'capability', width: 120 },
+              {
+                title: '当前使用',
+                width: 260,
+                render: (_, row) =>
+                  row.track === 'ocr'
+                    ? formatOCRProvider(row.active_provider, overview)
+                    : formatProviderModel(row.active_provider, row.active_model, overview),
+              },
+              {
+                title: '保存配置',
+                width: 260,
+                render: (_, row) =>
+                  row.track === 'ocr'
+                    ? formatOCRProvider(row.saved_provider, overview)
+                    : formatProviderModel(row.saved_provider, row.saved_model, overview),
+              },
+              {
+                title: '状态',
+                width: 100,
+                render: (_, row) => aiRouteStatusTag(row, overview.config.enabled),
+              },
+            ]}
+          />
+        ),
+      },
+      {
+        key: 'pricing',
+        label: '费用估算',
+        // Keep mounted so the pricing rows survive a save while the panel is collapsed.
+        forceRender: true,
+        extra: <Typography.Text type="secondary">不填则费用显示为 0</Typography.Text>,
+        children: (
+          <Form.List name="pricing_items">
+            {(fields, { add, remove }) => (
+              <Space direction="vertical" size={8} className="full-width">
+                {fields.map((field) => (
+                  <Row key={field.key} gutter={[8, 0]} className="ai-config-pricing-row">
+                    <Col xs={24} md={7}>
+                      <Form.Item
+                        {...field}
+                        label="计费对象"
+                        name={[field.name, 'key']}
+                        rules={[{ required: true, message: '请输入计费对象' }]}
+                      >
+                        <Input placeholder="provider/model 或 provider/*" disabled={!canWrite} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={5}>
+                      <Form.Item {...field} label="显示名称" name={[field.name, 'display_name']}>
+                        <Input placeholder="模型名称" disabled={!canWrite} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Form.Item {...field} label="输入/百万" name={[field.name, 'input_per_1m']}>
+                        <InputNumber
+                          min={0}
+                          max={MAX_AI_MODEL_RATE}
+                          step={0.01}
+                          className="full-width"
+                          disabled={!canWrite}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Form.Item {...field} label="输出/百万" name={[field.name, 'output_per_1m']}>
+                        <InputNumber
+                          min={0}
+                          max={MAX_AI_MODEL_RATE}
+                          step={0.01}
+                          className="full-width"
+                          disabled={!canWrite}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={16} md={2}>
+                      <Form.Item {...field} label="币种" name={[field.name, 'currency']}>
+                        <Select
+                          disabled={!canWrite}
+                          options={[
+                            { value: 'CNY', label: 'CNY' },
+                            { value: 'USD', label: 'USD' },
+                          ]}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={8} md={2}>
+                      <Form.Item label="操作">
+                        <Button danger disabled={!canWrite} onClick={() => remove(field.name)}>
+                          删除
+                        </Button>
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                ))}
+                <Button disabled={!canWrite} icon={<PlusOutlined />} onClick={() => add({ currency: 'CNY' })}>
+                  添加单价
+                </Button>
+              </Space>
+            )}
+          </Form.List>
+        ),
+      },
+      {
+        key: 'secrets',
+        label: '授权状态',
+        extra: <Typography.Text type="secondary">密钥由服务器配置，此处只读</Typography.Text>,
+        children: (
+          <Table
+            rowKey="key"
+            dataSource={overview.runtime.secrets}
+            pagination={false}
+            scroll={{ x: 620 }}
+            columns={[
+              { title: '授权项', dataIndex: 'name', width: 220 },
+              {
+                title: '状态',
+                dataIndex: 'configured',
+                width: 100,
+                render: (configured) => (configured ? <Tag color="green">已配置</Tag> : <Tag>未配置</Tag>),
+              },
+              {
+                title: '适用服务',
+                dataIndex: 'provider',
+                width: 200,
+                render: (provider) => (provider === 'ocr' ? '扫描件识别' : formatAIProvider(provider, overview)),
+              },
+            ]}
+          />
+        ),
+      },
+      {
+        key: 'usage',
+        label: '本月用量',
+        children: (
+          <Table
+            rowKey={(row) => `${row.provider}/${row.model}`}
+            dataSource={overview.summary.provider_usage}
+            pagination={false}
+            locale={{ emptyText: <EmptyBlock /> }}
+            scroll={{ x: 720 }}
+            columns={[
+              {
+                title: '服务',
+                width: 240,
+                render: (_, row) => formatProviderModel(row.provider, row.model, overview),
+              },
+              { title: '调用次数', dataIndex: 'calls', width: 100 },
+              { title: '预估费用', dataIndex: 'estimated_cost', width: 120, render: formatEstimatedCost },
+            ]}
+          />
+        ),
+      },
+    ]
     return (
       <Space direction="vertical" size={16} className="full-width">
         <div className="ai-config-summary-grid">
@@ -782,10 +970,21 @@ export function TeamPage() {
           form={aiConfigForm}
           layout="vertical"
           onFinish={aiConfigMutation.mutate}
-          onValuesChange={() => setAIConfigCheckResult(null)}
+          onValuesChange={(changed) => {
+            setAIConfigCheckResult(null)
+            if (changed.mock_fallback_allowed === true) {
+              confirmFallbackEnabled()
+            }
+          }}
         >
           <Space direction="vertical" size={16} className="full-width">
             <Typography.Title level={4}>能力选择</Typography.Title>
+            <Alert
+              type="info"
+              showIcon
+              message="先选服务，再读模型"
+              description="选定服务后点模型框旁的「读取可用模型」，系统会去问这家服务现在提供哪些模型，不用手记模型名称。改完先「保存配置」，再「检查配置」确认能正常调用。"
+            />
             <Row gutter={[16, 0]}>
               <Col xs={24} md={8}>
                 <Form.Item label="启用保存配置" name="enabled" valuePropName="checked">
@@ -805,7 +1004,19 @@ export function TeamPage() {
                 </Form.Item>
               </Col>
               <Col xs={24} md={8}>
-                <Form.Item label="允许演练回退" name="mock_fallback_allowed" valuePropName="checked">
+                <Form.Item
+                  label={
+                    <Space size={4}>
+                      <span>允许演练回退</span>
+                      <Tooltip title="模型服务调不通时，系统改用预置的示例内容顶上，让流程能继续走完。这些内容不是真实分析结果。">
+                        <QuestionCircleOutlined />
+                      </Tooltip>
+                    </Space>
+                  }
+                  name="mock_fallback_allowed"
+                  valuePropName="checked"
+                  extra="正式使用建议保持关闭，否则可能把示例内容当成真实结论"
+                >
                   <Switch disabled={!canWrite} />
                 </Form.Item>
               </Col>
@@ -818,9 +1029,15 @@ export function TeamPage() {
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
-                <Form.Item label="文件理解模型" name="llm_model" rules={[{ required: true, message: '请输入模型名称' }]}>
-                  <Input placeholder="gpt-4o-mini" disabled={!canWrite} />
-                </Form.Item>
+                <ModelField
+                  form={aiConfigForm}
+                  label="文件理解模型"
+                  name="llm_model"
+                  providerField="llm_provider"
+                  placeholder="gpt-4o-mini"
+                  purpose="用于读招标文件、拆解要求、起草章节"
+                  disabled={!canWrite}
+                />
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item label="资料整理服务" name="embedding_provider" rules={[{ required: true, message: '请选择服务' }]}>
@@ -828,9 +1045,15 @@ export function TeamPage() {
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
-                <Form.Item label="资料整理模型" name="embedding_model" rules={[{ required: true, message: '请输入模型名称' }]}>
-                  <Input placeholder="text-embedding-3-large" disabled={!canWrite} />
-                </Form.Item>
+                <ModelField
+                  form={aiConfigForm}
+                  label="资料整理模型"
+                  name="embedding_model"
+                  providerField="embedding_provider"
+                  placeholder="text-embedding-v3"
+                  purpose="把知识库资料转成可检索的向量，换模型需重新入库"
+                  disabled={!canWrite}
+                />
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item label="资料匹配服务" name="rerank_provider" rules={[{ required: true, message: '请选择服务' }]}>
@@ -838,9 +1061,15 @@ export function TeamPage() {
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
-                <Form.Item label="资料匹配模型" name="rerank_model" rules={[{ required: true, message: '请输入模型名称' }]}>
-                  <Input placeholder="gpt-4o-mini" disabled={!canWrite} />
-                </Form.Item>
+                <ModelField
+                  form={aiConfigForm}
+                  label="资料匹配模型"
+                  name="rerank_model"
+                  providerField="rerank_provider"
+                  placeholder="gte-rerank"
+                  purpose="在检索结果里挑出最相关的段落"
+                  disabled={!canWrite}
+                />
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item label="扫描件识别服务" name="ocr_provider" rules={[{ required: true, message: '请选择服务' }]}>
@@ -853,132 +1082,6 @@ export function TeamPage() {
                 </Form.Item>
               </Col>
             </Row>
-
-            <Typography.Title level={4}>能力路由</Typography.Title>
-            <Table
-              rowKey="task_type"
-              dataSource={overview.runtime.routes}
-              pagination={false}
-              scroll={{ x: 920 }}
-              columns={[
-                { title: '能力', dataIndex: 'name', width: 150 },
-                { title: '用途', dataIndex: 'capability', width: 120 },
-                {
-                  title: '当前使用',
-                  width: 260,
-                  render: (_, row) =>
-                    row.track === 'ocr'
-                      ? formatOCRProvider(row.active_provider, overview)
-                      : formatProviderModel(row.active_provider, row.active_model, overview),
-                },
-                {
-                  title: '保存配置',
-                  width: 260,
-                  render: (_, row) =>
-                    row.track === 'ocr'
-                      ? formatOCRProvider(row.saved_provider, overview)
-                      : formatProviderModel(row.saved_provider, row.saved_model, overview),
-                },
-                {
-                  title: '状态',
-                  width: 100,
-                  render: (_, row) => aiRouteStatusTag(row, overview.config.enabled),
-                },
-              ]}
-            />
-
-            <Typography.Title level={4}>费用估算</Typography.Title>
-            <Form.List name="pricing_items">
-              {(fields, { add, remove }) => (
-                <Space direction="vertical" size={8} className="full-width">
-                  {fields.map((field) => (
-                    <Row key={field.key} gutter={[8, 0]} className="ai-config-pricing-row">
-                      <Col xs={24} md={7}>
-                        <Form.Item
-                          {...field}
-                          label="计费对象"
-                          name={[field.name, 'key']}
-                          rules={[{ required: true, message: '请输入计费对象' }]}
-                        >
-                          <Input placeholder="provider/model 或 provider/*" disabled={!canWrite} />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={24} md={5}>
-                        <Form.Item {...field} label="显示名称" name={[field.name, 'display_name']}>
-                          <Input placeholder="模型名称" disabled={!canWrite} />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={12} md={4}>
-                        <Form.Item {...field} label="输入/百万" name={[field.name, 'input_per_1m']}>
-                          <InputNumber
-                            min={0}
-                            max={MAX_AI_MODEL_RATE}
-                            step={0.01}
-                            className="full-width"
-                            disabled={!canWrite}
-                          />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={12} md={4}>
-                        <Form.Item {...field} label="输出/百万" name={[field.name, 'output_per_1m']}>
-                          <InputNumber
-                            min={0}
-                            max={MAX_AI_MODEL_RATE}
-                            step={0.01}
-                            className="full-width"
-                            disabled={!canWrite}
-                          />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={16} md={2}>
-                        <Form.Item {...field} label="币种" name={[field.name, 'currency']}>
-                          <Select
-                            disabled={!canWrite}
-                            options={[
-                              { value: 'CNY', label: 'CNY' },
-                              { value: 'USD', label: 'USD' },
-                            ]}
-                          />
-                        </Form.Item>
-                      </Col>
-                      <Col xs={8} md={2}>
-                        <Form.Item label="操作">
-                          <Button danger disabled={!canWrite} onClick={() => remove(field.name)}>
-                            删除
-                          </Button>
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                  ))}
-                  <Button disabled={!canWrite} icon={<PlusOutlined />} onClick={() => add({ currency: 'CNY' })}>
-                    添加单价
-                  </Button>
-                </Space>
-              )}
-            </Form.List>
-
-            <Typography.Title level={4}>授权状态</Typography.Title>
-            <Table
-              rowKey="key"
-              dataSource={overview.runtime.secrets}
-              pagination={false}
-              scroll={{ x: 620 }}
-              columns={[
-                { title: '授权项', dataIndex: 'name', width: 220 },
-                {
-                  title: '状态',
-                  dataIndex: 'configured',
-                  width: 100,
-                  render: (configured) => (configured ? <Tag color="green">已配置</Tag> : <Tag>未配置</Tag>),
-                },
-                {
-                  title: '适用服务',
-                  dataIndex: 'provider',
-                  width: 200,
-                  render: (provider) => (provider === 'ocr' ? '扫描件识别' : formatAIProvider(provider, overview)),
-                },
-              ]}
-            />
 
             {aiConfigCheckResult ? (
               <>
@@ -997,23 +1100,7 @@ export function TeamPage() {
               </>
             ) : null}
 
-            <Typography.Title level={4}>本月用量</Typography.Title>
-            <Table
-              rowKey={(row) => `${row.provider}/${row.model}`}
-              dataSource={overview.summary.provider_usage}
-              pagination={false}
-              locale={{ emptyText: <EmptyBlock /> }}
-              scroll={{ x: 720 }}
-              columns={[
-                {
-                  title: '服务',
-                  width: 240,
-                  render: (_, row) => formatProviderModel(row.provider, row.model, overview),
-                },
-                { title: '调用次数', dataIndex: 'calls', width: 100 },
-                { title: '预估费用', dataIndex: 'estimated_cost', width: 120, render: formatEstimatedCost },
-              ]}
-            />
+            <Collapse items={advancedPanels} />
 
             <Space wrap>
               <Button
@@ -1598,5 +1685,75 @@ export function TeamPage() {
         </Form>
       </Modal>
     </PageFrame>
+  )
+}
+
+type ModelFieldProps = {
+  form: FormInstance
+  label: string
+  name: string
+  providerField: string
+  placeholder: string
+  purpose: string
+  disabled: boolean
+}
+
+function ModelField({ form, label, name, providerField, placeholder, purpose, disabled }: ModelFieldProps) {
+  const { message } = AntApp.useApp()
+  const provider = Form.useWatch<string | undefined>(providerField, form)
+  const [probe, setProbe] = useState<AIAvailableModelsDTO | null>(null)
+
+  useEffect(() => {
+    setProbe(null)
+  }, [provider])
+
+  const probeMutation = useMutation({
+    mutationFn: () => fetchAvailableModels(provider ?? ''),
+    onSuccess: (result) => {
+      setProbe(result)
+      if (!result.reachable) {
+        message.warning(`读取模型清单失败：${result.error || '服务未响应'}`)
+        return
+      }
+      if (result.models.length === 0) {
+        message.info('该服务没有返回模型清单，请手动填写模型名称')
+        return
+      }
+      message.success(`该服务当前可用 ${result.models.length} 个模型`)
+    },
+    onError: (error) => message.error(getApiErrorMessage(error)),
+  })
+
+  const localProvider = provider === 'local' || provider === 'mock'
+  const options = useMemo(() => (probe?.models ?? []).map((model) => ({ value: model })), [probe])
+  const readModels = probe?.reachable && probe.models.length > 0
+
+  return (
+    <Form.Item
+      label={
+        <Space size={4}>
+          <span>{label}</span>
+          <Button
+            size="small"
+            type="link"
+            icon={<SyncOutlined spin={probeMutation.isPending} />}
+            disabled={disabled || localProvider || !provider || probeMutation.isPending}
+            onClick={() => probeMutation.mutate()}
+          >
+            读取可用模型
+          </Button>
+        </Space>
+      }
+      name={name}
+      rules={[{ required: true, message: '请填写模型名称' }]}
+      extra={readModels ? `已读取 ${probe.models.length} 个可用模型，点开输入框选择` : purpose}
+    >
+      <AutoComplete
+        options={options}
+        placeholder={placeholder}
+        disabled={disabled}
+        filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+      />
+    </Form.Item>
   )
 }
