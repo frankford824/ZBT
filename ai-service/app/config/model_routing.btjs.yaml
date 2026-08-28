@@ -1,0 +1,164 @@
+# btjs 部署使用的模型路由：全部指向阿里云百炼实测可用的真实模型，不使用 mock。
+# 端点由 OPENAI_BASE_URL 指定（百炼专属部署，兼容 OpenAI 协议）。
+#
+# 实测结论（2026-08-27，btjs 上直连百炼）：
+# - qwen3.8-flash / qwen3.7-flash / qwen3.8-27b / glm-5.2 / deepseek-v4-flash-0731
+#   均可正常返回，finish_reason=stop，content 为干净 JSON；qwen3.8-flash 额外支持
+#   response_format=json_object，且思维链最短，故作为各路由主力。
+# - text-embedding-v3 / v4 / qwen3.7-text-embedding 输出均为 1024 维，
+#   与 knowledge_chunks.embedding vector(1024) 一致。
+# - qwen-plus、qwen-vl-ocr 受账号「仅用免费额度」限制被拒，未采用。
+#
+# fallback 一律指向另一个真实模型而非 mock：主力不可用时降级到备用模型，
+# 而不是返回伪造结果。document_ocr 仍走 local，实际 OCR provider 由
+# OCR_PROVIDER 系列环境变量决定，尚未接入时会明确报错而不是静默造假。
+providers:
+  local:
+    type: local
+  openai_compatible_primary:
+    type: openai_compatible
+    base_url_env: OPENAI_BASE_URL
+    api_key_env: OPENAI_API_KEY
+    default_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  dashscope:
+    type: openai_compatible
+    base_url_env: DASHSCOPE_BASE_URL
+    api_key_env: DASHSCOPE_API_KEY
+  deepseek:
+    type: openai_compatible
+    base_url_env: DEEPSEEK_BASE_URL
+    api_key_env: DEEPSEEK_API_KEY
+
+routes:
+  tender_parse:
+    primary:
+      provider: openai_compatible_primary
+      model: qwen3.8-flash
+      temperature: 0.1
+      output: json
+      schema: TenderParseModuleResult
+      timeout_s: 180
+    fallback:
+      - provider: openai_compatible_primary
+        model: deepseek-v4-flash-0731
+        temperature: 0.1
+        output: json
+        schema: TenderParseModuleResult
+        timeout_s: 180
+  outline_generate:
+    primary:
+      provider: openai_compatible_primary
+      model: qwen3.8-flash
+      temperature: 0.2
+      output: json
+      schema: BidOutline
+    fallback:
+      - provider: openai_compatible_primary
+        model: deepseek-v4-flash-0731
+        temperature: 0.2
+        output: json
+        schema: BidOutline
+  knowledge_embedding:
+    primary:
+      provider: openai_compatible_primary
+      model: text-embedding-v3
+      dimensions: 1024
+    fallback:
+      - provider: openai_compatible_primary
+        model: text-embedding-v4
+        dimensions: 1024
+  knowledge_process:
+    primary:
+      provider: local
+      model: configurable-document-processing-pipeline
+      output: json
+      schema: KnowledgeProcessTask
+      timeout_s: 300
+  document_ocr:
+    primary:
+      provider: local
+      model: configurable-ocr-provider-pipeline
+      output: json
+      schema: OCRProviderResult
+      timeout_s: 300
+  knowledge_rerank:
+    primary:
+      provider: openai_compatible_primary
+      model: qwen3.8-flash
+      top_k_input: 30
+      top_k_output: 8
+    fallback:
+      - provider: openai_compatible_primary
+        model: deepseek-v4-flash-0731
+        top_k_input: 30
+        top_k_output: 8
+  chapter_generate:
+    primary:
+      provider: openai_compatible_primary
+      model: deepseek-v4-flash-0731
+      temperature: 0.3
+      stream: true
+      require_source_refs: true
+    fallback:
+      - provider: openai_compatible_primary
+        model: qwen3.8-flash
+        temperature: 0.3
+        stream: true
+        require_source_refs: true
+  chapter_self_check:
+    primary:
+      provider: openai_compatible_primary
+      model: qwen3.8-flash
+      temperature: 0.0
+      output: json
+      schema: ChapterSelfCheckResult
+    fallback:
+      - provider: openai_compatible_primary
+        model: qwen3.8-27b
+        temperature: 0.0
+        output: json
+        schema: ChapterSelfCheckResult
+  compliance_check:
+    primary:
+      provider: openai_compatible_primary
+      model: deepseek-v4-flash-0731
+      temperature: 0.0
+      output: json
+      schema: ComplianceIssueList
+    fallback:
+      - provider: openai_compatible_primary
+        model: qwen3.8-flash
+        temperature: 0.0
+        output: json
+        schema: ComplianceIssueList
+  rewrite_assistant:
+    primary:
+      provider: openai_compatible_primary
+      model: qwen3.8-flash
+      temperature: 0.4
+      stream: true
+    fallback:
+      - provider: openai_compatible_primary
+        model: qwen3.7-flash
+        temperature: 0.4
+        stream: true
+  cost_advice:
+    primary:
+      provider: openai_compatible_primary
+      model: qwen3.8-flash
+      temperature: 0.2
+      output: json
+    fallback:
+      - provider: openai_compatible_primary
+        model: qwen3.8-27b
+        temperature: 0.2
+        output: json
+  document_export:
+    primary:
+      provider: local
+      model: docx-export-engine
+
+quotas:
+  default_tenant_monthly_budget: 500
+  currency: CNY
+  on_exceed: downgrade_then_block

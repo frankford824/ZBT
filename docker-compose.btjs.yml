@@ -1,0 +1,90 @@
+# btjs 局域网服务器部署覆盖层。
+# 与 docker-compose.yml 叠加使用：
+#   docker compose -f docker-compose.yml -f docker-compose.btjs.yml up -d
+#
+# 三处与本机开发环境的差异：
+# 1. 镜像走 daocloud 源 —— btjs 直连 Docker Hub 超时。
+# 2. 5432/6379 已被同机的 asset_pipeline_service 占用，全部改高位端口。
+#    ports 必须带 !override，否则 Compose 会在原端口之上追加而不是替换。
+# 3. 除前端与 MinIO 对象读取外，其余端口只绑回环，不对外暴露。
+services:
+  postgres:
+    image: docker.m.daocloud.io/pgvector/pgvector:pg16
+    container_name: zbt-db
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_PASSWORD: ${POSTGRES_SUPER_PASSWORD}
+    ports: !override
+      - "127.0.0.1:15432:5432"
+
+  redis:
+    # daocloud 源缺 redis:7-alpine，改用同机 asset-redis 已在用的 redis:7
+    image: docker.m.daocloud.io/library/redis:7
+    container_name: zbt-redis
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports: !override
+      - "127.0.0.1:16379:6379"
+
+  minio:
+    image: docker.m.daocloud.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: zbt-minio
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports: !override
+      # 预签名下载链接由浏览器直连，需对外可达（局域网 + Tailscale）
+      - "0.0.0.0:19000:9000"
+      - "127.0.0.1:19001:9001"
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+    container_name: zbt-backend
+    restart: unless-stopped
+    environment:
+      ZIZHI_API_URL: ${ZIZHI_API_URL:-}
+      ZIZHI_API_KEY: ${ZIZHI_API_KEY:-}
+      TZ: Asia/Shanghai
+      APP_ENV: production
+      JWT_SECRET: ${JWT_SECRET}
+      MIGRATION_DATABASE_URL: postgres://zbt:${POSTGRES_SUPER_PASSWORD}@postgres:5432/zbt?sslmode=disable
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID}
+    ports: !override
+      - "127.0.0.1:18080:8080"
+
+  ai-service:
+    build:
+      context: ./ai-service
+      args:
+        BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+    container_name: zbt-ai
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      # 不设 APP_ENV=production：其 production 校验要求 OCR provider 也就绪，
+      # 而 ZBT 的 OCR 走自定义 JSON+base64 协议，与 btjs 上 MinerU 的 multipart 接口
+      # 不兼容，需另写适配层。LLM / embedding / rerank 三条通道均已指向真实模型。
+    volumes:
+      # 用 btjs 专用路由表覆盖镜像内默认表（默认表指向 gpt-4o-mini 且 fallback 为 mock）
+      - ./ai-service/app/config/model_routing.btjs.yaml:/app/app/config/model_routing.yaml:ro
+    ports: !override
+      - "127.0.0.1:18000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+    container_name: zbt-frontend
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports: !override
+      - "0.0.0.0:8080:80"

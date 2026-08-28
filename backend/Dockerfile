@@ -1,4 +1,5 @@
-FROM golang:1.25-alpine AS build
+ARG BASE_IMAGE_REGISTRY=
+FROM ${BASE_IMAGE_REGISTRY}golang:1.25-alpine AS build
 
 WORKDIR /src
 ENV GOTOOLCHAIN=local
@@ -9,7 +10,7 @@ RUN go mod download
 COPY . .
 RUN go build -o /out/zbt-backend ./cmd/server
 
-FROM alpine:3.22
+FROM ${BASE_IMAGE_REGISTRY}alpine:3.22
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=build /out/zbt-backend /app/zbt-backend

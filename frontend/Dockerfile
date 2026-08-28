@@ -1,4 +1,5 @@
-FROM node:22-alpine AS build
+ARG BASE_IMAGE_REGISTRY=
+FROM ${BASE_IMAGE_REGISTRY}node:22-alpine AS build
 
 WORKDIR /src
 ARG VITE_API_BASE_URL=/api/v1
@@ -11,7 +12,7 @@ RUN npm config set registry https://registry.npmmirror.com \
 COPY frontend ./
 RUN pnpm build
 
-FROM nginx:1.29-alpine
+FROM ${BASE_IMAGE_REGISTRY}nginx:1.29-alpine
 COPY --from=build /src/dist /usr/share/nginx/html
 COPY infra/nginx/default.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

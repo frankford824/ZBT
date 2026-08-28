@@ -14,3 +14,4 @@ __pycache__/
 tmp/
 .wrangler/
 docs/ex/
+.codex_doc_review_admin/
