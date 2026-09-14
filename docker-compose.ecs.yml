@@ -53,6 +53,7 @@ services:
       context: ./ai-service
       args:
         BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+        DEBIAN_MIRROR: https://mirrors.aliyun.com
     container_name: zbt-dev-ai
     restart: unless-stopped
     environment:
