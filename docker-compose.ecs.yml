@@ -60,10 +60,35 @@ services:
     environment:
       TZ: Asia/Shanghai
       APP_ENV: development
+      OCR_PROVIDER: http_ocr
+      OCR_HTTP_ENDPOINT: http://ocr-service:8001/parse
+      OCR_API_KEY: ${OCR_API_KEY}
     volumes:
       - ./ai-service/app/config/model_routing.btjs.yaml:/app/app/config/model_routing.yaml:ro
     ports: !override
       - "127.0.0.1:18000:8000"
+
+  ocr-service:
+    image: zbt-dev-ai-service:latest
+    container_name: zbt-dev-ocr
+    command: uvicorn app.ocr_bridge:app --host 0.0.0.0 --port 8001
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      OCR_BRIDGE_API_KEY: ${OCR_API_KEY}
+      OCR_BRIDGE_MODEL: qwen-vl-ocr
+      OCR_BRIDGE_TIMEOUT_S: 120
+      OCR_BRIDGE_MAX_BYTES: 20971520
+      OCR_BRIDGE_MAX_PAGES: 20
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    ports:
+      - "127.0.0.1:18001:8001"
 
   frontend:
     build:

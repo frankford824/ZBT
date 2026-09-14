@@ -35,6 +35,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           AI_MODEL_PRICING_JSON: ${{ secrets.AI_MODEL_PRICING_JSON }}
+          OCR_API_KEY: ${{ secrets.OCR_API_KEY }}
           DEFAULT_TENANT_ID: ${{ vars.DEFAULT_TENANT_ID }}
           MINIO_PUBLIC_ENDPOINT: ${{ vars.MINIO_PUBLIC_ENDPOINT }}
         run: |
@@ -65,6 +66,8 @@ jobs:
             printf 'OPENAI_BASE_URL=%s\n' "$OPENAI_BASE_URL"
             printf 'AI_MODEL_PRICING_JSON=%s\n' "$AI_MODEL_PRICING_JSON"
             printf 'OCR_PROVIDER=http_ocr\n'
+            printf 'OCR_API_KEY=%s\n' "$OCR_API_KEY"
+            printf 'OCR_HTTP_ENDPOINT=http://ocr-service:8001/parse\n'
             printf 'ZIZHI_API_URL=\n'
             printf 'ZIZHI_API_KEY=\n'
           } > /opt/zbt/.env
@@ -86,10 +89,12 @@ jobs:
         run: |
           curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:18080/healthz
           curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:18000/healthz
+          curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:18001/healthz
           curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:8080/ >/dev/null
           route_status="$(curl --silent --show-error --retry 10 --retry-delay 2 --retry-all-errors --output /tmp/zbt-route-response --write-out '%{http_code}' http://127.0.0.1:8080/api/v1/meta/routes)"
           test "$route_status" = "401"
           grep --quiet 'unauthorized' /tmp/zbt-route-response
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T ai-service python -m app.evaluation.ocr_bridge_smoke
           docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T postgres pg_isready -U zbt -d zbt
           docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T redis redis-cli ping
           docker volume inspect zbt-dev_postgres_data zbt-dev_minio_data >/dev/null
@@ -100,4 +105,4 @@ jobs:
         working-directory: /opt/zbt
         run: |
           docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml ps || true
-          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml logs --tail 120 backend ai-service frontend postgres redis minio || true
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml logs --tail 120 backend ai-service ocr-service frontend postgres redis minio || true

@@ -59,6 +59,26 @@ func (s *server) listCompanyPersonnel(c *gin.Context) {
 	}, err)
 }
 
+func (s *server) createCompanyCertificate(c *gin.Context) {
+	var req qualification.CertificateCreate
+	if !bindJSON(c, &req) {
+		return
+	}
+	result, err := s.qualificationStore.CreateCertificate(c.Request.Context(),
+		tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
+func (s *server) createCompanyPersonnel(c *gin.Context) {
+	var req qualification.PersonnelCreate
+	if !bindJSON(c, &req) {
+		return
+	}
+	result, err := s.qualificationStore.CreatePersonnel(c.Request.Context(),
+		tenant.FromContext(c.Request.Context()), req)
+	respondStatus(c, http.StatusCreated, result, err)
+}
+
 // qualificationSourceStatus 报告资质库（zizhi-api）的连通性与规模。
 // 前端用它决定「同步」按钮是否可点，以及展示上游还有多少文件没进档案。
 func (s *server) qualificationSourceStatus(c *gin.Context) {

@@ -2530,6 +2530,38 @@ export type PersonnelReviewPayload = {
   in_service?: boolean
 }
 
+export type CertificateCreatePayload = {
+  cert_name: string
+  cert_category?: string
+  cert_level?: string
+  cert_no?: string
+  issuer?: string
+  issued_at?: string
+  expires_at?: string
+}
+
+export type PersonnelCreatePayload = {
+  person_name: string
+  cert_type?: string
+  cert_level?: string
+  major?: string
+  reg_no?: string
+  expires_at?: string
+  in_service?: boolean
+}
+
+export async function createCompanyCertificate(
+  payload: CertificateCreatePayload,
+): Promise<CompanyCertificateDTO> {
+  const { data } = await apiClient.post<CompanyCertificateDTO>('/company/certificates', payload)
+  return data
+}
+
+export async function createCompanyPersonnel(payload: PersonnelCreatePayload): Promise<CompanyPersonnelDTO> {
+  const { data } = await apiClient.post<CompanyPersonnelDTO>('/company/personnel', payload)
+  return data
+}
+
 export async function reviewCompanyCertificate(
   id: string,
   payload: CertificateReviewPayload,

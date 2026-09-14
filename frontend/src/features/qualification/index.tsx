@@ -1,4 +1,4 @@
-import { CloudSyncOutlined } from '@ant-design/icons'
+import { CloudSyncOutlined, PlusOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Alert,
@@ -21,6 +21,8 @@ import {
 } from 'antd'
 import { useEffect, useState, type ReactNode } from 'react'
 import {
+  createCompanyCertificate,
+  createCompanyPersonnel,
   fetchCompanyCertificates,
   fetchCompanyPersonnel,
   fetchQualificationSource,
@@ -361,6 +363,116 @@ function PersonnelReviewDrawer({
   )
 }
 
+function ManualCertificateDrawer({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const [form] = Form.useForm()
+  const mutation = useMutation({
+    mutationFn: async () => createCompanyCertificate(await form.validateFields()),
+    onSuccess: () => {
+      message.success('企业资质已新增')
+      form.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['company-certificates'] })
+      onCreated()
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '新增失败')),
+  })
+
+  return (
+    <Drawer
+      open={open}
+      title="手工新增企业资质"
+      width={520}
+      destroyOnClose
+      onClose={onClose}
+      extra={
+        <Button type="primary" loading={mutation.isPending} onClick={() => mutation.mutate()}>
+          保存并确认
+        </Button>
+      }
+    >
+      <Alert type="info" showIcon message="人工录入后直接进入已确认档案" style={{ marginBottom: 16 }} />
+      <Form form={form} layout="vertical">
+        <Form.Item name="cert_name" label="资质名称" rules={[{ required: true, whitespace: true, message: '请填写资质名称' }]}>
+          <Input placeholder="例如：建筑业企业资质证书" />
+        </Form.Item>
+        <Form.Item name="cert_category" label="分类"><Input placeholder="例如：建筑业企业资质" /></Form.Item>
+        <Form.Item name="cert_level" label="等级">
+          <AutoComplete allowClear options={levelSuggestions.map((value) => ({ value }))} />
+        </Form.Item>
+        <Form.Item name="cert_no" label="证书编号"><Input /></Form.Item>
+        <Form.Item name="issuer" label="发证机关"><Input /></Form.Item>
+        <Form.Item name="issued_at" label="发证日期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
+        <Form.Item name="expires_at" label="有效期至"><Input placeholder="YYYY-MM-DD" /></Form.Item>
+      </Form>
+    </Drawer>
+  )
+}
+
+function ManualPersonnelDrawer({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const { message } = AntApp.useApp()
+  const queryClient = useQueryClient()
+  const [form] = Form.useForm()
+  const mutation = useMutation({
+    mutationFn: async () => createCompanyPersonnel(await form.validateFields()),
+    onSuccess: () => {
+      message.success('企业人员已新增')
+      form.resetFields()
+      queryClient.invalidateQueries({ queryKey: ['company-personnel'] })
+      onCreated()
+    },
+    onError: (error) => message.error(getApiErrorMessage(error, '新增失败')),
+  })
+
+  return (
+    <Drawer
+      open={open}
+      title="手工新增企业人员"
+      width={520}
+      destroyOnClose
+      onClose={onClose}
+      extra={
+        <Button type="primary" loading={mutation.isPending} onClick={() => mutation.mutate()}>
+          保存并确认
+        </Button>
+      }
+    >
+      <Alert type="info" showIcon message="人工录入后直接进入已确认档案" style={{ marginBottom: 16 }} />
+      <Form form={form} layout="vertical" initialValues={{ in_service: true }}>
+        <Form.Item name="person_name" label="姓名" rules={[{ required: true, whitespace: true, message: '请填写姓名' }]}>
+          <Input />
+        </Form.Item>
+        <Form.Item name="cert_type" label="持有证件"><Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} /></Form.Item>
+        <Form.Item name="cert_level" label="等级">
+          <AutoComplete allowClear options={levelSuggestions.map((value) => ({ value }))} />
+        </Form.Item>
+        <Form.Item name="major" label="专业"><Input placeholder="例如：市政公用 / 建筑工程 / 机电" /></Form.Item>
+        <Form.Item name="reg_no" label="注册编号"><Input /></Form.Item>
+        <Form.Item name="expires_at" label="最近到期"><Input placeholder="YYYY-MM-DD" /></Form.Item>
+        <Form.Item name="in_service" label="在职状态">
+          <Select options={[{ value: true, label: '在职' }, { value: false, label: '离职' }]} />
+        </Form.Item>
+      </Form>
+    </Drawer>
+  )
+}
+
 function SourceCard() {
   const { message } = AntApp.useApp()
   const queryClient = useQueryClient()
@@ -387,10 +499,10 @@ function SourceCard() {
   if (!data?.configured) {
     return (
       <Alert
-        type="warning"
+        type="info"
         showIcon
-        message="资质库未接入"
-        description={data?.reason || '需要后端配置 ZIZHI_API_URL 与 ZIZHI_API_KEY 后才能同步企业资质。'}
+        message="当前使用手工维护"
+        description="外部资质库暂不接入；可在下方分别新增企业证书和人员档案。"
       />
     )
   }
@@ -442,6 +554,7 @@ function CertificatesTable() {
   const [status, setStatus] = useState('pending_review')
   const [page, setPage] = useState(1)
   const [reviewing, setReviewing] = useState<CompanyCertificateDTO | null>(null)
+  const [creating, setCreating] = useState(false)
   const canReview = useCanAccess('team', 'full')
   const query = useQuery({
     queryKey: ['company-certificates', status, page],
@@ -455,6 +568,11 @@ function CertificatesTable() {
 
   return (
     <Space direction="vertical" size={12} className="full-width">
+      <div style={{ textAlign: 'right' }}>
+        <Button type="primary" icon={<PlusOutlined />} disabled={!canReview} onClick={() => setCreating(true)}>
+          新增企业资质
+        </Button>
+      </div>
       <Tabs
         size="small"
         activeKey={status}
@@ -469,7 +587,7 @@ function CertificatesTable() {
         <ErrorBlock description={getApiErrorMessage(query.error, '资质档案加载失败')} onRetry={() => query.refetch()} />
       ) : null}
       {!query.isLoading && !query.isError && !query.data?.items.length ? (
-        <EmptyBlock description={status === 'confirmed' ? '还没有已确认的资质' : '资质档案为空，先同步资质库'} />
+        <EmptyBlock description={status === 'confirmed' ? '还没有已确认的资质' : '资质档案为空，可手工新增'} />
       ) : null}
       {query.data?.items.length ? (
         <Table<CompanyCertificateDTO>
@@ -539,6 +657,15 @@ function CertificatesTable() {
         />
       ) : null}
       <CertificateReviewDrawer record={reviewing} onClose={() => setReviewing(null)} />
+      <ManualCertificateDrawer
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={() => {
+          setCreating(false)
+          setStatus('confirmed')
+          setPage(1)
+        }}
+      />
     </Space>
   )
 }
@@ -547,6 +674,7 @@ function PersonnelTable() {
   const [status, setStatus] = useState('pending_review')
   const [page, setPage] = useState(1)
   const [reviewing, setReviewing] = useState<CompanyPersonnelDTO | null>(null)
+  const [creating, setCreating] = useState(false)
   const canReview = useCanAccess('team', 'full')
   const query = useQuery({
     queryKey: ['company-personnel', status, page],
@@ -560,6 +688,11 @@ function PersonnelTable() {
 
   return (
     <Space direction="vertical" size={12} className="full-width">
+      <div style={{ textAlign: 'right' }}>
+        <Button type="primary" icon={<PlusOutlined />} disabled={!canReview} onClick={() => setCreating(true)}>
+          新增企业人员
+        </Button>
+      </div>
       <Tabs
         size="small"
         activeKey={status}
@@ -574,7 +707,7 @@ function PersonnelTable() {
         <ErrorBlock description={getApiErrorMessage(query.error, '人员档案加载失败')} onRetry={() => query.refetch()} />
       ) : null}
       {!query.isLoading && !query.isError && !query.data?.items.length ? (
-        <EmptyBlock description={status === 'confirmed' ? '还没有已确认的人员' : '人员档案为空，先同步资质库'} />
+        <EmptyBlock description={status === 'confirmed' ? '还没有已确认的人员' : '人员档案为空，可手工新增'} />
       ) : null}
       {query.data?.items.length ? (
         <Table<CompanyPersonnelDTO>
@@ -654,6 +787,15 @@ function PersonnelTable() {
         />
       ) : null}
       <PersonnelReviewDrawer record={reviewing} onClose={() => setReviewing(null)} />
+      <ManualPersonnelDrawer
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={() => {
+          setCreating(false)
+          setStatus('confirmed')
+          setPage(1)
+        }}
+      />
     </Space>
   )
 }
@@ -666,15 +808,15 @@ export function QualificationPage() {
           企业资质
         </Typography.Title>
         <Typography.Text type="secondary">
-          档案同步自公司局域网资质库，原件仍存放在 NAS 上，这里只保留检索凭证与抽取出的字段。
+          当前开发环境暂不连接外部资质数据，企业证书与人员档案由管理员手工维护。
         </Typography.Text>
       </div>
       <SourceCard />
       <Alert
         type="info"
         showIcon
-        message="同步进来的记录一律为「待确认」"
-        description="上游是扫描件 OCR 的结果，证号、有效期、持证人都可能抽错或抽不全，确认之前不作为投标资格依据。点右侧「审核」逐条核对：确认后才会计入企业资质并纳入到期预警，明显是模板或噪声的直接驳回。"
+        message="手工录入即视为已核对"
+        description="请按证书原件填写证号、等级和有效期；保存后直接进入已确认档案，并纳入后续资格判断和到期预警。"
       />
       <Card>
         <Tabs

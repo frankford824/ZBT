@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/frankford824/ZBT/backend/internal/company/qualification"
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
 	"github.com/frankford824/ZBT/backend/internal/platform/aiconfig"
 	platformapproval "github.com/frankford824/ZBT/backend/internal/platform/approval"
@@ -38,7 +39,6 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenant"
 	platformtender "github.com/frankford824/ZBT/backend/internal/platform/tender"
-	"github.com/frankford824/ZBT/backend/internal/company/qualification"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenderpool"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
@@ -130,8 +130,10 @@ var routeSpecs = []routeSpec{
 	// 企业资质档案挂在 team 模块下：它是企业主体信息的一部分，
 	// 由公司管理员维护，与团队/租户设置同权限域。
 	{"GET", "/company/certificates", "team", false},
+	{"POST", "/company/certificates", "team", false},
 	{"PATCH", "/company/certificates/:id", "team", false},
 	{"GET", "/company/personnel", "team", false},
+	{"POST", "/company/personnel", "team", false},
 	{"PATCH", "/company/personnel/:id", "team", false},
 	{"GET", "/company/qualification/source", "team", false},
 	{"POST", "/company/qualification/sync", "team", false},
@@ -653,15 +655,17 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.PATCH("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.updateTenderSource)
 	group.DELETE("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.deleteTenderSource)
 	group.POST("/tender-sources/:id/verify", rbac.Require("tender", rbac.LevelFull), s.verifyTenderSource)
-		group.GET("/platform/tenders", rbac.Require("tender", rbac.LevelRead), s.listPlatformTenders)
-		group.GET("/platform/collector-runs", rbac.Require("tender", rbac.LevelRead), s.listPlatformCollectorRuns)
+	group.GET("/platform/tenders", rbac.Require("tender", rbac.LevelRead), s.listPlatformTenders)
+	group.GET("/platform/collector-runs", rbac.Require("tender", rbac.LevelRead), s.listPlatformCollectorRuns)
 
 	group.GET("/company/certificates", rbac.Require("team", rbac.LevelRead), s.listCompanyCertificates)
+	group.POST("/company/certificates", rbac.Require("team", rbac.LevelFull), s.createCompanyCertificate)
 	group.PATCH("/company/certificates/:id", rbac.Require("team", rbac.LevelFull), s.reviewCompanyCertificate)
 	group.GET("/company/personnel", rbac.Require("team", rbac.LevelRead), s.listCompanyPersonnel)
+	group.POST("/company/personnel", rbac.Require("team", rbac.LevelFull), s.createCompanyPersonnel)
 	group.PATCH("/company/personnel/:id", rbac.Require("team", rbac.LevelFull), s.reviewCompanyPersonnel)
-		group.GET("/company/qualification/source", rbac.Require("team", rbac.LevelRead), s.qualificationSourceStatus)
-		group.POST("/company/qualification/sync", rbac.Require("team", rbac.LevelFull), s.syncQualificationFromZizhi)
+	group.GET("/company/qualification/source", rbac.Require("team", rbac.LevelRead), s.qualificationSourceStatus)
+	group.POST("/company/qualification/sync", rbac.Require("team", rbac.LevelFull), s.syncQualificationFromZizhi)
 	group.GET("/projects", rbac.Require("project", rbac.LevelRead), s.listProjects)
 	group.POST("/projects", rbac.Require("project", rbac.LevelFull), s.createProject)
 	group.GET("/projects/:id", rbac.Require("project", rbac.LevelRead), s.getProject)
@@ -826,7 +830,7 @@ func customRouteSet() map[string]bool {
 		"GET /ai-config":                                    true,
 		"PUT /ai-config":                                    true,
 		"POST /ai-config/health-check":                      true,
-	"GET /ai-config/models":                             true,
+		"GET /ai-config/models":                             true,
 		"GET /notifications":                                true,
 		"GET /tenders":                                      true,
 		"POST /tenders":                                     true,
@@ -844,8 +848,10 @@ func customRouteSet() map[string]bool {
 		"GET /platform/tenders":                             true,
 		"GET /platform/collector-runs":                      true,
 		"GET /company/certificates":                         true,
+		"POST /company/certificates":                        true,
 		"PATCH /company/certificates/:id":                   true,
 		"GET /company/personnel":                            true,
+		"POST /company/personnel":                           true,
 		"PATCH /company/personnel/:id":                      true,
 		"GET /company/qualification/source":                 true,
 		"POST /company/qualification/sync":                  true,
