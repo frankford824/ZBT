@@ -21,10 +21,12 @@ RUN sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g; s|https://deb.debian.org
 COPY pyproject.toml ./
 COPY app ./app
 ARG INSTALL_DEV_DEPS=true
-RUN if [ "$INSTALL_DEV_DEPS" = "true" ]; then \
-        pip install --no-cache-dir ".[dev]"; \
+ARG PIP_INDEX_URL=https://pypi.org/simple
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$INSTALL_DEV_DEPS" = "true" ]; then \
+        pip install --index-url "$PIP_INDEX_URL" ".[dev]"; \
     else \
-        pip install --no-cache-dir .; \
+        pip install --index-url "$PIP_INDEX_URL" .; \
     fi
 
 EXPOSE 8000

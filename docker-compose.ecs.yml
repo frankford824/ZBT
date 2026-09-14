@@ -54,6 +54,7 @@ services:
       args:
         BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
         DEBIAN_MIRROR: https://mirrors.aliyun.com
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
     container_name: zbt-dev-ai
     restart: unless-stopped
     environment:
