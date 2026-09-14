@@ -1,0 +1,78 @@
+# Personal ECS development deployment overlay.
+# Usage:
+#   docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml up -d --build
+services:
+  postgres:
+    image: docker.m.daocloud.io/pgvector/pgvector:pg16
+    container_name: zbt-dev-db
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_PASSWORD: ${POSTGRES_SUPER_PASSWORD}
+    ports: !override
+      - "127.0.0.1:15432:5432"
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7
+    container_name: zbt-dev-redis
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports: !override
+      - "127.0.0.1:16379:6379"
+
+  minio:
+    image: docker.m.daocloud.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: zbt-dev-minio
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports: !override
+      - "0.0.0.0:19000:9000"
+      - "127.0.0.1:19001:9001"
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+    container_name: zbt-dev-backend
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      APP_ENV: development
+      MIGRATION_DATABASE_URL: postgres://zbt:${POSTGRES_SUPER_PASSWORD}@postgres:5432/zbt?sslmode=disable
+      DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-00000000-0000-4000-8000-000000000001}
+      ZIZHI_API_URL: ${ZIZHI_API_URL:-}
+      ZIZHI_API_KEY: ${ZIZHI_API_KEY:-}
+    ports: !override
+      - "127.0.0.1:18080:8080"
+
+  ai-service:
+    build:
+      context: ./ai-service
+      args:
+        BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+    container_name: zbt-dev-ai
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      APP_ENV: development
+    volumes:
+      - ./ai-service/app/config/model_routing.btjs.yaml:/app/app/config/model_routing.yaml:ro
+    ports: !override
+      - "127.0.0.1:18000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
+    container_name: zbt-dev-frontend
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports: !override
+      - "0.0.0.0:8080:80"

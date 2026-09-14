@@ -1,0 +1,101 @@
+name: Deploy development to ECS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zbt-development-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, deploy, and verify ZBT
+    runs-on: [self-hosted, linux, x64, zbt-dev]
+    environment: development
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the release commit
+        uses: actions/checkout@v7
+
+      - name: Prepare deployment directory and environment
+        env:
+          POSTGRES_SUPER_PASSWORD: ${{ secrets.POSTGRES_SUPER_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          AI_SERVICE_HMAC_SECRET: ${{ secrets.AI_SERVICE_HMAC_SECRET }}
+          COLLECTOR_HMAC_SECRET: ${{ secrets.COLLECTOR_HMAC_SECRET }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          AI_MODEL_PRICING_JSON: ${{ secrets.AI_MODEL_PRICING_JSON }}
+          DEFAULT_TENANT_ID: ${{ vars.DEFAULT_TENANT_ID }}
+          MINIO_PUBLIC_ENDPOINT: ${{ vars.MINIO_PUBLIC_ENDPOINT }}
+        run: |
+          install -d -m 0750 /opt/zbt
+          rsync -a --delete --exclude '.git/' --exclude '.env' ./ /opt/zbt/
+          umask 077
+          {
+            printf 'APP_ENV=development\n'
+            printf 'POSTGRES_SUPER_PASSWORD=%s\n' "$POSTGRES_SUPER_PASSWORD"
+            printf 'JWT_SECRET=%s\n' "$JWT_SECRET"
+            printf 'JWT_ACCESS_TTL=8h\n'
+            printf 'AI_SERVICE_HMAC_SECRET=%s\n' "$AI_SERVICE_HMAC_SECRET"
+            printf 'COLLECTOR_HMAC_SECRET=%s\n' "$COLLECTOR_HMAC_SECRET"
+            printf 'PLATFORM_TENDER_POOL_PUBLIC=true\n'
+            printf 'DEFAULT_TENANT_ID=%s\n' "$DEFAULT_TENANT_ID"
+            printf 'MINIO_ENDPOINT=minio:9000\n'
+            printf 'MINIO_PUBLIC_ENDPOINT=%s\n' "$MINIO_PUBLIC_ENDPOINT"
+            printf 'MINIO_ACCESS_KEY=%s\n' "$MINIO_ACCESS_KEY"
+            printf 'MINIO_SECRET_KEY=%s\n' "$MINIO_SECRET_KEY"
+            printf 'MINIO_USE_SSL=false\n'
+            printf 'MINIO_REGION=us-east-1\n'
+            printf 'MINIO_BUCKET=zbt-files\n'
+            printf 'MINIO_ENSURE_BUCKET=true\n'
+            printf 'USE_MOCK_PROVIDERS=false\n'
+            printf 'ALLOW_MOCK_FALLBACK=false\n'
+            printf 'MODEL_ROUTING_FILE=./app/config/model_routing.yaml\n'
+            printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY"
+            printf 'OPENAI_BASE_URL=%s\n' "$OPENAI_BASE_URL"
+            printf 'AI_MODEL_PRICING_JSON=%s\n' "$AI_MODEL_PRICING_JSON"
+            printf 'OCR_PROVIDER=http_ocr\n'
+            printf 'ZIZHI_API_URL=\n'
+            printf 'ZIZHI_API_KEY=\n'
+          } > /opt/zbt/.env
+
+      - name: Validate Compose configuration
+        working-directory: /opt/zbt
+        run: docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml config --quiet
+
+      - name: Build application images
+        working-directory: /opt/zbt
+        run: docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml build --pull backend ai-service frontend
+
+      - name: Start development stack
+        working-directory: /opt/zbt
+        run: docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml up -d --remove-orphans
+
+      - name: Verify services and persistent volumes
+        working-directory: /opt/zbt
+        run: |
+          curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:18080/healthz
+          curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:18000/healthz
+          curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:8080/ >/dev/null
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 --retry-connrefused http://127.0.0.1:8080/api/v1/meta/routes >/dev/null
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T postgres pg_isready -U zbt -d zbt
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T redis redis-cli ping
+          docker volume inspect zbt-dev_postgres_data zbt-dev_minio_data >/dev/null
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml ps
+
+      - name: Show service diagnostics on failure
+        if: failure()
+        working-directory: /opt/zbt
+        run: |
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml ps || true
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml logs --tail 120 backend ai-service frontend postgres redis minio || true
