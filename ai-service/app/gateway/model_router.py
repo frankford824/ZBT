@@ -104,7 +104,23 @@ class ModelRouter:
         route_kind = self._route_kind(task_type)
         tenant_over_budget = bool(route_kind and not self.enforce_quota(tenant_id))
         candidates = [self.config["routes"][task_type]["primary"], *self.config["routes"][task_type].get("fallback", [])]
-        candidate_targets = [self._route_target(task_type, route) for route in candidates]
+        candidate_targets = [
+            self._route_target(task_type, route, apply_environment_override=index == 0)
+            for index, route in enumerate(candidates)
+        ]
+        # A broad AI_LLM_MODEL/PROVIDER override is intended to select the
+        # primary runtime route. Applying it to fallbacks silently turns every
+        # attempt into the same provider/model and can multiply a timeout. Keep
+        # declared fallbacks independent, and defensively remove any duplicates.
+        unique_targets: list[RouteTarget] = []
+        seen_targets: set[tuple[str, str]] = set()
+        for target in candidate_targets:
+            identity = (target.provider, target.model)
+            if identity in seen_targets:
+                continue
+            seen_targets.add(identity)
+            unique_targets.append(target)
+        candidate_targets = unique_targets
         missing_providers = [target.provider for target in candidate_targets if target.provider not in self.providers]
         if missing_providers:
             missing = ", ".join(dict.fromkeys(missing_providers))
@@ -130,7 +146,10 @@ class ModelRouter:
         raise RuntimeError(f"no configured provider is available for {task_type}: {provider_names}")
 
     def fallback(self, task_type: str) -> list[RouteTarget]:
-        return [self._route_target(task_type, item) for item in self.config["routes"][task_type].get("fallback", [])]
+        return [
+            self._route_target(task_type, item, apply_environment_override=False)
+            for item in self.config["routes"][task_type].get("fallback", [])
+        ]
 
     def get_llm(self, task_type: str, tenant_id: str) -> object:
         target = self.resolve(task_type, tenant_id)
@@ -242,11 +261,17 @@ class ModelRouter:
                 issues.append(f"{task_type}: missing pricing for {target.provider}/{target.model}")
         return issues
 
-    def _route_target(self, task_type: str, route: dict[str, Any]) -> RouteTarget:
+    def _route_target(
+        self,
+        task_type: str,
+        route: dict[str, Any],
+        *,
+        apply_environment_override: bool = True,
+    ) -> RouteTarget:
         provider = str(route["provider"]).strip()
         model = str(route.get("model") or "").strip()
         route_kind = self._route_kind(task_type)
-        if route_kind and provider not in {"mock", "local"}:
+        if apply_environment_override and route_kind and provider not in {"mock", "local"}:
             provider = (
                 self._route_env(task_type, "PROVIDER")
                 or os.getenv(f"AI_{route_kind}_PROVIDER", "")

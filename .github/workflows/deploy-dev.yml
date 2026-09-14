@@ -95,6 +95,8 @@ jobs:
           test "$route_status" = "401"
           grep --quiet 'unauthorized' /tmp/zbt-route-response
           docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T ai-service python -m app.evaluation.ocr_bridge_smoke
+          docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T ai-service \
+            python -m app.evaluation.provider_canary_eval --route chapter_generate --call-provider --strict --json
           docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T postgres pg_isready -U zbt -d zbt
           docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml exec -T redis redis-cli ping
           docker volume inspect zbt-dev_postgres_data zbt-dev_minio_data >/dev/null

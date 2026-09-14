@@ -99,12 +99,14 @@ routes:
       temperature: 0.3
       stream: true
       require_source_refs: true
+      timeout_s: 120
     fallback:
       - provider: openai_compatible_primary
         model: qwen3.8-flash
         temperature: 0.3
         stream: true
         require_source_refs: true
+        timeout_s: 120
   chapter_self_check:
     primary:
       provider: openai_compatible_primary

@@ -38,6 +38,9 @@ from app.main import (
     process_knowledge_document,
     process_tender_parse,
     post_callback,
+    provider_failure_diagnostics,
+    provider_failure_message,
+    ProviderTaskError,
     production_mode,
     require_backend_signature,
     safe_output_filename,
@@ -70,6 +73,37 @@ def test_safe_output_filename_keeps_task_output_in_temp_directory() -> None:
     assert safe_output_filename("/etc/passwd", "pdf") == "passwd.pdf"
     assert safe_output_filename("..\\..\\投标文件?.docx", "docx") == "投标文件.docx"
     assert safe_output_filename("", "zip") == "export.zip"
+
+
+def test_provider_timeout_failure_is_actionable_and_preserves_safe_diagnostics() -> None:
+    timeout = TimeoutError("secret upstream details")
+    error = ProviderTaskError(
+        "chapter_generate",
+        [
+            ("openai_compatible_primary", "deepseek-v4-flash-0731", timeout),
+            ("openai_compatible_primary", "qwen3.8-flash", TimeoutError("more secret details")),
+        ],
+    )
+
+    assert provider_failure_message(error, "章节生成失败，请稍后重试") == (
+        "AI 服务响应超时，已自动尝试备用模型，请稍后重试"
+    )
+    assert provider_failure_diagnostics(error) == {
+        "error_code": "ai_provider_timeout",
+        "retryable": True,
+        "provider_attempts": [
+            {
+                "provider": "openai_compatible_primary",
+                "model": "deepseek-v4-flash-0731",
+                "error_type": "TimeoutError",
+            },
+            {
+                "provider": "openai_compatible_primary",
+                "model": "qwen3.8-flash",
+                "error_type": "TimeoutError",
+            },
+        ],
+    }
 
 
 def test_safe_output_filename_preserves_suffix_when_truncated() -> None:

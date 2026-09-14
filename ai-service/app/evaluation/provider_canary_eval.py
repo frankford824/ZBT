@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.gateway.model_router import ModelRouter, RouteTarget
+from app.schemas.generation import ChapterGenerateRequest, TenderRequirementRef
 
 
 DEFAULT_ROUTES = ("chapter_generate", "knowledge_embedding", "knowledge_rerank")
@@ -146,10 +147,10 @@ def _evaluate_route(
     health = _provider_health(provider)
     _add_check(checks, f"{prefix}.health", health, True, health)
 
-    sample = _route_sample(route_kind)
+    sample = _route_sample(route_name, route_kind)
     call_tokens = {"input_tokens": sample["input_tokens"], "output_tokens": sample["output_tokens"]}
     if call_provider and target.provider not in ZERO_COST_PROVIDERS:
-        call_result = _call_provider(route_kind, provider, sample)
+        call_result = _call_provider(route_name, route_kind, provider, sample)
         result["call"] = call_result
         _add_check(
             checks,
@@ -185,8 +186,33 @@ def _evaluate_route(
     return result
 
 
-def _call_provider(route_kind: str, provider: object, sample: dict[str, Any]) -> dict[str, Any]:
+def _call_provider(route_name: str, route_kind: str, provider: object, sample: dict[str, Any]) -> dict[str, Any]:
     try:
+        if route_name == "chapter_generate" and hasattr(provider, "generate_chapter"):
+            response = provider.generate_chapter(sample["payload"])
+            tiptap_json = response.tiptap_json
+            content = tiptap_json.get("content") if isinstance(tiptap_json, dict) else None
+            coverage = response.self_check.get("requirement_coverage")
+            requirement_covered = isinstance(coverage, list) and any(
+                isinstance(item, dict) and item.get("requirement_id") == "provider-canary-requirement"
+                for item in coverage
+            )
+            passed = (
+                tiptap_json.get("type") == "doc"
+                and isinstance(content, list)
+                and bool(content)
+                and requirement_covered
+            )
+            return {
+                "passed": passed,
+                "actual": {
+                    "tiptap_type": tiptap_json.get("type"),
+                    "content_nodes": len(content) if isinstance(content, list) else 0,
+                    "requirement_covered": requirement_covered,
+                },
+                "input_tokens": int(response.token_usage.get("input_tokens", 0)),
+                "output_tokens": int(response.token_usage.get("output_tokens", 0)),
+            }
         if route_kind == "embedding" and hasattr(provider, "embed_text"):
             vector = provider.embed_text(sample["text"])
             return {
@@ -225,13 +251,36 @@ def _provider_health(provider: object) -> bool:
         return False
 
 
-def _route_sample(route_kind: str) -> dict[str, Any]:
+def _route_sample(route_name: str, route_kind: str) -> dict[str, Any]:
     if route_kind == "embedding":
         return {"text": "ZBT provider canary embedding sample", "input_tokens": 1000, "output_tokens": 0}
     if route_kind == "rerank":
         return {
             "query": "bid document requirement",
             "documents": ["technical proposal requirement", "unrelated office notice"],
+            "input_tokens": 1000,
+            "output_tokens": 200,
+        }
+    if route_name == "chapter_generate":
+        return {
+            "payload": ChapterGenerateRequest(
+                tenant_id="provider-canary",
+                bid_document_id="provider-canary-bid",
+                bid_part_id="provider-canary-part",
+                chapter_id="provider-canary-chapter",
+                chapter_title="项目概况",
+                tender_requirements=["准确说明项目名称和建设目标"],
+                requirement_refs=[
+                    TenderRequirementRef(
+                        id="provider-canary-requirement",
+                        module="basic",
+                        type="requirement",
+                        requirement="准确说明项目名称和建设目标",
+                        priority="high",
+                    )
+                ],
+            ),
+            "prompt": "Generate a structured bid chapter for the provider canary.",
             "input_tokens": 1000,
             "output_tokens": 200,
         }

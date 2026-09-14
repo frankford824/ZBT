@@ -100,6 +100,14 @@ class AIServiceRequestBodyTooLargeError(RuntimeError):
     pass
 
 
+class ProviderTaskError(RuntimeError):
+    def __init__(self, task_type: str, failures: list[tuple[str, str, Exception]]) -> None:
+        self.task_type = task_type
+        self.failures = tuple(failures)
+        attempted = ", ".join(f"{provider}/{model}" for provider, model, _error in failures)
+        super().__init__(f"all configured providers failed for {task_type}: {attempted}")
+
+
 @app.middleware("http")
 async def require_backend_signature(request: Request, call_next):
     if request.url.path in PUBLIC_PATHS:
@@ -400,7 +408,7 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                     module_results[module] = {
                         "module": module,
                         "status": "failed",
-                        "error_type": type(exc).__name__,
+                        "error_type": _root_exception(exc).__class__.__name__,
                     }
         for module in MODULE_ORDER:
             module_result = module_results.get(module)
@@ -1088,12 +1096,12 @@ def run_provider_task(
     *,
     provider_kind: str = "llm",
 ) -> tuple[RouteTarget, object, object]:
-    last_error: Exception | None = None
+    failures: list[tuple[str, str, Exception]] = []
     for route, provider in provider_attempts(task_type, tenant_id, provider_kind):
         try:
             return route, provider, operation(route, provider)
         except Exception as exc:
-            last_error = exc
+            failures.append((provider_name(provider, route), route.model, exc))
             logger.warning(
                 "AI provider call failed; task_type=%s provider=%s model=%s error_type=%s",
                 task_type,
@@ -1101,7 +1109,10 @@ def run_provider_task(
                 route.model,
                 type(exc).__name__,
             )
-    raise RuntimeError(f"all configured providers failed for {task_type}") from last_error
+    error = ProviderTaskError(task_type, failures)
+    if failures:
+        raise error from failures[-1][2]
+    raise error
 
 
 def run_llm_task(
@@ -1145,12 +1156,13 @@ def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> N
             "status": "done",
             "result": generation.model_dump(),
         }
-    except Exception:  # pragma: no cover - defensive task boundary
+    except Exception as exc:  # pragma: no cover - defensive task boundary
         callback_payload = task_failure_callback(
             payload.tenant_id,
             task_id,
-            "章节生成失败，请稍后重试",
+            provider_failure_message(exc, "章节生成失败，请稍后重试"),
             {"chapter_id": payload.chapter_id},
+            cause=exc,
         )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
@@ -1381,15 +1393,69 @@ def task_failure_callback(
     task_id: str,
     public_message: str,
     result_refs: dict[str, object],
+    *,
+    cause: Exception | None = None,
 ) -> dict[str, object]:
     logger.exception("AI background task failed: task_id=%s", task_id)
+    diagnostics = provider_failure_diagnostics(cause)
     return {
         "tenant_id": tenant_id,
         "task_id": task_id,
         "status": "failed",
         "error_message": public_message,
-        "result": {"error": public_message, **result_refs},
+        "result": {"error": public_message, **result_refs, **diagnostics},
     }
+
+
+def provider_failure_message(exc: Exception, fallback: str) -> str:
+    failures = provider_failures(exc)
+    if any(_exception_chain_contains(error, TimeoutError) for _provider, _model, error in failures):
+        return "AI 服务响应超时，已自动尝试备用模型，请稍后重试"
+    return fallback
+
+
+def provider_failure_diagnostics(exc: Exception | None) -> dict[str, object]:
+    failures = provider_failures(exc)
+    if not failures:
+        return {}
+    timed_out = any(_exception_chain_contains(error, TimeoutError) for _provider, _model, error in failures)
+    return {
+        "error_code": "ai_provider_timeout" if timed_out else "ai_provider_failed",
+        "retryable": timed_out,
+        "provider_attempts": [
+            {"provider": provider, "model": model, "error_type": _root_exception(error).__class__.__name__}
+            for provider, model, error in failures
+        ],
+    }
+
+
+def provider_failures(exc: Exception | None) -> list[tuple[str, str, Exception]]:
+    if isinstance(exc, ProviderTaskError):
+        return list(exc.failures)
+    return []
+
+
+def _exception_chain_contains(exc: Exception, expected_type: type[BaseException]) -> bool:
+    current: BaseException | None = exc
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        if isinstance(current, expected_type):
+            return True
+        visited.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _root_exception(exc: Exception) -> BaseException:
+    current: BaseException = exc
+    visited: set[int] = set()
+    while id(current) not in visited:
+        visited.add(id(current))
+        next_error = current.__cause__ or current.__context__
+        if next_error is None:
+            return current
+        current = next_error
+    return current
 
 
 def hydrate_export_attachment_content(client: Minio, payload: DocumentExportRequest) -> DocumentExportRequest:

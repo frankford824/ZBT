@@ -262,6 +262,66 @@ def test_real_provider_routes_accept_environment_model_override(monkeypatch: pyt
     assert target.fallback_from is None
 
 
+def test_environment_override_only_changes_primary_and_keeps_distinct_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_LLM_MODEL", "runtime-primary")
+    router = ModelRouter(
+        {
+            "providers": {
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                }
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "configured-primary"},
+                    "fallback": [
+                        {"provider": "openai_compatible_primary", "model": "configured-fallback"}
+                    ],
+                }
+            },
+        }
+    )
+
+    targets = router.resolve_candidates("chapter_generate", tenant_id="tenant-demo")
+
+    assert [target.model for target in targets] == ["runtime-primary", "configured-fallback"]
+    assert targets[1].fallback_from is None
+
+
+def test_router_removes_duplicate_provider_model_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AI_LLM_MODEL", "same-model")
+    router = ModelRouter(
+        {
+            "providers": {
+                "openai_compatible_primary": {
+                    "type": "openai_compatible",
+                    "base_url_env": "OPENAI_BASE_URL",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "default_base_url": "https://example.test/v1",
+                }
+            },
+            "routes": {
+                "chapter_generate": {
+                    "primary": {"provider": "openai_compatible_primary", "model": "configured-primary"},
+                    "fallback": [{"provider": "openai_compatible_primary", "model": "same-model"}],
+                }
+            },
+        }
+    )
+
+    targets = router.resolve_candidates("chapter_generate", tenant_id="tenant-demo")
+
+    assert len(targets) == 1
+    assert targets[0].model == "same-model"
+
+
 def test_cloudflare_ai_gateway_provider_can_use_gateway_token_without_provider_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

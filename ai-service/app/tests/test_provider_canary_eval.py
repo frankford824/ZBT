@@ -90,7 +90,19 @@ def test_provider_canary_can_call_openai_compatible_llm(
         captured["url"] = req.full_url
         captured["body"] = json.loads(req.data.decode("utf-8"))
         captured["authorization"] = req.get_header("Authorization")
-        return _FakeHTTPResponse(b'{"choices":[{"message":{"content":"ZBT_OK"}}]}')
+        content = json.dumps(
+            {
+                "tiptap_json": {"type": "doc", "content": [{"type": "paragraph"}]},
+                "source_refs": [],
+                "self_check": {
+                    "requirement_coverage": [
+                        {"requirement_id": "provider-canary-requirement", "satisfied": True}
+                    ]
+                },
+                "needs_human_input": [],
+            }
+        )
+        return _FakeHTTPResponse(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
 
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
     monkeypatch.setenv("ALLOW_MOCK_FALLBACK", "false")
@@ -144,7 +156,19 @@ def test_provider_canary_can_call_cloudflare_workers_ai_embedding_and_rerank(
         body = json.loads(req.data.decode("utf-8"))
         if req.full_url.endswith("/chat/completions"):
             assert body["model"] == "openai/gpt-4.1"
-            return _FakeHTTPResponse(b'{"choices":[{"message":{"content":"ZBT_OK"}}]}')
+            content = json.dumps(
+                {
+                    "tiptap_json": {"type": "doc", "content": [{"type": "paragraph"}]},
+                    "source_refs": [],
+                    "self_check": {
+                        "requirement_coverage": [
+                            {"requirement_id": "provider-canary-requirement", "satisfied": True}
+                        ]
+                    },
+                    "needs_human_input": [],
+                }
+            )
+            return _FakeHTTPResponse(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
         if req.full_url.endswith("/ai/run/@cf/baai/bge-large-en-v1.5"):
             assert body["text"] == ["ZBT provider canary embedding sample"]
             return _FakeHTTPResponse(b'{"success":true,"result":{"data":[[0.1,0.2]],"shape":[1,2]}}')
