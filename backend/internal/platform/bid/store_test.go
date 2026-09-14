@@ -738,6 +738,19 @@ func TestRequirementRefsFromStructuredResultMatchesChapterTitle(t *testing.T) {
 	}
 }
 
+func TestNonNilTenderRequirementRefsSerializesEmptyList(t *testing.T) {
+	payload := chapterGenerateRequest{
+		RequirementRefs: nonNilTenderRequirementRefs(nil),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"requirement_refs":[]`) {
+		t.Fatalf("expected empty requirement_refs list, got %s", raw)
+	}
+}
+
 func TestRequirementRefsFromStructuredResultFallsBackForLegacyParseResult(t *testing.T) {
 	structured := map[string]any{
 		"qualification_requirements": []any{"营业执照和授权书齐备"},

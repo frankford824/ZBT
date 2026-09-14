@@ -2343,7 +2343,7 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 			ChapterID:              chapter.ID,
 			ChapterTitle:           chapter.Title,
 			TenderRequirements:     tenderRequirementTexts(requirementRefs),
-			RequirementRefs:        requirementRefs,
+			RequirementRefs:        nonNilTenderRequirementRefs(requirementRefs),
 			SelectedKnowledgeRefs:  selectedRefs,
 			RetrievedKnowledgeRefs: knowledgeRefs,
 			CallbackURL:            s.cfg.AICallbackURL,
@@ -2434,7 +2434,7 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 				ChapterID:              chapter.ID,
 				ChapterTitle:           chapter.Title,
 				TenderRequirements:     tenderRequirementTexts(requirementRefs),
-				RequirementRefs:        requirementRefs,
+				RequirementRefs:        nonNilTenderRequirementRefs(requirementRefs),
 				SelectedKnowledgeRefs:  selectedRefs,
 				RetrievedKnowledgeRefs: knowledgeRefs,
 				CallbackURL:            s.cfg.AICallbackURL,
@@ -3277,7 +3277,7 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 			ChapterID:              chapter.ID,
 			ChapterTitle:           chapter.Title,
 			TenderRequirements:     tenderRequirementTexts(requirementRefs),
-			RequirementRefs:        requirementRefs,
+			RequirementRefs:        nonNilTenderRequirementRefs(requirementRefs),
 			SelectedKnowledgeRefs:  selectedRefs,
 			RetrievedKnowledgeRefs: knowledgeRefs,
 			CallbackURL:            s.cfg.AICallbackURL,
@@ -5381,6 +5381,13 @@ func tenderRequirementTexts(refs []tenderRequirementRef) []string {
 	requirements = append(requirements, "事实性企业资质、人员、证书、金额和日期必须保留来源或标记人工确认")
 	requirements = append(requirements, "生成后按需求项逐条完成自检并返回覆盖证据")
 	return requirements
+}
+
+func nonNilTenderRequirementRefs(refs []tenderRequirementRef) []tenderRequirementRef {
+	if refs == nil {
+		return []tenderRequirementRef{}
+	}
+	return refs
 }
 
 func requirementRefsFromStructuredResult(structured map[string]any, chapterTitle string, limit int) []tenderRequirementRef {
