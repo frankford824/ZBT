@@ -69,6 +69,9 @@ def run(origin):
             raise RuntimeError('bid type or project name did not survive reload')
         expect_rejection(base, '/bids/' + bid['id'] + '/submit-for-approval', login['access_token'],
                          {}, 409, 'approval_not_ready')
+        for status in ('generating','in_review','approved','submitted'):
+            expect_rejection(base, '/bids/' + bid['id'], login['access_token'],
+                             {'status':status}, 409, 'bid_workflow_transition_required', method='PATCH')
         api_call(base, '/bids/' + bid['id'], method='PATCH', token=login['access_token'], body={'status': 'archived'})
     pool = api_call(base, '/platform/tenders?limit=1', token=login['access_token'])
     if not pool.get('items'):

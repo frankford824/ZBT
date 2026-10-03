@@ -114,8 +114,12 @@ def verify_second_reviewer(base, token, bid):
     persisted = api_call(base, f'/bids/{bid}', token=token)
     if approved['instance']['status'] != 'approved' or persisted['status'] != 'approved':
         raise RuntimeError('second reviewer approval did not persist')
+    submitted = api_call(base, f'/bids/{bid}', method='PATCH', token=token, body={'status': 'submitted'})
+    if submitted['status'] != 'submitted':
+        raise RuntimeError('completed approval could not transition to submitted')
     return {'instance_id': instance, 'reviewer_user_id': member['user']['id'],
             'submitter_approve': '403 rejected', 'second_reviewer_approve': 'passed',
+            'approved_to_submitted': 'passed after current content approval',
             'reviewer_team_permission': 'read', 'post_submission_fact_gap': '409 rejected',
             'post_submission_stale_review': '409 rejected; rechecked and reexported before approval'}
 

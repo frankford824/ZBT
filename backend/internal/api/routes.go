@@ -3178,6 +3178,10 @@ func respondInternal(c *gin.Context) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
+	if errors.Is(err, bid.ErrWorkflowTransition) {
+		c.JSON(http.StatusConflict, apiError("bid_workflow_transition_required", "不能直接修改生成或审批状态，请完成正文、复核、导出及审批流程后再提交"))
+		return
+	}
 	if errors.Is(err, bid.ErrParseResultChanged) {
 		c.JSON(http.StatusConflict, apiError("parse_result_changed", "解读结果已更新，请刷新核对后重新确认"))
 		return

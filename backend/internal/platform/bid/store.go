@@ -32,6 +32,7 @@ var (
 	ErrInvalidRequest            = errors.New("invalid bid request")
 	ErrParseConfirmationRequired = errors.New("parse confirmation required")
 	ErrParseResultChanged        = errors.New("parse result changed")
+	ErrWorkflowTransition        = errors.New("bid status requires workflow transition")
 )
 
 const (
@@ -892,6 +893,34 @@ func (s *Store) UpdateDocument(ctx context.Context, tenantID, id string, req Upd
 	}
 	var document Document
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var currentStatus string
+		if err := tx.QueryRow(ctx, `select status from bid_documents where tenant_id=$1 and id=$2 for update`, tenantID, id).Scan(&currentStatus); err != nil {
+			return err
+		}
+		if !manualDocumentStatusAllowed(currentStatus, status) {
+			return ErrWorkflowTransition
+		}
+		if status == "submitted" && currentStatus != "submitted" {
+			if err := factualreview.RequireClear(ctx, tx, tenantID, id); err != nil {
+				return err
+			}
+			for _, stage := range []string{"generate", "check", "format"} {
+				if err := requirePipelineGatePassed(ctx, tx, tenantID, id, stage); err != nil {
+					return ErrWorkflowTransition
+				}
+			}
+			var ready bool
+			if err := tx.QueryRow(ctx, `select
+				exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2)
+				and not exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2 and (status<>'accepted' or btrim(plain_text)=''))
+				and exists(select 1 from approval_instances where tenant_id=$1 and bid_document_id=$2 and status='approved'
+					and completed_at >= (select max(updated_at) from bid_chapters where tenant_id=$1 and bid_document_id=$2))`, tenantID, id).Scan(&ready); err != nil {
+				return err
+			}
+			if !ready {
+				return ErrWorkflowTransition
+			}
+		}
 		if projectID != "" {
 			var exists bool
 			if err := tx.QueryRow(ctx, `select exists(select 1 from projects where tenant_id = $1 and id = $2)`, tenantID, projectID).Scan(&exists); err != nil {
@@ -6825,6 +6854,16 @@ func normalizeDocumentStatus(value string) string {
 	default:
 		return ""
 	}
+}
+
+func manualDocumentStatusAllowed(current, next string) bool {
+	if next == "" || next == current || next == "archived" {
+		return true
+	}
+	if next == "submitted" {
+		return current == "approved"
+	}
+	return (current == "draft" || current == "editing") && (next == "draft" || next == "editing")
 }
 
 func normalizePipelineStage(value string) string {
