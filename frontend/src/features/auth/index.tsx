@@ -1,5 +1,7 @@
 import { LoginOutlined, UserAddOutlined } from '@ant-design/icons'
-import { Alert, Button, Form, Input, message, Space, Typography } from 'antd'
+import { Alert, Button, Form, Input, message, Select, Space, Typography } from 'antd'
+import { isAxiosError } from 'axios'
+import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { useSessionStore } from '../../app/store/session'
@@ -24,6 +26,8 @@ export function LoginPage() {
   const setSession = useSessionStore((state) => state.setSession)
   const sessionExpired = searchParams.get('session') === 'expired'
   const tenantId = searchParams.get('tenant') ?? undefined
+  const [form] = Form.useForm()
+  const [tenantOptions, setTenantOptions] = useState<Array<{ id: string; name: string }>>([])
   const locationState = location.state as LoginLocationState | null
   const returnPath = safeReturnPath(searchParams.get('from') || locationState?.from)
   const mutation = useMutation({
@@ -31,6 +35,11 @@ export function LoginPage() {
     onSuccess: (payload) => {
       setSession(payload)
       navigate(returnPath, { replace: true })
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.data?.code === 'tenant_selection_required') {
+        setTenantOptions(error.response.data.tenants)
+      }
     },
   })
 
@@ -42,21 +51,28 @@ export function LoginPage() {
         </Typography.Title>
         <Typography.Text type="secondary">使用企业账号进入投标工作台</Typography.Text>
       </div>
-      {mutation.isError ? (
+      {tenantOptions.length ? <Alert type="info" showIcon message="账号属于多个企业，请选择后登录" /> : null}
+      {mutation.isError && !(isAxiosError(mutation.error) && mutation.error.response?.data?.code === 'tenant_selection_required') ? (
         <Alert type="error" showIcon message="登录失败" description="账号或密码不正确，请重新输入" />
       ) : null}
       {sessionExpired && !mutation.isError ? (
         <Alert type="warning" showIcon message="登录状态已过期" description="请重新登录后继续处理刚才的事项" />
       ) : null}
-      <Form layout="vertical" onFinish={(values) => mutation.mutate(values)}>
+      <Form form={form} layout="vertical" onValuesChange={(changed) => {
+        if ('email' in changed || 'password' in changed) {
+          setTenantOptions([])
+          form.setFieldValue('tenant_id', tenantId)
+        }
+      }} onFinish={(values) => mutation.mutate(values)}>
         <Form.Item label="账号" name="email" initialValue={showDemoLogin ? 'admin@zbt.local' : undefined}>
           <Input />
         </Form.Item>
         <Form.Item label="密码" name="password" initialValue={showDemoLogin ? 'demo-password' : undefined}>
           <Input.Password />
         </Form.Item>
-        <Form.Item hidden name="tenant_id" initialValue={tenantId}>
-          <Input type="hidden" />
+        <Form.Item hidden={!tenantOptions.length} label="企业" name="tenant_id" initialValue={tenantId}
+          rules={tenantOptions.length ? [{ required: true, message: '请选择企业' }] : []}>
+          {tenantOptions.length ? <Select options={tenantOptions.map((tenant) => ({ value: tenant.id, label: tenant.name }))} /> : <Input type="hidden" />}
         </Form.Item>
         <Button
           type="primary"
@@ -100,7 +116,7 @@ export function RegisterPage() {
           type="error"
           showIcon
           message="注册失败"
-          description="请确认邮箱未被占用，且密码不少于 8 位"
+          description={getApiErrorMessage(mutation.error, '请检查注册信息，密码不少于 8 位')}
         />
       ) : null}
       <Form layout="vertical" onFinish={(values) => mutation.mutate(values)}>

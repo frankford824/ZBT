@@ -7,12 +7,15 @@ files and the archived smoke bid remain as deployment evidence.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import time
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
+from xml.sax.saxutils import escape
 
 from chapter_generation_smoke import api_call
 
@@ -52,6 +55,25 @@ def make_tender_pdf(marker: str) -> bytes:
     return pdf
 
 
+def make_tender_docx(marker: str) -> bytes:
+    lines = ["项目名称：城南雨水管道项目 " + marker,
+             "发布日期：2026-10-03", "招标人：灰度测试采购单位", "预算金额：100万元",
+             "投标截止时间：2026-11-15 09:30",
+             "投标人须具备市政公用工程施工总承包三级及以上资质。",
+             "安全生产许可证须在有效期内。",
+             "评分办法：技术方案40分；类似业绩30分；报价30分。",
+             "递交要求：投标文件须按要求签章并在截止时间前提交。",
+             "附件格式：报价表。", "交付期限：合同生效后30天。",
+             "末页否决条款：资格证明材料缺失的投标文件将被否决。GRAY-END-CLAUSE-20261003"]
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as doc:
+        doc.writestr('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        doc.writestr('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        body = ''.join('<w:p><w:r><w:t>' + escape(line) + '</w:t></w:r></w:p>' for line in lines)
+        doc.writestr('word/document.xml', '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + body + '<w:sectPr/></w:body></w:document>')
+    return output.getvalue()
+
+
 def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *, archive: bool = True) -> dict:
     login = api_call(base_url, "/auth/login", method="POST",
                      body={"email": os.getenv("ZBT_SMOKE_EMAIL", "admin@zbt.local"), "password": password})
@@ -60,9 +82,11 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *,
     bid = api_call(base_url, "/bids", method="POST", token=token,
                    body={"title": marker, "project_name": marker, "bid_type": "combined"})
     bid_id = str(bid["id"])
-    content = make_tender_pdf(marker)
+    if bid.get('bid_type') != 'combined' or bid.get('project_name') != marker or not bid.get('project_id'):
+        raise RuntimeError('selected bid type and project association did not persist')
+    content = make_tender_docx(marker)
     upload = api_call(base_url, "/files/presign-upload", method="POST", token=token,
-                      body={"filename": marker + ".pdf", "content_type": "application/pdf",
+                      body={"filename": marker + ".docx", "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             "size_bytes": len(content), "biz_type": "bid_tender", "biz_id": bid_id})
     require_origin(upload["upload_url"], public_origin)
     request = urllib.request.Request(upload["upload_url"], data=content,
@@ -87,6 +111,10 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *,
         raise RuntimeError("tender attachment did not persist the uploaded file")
     started = api_call(base_url, f"/bids/{bid_id}/parse-tender", method="POST", token=token)
     task_id = str(started["task"]["id"])
+    queued = api_call(base_url, f"/bids/{bid_id}/parse-result", token=token)
+    if queued['status'] in {'queued', 'processing'} and any(
+            queued['structured_result'].get(key) for key in ('deadline', 'qualification_requirements', 'scoring_points', 'requirement_items')):
+        raise RuntimeError('in-progress interpretation exposed manufactured file facts')
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         task = api_call(base_url, f"/ai-tasks/{task_id}", token=token)
@@ -99,6 +127,18 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *,
             if (parsed.get("file_asset_id") != file_id or parsed.get("status") != "ready"
                     or not parsed.get("structured_result")):
                 raise RuntimeError("parse callback did not persist the uploaded file result")
+            structured = parsed['structured_result']
+            if structured.get('deadline') != '2026-11-15 09:30' or structured.get('bid_type') != 'combined':
+                raise RuntimeError('interpretation changed deadline or selected layout')
+            qualifications = json.dumps(structured.get('qualification_requirements', []), ensure_ascii=False)
+            if '市政公用工程施工总承包三级' not in qualifications or '安全生产许可证' not in qualifications:
+                raise RuntimeError('mandatory original qualifications were not retained')
+            scores = json.dumps(structured.get('scoring_points', []), ensure_ascii=False)
+            if not all(item in scores for item in ('技术方案', '40', '类似业绩', '30', '报价')):
+                raise RuntimeError('original 40/30/30 scoring was not retained')
+            requirements = json.dumps(structured.get('requirement_items', []), ensure_ascii=False)
+            if 'GRAY-END-CLAUSE-20261003' not in requirements or '工程量清单' in requirements:
+                raise RuntimeError('end clause lost or absent bill of quantities invented')
             if archive:
                 api_call(base_url, f"/bids/{bid_id}", method="PATCH", token=token,
                          body={"status": "archived"})

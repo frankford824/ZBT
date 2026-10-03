@@ -832,6 +832,8 @@ def _chapter_response_from_json(
         else {"status": "needs_review"}
     )
     needs_human_input = _string_list(result.get("needs_human_input"))
+    if not payload.retrieved_knowledge_refs:
+        needs_human_input.append("未提供可引用的企业资料；企业资质、人员、业绩等事实需要人工补充，不得视为已验证。")
     coverage = self_check.get("requirement_coverage")
     if isinstance(coverage, list):
         self_check = dict(self_check)

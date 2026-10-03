@@ -10,10 +10,12 @@ import argparse
 import io
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.request
 import zipfile
+from xml.etree import ElementTree
 from chapter_generation_smoke import api_call
 from file_upload_smoke import run_smoke, require_origin
 
@@ -58,12 +60,15 @@ def run(base, origin):
         raise RuntimeError("not every fixture chapter completed")
     chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
     for chapter in chapters:
-        if not chapter.get("plain_text") or not chapter.get("source_refs"):
-            raise RuntimeError("generated chapter is missing persisted text or evidence")
+        if not chapter.get("plain_text") or not (chapter.get("content") or {}).get("content"):
+            raise RuntimeError("generated chapter is missing persisted text or editor content")
+        if not chapter.get("source_refs") and not chapter.get("needs_human_input"):
+            raise RuntimeError("chapter without enterprise evidence must explicitly require human input")
         versions = api_call(base, "/chapters/" + chapter["id"] + "/versions", token=token)
         if not versions.get("items"):
             raise RuntimeError("chapter version was not persisted")
         api_call(base, "/chapters/" + chapter["id"] + "/accept", method="POST", token=token, body={})
+    content_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters]
     check = api_call(base, "/compliance/checks", method="POST", token=token,
                      body={"name": "发布验收-仅测试项目", "bid_document_id": bid, "levels": ["L1", "L2", "L3"]})
     # Seed rules generate review flags. Exercise reviewer acknowledgement on the
@@ -76,7 +81,7 @@ def run(base, origin):
         print("Acceptance: validate " + kind + " export", flush=True)
         started = api_call(base, f"/bids/{bid}/exports", method="POST", token=token,
                            body={"export_type": kind, "part_code": "combined_body"})
-        exported = wait_for(base, "/bid-exports/" + started["export"]["id"], token, "")
+        exported = wait_for(base, "/bid-exports/" + started["export"]["id"], token, "export")["export"]
         download = api_call(base, "/files/" + exported["file_asset_id"] + "/download-url", token=token)
         require_origin(download["url"], origin)
         with urllib.request.urlopen(download["url"], timeout=60) as response:
@@ -90,8 +95,11 @@ def run(base, origin):
                 if archive.testzip() is not None:
                     raise RuntimeError("exported archive is corrupt")
                 if kind == "docx":
-                    if len(archive.read("word/document.xml")) < 500:
-                        raise RuntimeError("DOCX body is empty")
+                    document = ElementTree.fromstring(archive.read('word/document.xml'))
+                    text = ''.join(node.text or '' for node in document.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
+                    normalized = re.sub(r'\W+', '', text)
+                    if not all(sample and sample in normalized for sample in content_samples):
+                        raise RuntimeError('DOCX does not contain the persisted generated chapter bodies')
                 elif not any(name.endswith(".docx") for name in archive.namelist()):
                     raise RuntimeError("ZIP does not contain a generated Word document")
         exports[kind] = {"export_id": exported["id"], "bytes": len(content)}

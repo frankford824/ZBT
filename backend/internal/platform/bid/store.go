@@ -619,6 +619,7 @@ type tenderParseRequest struct {
 	TenantID    string `json:"tenant_id"`
 	BidID       string `json:"bid_id,omitempty"`
 	BidTitle    string `json:"bid_title,omitempty"`
+	BidType     string `json:"bid_type,omitempty"`
 	FileID      string `json:"file_id"`
 	ObjectKey   string `json:"object_key"`
 	Filename    string `json:"filename"`
@@ -835,11 +836,21 @@ func (s *Store) CreateDocument(ctx context.Context, tenantID string, req CreateD
 	}
 	var id string
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var projectID string
+		projectName := strings.TrimSpace(req.ProjectName)
+		if projectName == "" {
+			projectName = title
+		}
 		if err := tx.QueryRow(ctx, `
-			insert into bid_documents (tenant_id, title, bid_type, status)
-			values ($1, $2, $3, 'draft')
+			insert into projects (tenant_id, name, status) values ($1, $2, 'bidding') returning id::text
+		`, tenantID, projectName).Scan(&projectID); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(ctx, `
+			insert into bid_documents (tenant_id, project_id, title, bid_type, status)
+			values ($1, $2, $3, $4, 'draft')
 			returning id::text
-		`, tenantID, title, bidType).Scan(&id); err != nil {
+		`, tenantID, projectID, title, bidType).Scan(&id); err != nil {
 			return err
 		}
 		return createDefaultParts(ctx, tx, tenantID, id, bidType)
@@ -1082,6 +1093,7 @@ func (s *Store) ParseTender(ctx context.Context, tenantID, userID, bidID string)
 			TenantID:    tenantID,
 			BidID:       bidID,
 			BidTitle:    document.Title,
+			BidType:     document.BidType,
 			FileID:      file.FileAssetID,
 			ObjectKey:   file.ObjectKey,
 			Filename:    file.Filename,
@@ -1507,7 +1519,7 @@ func (s *Store) GenerateOutline(ctx context.Context, tenantID, userID, bidID str
 		}
 		parseResult, err := parseResultForBid(ctx, tx, tenantID, bidID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			parseResult, err = upsertParseResult(ctx, tx, tenantID, bidID, "", "ready", defaultTenderStructuredResult(document, TenderFile{}), "")
+			return ErrInvalidRequest
 		}
 		if err != nil {
 			return err
@@ -5113,24 +5125,6 @@ func copyStringAnyMap(value map[string]any) map[string]any {
 }
 
 func defaultTenderStructuredResult(document Document, file TenderFile) map[string]any {
-	outline := defaultOutlineSpecs(document)
-	parts := make([]any, 0, len(outline))
-	for _, part := range outline {
-		chapters := make([]any, 0, len(part.Chapters))
-		for _, chapter := range part.Chapters {
-			chapters = append(chapters, map[string]any{
-				"title":      chapter.Title,
-				"plain_text": chapter.PlainText,
-				"sort_order": chapter.SortOrder,
-			})
-		}
-		parts = append(parts, map[string]any{
-			"code":       part.Code,
-			"title":      part.Title,
-			"sort_order": part.SortOrder,
-			"chapters":   chapters,
-		})
-	}
 	sourceFile := map[string]any{}
 	if file.FileAssetID != "" {
 		sourceFile = map[string]any{
@@ -5142,31 +5136,9 @@ func defaultTenderStructuredResult(document Document, file TenderFile) map[strin
 		}
 	}
 	return map[string]any{
-		"project_name": document.Title,
-		"bid_type":     document.BidType,
-		"source_file":  sourceFile,
-		"deadline":     time.Now().UTC().AddDate(0, 0, 14).Format("2006-01-02"),
-		"qualification_requirements": []any{
-			"营业执照、法定代表人授权及签章文件齐备",
-			"具备类似项目实施经验或信息系统建设能力证明",
-			"提供项目团队、服务承诺和安全管理相关材料",
-		},
-		"invalid_clause_risks": []any{
-			"签章、报价、投标有效期不一致可能导致无效投标",
-			"资格证明材料缺失或过期需要人工复核",
-			"技术响应未逐条覆盖评分点会影响得分",
-		},
-		"scoring_points": []any{
-			"实施方案完整性",
-			"项目团队与案例经验",
-			"数据安全和运维服务能力",
-		},
-		"outline": map[string]any{"parts": parts},
-		"material_suggestions": []any{
-			map[string]any{"title": "企业资质证书", "ref_type": "qualification", "reason": "响应资格审查要求", "selected": true},
-			map[string]any{"title": "同类项目案例", "ref_type": "case", "reason": "支撑评分项中的经验能力", "selected": true},
-			map[string]any{"title": "技术方案素材", "ref_type": "solution", "reason": "复用实施方案和安全保障描述", "selected": true},
-		},
+		"requested_title":    document.Title,
+		"requested_bid_type": document.BidType,
+		"source_file":        sourceFile,
 	}
 }
 

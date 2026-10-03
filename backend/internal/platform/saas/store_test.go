@@ -35,7 +35,7 @@ func TestLoginRejectsInvalidInputBeforeDB(t *testing.T) {
 		email    string
 		password string
 	}{
-		{tenantID: "", email: "admin@example.com", password: "password1"},
+		{tenantID: "", email: "not-an-email", password: "password1"},
 		{tenantID: "not-a-uuid", email: "admin@example.com", password: "password1"},
 		{tenantID: "00000000-0000-4000-8000-000000000001", email: "", password: "password1"},
 		{tenantID: "00000000-0000-4000-8000-000000000001", email: "not-an-email", password: "password1"},

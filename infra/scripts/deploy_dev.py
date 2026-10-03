@@ -7,6 +7,7 @@ must never pretend it can undo an incompatible database migration.
 from __future__ import annotations
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,33 @@ def migrations(directory):
     return {path.name: path.read_bytes() for path in root.glob("*.sql")}
 
 
+# Explicitly reviewed additive, read-only authentication helper. It changes no
+# tables, passwords, RLS policies or memberships; old images can ignore it after
+# rollback. Any other migration or change to this exact SQL remains blocked.
+REVIEWED_ADDITIVE_MIGRATIONS = {
+    "00038_authenticated_login_tenants.sql": "4f5f82ed02621f4fee99ce7060cf438d2388e7e15b368b801eaaca3935f10fac",
+}
+
+
+def migration_compatible(previous, candidate):
+    return (all(candidate.get(name) == content for name, content in previous.items())
+            and all(REVIEWED_ADDITIVE_MIGRATIONS.get(name) == hashlib.sha256(content).hexdigest()
+                    for name, content in candidate.items() if name not in previous))
+
+
+def tester_accounts():
+    # No passwords or account data are logged. Exclude only our dedicated
+    # release tester, whose bcrypt hash is refreshed by its provisioning step.
+    statement = """select coalesce(jsonb_object_agg(u.id::text,
+        jsonb_build_object('password_fingerprint', md5(u.password_hash),
+            'memberships', (select coalesce(jsonb_agg(jsonb_build_object(
+                'tenant', tm.tenant_id, 'status', tm.status) order by tm.tenant_id), '[]')
+                from tenant_members tm where tm.user_id=u.id))), '{}')
+        from users u where u.email <> 'release-smoke@zbt.local';"""
+    return json.loads(subprocess.check_output([
+        'docker', 'exec', 'zbt-dev-db', 'psql', '-U', 'zbt', '-d', 'zbt', '-At', '-c', statement], text=True))
+
+
 def deploy(directory, force_failure=False):
     os.umask(0o077)
     private = Path("/opt/zbt-private")
@@ -47,7 +75,7 @@ def deploy(directory, force_failure=False):
     with (private / "deploy.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         previous = active_directory()
-        if migrations(previous) != migrations(directory):
+        if not migration_compatible(migrations(previous), migrations(directory)):
             raise RuntimeError("Database migrations changed: review migration/rollback compatibility before deployment")
         new_command = compose(directory)
         old_command = compose(previous)
@@ -64,6 +92,7 @@ def deploy(directory, force_failure=False):
         if pending != "0":
             raise RuntimeError("AI tasks are still active; let them complete before deployment")
         backup = snapshot(previous)
+        existing_accounts = tester_accounts()
         try:
             execute(new_command + ["up", "-d", "--no-build", "--remove-orphans"])
             health()
@@ -74,10 +103,15 @@ def deploy(directory, force_failure=False):
             environment = {**os.environ, "ZBT_SMOKE_EMAIL": credentials["smoke_email"], "ZBT_SMOKE_PASSWORD": credentials["smoke_password"]}
             execute(new_command + ["exec", "-T", "ai-service", "python", "-m", "app.evaluation.ocr_bridge_smoke"])
             execute(["python3", str(directory / "infra/scripts/full_bid_smoke.py"), "--base-url", "http://127.0.0.1:8080/api/v1"], env=environment)
+            execute(["python3", str(directory / "infra/scripts/gray_acceptance.py")], env=environment)
             execute(new_command + ["exec", "-T", "postgres", "pg_isready", "-U", "zbt", "-d", "zbt"])
             execute(new_command + ["exec", "-T", "redis", "redis-cli", "ping"])
             execute(["docker", "volume", "inspect", "zbt-dev_postgres_data", "zbt-dev_minio_data", "zbt-dev_ai_tasks_data"], stdout=subprocess.DEVNULL)
-            state = {"directory": str(directory), "pre_deploy_backup": str(backup), "verified_at": time.time()}
+            current_accounts = tester_accounts()
+            if any(current_accounts.get(user) != fingerprint for user, fingerprint in existing_accounts.items()):
+                raise RuntimeError('Existing tester passwords or memberships changed during acceptance; investigate before release')
+            state = {"directory": str(directory), "pre_deploy_backup": str(backup), "verified_at": time.time(),
+                     "preserved_account_count": len(existing_accounts)}
             temporary = ACTIVE.with_suffix(".tmp")
             temporary.write_text(json.dumps(state, indent=2))
             temporary.replace(ACTIVE)

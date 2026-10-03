@@ -71,6 +71,15 @@ def test_unknown_or_requirement_id_is_not_accepted_as_fabricated_provenance():
     assert response.needs_human_input
 
 
+def test_empty_enterprise_evidence_is_explicit_even_if_model_reports_no_gaps():
+    payload = ChapterGenerateRequest(tenant_id='tenant', bid_document_id='bid', bid_part_id='part',
+                                    chapter_id='chapter', chapter_title='title')
+    response = _chapter_response_from_json({'plain_text': '项目方案', 'source_refs': [], 'needs_human_input': []},
+                                         payload, 'provider', 'model')
+    assert response.source_refs == []
+    assert any('未提供可引用的企业资料' in item for item in response.needs_human_input)
+
+
 def test_requirement_coverage_drops_unknown_provenance_and_requires_review():
     payload = ChapterGenerateRequest(
         tenant_id="tenant",

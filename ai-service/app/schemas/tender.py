@@ -97,6 +97,7 @@ class TenderParseRequest(BaseModel):
     tenant_id: TenderTenantID
     bid_id: TenderOptionalEntityID | None = None
     bid_title: TenderTitle | None = None
+    bid_type: Literal['combined', 'separated', 'custom'] | None = None
     file_id: TenderEntityID
     object_key: TenderObjectKey
     filename: TenderFilename

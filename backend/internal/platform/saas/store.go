@@ -19,7 +19,14 @@ import (
 var (
 	ErrNotFound       = errors.New("not found")
 	ErrInvalidRequest = errors.New("invalid request")
+	ErrEmailTaken     = errors.New("email already registered")
 )
+
+type TenantSelectionRequired struct {
+	Tenants []Tenant
+}
+
+func (e *TenantSelectionRequired) Error() string { return "tenant selection required" }
 
 const (
 	maxSaaSTenantNameRunes     = 255
@@ -123,7 +130,7 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, err
 			return err
 		}
 		if exists {
-			return ErrInvalidRequest
+			return ErrEmailTaken
 		}
 		if _, err := tx.Exec(ctx, `
 			insert into tenants (id, name)
@@ -176,13 +183,20 @@ func (s *Store) Register(ctx context.Context, req RegisterRequest) (Session, err
 		}
 		return nil
 	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "users_email_key" {
+		return Session{}, ErrEmailTaken
+	}
 	return session, normalizeSaaSWriteError(err)
 }
 
 func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Session, error) {
-	tenantID, err := normalizeUUID(tenantID)
-	if err != nil {
-		return Session{}, err
+	var err error
+	if strings.TrimSpace(tenantID) != "" {
+		tenantID, err = normalizeUUID(tenantID)
+		if err != nil {
+			return Session{}, err
+		}
 	}
 	email, err = normalizeEmail(email)
 	if err != nil {
@@ -191,6 +205,33 @@ func (s *Store) Login(ctx context.Context, tenantID, email, password string) (Se
 	password, err = normalizePassword(password)
 	if err != nil {
 		return Session{}, ErrInvalidRequest
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		rows, err := s.pool.Query(ctx, `select tenant_id::text, tenant_name from public.authenticated_login_tenants($1, $2)`, email, password)
+		if err != nil {
+			return Session{}, err
+		}
+		tenants := []Tenant{}
+		for rows.Next() {
+			var tenant Tenant
+			if err := rows.Scan(&tenant.ID, &tenant.Name); err != nil {
+				rows.Close()
+				return Session{}, err
+			}
+			tenants = append(tenants, tenant)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return Session{}, err
+		}
+		if len(tenants) == 0 {
+			return Session{}, ErrNotFound
+		}
+		if len(tenants) > 1 {
+			return Session{}, &TenantSelectionRequired{Tenants: tenants}
+		}
+		tenantID = tenants[0].ID
 	}
 	var session Session
 	err = s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {

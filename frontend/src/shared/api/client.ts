@@ -1575,6 +1575,11 @@ export async function fetchPlatformCollectorRuns(params?: {
   return data.items ?? []
 }
 
+export async function fetchPlatformTender(id: string): Promise<PlatformTenderDTO> {
+  const { data } = await apiClient.get<PlatformTenderDTO>(`/platform/tenders/${encodeURIComponent(id)}`)
+  return data
+}
+
 export async function fetchTenderSources(): Promise<TenderSourceDTO[]> {
   const { data } = await apiClient.get<{ items: TenderSourceDTO[] }>('/tender-sources')
   return data.items

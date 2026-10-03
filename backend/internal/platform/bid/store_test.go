@@ -55,6 +55,11 @@ func TestDefaultTenderStructuredResultCarriesSourceObjectKey(t *testing.T) {
 	if source["object_key"] != "tenant/bid_tender/file-demo" {
 		t.Fatalf("expected object key in source_file, got %v", source["object_key"])
 	}
+	for _, field := range []string{"deadline", "project_name", "qualification_requirements", "invalid_clause_risks", "scoring_points", "outline", "material_suggestions"} {
+		if _, exists := structured[field]; exists {
+			t.Fatalf("queued parse must not manufacture source facts: %s", field)
+		}
+	}
 }
 
 func TestMarshalParseStructuredResultJSONRejectsInvalidAndOversizedValues(t *testing.T) {

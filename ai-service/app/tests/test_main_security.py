@@ -987,7 +987,7 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
     assert result["modules"]["basic"]["fields"]["project_name"] == "智慧交通平台建设"
     assert result["modules"]["qualification"]["requirement_items"]
     assert result["modules"]["submission"]["requirement_items"]
-    assert result["modules"]["annex"]["requirement_items"]
+    assert result["modules"]["annex"]["requirement_items"] == []
     assert result["field_evidence"]
     assert result["requirement_items"]
     assert result["quality_gates"]["interpret"]["module_count"] == 6
@@ -1002,10 +1002,10 @@ def test_build_tender_structured_result_extracts_business_fields() -> None:
         "annex",
     }
     assert "annex" in result["quality_gates"]["interpret"]["review_modules"]
-    assert result["quality_gates"]["interpret"]["module_quality"]["annex"]["missing_source_count"] >= 1
+    assert result["quality_gates"]["interpret"]["module_quality"]["annex"]["requirement_count"] == 0
     assert result["parse_metadata"]["module_count"] == 6
     assert result["parse_metadata"]["requirement_count"] == len(result["requirement_items"])
-    assert result["parse_metadata"]["module_quality"]["annex"]["missing_source_count"] >= 1
+    assert result["parse_metadata"]["module_quality"]["annex"]["requirement_count"] == 0
     assert "annex" in result["parse_metadata"]["review_modules"]
     assert result["parse_metadata"]["module_checklist"]["modules"]["evaluation"]["requirement_types"]
     qualification_source = result["modules"]["qualification"]["requirement_items"][0]["source_ref"]
@@ -1164,13 +1164,14 @@ def test_merge_tender_module_result_downgrades_unverified_model_source_refs() ->
 
     qualification = merged["modules"]["qualification"]
     source_ref = qualification["requirement_items"][0]["source_ref"]
-    assert source_ref["traceable"] is False
-    assert source_ref["needs_review"] is True
-    assert source_ref["confidence"] == 0.5
-    assert qualification["requirement_items"][0]["needs_review"] is True
+    assert source_ref["traceable"] is True  # Original extraction retained, invented model requirement rejected.
+    assert source_ref["needs_review"] is False
+    assert '桥梁检测资质' in qualification['requirement_items'][0]['requirement']
+    assert '施工总承包一级' not in str(qualification['fields'])
+    assert all('施工总承包一级' not in item['requirement'] for item in qualification['requirement_items'])
     assert qualification["status"] == "needs_review"
     assert "qualification" in merged["quality_gates"]["interpret"]["review_modules"]
-    assert merged["quality_gates"]["interpret"]["module_quality"]["qualification"]["requirement_review_count"] == 1
+    assert merged["quality_gates"]["interpret"]["module_quality"]["qualification"]["requirement_review_count"] == 0
     assert "部分模型来源未能在解析上下文中定位" in qualification["warnings"][0]
 
 
@@ -1335,7 +1336,7 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert callbacks[0]["status"] == "done", callbacks[0]
     result = callbacks[0]["result"]
     assert isinstance(result, dict)
-    assert result["structured_result"]["project_name"] == "模型增强桥梁检查服务"
+    assert result["structured_result"]["project_name"] == "桥梁检查服务"
     assert set(result["structured_result"]["modules"]) == {
         "basic",
         "qualification",
@@ -1344,16 +1345,16 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
         "invalid_risk",
         "annex",
     }
-    assert result["structured_result"]["modules"]["basic"]["fields"]["project_name"] == "模型增强桥梁检查服务"
+    assert result["structured_result"]["modules"]["basic"]["fields"]["project_name"] == "桥梁检查服务"
     assert result["structured_result"]["modules"]["qualification"]["fields"]["qualification_requirements"] == [
-        "模型识别资质要求"
+        "资格要求：具备桥梁检测资质"
     ]
     assert result["structured_result"]["modules"]["qualification"]["requirement_items"][0]["needs_review"] is False
     assert result["structured_result"]["requirement_items"]
     assert result["structured_result"]["field_evidence"]
     assert result["structured_result"]["quality_gates"]["interpret"]["module_count"] == 6
     assert result["structured_result"]["quality_gates"]["interpret"]["module_quality"]["qualification"]["requirement_count"] >= 1
-    assert "qualification" not in result["structured_result"]["quality_gates"]["interpret"]["review_modules"]
+    assert "qualification" in result["structured_result"]["quality_gates"]["interpret"]["review_modules"]
     assert result["model_metadata"]["provider"] == "fake-llm"
     assert result["model_metadata"]["model"] == "fake-model"
     assert result["model_metadata"]["module_call_count"] == 6
@@ -1364,7 +1365,7 @@ def test_process_tender_parse_uses_model_provider_and_callback(monkeypatch) -> N
     assert result["token_usage"]["input_tokens"] > 0
 
 
-def test_process_tender_parse_rejects_oversized_model_structured_result(monkeypatch) -> None:
+def test_process_tender_parse_rejects_oversized_enhancement_and_keeps_original(monkeypatch) -> None:
     callbacks: list[dict[str, object]] = []
 
     class FakeResponse:
@@ -1427,13 +1428,15 @@ def test_process_tender_parse_rejects_oversized_model_structured_result(monkeypa
     )
 
     assert callbacks
-    assert callbacks[0]["status"] == "failed"
-    assert callbacks[0]["error_message"] == "招标文件解读失败，请检查文件后重试"
-    assert callbacks[0]["result"] == {
-        "error": "招标文件解读失败，请检查文件后重试",
-        "bid_id": "bid-demo",
-        "file_id": "file-demo",
-    }
+    assert callbacks[0]["status"] == "done"
+    result = callbacks[0]['result']
+    assert result['structured_result']['project_name'] == '桥梁检查服务'
+    basic = result['structured_result']['modules']['basic']
+    assert basic['status'] == 'needs_review'
+    assert 'oversized' not in basic['fields']
+    assert basic['enhancement_error']['needs_review'] is True
+    assert any(call['module'] == 'basic' and call['status'] == 'failed'
+               for call in result['model_metadata']['module_calls'])
 
 
 def test_process_tender_parse_runs_modules_with_configured_concurrency(monkeypatch) -> None:
@@ -1621,7 +1624,7 @@ def test_process_tender_parse_falls_back_when_primary_provider_call_fails(monkey
     assert callbacks[0]["status"] == "done", callbacks[0]
     result = callbacks[0]["result"]
     assert isinstance(result, dict)
-    assert result["structured_result"]["project_name"] == "fallback 解析项目"
+    assert result["structured_result"]["project_name"] == "桥梁检查服务"
     assert result["model_metadata"]["provider"] == "fallback-llm"
     assert result["model_metadata"]["model"] == "fallback-model"
     assert result["model_metadata"]["fallback_from"] == "primary-llm"

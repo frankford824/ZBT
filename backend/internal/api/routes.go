@@ -126,6 +126,7 @@ var routeSpecs = []routeSpec{
 	{"DELETE", "/tender-sources/:id", "tender", false},
 	{"POST", "/tender-sources/:id/verify", "tender", false},
 	{"GET", "/platform/tenders", "tender", false},
+	{"GET", "/platform/tenders/:id", "tender", false},
 	{"GET", "/platform/collector-runs", "tender", false},
 	// 企业资质档案挂在 team 模块下：它是企业主体信息的一部分，
 	// 由公司管理员维护，与团队/租户设置同权限域。
@@ -450,10 +451,12 @@ func (s *server) login(c *gin.Context) {
 		return
 	}
 	tenantID := req.TenantID
-	if tenantID == "" {
-		tenantID = s.cfg.DefaultTenantID
-	}
 	session, err := s.store.Login(c.Request.Context(), tenantID, req.Email, req.Password)
+	var selection *saas.TenantSelectionRequired
+	if errors.As(err, &selection) {
+		c.JSON(http.StatusConflict, gin.H{"code": "tenant_selection_required", "message": "请选择要登录的企业", "tenants": selection.Tenants})
+		return
+	}
 	if errors.Is(err, saas.ErrNotFound) {
 		c.JSON(http.StatusUnauthorized, apiError("invalid_credentials", "账号或密码不正确"))
 		return
@@ -475,6 +478,10 @@ func (s *server) register(c *gin.Context) {
 		return
 	}
 	session, err := s.store.Register(c.Request.Context(), req)
+	if errors.Is(err, saas.ErrEmailTaken) {
+		c.JSON(http.StatusConflict, apiError("email_already_registered", "该邮箱已注册，请登录或使用其他邮箱"))
+		return
+	}
 	if errors.Is(err, saas.ErrInvalidRequest) {
 		respondBadRequest(c)
 		return
@@ -656,6 +663,7 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.DELETE("/tender-sources/:id", rbac.Require("tender", rbac.LevelFull), s.deleteTenderSource)
 	group.POST("/tender-sources/:id/verify", rbac.Require("tender", rbac.LevelFull), s.verifyTenderSource)
 	group.GET("/platform/tenders", rbac.Require("tender", rbac.LevelRead), s.listPlatformTenders)
+	group.GET("/platform/tenders/:id", rbac.Require("tender", rbac.LevelRead), s.getPlatformTender)
 	group.GET("/platform/collector-runs", rbac.Require("tender", rbac.LevelRead), s.listPlatformCollectorRuns)
 
 	group.GET("/company/certificates", rbac.Require("team", rbac.LevelRead), s.listCompanyCertificates)
@@ -846,6 +854,7 @@ func customRouteSet() map[string]bool {
 		"DELETE /tender-sources/:id":                        true,
 		"POST /tender-sources/:id/verify":                   true,
 		"GET /platform/tenders":                             true,
+		"GET /platform/tenders/:id":                         true,
 		"GET /platform/collector-runs":                      true,
 		"GET /company/certificates":                         true,
 		"POST /company/certificates":                        true,
@@ -1159,6 +1168,14 @@ func (s *server) listPlatformCollectorRuns(c *gin.Context) {
 	}
 	result, err := s.tenderPoolStore.ListRuns(c.Request.Context(), c.Query("source"), limit)
 	respond(c, gin.H{"items": result}, err)
+}
+
+func (s *server) getPlatformTender(c *gin.Context) {
+	if !s.platformTenderPoolVisible(c) {
+		return
+	}
+	result, err := s.tenderPoolStore.Get(c.Request.Context(), c.Param("id"))
+	respond(c, result, err)
 }
 
 // platformTenderPoolVisible 由 PLATFORM_TENDER_POOL_PUBLIC 控制，默认关闭。
@@ -3149,6 +3166,10 @@ func respondInternal(c *gin.Context) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
+	if errors.Is(err, tenderpool.ErrNotFound) {
+		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
+		return
+	}
 	if errors.Is(err, saas.ErrNotFound) || errors.Is(err, platformfile.ErrNotFound) || errors.Is(err, knowledge.ErrNotFound) || errors.Is(err, bid.ErrNotFound) || errors.Is(err, platformtender.ErrNotFound) || errors.Is(err, platformproject.ErrNotFound) || errors.Is(err, platformcost.ErrNotFound) || errors.Is(err, platformcompliance.ErrNotFound) || errors.Is(err, platformapproval.ErrNotFound) || errors.Is(err, externaltool.ErrNotFound) || errors.Is(err, qualification.ErrNotFound) {
 		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return

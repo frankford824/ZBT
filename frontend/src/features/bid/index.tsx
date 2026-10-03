@@ -173,7 +173,7 @@ export function BidNewPage() {
       tenderOrg: '',
       deadline: '',
       budget: '',
-      bidType: 'separated',
+      bidType: 'combined',
     },
   })
 
@@ -244,7 +244,7 @@ export function BidNewPage() {
                 name="bidType"
                 control={control}
                 render={({ field }) => (
-                  <Radio.Group {...field} id="bid-type">
+                  <Radio.Group {...field} id="bid-type" onChange={(event) => field.onChange(event.target.value)}>
                     <Radio.Button value="combined">综合标书</Radio.Button>
                     <Radio.Button value="separated">分离标书</Radio.Button>
                     <Radio.Button value="custom">自定义组合</Radio.Button>
@@ -550,9 +550,12 @@ export function BidWizardPage() {
   const parseConfirmSourceKey = parseResult.data
     ? `${parseResult.data.id}:${parseResult.data.updated_at}:${parseResult.data.status}`
     : ''
+  const completedParseStructured = ['ready', 'confirmed'].includes(parseResult.data?.status ?? '')
+    ? parseResult.data?.structured_result
+    : undefined
   const parseConfirmServerDraft = useMemo(
-    () => parseConfirmDraftFromStructuredResult(parseResult.data?.structured_result),
-    [parseResult.data?.structured_result],
+    () => parseConfirmDraftFromStructuredResult(completedParseStructured),
+    [completedParseStructured],
   )
   const parseConfirmDraft =
     parseConfirmDraftState?.sourceKey === parseConfirmSourceKey
@@ -560,8 +563,8 @@ export function BidWizardPage() {
       : parseConfirmServerDraft
   const parseConfirmEditedFields = parseConfirmChangedFieldLabels(parseConfirmServerDraft, parseConfirmDraft)
   const parseModuleFieldsServerDraft = useMemo(
-    () => parseModuleFieldsDraftFromStructuredResult(parseResult.data?.structured_result),
-    [parseResult.data?.structured_result],
+    () => parseModuleFieldsDraftFromStructuredResult(completedParseStructured),
+    [completedParseStructured],
   )
   const parseModuleFieldsDraft =
     parseModuleFieldsDraftState?.sourceKey === parseConfirmSourceKey
@@ -576,8 +579,8 @@ export function BidWizardPage() {
   const canEditParseConfirm =
     canWrite && Boolean(parseResult.data) && ['ready', 'confirmed'].includes(parseResult.data?.status ?? 'queued')
   const parseFieldReviewServerDraft = useMemo(
-    () => parseFieldReviewDraftFromStructuredResult(parseResult.data?.structured_result),
-    [parseResult.data?.structured_result],
+    () => parseFieldReviewDraftFromStructuredResult(completedParseStructured),
+    [completedParseStructured],
   )
   const parseFieldReviewDraft =
     parseFieldReviewDraftState?.sourceKey === parseConfirmSourceKey
@@ -1125,14 +1128,14 @@ export function BidWizardPage() {
   }
   const exportableParts = (parts.data ?? []).filter((part) => ['combined_body', 'tech', 'business'].includes(part.code))
   const primaryPartCode = exportableParts[0]?.code
-  const parseRows = structuredResultRows(parseResult.data?.structured_result)
-  const parseFieldEvidenceRows = structuredFieldEvidenceRows(parseResult.data?.structured_result)
-  const parseModuleRows = structuredModuleRows(parseResult.data?.structured_result)
-  const parseModuleFieldRows = structuredModuleFieldRows(parseResult.data?.structured_result)
-  const syncedRequirementRows = requirementRowsFromItems(bidRequirements.data ?? [])
+  const parseRows = structuredResultRows(completedParseStructured)
+  const parseFieldEvidenceRows = structuredFieldEvidenceRows(completedParseStructured)
+  const parseModuleRows = structuredModuleRows(completedParseStructured)
+  const parseModuleFieldRows = structuredModuleFieldRows(completedParseStructured)
+  const syncedRequirementRows = requirementRowsFromItems(completedParseStructured ? bidRequirements.data ?? [] : [])
   const parseRequirementRows = syncedRequirementRows.length
     ? syncedRequirementRows
-    : structuredRequirementRows(parseResult.data?.structured_result)
+    : structuredRequirementRows(completedParseStructured)
   const visibleRequirementRows = filterRequirementRows(parseRequirementRows, requirementFilter, requirementEvidenceFilter)
   const filteredUpdatableRequirementRows = visibleRequirementRows.filter((row) => row.canUpdate)
   const selectedRequirementRows = parseRequirementRows.filter((row) => row.canUpdate && selectedRequirementKeys.includes(row.id))
@@ -1249,7 +1252,10 @@ export function BidWizardPage() {
                 </Tag>
               </Space>
               {parseFailureMessage ? <Alert type="error" showIcon message={parseFailureMessage} /> : null}
-              <div className="parse-confirm-panel">
+              {parseResult.data && ['queued', 'processing'].includes(parseResult.data.status) ? (
+                <Alert type="info" showIcon message="正在解读招标文件" description="尚未得到文件事实；日期、资格、评分及要求清单将在解读完成后显示。" />
+              ) : null}
+              <div className="parse-confirm-panel" hidden={!completedParseStructured}>
                 <div className="parse-confirm-head">
                   <Typography.Title level={5}>确认信息</Typography.Title>
                   <Space size={6} wrap>

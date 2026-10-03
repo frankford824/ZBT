@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date as calendar_date
 from pathlib import Path
 
 from pydantic import TypeAdapter
 
+from app.schemas.common import bounded_json_object
 from app.schemas.knowledge import KnowledgeProcessResult
 from app.schemas.tender import (
+    MAX_TENDER_RESPONSE_FIELDS_BYTES,
     TenderParseFieldEvidence,
     TenderParseModule,
     TenderParseModuleResult,
@@ -135,43 +138,43 @@ def build_tender_structured_result(
     parsed: KnowledgeProcessResult,
 ) -> dict[str, object]:
     text = "\n".join(chunk.content for chunk in parsed.chunks)
-    project_name = payload.bid_title or _project_name_from_text(text) or Path(payload.filename).stem
+    project_name = _project_name_from_text(text) or payload.bid_title or Path(payload.filename).stem
     has_tech_part = any(marker in text for marker in ("技术标", "技术方案", "实施方案"))
     has_business_part = any(marker in text for marker in ("商务标", "商务响应", "报价文件", "报价说明"))
-    bid_type = "separated" if has_tech_part and has_business_part else "combined"
+    bid_type = payload.bid_type or ("separated" if has_tech_part and has_business_part else "combined")
     outline_parts = _tender_outline_parts(text, bid_type)
     source_records = _source_records(parsed, payload)
     qualification_requirements, qualification_evidence = _keyword_values_with_evidence(
         source_records,
         "qualification_requirements",
-        ("资格", "资质", "业绩", "证书", "项目负责人", "联合体"),
-        fallback=("营业执照、授权及签章材料齐备", "按招标文件提交资格证明材料"),
+        ("资格", "资质", "业绩", "证书", "许可证", "项目负责人", "联合体"),
+        fallback=(),
     )
     invalid_clause_risks, invalid_evidence = _keyword_values_with_evidence(
         source_records,
         "invalid_clause_risks",
         ("无效", "废标", "否决", "投标保证金", "投标有效期", "签章"),
-        fallback=("签章、报价、投标有效期等关键条款需人工复核",),
+        fallback=(),
     )
     scoring_points, scoring_evidence = _keyword_values_with_evidence(
         source_records,
         "scoring_points",
         ("评分", "分值", "评审", "技术方案", "服务方案", "实施方案"),
-        fallback=("实施方案完整性", "项目团队与业绩能力", "服务承诺与响应程度"),
+        fallback=(),
     )
     submission_requirements, submission_evidence = _keyword_values_with_evidence(
         source_records,
         "submission_requirements",
         ("递交", "提交", "投标文件", "密封", "签章", "份数", "电子", "开标"),
-        fallback=("按招标文件要求提交、签章、密封和递交投标文件",),
+        fallback=(),
     )
     annex_items, annex_evidence = _keyword_values_with_evidence(
         source_records,
         "annex_items",
         ("附件", "格式", "投标函", "报价表", "承诺函", "清单", "响应文件格式"),
-        fallback=("按招标文件附件和响应文件格式准备投标函、报价表和承诺函",),
+        fallback=(),
     )
-    deadline = _first_date(text)
+    deadline = _tender_deadline(text)
     base_fields = {
         "project_name": project_name,
         "bid_type": bid_type,
@@ -412,6 +415,10 @@ def build_tender_module_prompt(
                 "Return only JSON.",
                 "Only improve the requested module.",
                 "Do not invent dates, certificates, prices, page numbers, names, or scores.",
+                "The checklist is coverage guidance, NOT evidence that these requirements exist.",
+                "Quote requirements verbatim from the source; omit absent requirements instead of inferring them.",
+                "Each factual value must be contained in its source_text. Do not use an unrelated real quote to justify a new fact.",
+                "Missing fields must remain empty. Preserve the user's selected bid_type.",
                 "Every changed field or requirement must include source_text or needs_review=true.",
                 "Every traceable changed field or requirement must keep citation_id/reference_id.",
                 "Prefer source_context chunk_id/page/table_block_id when emitting source evidence.",
@@ -941,6 +948,7 @@ def _normalized_model_module_result(
     fields = dict(current.get("fields") if isinstance(current.get("fields"), dict) else {})
     model_fields = model_result.get("fields")
     if isinstance(model_fields, dict):
+        bounded_json_object(model_fields, max_bytes=MAX_TENDER_RESPONSE_FIELDS_BYTES, label="model module fields")
         for key, value in model_fields.items():
             if _usable_model_value(value):
                 fields[str(key)] = value
@@ -981,10 +989,19 @@ def _normalized_model_module_result(
         for item in current.get("warnings", [])
         if str(item).strip()
     ] if isinstance(current.get("warnings"), list) else []
+    rejected = False
+    if source_context_records is not None:
+        fields, evidence, requirement_items, rejected = _ground_module_facts(
+            current, fields, evidence, requirement_items
+        )
+        if rejected:
+            warnings.insert(0, "部分模型来源未能在解析上下文中定位或不能支持对应事实，已拒绝写入要求清单并保留原文抽取结果。")
     if _has_unverified_source_refs(evidence, requirement_items):
         warnings.append("部分模型来源未能在解析上下文中定位，已降级为人工复核。")
     status = str(model_result.get("status") or current.get("status") or "done")
     if status not in {"done", "needs_review", "empty"}:
+        status = "needs_review"
+    if rejected:
         status = "needs_review"
     if any(bool(item.get("needs_review")) for item in evidence if isinstance(item, dict)) or any(
         bool(item.get("needs_review")) for item in requirement_items if isinstance(item, dict)
@@ -999,6 +1016,77 @@ def _normalized_model_module_result(
         "requirement_items": requirement_items,
         "warnings": warnings or current_warnings,
     }
+
+
+def _fact_text(value: object) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})日?",
+                  lambda m: f"{int(m[1]):04d}{int(m[2]):02d}{int(m[3]):02d}", text)
+    return re.sub(r"[\s\W_]+", "", text)
+
+
+def _fact_supported(value: object, quote: object) -> bool:
+    """Conservative extractive contract: a genuine quote alone is not proof."""
+    source = _fact_text(quote)
+    if isinstance(value, list):
+        return bool(value) and all(_fact_supported(item, quote) for item in value)
+    if isinstance(value, dict):
+        label = next((value.get(key) for key in ("text", "requirement", "description", "name", "title", "value")
+                      if value.get(key) not in (None, "")), None)
+        if label is None or not _fact_supported(label, quote):
+            return False
+        score = value.get("score")
+        if score is not None:
+            # Require the score near its own label, not another item in a table.
+            score_text = str(int(score)) if isinstance(score, (int, float)) and float(score).is_integer() else str(score)
+            return bool(re.search(re.escape(_fact_text(label)) + r".{0,16}?" + re.escape(score_text) + r"(?:分|points?)", source))
+        return True
+    candidate = _fact_text(value)
+    return bool(candidate) and candidate in source
+
+
+def _ground_module_facts(current, fields, evidence, requirements):
+    accepted_evidence = [item for item in evidence if item.get("traceable")
+                         and not item.get("needs_review") and float(item.get("confidence") or 0) >= 0.65
+                         and _fact_supported(item.get("value"), item.get("source_text"))]
+    grounded = dict(current.get("fields") or {})
+    rejected = False
+    for field, value in fields.items():
+        if field == "bid_type":
+            # This is a user-selected layout, not a model-inferred file fact.
+            continue
+        candidates = value if isinstance(value, list) else [value]
+        supported = [candidate for candidate in candidates if any(
+            item.get("field") == field and _fact_supported(candidate, item.get("source_text"))
+            for item in accepted_evidence
+        )]
+        if len(supported) != len(candidates):
+            rejected = True
+        if supported:
+            grounded[field] = supported if isinstance(value, list) else supported[0]
+    accepted_requirements = []
+    for item in requirements:
+        source = item.get("source_ref") or {}
+        if (source.get("traceable") and not source.get("needs_review")
+                and not item.get("needs_review") and float(source.get("confidence") or 0) >= 0.65
+                and _fact_supported(item.get("requirement"), source.get("source_text"))):
+            accepted_requirements.append(item)
+        else:
+            rejected = True
+    # Never replace safe deterministic extraction with invented facts. Keep all
+    # original clauses, including end-of-document clauses and their citations.
+    by_requirement = {_fact_text(item.get("requirement")): dict(item)
+                      for item in current.get("requirement_items", []) if isinstance(item, dict)}
+    for item in accepted_requirements:
+        by_requirement[_fact_text(item.get("requirement"))] = item
+    result_requirements = list(by_requirement.values())
+    used_ids = set()
+    for index, item in enumerate(result_requirements, 1):
+        if item.get("id") in used_ids:
+            item["id"] = f"{item['module']}-grounded-{index:03d}"
+        used_ids.add(item.get("id"))
+    current_evidence = [item for item in current.get("evidence", []) if isinstance(item, dict)]
+    return grounded, current_evidence + accepted_evidence, result_requirements, rejected
 
 
 def _normalize_model_evidence(
@@ -1111,11 +1199,10 @@ def _normalize_model_requirement_items(
             continue
         raw_ref = item.get("source_ref")
         source_ref = (
-            _normalize_model_evidence(
-                module,
-                [raw_ref],
+            next(iter(_normalize_model_evidence(
+                module, [{"field": "requirement", "value": requirement, **raw_ref}],
                 source_context_records=source_context_records,
-            )[0]
+            )), None)
             if isinstance(raw_ref, dict)
             else None
         )
@@ -1874,6 +1961,8 @@ def _keyword_values_with_evidence(
     seen: set[str] = set()
     for record in records:
         value = str(record.get("text") or "").strip(" :：\t")
+        if field == "qualification_requirements" and re.search(r"评分|\d+\s*分", value) and not re.search(r"资格|资质|证书|许可证", value):
+            continue
         if len(value) < 4 or not any(keyword in value for keyword in keywords):
             continue
         if value in seen:
@@ -2091,6 +2180,27 @@ def _first_date(text: str) -> str | None:
         parts = [part.strip() for part in value.split("-") if part.strip()]
         if len(parts) == 3:
             return f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+    return None
+
+
+def _tender_deadline(text: str) -> str | None:
+    # A publication date or opening date is not the tender deadline.
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not re.search(r"(?:投标|递交|提交|响应|报价).{0,12}(?:截止|截至)|(?:投标截止|截止时间|deadline)", line, re.IGNORECASE):
+            continue
+        candidate = line + (" " + lines[index + 1] if index + 1 < len(lines) else "")
+        date = _first_date(candidate)
+        if not date:
+            continue
+        try:
+            calendar_date.fromisoformat(date)
+        except ValueError:
+            continue
+        clock = re.search(r"(?:[T\s日]|^)(\d{1,2})\s*[:：时]\s*(\d{2})(?:分)?", candidate)
+        if clock and int(clock[1]) < 24 and int(clock[2]) < 60:
+            return f"{date} {int(clock[1]):02d}:{int(clock[2]):02d}"
+        return date
     return None
 
 

@@ -1,10 +1,11 @@
 import { isAxiosError } from 'axios'
-import { Alert, Button, Input, Select, Space, Table, Tag, Typography } from 'antd'
+import { Alert, Button, Descriptions, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import {
   fetchPlatformCollectorRuns,
   fetchPlatformTenders,
+  fetchPlatformTender,
   getApiErrorMessage,
   type PlatformCollectorRunDTO,
   type PlatformTenderDTO,
@@ -64,6 +65,12 @@ export function PlatformPoolPanel() {
   const [keyword, setKeyword] = useState('')
   const [source, setSource] = useState<string>()
   const [page, setPage] = useState(1)
+  const [detail, setDetail] = useState<PlatformTenderDTO | null>(null)
+  const fullDetail = useQuery({
+    queryKey: ['platform-tender-detail', detail?.id],
+    queryFn: () => fetchPlatformTender(detail!.id),
+    enabled: Boolean(detail),
+  })
 
   const tenders = useQuery({
     queryKey: ['platform-tenders', keyword, source, page],
@@ -100,6 +107,26 @@ export function PlatformPoolPanel() {
 
   return (
     <Space direction="vertical" size={16} className="full-width">
+      <Modal title="公共标讯详情" open={Boolean(detail)} onCancel={() => setDetail(null)} footer={null} width={800}>
+        {detail ? <Space direction="vertical" size={16} className="full-width">
+          <Typography.Title level={4}>{detail.title}</Typography.Title>
+          <Descriptions column={2} items={[
+            { key: 'source', label: '来源', children: sourceLabels[detail.external_source] || detail.external_source },
+            { key: 'collected', label: '采集时间', children: formatDateTime(detail.collected_at) },
+            { key: 'purchaser', label: '采购人', children: detail.purchaser || '原记录未提供' },
+            { key: 'budget', label: '预算', children: detail.budget_text || '原记录未提供' },
+            { key: 'region', label: '地区', children: detail.region || '原记录未提供' },
+            { key: 'deadline', label: '截止时间', children: formatDateOnly(detail.deadline) },
+          ]} />
+          <Alert type="info" showIcon message="历史采集展示数据，非实时外部同步" description="以下为本地保存的公告内容，不代表完整招标文件；请核对来源公告及实际招标文件。" />
+          {fullDetail.isLoading ? <LoadingBlock /> : null}
+          {fullDetail.isError ? <ErrorBlock description={getApiErrorMessage(fullDetail.error, '公告详情加载失败')} /> : null}
+          {fullDetail.data ? <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>{fullDetail.data.raw_content_preview || '当前记录没有公告正文。'}</Typography.Paragraph> : null}
+          {timelineEntries(detail.timeline || {}).map((item) => <Typography.Text key={item.label}>{item.label}：{item.value}</Typography.Text>)}
+          {detail.risk_flags?.length ? <Alert type="warning" showIcon message="待复核事项" description={detail.risk_flags.join('；')} /> : null}
+          {detail.source_url && /^https?:\/\//i.test(detail.source_url) ? <Typography.Link href={detail.source_url} target="_blank" rel="noreferrer">打开来源公告</Typography.Link> : null}
+        </Space> : null}
+      </Modal>
       {unhealthy.length ? (
         <Alert
           type="error"
@@ -232,14 +259,7 @@ export function PlatformPoolPanel() {
               title: '标讯名称',
               dataIndex: 'title',
               width: 280,
-              render: (value: string, row) =>
-                row.source_url ? (
-                  <Typography.Link href={row.source_url} target="_blank" rel="noreferrer">
-                    {value}
-                  </Typography.Link>
-                ) : (
-                  value
-                ),
+              render: (value: string, row) => <Button type="link" style={{ padding: 0, whiteSpace: 'normal', textAlign: 'left' }} onClick={() => setDetail(row)}>{value}</Button>,
             },
             {
               title: '来源',

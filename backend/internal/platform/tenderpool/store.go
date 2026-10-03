@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"math"
 	"net/url"
 	"strings"
@@ -24,6 +25,7 @@ import (
 )
 
 var ErrInvalidRequest = errors.New("invalid platform tender request")
+var ErrNotFound = errors.New("platform tender not found")
 
 const (
 	maxIngestTenders          = 200
@@ -298,6 +300,25 @@ func (s *Store) List(ctx context.Context, filter ListFilter) (ListResult, error)
 		tenders = append(tenders, tender)
 	}
 	return ListResult{Items: tenders, Total: total}, rows.Err()
+}
+
+// Get returns the complete locally saved public announcement, not the clipped
+// list preview. It never requests an external data source.
+func (s *Store) Get(ctx context.Context, id string) (PlatformTender, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return PlatformTender{}, ErrInvalidRequest
+	}
+	tender, err := scanPlatformTender(s.pool.QueryRow(ctx, `
+		select id::text, external_source, external_id, title, purchaser, region, notice_type_name,
+			publish_date, deadline, source_url, budget_text, budget_amount::float8,
+			raw_content, requirement_dims, timeline, attachments,
+			review_result, risk_flags, status, collected_at, updated_at
+		from platform_tenders where id = $1
+	`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PlatformTender{}, ErrNotFound
+	}
+	return tender, err
 }
 
 func (s *Store) ListRuns(ctx context.Context, source string, limit int) ([]CollectorRun, error) {
