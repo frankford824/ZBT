@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from pydantic import TypeAdapter
+
 from app.schemas.knowledge import KnowledgeProcessResult
 from app.schemas.tender import (
     TenderParseFieldEvidence,
@@ -13,7 +15,6 @@ from app.schemas.tender import (
     TenderParseStructuredResult,
     TenderRequirementItem,
 )
-
 
 MERGEABLE_TOP_LEVEL_FIELDS = {
     "project_name",
@@ -1294,13 +1295,42 @@ def _apply_module_to_compatible_fields(
         for key in ("project_name", "bid_type", "deadline"):
             value = fields.get(key)
             if _usable_model_value(value):
-                merged[key] = value
+                merged[key] = _compatible_field_value(key, value)
     elif module == "qualification" and _usable_model_value(fields.get("qualification_requirements")):
-        merged["qualification_requirements"] = fields["qualification_requirements"]
+        merged["qualification_requirements"] = _compatible_field_value(
+            "qualification_requirements", fields["qualification_requirements"]
+        )
     elif module == "evaluation" and _usable_model_value(fields.get("scoring_points")):
-        merged["scoring_points"] = fields["scoring_points"]
+        merged["scoring_points"] = _compatible_field_value("scoring_points", fields["scoring_points"])
     elif module == "invalid_risk" and _usable_model_value(fields.get("invalid_clause_risks")):
-        merged["invalid_clause_risks"] = fields["invalid_clause_risks"]
+        merged["invalid_clause_risks"] = _compatible_field_value(
+            "invalid_clause_risks", fields["invalid_clause_risks"]
+        )
+
+
+def _compatible_field_value(key: str, value: object) -> object:
+    # Models may return structured score/requirement records, while the legacy
+    # response fields require strings. Keep raw records in module.fields and
+    # project readable text here. Validate before the worker reports success so
+    # an invalid field can fall back without poisoning the entire callback.
+    if key in {"qualification_requirements", "scoring_points", "invalid_clause_risks"} and isinstance(value, list):
+        projected: list[object] = []
+        for item in value:
+            if isinstance(item, dict):
+                label = next((item.get(k) for k in
+                              ("text", "requirement", "description", "name", "title")
+                              if isinstance(item.get(k), str) and item[k].strip()), None)
+                if label is None:
+                    label = json.dumps(item, ensure_ascii=False, sort_keys=True)
+                score = item.get("score")
+                if score is not None and isinstance(score, (str, int, float)) and not isinstance(score, bool):
+                    label = f"{label}（{score}分）"
+                projected.append(label)
+            else:
+                projected.append(item)
+        value = projected
+    field = TenderParseStructuredResult.model_fields[key]
+    return TypeAdapter(field.rebuild_annotation()).validate_python(value)
 
 
 def _confidence(value: object, default: float) -> float:

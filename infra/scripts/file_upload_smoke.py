@@ -26,6 +26,32 @@ def require_origin(url: str, origin: str) -> None:
         raise RuntimeError("signed file URL does not target the application bucket")
 
 
+def make_tender_pdf(marker: str) -> bytes:
+    """Small real text-layer PDF, requiring no dependency on the runner host."""
+    lines = [f"Tender project: {marker}", "Buyer: ZBT Development",
+             "Scope: File upload and tender parsing acceptance", "Budget: CNY 100000",
+             "Required: Business license", "Delivery: 30 days",
+             "Evaluation: Technical 40 points, Price 60 points"]
+    stream = ("BT /F1 12 Tf 72 720 Td " + " 0 -18 Td ".join(
+        "(" + line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ") Tj"
+        for line in lines) + " ET").encode("ascii")
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>",
+               b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+               f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream"]
+    pdf = b"%PDF-1.4\n"
+    offsets = [0]
+    for number, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf += f"{number} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(pdf)
+    pdf += f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode()
+    pdf += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets[1:])
+    pdf += f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return pdf
+
+
 def run_smoke(base_url: str, public_origin: str, password: str, timeout: int) -> dict:
     login = api_call(base_url, "/auth/login", method="POST",
                      body={"email": "admin@zbt.local", "password": password})
@@ -34,12 +60,9 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int) ->
     bid = api_call(base_url, "/bids", method="POST", token=token,
                    body={"title": marker, "project_name": marker, "bid_type": "combined"})
     bid_id = str(bid["id"])
-    content = (f"项目名称：{marker}\n招标人：ZBT开发测试单位\n"
-               "采购范围：开发环境文件上传与解析验证。预算10万元。\n"
-               "投标人须提供营业执照。采用综合评分法。技术方案40分，报价60分。\n"
-               "交付期限：合同签订后30日。\n").encode()
+    content = make_tender_pdf(marker)
     upload = api_call(base_url, "/files/presign-upload", method="POST", token=token,
-                      body={"filename": marker + ".txt", "content_type": "text/plain",
+                      body={"filename": marker + ".pdf", "content_type": "application/pdf",
                             "size_bytes": len(content), "biz_type": "bid_tender", "biz_id": bid_id})
     require_origin(upload["upload_url"], public_origin)
     request = urllib.request.Request(upload["upload_url"], data=content,
@@ -68,6 +91,10 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int) ->
     while time.monotonic() < deadline:
         task = api_call(base_url, f"/ai-tasks/{task_id}", token=token)
         if task["status"] == "done":
+            metadata = (task.get("result") or {}).get("model_metadata") or {}
+            calls = metadata.get("module_calls") or []
+            if len(calls) != 6 or any(call.get("status") != "done" for call in calls):
+                raise RuntimeError("not all six tender modules completed real model enhancement")
             parsed = api_call(base_url, f"/bids/{bid_id}/parse-result", token=token)
             if (parsed.get("file_asset_id") != file_id or parsed.get("status") != "ready"
                     or not parsed.get("structured_result")):
