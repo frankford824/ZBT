@@ -30,6 +30,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestAITaskCallbackAcknowledgementIsSmallAndPreservesErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	respondAITaskCallback(ctx, "task-tender-parse-fixture", "done", nil)
+	if recorder.Code != http.StatusOK || recorder.Body.Len() > 256 {
+		t.Fatalf("callback acknowledgement must be bounded: status=%d bytes=%d", recorder.Code, recorder.Body.Len())
+	}
+	var ack map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &ack); err != nil {
+		t.Fatal(err)
+	}
+	if len(ack) != 2 || ack["task_id"] != "task-tender-parse-fixture" || ack["status"] != "done" {
+		t.Fatalf("callback must only acknowledge the persisted task: %v", ack)
+	}
+	errorRecorder := httptest.NewRecorder()
+	errorCtx, _ := gin.CreateTestContext(errorRecorder)
+	respondAITaskCallback(errorCtx, "task-tender-parse-fixture", "", bid.ErrNotFound)
+	if errorRecorder.Code != http.StatusNotFound {
+		t.Fatalf("failed callback must not be acknowledged: status=%d", errorRecorder.Code)
+	}
+}
+
 func TestFileAccessModuleMapsSupportedFileTypes(t *testing.T) {
 	for _, tc := range []struct {
 		bizType string

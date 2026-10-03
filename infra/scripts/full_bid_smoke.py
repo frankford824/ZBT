@@ -40,6 +40,20 @@ def run(base, origin):
     bid = upload["bid_id"]
     login = api_call(base, "/auth/login", method="POST", body={"email": os.environ["ZBT_SMOKE_EMAIL"], "password": password})
     token = login["access_token"]
+    parsed_task = api_call(base, '/ai-tasks/' + upload['task_id'], token=token)
+    external_task = parsed_task['external_task_id']
+    # A persisted terminal result is not enough: its durable callback must also
+    # be acknowledged, otherwise oversized responses create endless retries.
+    callback_deadline = time.monotonic() + 90
+    while True:
+        state = subprocess.check_output(['docker', 'exec', 'zbt-dev-ai', 'python', '-c',
+            "import sqlite3,os,sys; d=sqlite3.connect(os.environ['AI_DURABLE_QUEUE_PATH']); r=d.execute('select state from jobs where id=?',(sys.argv[1],)).fetchone(); print(r[0] if r else 'absent')",
+            external_task], text=True).strip()
+        if state == 'done':
+            break
+        if time.monotonic() >= callback_deadline:
+            raise RuntimeError('persisted interpretation callback was not durably acknowledged')
+        time.sleep(2)
     parsed = api_call(base, f"/bids/{bid}/parse-result", token=token)
     structured = parsed["structured_result"]
     # Bound model expense while still generating EVERY chapter of the fixture.

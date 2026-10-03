@@ -2967,7 +2967,7 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 		if err == nil {
 			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
-		respond(c, result, err)
+		respondAITaskCallback(c, payload.TaskID, result.Status, err)
 	case "bid_export", "bid_chapter", "bid_parse_result":
 		result, err := s.bidStore.ApplyCallback(c.Request.Context(), bid.CallbackPayload{
 			TenantID:     payload.TenantID,
@@ -2979,7 +2979,7 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 		if err == nil {
 			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
-		respond(c, result, err)
+		respondAITaskCallback(c, payload.TaskID, result.Status, err)
 	case "cost_project":
 		result, err := s.costStore.ApplyAdviceCallback(c.Request.Context(), platformcost.CallbackPayload{
 			TenantID:     payload.TenantID,
@@ -2991,10 +2991,17 @@ func (s *server) aiTaskCallback(c *gin.Context) {
 		if err == nil {
 			err = s.recordTaskCallback(c, payload.TenantID, payload.TaskID, result.Result, result.Status, result.ErrorMessage)
 		}
-		respond(c, result, err)
+		respondAITaskCallback(c, payload.TaskID, result.Status, err)
 	default:
 		c.JSON(http.StatusBadRequest, apiError("unsupported_callback_resource", "回调资源类型不支持"))
 	}
+}
+
+func respondAITaskCallback(c *gin.Context, taskID, status string, err error) {
+	// Results are already persisted. Echoing their potentially large contents
+	// exceeds the worker's bounded response reader and causes endless outbox
+	// retries even after a successful transaction.
+	respond(c, gin.H{"task_id": taskID, "status": status}, err)
 }
 
 func normalizeAndValidateCallbackPayload(payload *knowledge.CallbackPayload) bool {
