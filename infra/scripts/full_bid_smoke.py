@@ -55,6 +55,20 @@ def review_fixture_text(text):
     return re.sub(r'【事实待核实：[^】]*】', '相关承诺未作出；应由企业提供真实依据，经人工确认后另行编制。', text)
 
 
+def export_body_samples(text):
+    # Word stores ordered-list labels in numbering.xml, not document.xml text.
+    # Compare every source line's body separately, so an automatic label between
+    # paragraphs cannot look like lost content. Never strip body numbers (dates,
+    # prices, scores) or decimals: mirror only the exporter's list-prefix syntax.
+    samples = []
+    for line in text.splitlines():
+        body = re.sub(r'^\s*\d+[.)、]\s+', '', line)
+        sample = re.sub(r'\W+', '', body)[-60:]
+        if sample:
+            samples.append(sample)
+    return samples
+
+
 def verify_second_reviewer(base, token, bid):
     print('Acceptance: invite dedicated project-manager reviewer', flush=True)
     marker = uuid.uuid4().hex[:12]
@@ -182,7 +196,7 @@ def run(base, origin, bid_type='combined', verify_approval=False):
                      body={'plain_text': text})
         api_call(base, "/chapters/" + chapter["id"] + "/accept", method="POST", token=token, body={})
     chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
-    content_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters]
+    content_samples = [sample for chapter in chapters for sample in export_body_samples(chapter['plain_text'])]
     technical = next(chapter for chapter in chapters if chapter['title'] == fixture_chapters[0]['title'])['plain_text']
     if not re.search(r'雨水|排水|管道', technical) or re.search(r'云平台|云计算|软件许可', technical):
         raise RuntimeError('civil-engineering fixture generated unrelated software content')
@@ -194,7 +208,7 @@ def run(base, origin, bid_type='combined', verify_approval=False):
     parts = api_call(base, f'/bids/{bid}/parts', token=token)['items']
     export_part_id = next(part['id'] for part in parts if part['code'] == export_part_code)
     part_chapters = [chapter for chapter in chapters if chapter['bid_part_id'] == export_part_id]
-    docx_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in part_chapters]
+    docx_samples = [sample for chapter in part_chapters for sample in export_body_samples(chapter['plain_text'])]
     check = api_call(base, "/compliance/checks", method="POST", token=token,
                      body={"name": "发布验收-仅测试项目", "bid_document_id": bid, "levels": ["L1", "L2", "L3"]})
     # Seed rules generate review flags. Exercise reviewer acknowledgement on the

@@ -14,6 +14,7 @@ def request(**kwargs):
     "交付后提供12个月质量保修期。", "我方承诺质保期为两年。", "故障响应时间为2小时。",
     "我方投标报价为128万元。", "我方拥有丰富的施工经验。", "我司已完成排水工程项目A。",
     "我方具备市政施工总承包三级资质。", "我方将提供近三年内承接的类似工程业绩。",
+    "我方承诺满足该资质要求，并提供有效的市政公用工程施工总承包三级证书。",
 ])
 def test_unsupported_commitment_or_enterprise_fact_is_not_saved_as_body_fact(text):
     result, notes, issues = guard_chapter_content({"plain_text": text}, request())
