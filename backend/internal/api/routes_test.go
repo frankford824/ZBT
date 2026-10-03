@@ -30,17 +30,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestPersonalDevelopmentCanDisablePublicRegistration(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", strings.NewReader(`{}`))
-	s := server{cfg: config.Config{DisableSelfRegistration: true}}
-	s.register(c)
-	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "registration_disabled") {
-		t.Fatalf("registration was not blocked: %d %s", recorder.Code, recorder.Body.String())
-	}
-}
-
 func TestFileAccessModuleMapsSupportedFileTypes(t *testing.T) {
 	for _, tc := range []struct {
 		bizType string

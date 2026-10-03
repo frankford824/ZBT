@@ -470,10 +470,6 @@ func (s *server) login(c *gin.Context) {
 }
 
 func (s *server) register(c *gin.Context) {
-	if s.cfg.DisableSelfRegistration {
-		c.JSON(http.StatusForbidden, gin.H{"code": "registration_disabled", "error": "此开发环境不开放自行注册，请使用已有账号"})
-		return
-	}
 	var req saas.RegisterRequest
 	if !bindJSON(c, &req) {
 		return

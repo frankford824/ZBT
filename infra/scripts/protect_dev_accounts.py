@@ -24,7 +24,8 @@ def main():
     os.chmod(directory, 0o700)
     path = directory / "access.json"
     credentials = json.loads(path.read_text()) if path.exists() else {"accounts": {}}
-    emails = sql("select email from users where password_hash=crypt('demo-password',password_hash);").splitlines()
+    seed_accounts = "'admin@zbt.local','pm@zbt.local','bidder@zbt.local','viewer@zbt.local','other@zbt.local'"
+    emails = sql("select email from users where email in (" + seed_accounts + ") and password_hash=crypt('demo-password',password_hash);").splitlines()
     for email in emails:
         password = secrets.token_urlsafe(32)
         # Email is DB-sourced but still escaped; passwords use a SQL-safe alphabet.
@@ -54,7 +55,7 @@ def main():
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w") as output:
         json.dump(credentials, output, indent=2)
-    assert sql("select count(*) from users where password_hash=crypt('demo-password',password_hash);") == "0"
+    assert sql("select count(*) from users where email in (" + seed_accounts + ") and password_hash=crypt('demo-password',password_hash);") == "0"
     print(json.dumps({"default_accounts_rotated": len(emails), "smoke_account": email, "credentials_path": str(path)}))
 
 

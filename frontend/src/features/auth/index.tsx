@@ -16,7 +16,6 @@ type OnboardingValues = {
 }
 
 const showDemoLogin = import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true'
-const enableRegistration = import.meta.env.VITE_ENABLE_REGISTRATION !== 'false'
 
 export function LoginPage() {
   const navigate = useNavigate()
@@ -70,8 +69,8 @@ export function LoginPage() {
         </Button>
       </Form>
       <Space separator={<Typography.Text type="secondary">·</Typography.Text>}>
-        {enableRegistration ? <Link to="/register">注册企业</Link> : null}
-        {enableRegistration ? <Link to="/onboarding">企业初始化</Link> : null}
+        <Link to="/register">注册企业</Link>
+        <Link to="/onboarding">企业初始化</Link>
       </Space>
     </Space>
   )
@@ -87,8 +86,6 @@ export function RegisterPage() {
       navigate('/onboarding')
     },
   })
-
-  if (!enableRegistration) return <Navigate to="/login" replace />
 
   return (
     <Space direction="vertical" size={20} className="auth-stack">
