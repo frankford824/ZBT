@@ -33,10 +33,12 @@ def wait_for(base, path, token, field, timeout=1200):
     raise RuntimeError("workflow deadline exceeded: " + path)
 
 
-def run(base, origin):
+def run(base, origin, bid_type='combined'):
+    if bid_type not in ('combined', 'separated'):
+        raise ValueError('full workflow fixture supports combined or separated layouts')
     password = os.environ["ZBT_SMOKE_PASSWORD"]
     print("Acceptance: real tender upload and six-module interpretation", flush=True)
-    upload = run_smoke(base, origin, password, 1200, archive=False)
+    upload = run_smoke(base, origin, password, 1200, archive=False, bid_type=bid_type)
     bid = upload["bid_id"]
     login = api_call(base, "/auth/login", method="POST", body={"email": os.environ["ZBT_SMOKE_EMAIL"], "password": password})
     token = login["access_token"]
@@ -57,9 +59,15 @@ def run(base, origin):
     parsed = api_call(base, f"/bids/{bid}/parse-result", token=token)
     structured = parsed["structured_result"]
     # Bound model expense while still generating EVERY chapter of the fixture.
-    structured["outline"] = {"parts": [{"code": "combined_body", "title": "验收测试综合标书", "chapters": [
+    fixture_chapters = [
         {"title": "项目理解与交付方案", "plain_text": "根据真实上传的测试招标文件编写项目理解、实施计划、30天交付和技术评分响应。"},
-        {"title": "商务响应与人工核对事项", "plain_text": "根据文件编写预算、报价原则、营业执照核对事项；测试项目不提供真实企业证明，不得虚构资质。"}]}]}
+        {"title": "商务响应与人工核对事项", "plain_text": "根据文件编写预算、报价原则、营业执照核对事项；测试项目不提供真实企业证明，不得虚构资质。"}]
+    structured["outline"] = {"parts": (
+        [{"code": "combined_body", "title": "验收测试综合标书", "chapters": fixture_chapters}]
+        if bid_type == 'combined' else [
+            {"code": "tech", "title": "验收测试技术标", "chapters": fixture_chapters[:1]},
+            {"code": "business", "title": "验收测试商务标", "chapters": fixture_chapters[1:]},
+        ])}
     api_call(base, f"/bids/{bid}/parse-result", method="PUT", token=token, body={"structured_result": structured})
     api_call(base, f"/bids/{bid}/material-selection", method="PUT", token=token,
              body={"selected_refs": [], "notes": "专用工作流测试：仅引用招标文件，企业证明待人工提供，不用于实际投标。"})
@@ -83,6 +91,10 @@ def run(base, origin):
             raise RuntimeError("chapter version was not persisted")
         api_call(base, "/chapters/" + chapter["id"] + "/accept", method="POST", token=token, body={})
     content_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters]
+    export_part_code = 'combined_body' if bid_type == 'combined' else 'tech'
+    parts = api_call(base, f'/bids/{bid}/parts', token=token)['items']
+    export_part_id = next(part['id'] for part in parts if part['code'] == export_part_code)
+    docx_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters if chapter['bid_part_id'] == export_part_id]
     check = api_call(base, "/compliance/checks", method="POST", token=token,
                      body={"name": "发布验收-仅测试项目", "bid_document_id": bid, "levels": ["L1", "L2", "L3"]})
     # Seed rules generate review flags. Exercise reviewer acknowledgement on the
@@ -91,10 +103,12 @@ def run(base, origin):
         api_call(base, "/compliance/issues/" + issue["id"] + "/ignore", method="POST", token=token,
                  body={"reason": "自动化工作流夹具，不是真实投标；验证人工审核动作与导出闸门。"})
     exports = {}
-    for kind in ("docx", "pdf", "zip"):
+    # The UI deliberately disables ZIP for a single-part combined bid. Test
+    # packing with a real two-part separated fixture, not an invalid request.
+    for kind in (('docx', 'pdf') if bid_type == 'combined' else ('docx', 'pdf', 'zip')):
         print("Acceptance: validate " + kind + " export", flush=True)
         started = api_call(base, f"/bids/{bid}/exports", method="POST", token=token,
-                           body={"export_type": kind, "part_code": "all" if kind == "zip" else "combined_body"})
+                           body={"export_type": kind, "part_code": "all" if kind == "zip" else export_part_code})
         exported = wait_for(base, "/bid-exports/" + started["export"]["id"], token, "export")["export"]
         download = api_call(base, "/files/" + exported["file_asset_id"] + "/download-url", token=token)
         require_origin(download["url"], origin)
@@ -112,13 +126,21 @@ def run(base, origin):
                     document = ElementTree.fromstring(archive.read('word/document.xml'))
                     text = ''.join(node.text or '' for node in document.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t'))
                     normalized = re.sub(r'\W+', '', text)
-                    if not all(sample and sample in normalized for sample in content_samples):
+                    if not all(sample and sample in normalized for sample in docx_samples):
                         raise RuntimeError('DOCX does not contain the persisted generated chapter bodies')
-                elif not any(name.endswith(".docx") for name in archive.namelist()):
-                    raise RuntimeError("ZIP does not contain a generated Word document")
+                else:
+                    documents = [name for name in archive.namelist() if name.endswith('.docx')]
+                    texts = []
+                    for name in documents:
+                        with zipfile.ZipFile(io.BytesIO(archive.read(name))) as nested:
+                            document = ElementTree.fromstring(nested.read('word/document.xml'))
+                            texts.append(''.join(node.text or '' for node in document.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')))
+                    normalized = re.sub(r'\W+', '', ''.join(texts))
+                    if len(documents) < 2 or not all(sample and sample in normalized for sample in content_samples):
+                        raise RuntimeError('ZIP does not contain both persisted generated part bodies')
         exports[kind] = {"export_id": exported["id"], "bytes": len(content)}
     api_call(base, f"/bids/{bid}", method="PATCH", token=token, body={"status": "archived"})
-    evidence = {"status": "passed", "bid_id": bid, "chapters_generated": 2, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
+    evidence = {"status": "passed", "bid_id": bid, "bid_type": bid_type, "chapters_generated": 2, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
             "review": "fixture-only acknowledgement; not semantic compliance certification"}
     from pathlib import Path
     Path("/opt/zbt-private/full-acceptance.json").write_text(json.dumps(evidence, indent=2))
@@ -129,5 +151,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8080/api/v1")
     parser.add_argument("--public-origin", default="http://47.114.51.41:8080")
+    parser.add_argument('--bid-type', choices=('combined', 'separated'), default='combined')
     args = parser.parse_args()
-    print(json.dumps(run(args.base_url, args.public_origin), ensure_ascii=False))
+    print(json.dumps(run(args.base_url, args.public_origin, args.bid_type), ensure_ascii=False))

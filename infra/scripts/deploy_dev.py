@@ -102,7 +102,7 @@ def deploy(directory, force_failure=False):
             credentials = json.loads((private / "access.json").read_text())
             environment = {**os.environ, "ZBT_SMOKE_EMAIL": credentials["smoke_email"], "ZBT_SMOKE_PASSWORD": credentials["smoke_password"]}
             execute(new_command + ["exec", "-T", "ai-service", "python", "-m", "app.evaluation.ocr_bridge_smoke"])
-            execute(["python3", str(directory / "infra/scripts/full_bid_smoke.py"), "--base-url", "http://127.0.0.1:8080/api/v1"], env=environment)
+            execute(["python3", str(directory / "infra/scripts/full_bid_smoke.py"), "--base-url", "http://127.0.0.1:8080/api/v1", "--bid-type", "separated"], env=environment)
             execute(["python3", str(directory / "infra/scripts/gray_acceptance.py")], env=environment)
             execute(new_command + ["exec", "-T", "postgres", "pg_isready", "-U", "zbt", "-d", "zbt"])
             execute(new_command + ["exec", "-T", "redis", "redis-cli", "ping"])

@@ -74,15 +74,15 @@ def make_tender_docx(marker: str) -> bytes:
     return output.getvalue()
 
 
-def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *, archive: bool = True) -> dict:
+def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *, archive: bool = True, bid_type: str = 'combined') -> dict:
     login = api_call(base_url, "/auth/login", method="POST",
                      body={"email": os.getenv("ZBT_SMOKE_EMAIL", "admin@zbt.local"), "password": password})
     token = str(login["access_token"])
     marker = "ZBT-upload-smoke-" + uuid.uuid4().hex[:12]
     bid = api_call(base_url, "/bids", method="POST", token=token,
-                   body={"title": marker, "project_name": marker, "bid_type": "combined"})
+                   body={"title": marker, "project_name": marker, "bid_type": bid_type})
     bid_id = str(bid["id"])
-    if bid.get('bid_type') != 'combined' or bid.get('project_name') != marker or not bid.get('project_id'):
+    if bid.get('bid_type') != bid_type or bid.get('project_name') != marker or not bid.get('project_id'):
         raise RuntimeError('selected bid type and project association did not persist')
     content = make_tender_docx(marker)
     upload = api_call(base_url, "/files/presign-upload", method="POST", token=token,
@@ -128,7 +128,7 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *,
                     or not parsed.get("structured_result")):
                 raise RuntimeError("parse callback did not persist the uploaded file result")
             structured = parsed['structured_result']
-            if structured.get('deadline') != '2026-11-15 09:30' or structured.get('bid_type') != 'combined':
+            if structured.get('deadline') != '2026-11-15 09:30' or structured.get('bid_type') != bid_type:
                 raise RuntimeError('interpretation changed deadline or selected layout')
             qualifications = json.dumps(structured.get('qualification_requirements', []), ensure_ascii=False)
             if '市政公用工程施工总承包三级' not in qualifications or '安全生产许可证' not in qualifications:
