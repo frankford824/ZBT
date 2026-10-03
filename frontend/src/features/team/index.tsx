@@ -79,6 +79,8 @@ import { PageFrame } from '../../shared/components/PageFrame'
 import { EmptyBlock, ErrorBlock, LoadingBlock } from '../../shared/components/StateBlocks'
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
+import { useSessionStore } from '../../app/store/session'
+import { canReviewApproval } from './approvalPermissions'
 
 const teamTabs = ['members', 'approvals', 'external-tools', 'ai-config', 'logs', 'notifications'] as const
 type TeamTab = (typeof teamTabs)[number]
@@ -483,6 +485,7 @@ export function TeamPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = normalizeTeamTab(searchParams.get('tab'))
   const canWrite = useCanAccess('team', 'full')
+  const currentUserId = useSessionStore((state) => state.user.id)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [chainOpen, setChainOpen] = useState(false)
   const [memberOpen, setMemberOpen] = useState(false)
@@ -498,6 +501,7 @@ export function TeamPage() {
   const [aiConfigForm] = Form.useForm<AIConfigFormValues>()
 
   const membersQuery = useQuery({ queryKey: ['team', 'members'], queryFn: fetchMembers })
+  const currentRoleCodes = (membersQuery.data ?? []).find((member) => member.user.id === currentUserId)?.roles.map((role) => role.code) ?? []
   const rolesQuery = useQuery({ queryKey: ['team', 'roles'], queryFn: fetchRoles })
   const notificationsQuery = useQuery({ queryKey: ['team', 'notifications'], queryFn: fetchNotifications })
   const approvalsQuery = useQuery({ queryKey: ['team', 'approvals'], queryFn: () => fetchApprovals() })
@@ -1212,7 +1216,7 @@ export function TeamPage() {
                             title: '操作',
                             width: 150,
                             render: (_, row) =>
-                              row.status === 'pending' && canWrite ? (
+                              canReviewApproval(row, currentUserId, currentRoleCodes) ? (
                                 <Space size={8} wrap={false}>
                                   <Button
                                     size="small"

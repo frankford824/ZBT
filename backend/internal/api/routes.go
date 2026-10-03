@@ -267,6 +267,8 @@ var routeLevelOverrides = map[string]rbac.Level{
 	"POST /knowledge/search":       rbac.LevelRead,
 	"POST /notifications/read":     rbac.LevelRead,
 	"POST /ai-config/health-check": rbac.LevelRead,
+	"POST /approvals/:id/approve":  rbac.LevelRead,
+	"POST /approvals/:id/reject":   rbac.LevelRead,
 }
 
 var routeAdditionalRequirements = map[string][]routeRequirement{
@@ -809,8 +811,10 @@ func (s *server) registerSaaSRoutes(group *gin.RouterGroup) {
 	group.DELETE("/approval-chains/:id", rbac.Require("team", rbac.LevelFull), s.deleteApprovalChain)
 	group.GET("/approvals", rbac.Require("team", rbac.LevelRead), s.listApprovals)
 	group.GET("/approvals/:id", rbac.Require("team", rbac.LevelRead), s.getApproval)
-	group.POST("/approvals/:id/approve", rbac.Require("team", rbac.LevelFull), s.approveApproval)
-	group.POST("/approvals/:id/reject", rbac.Require("team", rbac.LevelFull), s.rejectApproval)
+	// Taking an assigned approval is not permission to administer the team.
+	// The store separately enforces the exact current step's user/role actor.
+	group.POST("/approvals/:id/approve", rbac.Require("team", rbac.LevelRead), s.approveApproval)
+	group.POST("/approvals/:id/reject", rbac.Require("team", rbac.LevelRead), s.rejectApproval)
 	group.POST("/notifications/read", rbac.Require("team", rbac.LevelRead), s.markNotificationsRead)
 	group.GET("/notifications/stream", rbac.Require("team", rbac.LevelRead), s.streamNotifications)
 	group.GET("/ai-call-logs", rbac.Require("team", rbac.LevelRead), s.listAICallLogs)

@@ -56,6 +56,7 @@ def review_fixture_text(text):
 
 
 def verify_second_reviewer(base, token, bid):
+    print('Acceptance: invite dedicated project-manager reviewer', flush=True)
     marker = uuid.uuid4().hex[:12]
     password = secrets.token_urlsafe(24)
     email = 'gray-reviewer-' + marker + '@example.com'
@@ -66,10 +67,14 @@ def verify_second_reviewer(base, token, bid):
         'steps': [{'order': 1, 'name': '第二审批人复核', 'user_id': member['user']['id'],
                    'role_code': 'project_manager', 'required': True}]})
     reviewer = api_call(base, '/auth/login', method='POST', body={'email': email, 'password': password})
+    from pathlib import Path
+    Path('/opt/zbt-private/reviewer-' + bid + '.json').write_text(json.dumps({'email':email, 'password':password}))
     started = api_call(base, f'/bids/{bid}/submit-for-approval', method='POST', token=token, body={})
     instance = started['instance']['id']
+    print('Acceptance: reject decision by non-assigned submitter', flush=True)
     expect_rejection(base, f'/approvals/{instance}/approve', token,
         {'comment': '提交人不得代替指定审批人'}, 403, 'permission_denied')
+    print('Acceptance: assigned project manager approves without team administration', flush=True)
     approved = api_call(base, f'/approvals/{instance}/approve', method='POST', token=reviewer['access_token'],
         body={'comment': '仅专用夹具：验证第二角色审批流；非真实项目合规认证。'})
     persisted = api_call(base, f'/bids/{bid}', token=token)

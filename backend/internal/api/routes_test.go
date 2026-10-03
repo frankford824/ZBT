@@ -48,6 +48,21 @@ func TestReviewAndApprovalReadinessErrorsAreActionable(t *testing.T) {
 	}
 }
 
+func TestAssignedApprovalDoesNotRequireTeamAdministrationPermission(t *testing.T) {
+	for _, path := range []string{"/approvals/:id/approve", "/approvals/:id/reject"} {
+		route, ok := routeInfoByKey(http.MethodPost, path)
+		if !ok || route.Module != "team" || route.Required != rbac.LevelRead {
+			t.Fatalf("unexpected assigned approval permission: %+v", route)
+		}
+	}
+	for _, path := range []string{"/approval-chains", "/tenant/members/invite"} {
+		route, ok := routeInfoByKey(http.MethodPost, path)
+		if !ok || route.Required != rbac.LevelFull {
+			t.Fatalf("team administration must remain full permission: %+v", route)
+		}
+	}
+}
+
 func TestAITaskCallbackAcknowledgementIsSmallAndPreservesErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
