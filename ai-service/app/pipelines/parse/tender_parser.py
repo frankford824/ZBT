@@ -1063,7 +1063,17 @@ def _ground_module_facts(current, fields, evidence, requirements):
         if len(supported) != len(candidates):
             rejected = True
         if supported:
-            grounded[field] = supported if isinstance(value, list) else supported[0]
+            if isinstance(value, list):
+                originals = list(grounded.get(field) or []) if isinstance(grounded.get(field), list) else []
+                for candidate in supported:
+                    if not any(_fact_supported(candidate, original) for original in originals):
+                        originals.append(candidate)
+                grounded[field] = originals
+            else:
+                if field == 'deadline' and grounded.get(field) and _fact_supported(supported[0], grounded[field]):
+                    # Date-only model output must not erase an original clock.
+                    continue
+                grounded[field] = supported[0]
     accepted_requirements = []
     for item in requirements:
         source = item.get("source_ref") or {}

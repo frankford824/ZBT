@@ -78,7 +78,7 @@ def test_grounded_model_requirement_is_preserved():
         'fields': {'annex_items': ['须提交报价表']}, 'evidence': [quote],
         'requirement_items': [{'id': 'annex-001', 'requirement': '须提交报价表', 'mandatory': True, 'source_ref': quote}]},
         source_context_records=tender_module_source_context_records(parsed, 'annex'))
-    assert '须提交报价表' in result['modules']['annex']['fields']['annex_items']
+    assert any('须提交报价表' in value for value in result['modules']['annex']['fields']['annex_items'])
     assert any(item['requirement'] == '须提交报价表' and item['mandatory'] for item in result['requirement_items'])
 
 
@@ -100,3 +100,24 @@ def test_mentioning_an_annex_does_not_make_it_mandatory():
         'requirement_items': [{'id': 'annex-model', 'requirement': '报价表', 'mandatory': True, 'source_ref': quote}]},
         source_context_records=tender_module_source_context_records(parsed, 'annex'))
     assert not next(item for item in result['requirement_items'] if item['id'] == 'annex-model')['mandatory']
+
+
+def test_partial_model_summary_does_not_delete_original_mandatory_qualification():
+    parsed, base = fixture('项目名称：城南雨水管道项目\n投标人须具备市政公用工程施工总承包三级资质。\n安全生产许可证须在有效期内。')
+    quote = {'field': 'qualification_requirements', 'value': '市政公用工程施工总承包三级资质', 'confidence': 0.99,
+             'source_text': '投标人须具备市政公用工程施工总承包三级资质。', 'chunk_id': 'parse-chunk-0001'}
+    result = merge_tender_module_result(base, 'qualification', {
+        'fields': {'qualification_requirements': ['市政公用工程施工总承包三级资质']}, 'evidence': [quote]},
+        source_context_records=tender_module_source_context_records(parsed, 'qualification'))
+    assert any('安全生产许可证' in value for value in result['qualification_requirements'])
+    assert any('市政公用工程施工总承包三级' in value for value in result['qualification_requirements'])
+
+
+def test_date_only_model_output_does_not_erase_original_deadline_clock():
+    parsed, base = fixture('项目名称：城南雨水管道项目\n投标截止时间：2026-11-15 09:30')
+    result = merge_tender_module_result(base, 'basic', {
+        'fields': {'deadline': '2026-11-15'},
+        'evidence': [{'field': 'deadline', 'value': '2026-11-15', 'confidence': 0.99,
+                      'source_text': '投标截止时间：2026-11-15 09:30', 'chunk_id': 'parse-chunk-0001'}]},
+        source_context_records=tender_module_source_context_records(parsed, 'basic'))
+    assert result['deadline'] == '2026-11-15 09:30'
