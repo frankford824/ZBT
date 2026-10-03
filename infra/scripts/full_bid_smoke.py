@@ -96,8 +96,11 @@ def run(base, origin):
                     raise RuntimeError("ZIP does not contain a generated Word document")
         exports[kind] = {"export_id": exported["id"], "bytes": len(content)}
     api_call(base, f"/bids/{bid}", method="PATCH", token=token, body={"status": "archived"})
-    return {"status": "passed", "bid_id": bid, "chapters_generated": 2, "exports": exports,
+    evidence = {"status": "passed", "bid_id": bid, "chapters_generated": 2, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
             "review": "fixture-only acknowledgement; not semantic compliance certification"}
+    from pathlib import Path
+    Path("/opt/zbt-private/full-acceptance.json").write_text(json.dumps(evidence, indent=2))
+    return evidence
 
 
 if __name__ == "__main__":

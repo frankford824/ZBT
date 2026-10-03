@@ -71,6 +71,35 @@ def test_unknown_or_requirement_id_is_not_accepted_as_fabricated_provenance():
     assert response.needs_human_input
 
 
+def test_requirement_coverage_drops_unknown_provenance_and_requires_review():
+    payload = ChapterGenerateRequest(
+        tenant_id="tenant",
+        bid_document_id="bid",
+        bid_part_id="part",
+        chapter_id="chapter",
+        chapter_title="title",
+    )
+    result = {
+        "plain_text": "body",
+        "self_check": {
+            "status": "pass",
+            "requirement_coverage": [
+                {
+                    "requirement_id": "evaluation-001",
+                    "satisfied": True,
+                    "source_refs": [{"chunk_id": "invented"}],
+                }
+            ],
+        },
+    }
+    response = _chapter_response_from_json(result, payload, "provider", "model")
+    coverage = response.self_check["requirement_coverage"][0]
+    assert coverage["source_refs"] == []
+    assert coverage["satisfied"] is False
+    assert coverage["needs_review"] is True
+    assert response.self_check["status"] == "needs_review"
+
+
 def test_openai_rerank_accepts_numeric_string_indexes(monkeypatch) -> None:
     provider = OpenAICompatibleProvider(
         "fake",

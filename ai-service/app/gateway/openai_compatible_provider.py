@@ -832,6 +832,38 @@ def _chapter_response_from_json(
         else {"status": "needs_review"}
     )
     needs_human_input = _string_list(result.get("needs_human_input"))
+    coverage = self_check.get("requirement_coverage")
+    if isinstance(coverage, list):
+        self_check = dict(self_check)
+        sanitized = []
+        for item in coverage:
+            if not isinstance(item, dict):
+                continue
+            item = dict(item)
+            refs = item.get("source_refs")
+            verified = []
+            invalid = False
+            for ref in refs if isinstance(refs, list) else []:
+                identifier = (
+                    str(ref.get("chunk_id") or ref.get("id") or "")
+                    if isinstance(ref, dict)
+                    else str(ref)
+                )
+                canonical = known.get(identifier)
+                if canonical and (
+                    not isinstance(ref, dict)
+                    or not ref.get("document_id")
+                    or ref["document_id"] == canonical.document_id
+                ):
+                    verified.append(canonical.model_dump())
+                else:
+                    invalid = True
+                    rejected_refs += 1
+            item["source_refs"] = verified
+            if invalid:
+                item.update(satisfied=False, needs_review=True)
+            sanitized.append(item)
+        self_check["requirement_coverage"] = sanitized
     if rejected_refs:
         self_check = dict(self_check)
         self_check["status"] = "needs_review"

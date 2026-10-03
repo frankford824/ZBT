@@ -3874,6 +3874,11 @@ func refreshGenerationJobAndShouldDispatch(ctx context.Context, tx pgx.Tx, tenan
 			failed_steps = $6,
 			prompt_tokens = $7,
 			completion_tokens = $8,
+			error_message = case when $3 = 'failed' then coalesce(
+				(select nullif(step.error_message,'') from bid_generation_steps step
+				 where step.tenant_id=$1 and step.job_id=$2 and step.status='failed'
+				 order by step.step_order limit 1), '正文生成失败，请查看失败章节后重试')
+				when $3 = 'done' then null else error_message end,
 			completed_at = %s,
 			updated_at = now()
 		where tenant_id = $1 and id = $2
