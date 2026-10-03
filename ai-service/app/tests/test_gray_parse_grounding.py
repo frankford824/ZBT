@@ -39,6 +39,18 @@ def test_missing_source_does_not_create_generic_requirements():
     assert result['modules']['annex']['requirement_items'] == []
 
 
+def test_scope_and_contract_duration_are_distinct_from_bid_submission_date():
+    parsed, result = fixture('项目名称：城南雨水管道项目\n投标截止时间：2026-11-15 09:30\n采购范围：雨水管道改造\n交付期限：合同生效后30天')
+    basic = result['modules']['basic']
+    assert basic['fields']['delivery_period'] == '合同生效后30天'
+    assert basic['fields']['project_scope'] == '雨水管道改造'
+    assert basic['fields']['deadline'] == '2026-11-15 09:30'
+    assert any(item['field'] == 'delivery_period' and item['source_text'] == '交付期限：合同生效后30天' for item in basic['evidence'])
+    merged = merge_tender_module_result(result, 'basic', {'fields': {'delivery_period': '2026-11-15'}, 'evidence': []},
+                                        source_context_records=tender_module_source_context_records(parsed, 'basic'))
+    assert merged['modules']['basic']['fields']['delivery_period'] == '合同生效后30天'
+
+
 def test_user_layout_is_not_changed_by_technical_and_business_text():
     _, result = fixture('项目名称：城南雨水管道项目\n技术标：技术方案\n商务标：商务响应')
     assert result['bid_type'] == 'combined'

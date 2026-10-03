@@ -86,6 +86,16 @@ def test_generation_prompt_retains_real_project_and_forbids_fictional_examples()
     assert 'never claim we possess qualifications' in prompt['instruction']
 
 
+@pytest.mark.parametrize('text', ['交付期限为2026年11月15日09:30', '根据2026年11月15日的交付期限编制计划'])
+def test_generated_body_cannot_turn_submission_deadline_into_delivery_date(text):
+    payload = ChapterGenerateRequest(tenant_id='t', bid_document_id='b', bid_part_id='p', chapter_id='c', chapter_title='计划',
+                                    project_context={'submission_deadline':'2026-11-15 09:30', 'delivery_period':'合同生效后30天'})
+    with pytest.raises(RuntimeError, match='混淆投标截止'):
+        _chapter_response_from_json({'plain_text':text}, payload, 'provider','model')
+    response = _chapter_response_from_json({'plain_text':'投标截止时间为2026年11月15日，合同生效后30天内交付'}, payload, 'provider','model')
+    assert response.tiptap_json['content']
+
+
 def test_unknown_or_requirement_id_is_not_accepted_as_fabricated_provenance():
     payload = ChapterGenerateRequest(
         tenant_id="tenant",

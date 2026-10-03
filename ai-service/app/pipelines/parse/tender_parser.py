@@ -183,6 +183,8 @@ def build_tender_structured_result(
         "project_code": _first_label_value(text, ("项目编号", "采购编号", "招标编号")),
         "budget": _first_budget(text),
         "location": _first_label_value(text, ("项目地点", "建设地点", "服务地点", "履约地点")),
+        "project_scope": _first_label_value(text, ("采购范围", "招标范围", "项目范围", "工作范围")),
+        "delivery_period": _first_label_value(text, ("计划工期", "工期", "交付期限", "交付期", "履约期限")),
         "opening_time": _first_line_with_keywords(text, ("开标时间", "开启时间")),
     }
     modules = _build_module_results(
@@ -1699,6 +1701,8 @@ def _build_module_results(
         ("budget", ("预算", "最高限价", "控制价")),
         ("project_code", ("项目编号", "采购编号", "招标编号")),
         ("location", ("项目地点", "建设地点", "服务地点", "履约地点")),
+        ("project_scope", ("采购范围", "招标范围", "项目范围", "工作范围")),
+        ("delivery_period", ("计划工期", "工期", "交付期限", "交付期", "履约期限")),
         ("opening_time", ("开标时间", "开启时间")),
     ):
         if base_fields.get(field) not in (None, "", []):

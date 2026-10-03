@@ -95,6 +95,8 @@ def run(base, origin, bid_type='combined'):
     technical = next(chapter for chapter in chapters if chapter['title'] == fixture_chapters[0]['title'])['plain_text']
     if not re.search(r'雨水|排水|管道', technical) or re.search(r'云平台|云计算|软件许可', technical):
         raise RuntimeError('civil-engineering fixture generated unrelated software content')
+    if re.search(r'(交付|完工|竣工).{0,12}(2026[-年]11[-月]15|2026年11月15日)', technical):
+        raise RuntimeError('bid submission deadline was misrepresented as project delivery date')
     if re.search(r'项目\s*[ABＡＢ]|500\s*万元|200\s*万元|我方拥有丰富|我司拥有丰富', ''.join(chapter['plain_text'] for chapter in chapters)):
         raise RuntimeError('fixture generated fictional enterprise achievements or example prices')
     export_part_code = 'combined_body' if bid_type == 'combined' else 'tech'

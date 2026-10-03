@@ -5349,7 +5349,7 @@ func projectContextFromStructured(structured map[string]any) map[string]string {
 	basic, _ := modules["basic"].(map[string]any)
 	fields, _ := basic["fields"].(map[string]any)
 	evidence, _ := basic["evidence"].([]any)
-	for _, key := range []string{"project_name", "purchaser", "project_code", "budget", "location", "deadline", "opening_time"} {
+	for _, key := range []string{"project_name", "purchaser", "project_code", "budget", "location", "deadline", "opening_time", "project_scope", "delivery_period"} {
 		value, ok := fields[key].(string)
 		value = strings.TrimSpace(value)
 		if !ok || value == "" || utf8.RuneCountInString(value) > 1000 {
@@ -5363,7 +5363,16 @@ func projectContextFromStructured(structured map[string]any) map[string]string {
 			review, _ := item["needs_review"].(bool)
 			confidence, _ := item["confidence"].(float64)
 			if field == key && traceable && !review && confidence >= 0.65 && strings.Contains(quote, value) {
-				context[key] = value
+				contextKey := key
+				switch key {
+				case "deadline":
+					contextKey = "submission_deadline"
+				case "budget":
+					contextKey = "project_budget"
+				case "opening_time":
+					contextKey = "bid_opening_time"
+				}
+				context[contextKey] = value
 				break
 			}
 		}

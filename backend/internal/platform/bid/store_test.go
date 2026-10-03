@@ -23,7 +23,7 @@ func TestProjectContextPreservesOnlyAnchoredOriginalFacts(t *testing.T) {
 		},
 	}}}
 	got := projectContextFromStructured(structured)
-	if len(got) != 2 || got["project_name"] != "城南雨水管道项目" || got["deadline"] != "2026-11-15 09:30" {
+	if len(got) != 2 || got["project_name"] != "城南雨水管道项目" || got["submission_deadline"] != "2026-11-15 09:30" {
 		t.Fatalf("unexpected project context: %#v", got)
 	}
 	if len(projectContextFromStructured(nil)) != 0 {

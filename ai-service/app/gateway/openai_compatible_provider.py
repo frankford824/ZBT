@@ -761,6 +761,10 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
                 "items with requirement_id, satisfied, evidence, source_refs. Keep unsupported "
                 "facts in needs_human_input. The project_context identifies THIS project: "
                 "stay in its actual industry and scope; do not substitute software/cloud projects for civil engineering. "
+                "submission_deadline is ONLY the deadline to submit a bid, NEVER the construction/delivery date. "
+                "project_budget is the published budget, NOT our bid price. Use delivery_period only for construction duration. "
+                "Missing scope, warranty durations, response times or other numeric commitments require clarification, "
+                "not invented promises. "
                 "If scope is absent, say it requires clarification rather than inventing scope. "
                 "Never invent example project names, certificate numbers, dates, prices or company achievements, "
                 "even as illustrative examples. Without supplied enterprise evidence, write proposed measures "
@@ -789,6 +793,8 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
                 "Return JSON with tiptap_json, source_refs, self_check, needs_human_input. "
                 "self_check.requirement_coverage must review every requirement_ref. "
                 "Stay in the industry of project_context; absent facts require clarification. "
+                "submission_deadline is the bid submission deadline, not construction completion; "
+                "project_budget is the published budget, not a bid price. "
                 "Never invent example company achievements, projects, dates or amounts. "
                 "Without supplied enterprise evidence, do not claim qualifications or past experience."
             ),
@@ -803,6 +809,7 @@ def _chapter_response_from_json(
     provider: str,
     model: str,
 ) -> ChapterGenerateResponse:
+    _assert_project_deadline_semantics(result, payload)
     tiptap_json = result.get("tiptap_json")
     if not isinstance(tiptap_json, dict):
         text = str(result.get("plain_text") or result.get("content") or "")
@@ -923,6 +930,30 @@ def _chapter_response_from_json(
             "output_tokens": max(1, len(output_text) // 4),
         },
     )
+
+
+def _assert_project_deadline_semantics(result: dict[str, object], payload: ChapterGenerateRequest) -> None:
+    submission = re.search(r'(\d{4})\D+(\d{1,2})\D+(\d{1,2})', payload.project_context.get('submission_deadline', ''))
+    if not submission:
+        return
+    expected = tuple(int(part) for part in submission.groups())
+    delivery = re.search(r'(\d{4})\D+(\d{1,2})\D+(\d{1,2})', payload.project_context.get('delivery_period', ''))
+    if delivery and tuple(int(part) for part in delivery.groups()) == expected:
+        return
+    def text_values(value: object) -> list[str]:
+        if isinstance(value, dict):
+            return ([value['text']] if isinstance(value.get('text'), str) else []) + [text for key, child in value.items() if key != 'text' for text in text_values(child)]
+        if isinstance(value, list):
+            return [text for child in value for text in text_values(child)]
+        return []
+    text = '\n'.join(text_values(result.get('tiptap_json')) + [str(result.get('plain_text') or result.get('content') or '')])
+    date = r'(\d{4})[-年/](\d{1,2})[-月/](\d{1,2})(?:日)?'
+    patterns = [r'(?:交付期限|交付日期|完工日期|竣工日期|履约截止时间|施工截止时间)(?:为|是|：|:)?\s*' + date,
+                date + r'的(?:交付期限|交付日期|完工日期|竣工日期)']
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            if tuple(int(part) for part in match.groups()) == expected:
+                raise RuntimeError('生成正文混淆投标截止时间与工程交付期限，已拒绝保存，请核对原文后重试')
 
 
 def _fallback_requirement_coverage(
