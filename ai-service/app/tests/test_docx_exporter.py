@@ -21,6 +21,18 @@ from app.pipelines.export.docx_exporter import (
 from app.schemas.export import ExportAttachment, ExportChapter, ExportLayoutOptions, ExportPart
 
 
+def test_export_preserves_numbered_subheadings_across_chapters(tmp_path, monkeypatch):
+    monkeypatch.delenv('BID_EXPORT_TEMPLATE_PATH', raising=False)
+    output = tmp_path / 'numbered-chapters.docx'
+    export_bid_docx('测试项目','综合标书',[
+        ExportChapter(title='第一章',plain_text='1. 项目理解\n正文。\n3. 自检与覆盖证据\n自检正文。'),
+        ExportChapter(title='第二章',plain_text='1. 市政资质\n企业需提供真实证据。')],output)
+    paragraphs = Document(output).paragraphs
+    assert [p.text for p in paragraphs if p.text.startswith('1. ')] == ['1. 项目理解','1. 市政资质']
+    heading = next(p for p in paragraphs if p.text=='3. 自检与覆盖证据')
+    assert heading.paragraph_format.keep_with_next is True
+
+
 def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("BID_EXPORT_TEMPLATE_PATH", raising=False)
     output = tmp_path / "bid.docx"

@@ -24,7 +24,16 @@ _CATEGORIES = {
 }
 _OWNERSHIP = re.compile(_SUBJECT + r".{0,12}(?:拥有|具备|持有|取得|已获|曾|已完成|已承接|已承担|积累|承诺(?:已)?(?:满足|符合))")
 _HISTORY_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:将|拟)?提供.{0,24}(?:近.{0,4}年|承接|完成|承担).{0,24}(?:业绩|项目|工程)")
+_CERT_ASSERTION = re.compile(_SUBJECT + r".{0,8}(?:承诺|保证).{0,15}(?:许可证|证书|资质).{0,15}(?:有效|符合|满足)")
 _SUBMISSION_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:承诺|保证|将).{0,24}(" + _NUMBER + r"\s*(?:工作日|天|日|小时|个月|月))\s*(?:内|后)?.{0,6}(?:提交|报送)")
+_DATE = re.compile(r"(\d{4})[-年/](\d{1,2})[-月/](\d{1,2})(?:日)?")
+_TIME = re.compile(r"(\d{1,2})[:：时](\d{1,2})(?:分)?")
+_CALENDAR_LABELS = {
+    "submission_deadline": r"(?:投标|递交|提交)(?:文件)?截止(?:时间|日期)?",
+    "bid_opening_time": r"开标(?:时间|日期)?",
+}
+_COPY_DETAIL = re.compile(r"(?:正本|副本|电子版|书面版)\s*" + _NUMBER + r"\s*份|" + _NUMBER + r"正" + _NUMBER + r"副|U\s*盘", re.IGNORECASE)
+_BOQ_ASSERTION = re.compile(r"招标文件(?:中|的).{0,6}工程量清单")
 _CLAUSE_SPLIT = re.compile(r"(?<=[。！？；;\n])")
 
 
@@ -62,6 +71,26 @@ def _numeric_pairs(text: str, category: str) -> set[str]:
     return pairs
 
 
+def _calendar_mismatch(text: str, context: dict[str, str]) -> bool:
+    text = _normalized(text)
+    labels = sorted((match.start(), match.end(), key)
+                    for key, pattern in _CALENDAR_LABELS.items() for match in re.finditer(pattern, text))
+    for pattern in (_DATE, _TIME):
+        for value in pattern.finditer(text):
+            before = [label for label in labels if 0 <= value.start() - label[1] <= 45]
+            if not before:
+                continue
+            targets = [before[-1]]
+            # "投标截止时间及开标时间为10:00" claims the same time for both.
+            if len(before) > 1 and re.fullmatch(r"(?:及|和|与|、|/|暨)", text[before[-2][1]:before[-1][0]]):
+                targets.append(before[-2])
+            for _, _, key in targets:
+                expected = pattern.search(_normalized(context.get(key, "")))
+                if not expected or tuple(map(int, value.groups())) != tuple(map(int, expected.groups())):
+                    return True
+    return False
+
+
 def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateRequest) -> tuple[dict[str, object], list[str], list[dict[str, str]]]:
     guarded = deepcopy(result)
     # Only actual source quotations and retrieved document content are evidence.
@@ -82,6 +111,14 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
         clauses = []
         for clause in _CLAUSE_SPLIT.split(text):
             kinds = []
+            if _calendar_mismatch(clause, payload.project_context):
+                kinds.append("截止或开标时间")
+            details = _COPY_DETAIL.findall(clause)
+            if any(not any(_normalized(detail).lower() in _normalized(source).lower() for source in tender_sources)
+                   for detail in details):
+                kinds.append("递交份数或介质")
+            if _BOQ_ASSERTION.search(clause) and not any("工程量清单" in source for source in tender_sources):
+                kinds.append("原文附件")
             for category in _CATEGORIES:
                 pairs = _numeric_pairs(clause, category)
                 if pairs - supported[category]:
@@ -94,7 +131,7 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
                 if not any(duration in _normalized(source_clause) and re.search(r"提交|报送", source_clause)
                            for source in sources for source_clause in _CLAUSE_SPLIT.split(source)):
                     kinds.append("提交时限")
-            ownership = _OWNERSHIP.search(clause) or _HISTORY_PROMISE.search(clause)
+            ownership = _OWNERSHIP.search(clause) or _HISTORY_PROMISE.search(clause) or _CERT_ASSERTION.search(clause)
             if ownership:
                 # Ownership must be evidenced by enterprise records, not by a
                 # tender's qualification requirement. Conservative literal

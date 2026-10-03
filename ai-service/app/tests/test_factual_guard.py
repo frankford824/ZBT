@@ -67,6 +67,34 @@ def test_submission_promise_cannot_reuse_unrelated_warranty_duration():
     assert not guard_chapter_content({"plain_text": text}, grounded)[2]
 
 
+@pytest.mark.parametrize('text', [
+    '投标截止时间及开标时间为2026年11月15日10:00。',
+    '投标截止时间：2026-11-15 10:00。',
+    '投标截止时间为2026年11月16日09:30。',
+    '开标时间为2026-11-15 09:30。',
+    '投标文件正本一份、副本四份，电子版一份（U盘）。',
+    '投标文件一正四副。',
+    '我方承诺安全生产许可证在有效期内。',
+    '工程量需以招标文件中的工程量清单和图纸为准。',
+])
+def test_actual_original_file_export_false_claims_require_review(text):
+    payload = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'2026-11-15 10:00'})
+    guarded, _, issues = guard_chapter_content({'plain_text':text}, payload)
+    assert guarded['plain_text'].startswith(REVIEW_MARKER) and issues
+
+
+def test_submission_and_opening_times_can_share_date_but_not_time():
+    text = '开标时间为2026年11月15日10:00，投标截止时间为2026年11月15日09:30。'
+    payload = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'开标时间：2026-11-15 10:00'})
+    assert not guard_chapter_content({'plain_text':text},payload)[2]
+
+
+def test_literal_tender_copy_requirements_are_preserved():
+    text = '投标文件正本一份、副本四份，电子版一份（U盘）。'
+    payload = request(requirement_refs=[TenderRequirementRef(id='r',requirement='递交',source_text=text)])
+    assert not guard_chapter_content({'plain_text':text},payload)[2]
+
+
 def test_enterprise_quote_supports_literal_claim_not_other_claims():
     payload = request(retrieved_knowledge_refs=[RetrievedKnowledgeRef(chunk_id="k", document_id="d", title="企业资料", content="具备市政施工总承包三级资质")])
     result, _, issues = guard_chapter_content({"plain_text": "我方具备市政施工总承包三级资质。我方拥有丰富施工经验。"}, payload)
