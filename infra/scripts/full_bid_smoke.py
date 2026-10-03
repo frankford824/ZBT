@@ -74,6 +74,26 @@ def verify_second_reviewer(base, token, bid):
     print('Acceptance: reject decision by non-assigned submitter', flush=True)
     expect_rejection(base, f'/approvals/{instance}/approve', token,
         {'comment': '提交人不得代替指定审批人'}, 403, 'permission_denied')
+    if reviewer['session']['permissions'].get('team') != 'read':
+        raise RuntimeError('reviewer was improperly granted team administration')
+    # Pending approvals must not use stale pre-edit checks or exports.
+    print('Acceptance: block approval after a post-submission content change', flush=True)
+    chapter = api_call(base, f'/bids/{bid}/chapters', token=token)['items'][0]
+    api_call(base, '/chapters/' + chapter['id'] + '/content', method='PUT', token=token,
+             body={'plain_text': chapter['plain_text'] + '\n【事实待核实：送审后变更夹具。】'})
+    expect_rejection(base, f'/approvals/{instance}/approve', reviewer['access_token'], {}, 409, 'factual_review_required')
+    api_call(base, '/chapters/' + chapter['id'] + '/content', method='PUT', token=token,
+             body={'plain_text': chapter['plain_text'], 'content': chapter['content']})
+    api_call(base, '/chapters/' + chapter['id'] + '/accept', method='POST', token=token, body={})
+    expect_rejection(base, f'/approvals/{instance}/approve', reviewer['access_token'], {}, 409, 'approval_not_ready')
+    check = api_call(base, '/compliance/checks', method='POST', token=token,
+                     body={'name': '专用夹具送审后变更复核', 'bid_document_id': bid, 'levels': ['L1','L2','L3']})
+    for issue in check.get('issues', []):
+        api_call(base, '/compliance/issues/' + issue['id'] + '/ignore', method='POST', token=token,
+                 body={'reason': '仅合成工作流夹具，正文已恢复原样；非真实投标合规认证。'})
+    exported = api_call(base, f'/bids/{bid}/exports', method='POST', token=token,
+        body={'export_type': 'docx', 'part_code': 'combined_body'})
+    wait_for(base, '/bid-exports/' + exported['export']['id'], token, 'export')
     print('Acceptance: assigned project manager approves without team administration', flush=True)
     approved = api_call(base, f'/approvals/{instance}/approve', method='POST', token=reviewer['access_token'],
         body={'comment': '仅专用夹具：验证第二角色审批流；非真实项目合规认证。'})
@@ -81,7 +101,9 @@ def verify_second_reviewer(base, token, bid):
     if approved['instance']['status'] != 'approved' or persisted['status'] != 'approved':
         raise RuntimeError('second reviewer approval did not persist')
     return {'instance_id': instance, 'reviewer_user_id': member['user']['id'],
-            'submitter_approve': '403 rejected', 'second_reviewer_approve': 'passed'}
+            'submitter_approve': '403 rejected', 'second_reviewer_approve': 'passed',
+            'reviewer_team_permission': 'read', 'post_submission_fact_gap': '409 rejected',
+            'post_submission_stale_review': '409 rejected; rechecked and reexported before approval'}
 
 
 def run(base, origin, bid_type='combined', verify_approval=False):

@@ -268,20 +268,8 @@ func (s *Store) SubmitBid(ctx context.Context, tenantID, userID, bidID string) (
 		`, tenantID, bidID).Scan(&bidTitle); err != nil {
 			return err
 		}
-		if err := factualreview.RequireClear(ctx, tx, tenantID, bidID); err != nil {
+		if err := requireBidReady(ctx, tx, tenantID, bidID); err != nil {
 			return err
-		}
-		var ready bool
-		if err := tx.QueryRow(ctx, `select
-			(select count(*) from bid_pipeline_gates where tenant_id=$1 and bid_document_id=$2
-			 and stage in ('generate','check','format') and status='passed') = 3
-			and exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2)
-			and not exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2
-			 and (status <> 'accepted' or btrim(plain_text) = ''))`, tenantID, bidID).Scan(&ready); err != nil {
-			return err
-		}
-		if !ready {
-			return ErrNotReady
 		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `
@@ -412,6 +400,13 @@ func (s *Store) Approve(ctx context.Context, tenantID, userID, instanceID string
 		if err := ensureStepActor(ctx, tx, tenantID, userID, step); err != nil {
 			return err
 		}
+		// A submit-time check is insufficient: content can change while an
+		// approval is pending. Recheck the current document on every decision.
+		if instance.BidDocumentID != nil {
+			if err := requireBidReady(ctx, tx, tenantID, *instance.BidDocumentID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			insert into approval_actions (tenant_id, instance_id, actor_user_id, action, step_order, comment)
 			values ($1, $2, $3, 'approve', $4, $5)
@@ -510,6 +505,25 @@ func (s *Store) Reject(ctx context.Context, tenantID, userID, instanceID string,
 		return InstanceDetail{}, err
 	}
 	return s.GetInstance(ctx, tenantID, instanceID)
+}
+
+func requireBidReady(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error {
+	if err := factualreview.RequireClear(ctx, tx, tenantID, bidID); err != nil {
+		return err
+	}
+	var ready bool
+	if err := tx.QueryRow(ctx, `select
+		(select count(*) from bid_pipeline_gates where tenant_id=$1 and bid_document_id=$2
+		 and stage in ('generate','check','format') and status='passed') = 3
+		and exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2)
+		and not exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2
+		 and (status <> 'accepted' or btrim(plain_text) = ''))`, tenantID, bidID).Scan(&ready); err != nil {
+		return err
+	}
+	if !ready {
+		return ErrNotReady
+	}
+	return nil
 }
 
 func (s *Store) withTenant(ctx context.Context, tenantID string, fn func(pgx.Tx) error) error {
