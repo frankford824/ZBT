@@ -12,6 +12,25 @@ import (
 	"time"
 )
 
+func TestProjectContextPreservesOnlyAnchoredOriginalFacts(t *testing.T) {
+	structured := map[string]any{"modules": map[string]any{"basic": map[string]any{
+		"fields": map[string]any{"project_name": "城南雨水管道项目", "budget": "100万元", "deadline": "2026-11-15 09:30", "location": "虚构地点"},
+		"evidence": []any{
+			map[string]any{"field": "project_name", "source_text": "项目名称：城南雨水管道项目", "traceable": true, "confidence": 0.99},
+			map[string]any{"field": "budget", "source_text": "预算：100万元", "traceable": true, "confidence": 0.99, "needs_review": true},
+			map[string]any{"field": "deadline", "source_text": "截止时间：2026-11-15 09:30", "traceable": true, "confidence": 0.99},
+			map[string]any{"field": "location", "source_text": "原文件没有这个地点", "traceable": true, "confidence": 0.99},
+		},
+	}}}
+	got := projectContextFromStructured(structured)
+	if len(got) != 2 || got["project_name"] != "城南雨水管道项目" || got["deadline"] != "2026-11-15 09:30" {
+		t.Fatalf("unexpected project context: %#v", got)
+	}
+	if len(projectContextFromStructured(nil)) != 0 {
+		t.Fatal("missing original evidence must not manufacture project context")
+	}
+}
+
 func TestTenderStructuredResultFromCallbackExtractsNestedResult(t *testing.T) {
 	structured, ok := tenderStructuredResultFromCallback(map[string]any{
 		"structured_result": map[string]any{

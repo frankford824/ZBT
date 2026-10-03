@@ -92,6 +92,11 @@ def run(base, origin, bid_type='combined'):
             raise RuntimeError("chapter version was not persisted")
         api_call(base, "/chapters/" + chapter["id"] + "/accept", method="POST", token=token, body={})
     content_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters]
+    technical = next(chapter for chapter in chapters if chapter['title'] == fixture_chapters[0]['title'])['plain_text']
+    if not re.search(r'雨水|排水|管道', technical) or re.search(r'云平台|云计算|软件许可', technical):
+        raise RuntimeError('civil-engineering fixture generated unrelated software content')
+    if re.search(r'项目\s*[ABＡＢ]|500\s*万元|200\s*万元|我方拥有丰富|我司拥有丰富', ''.join(chapter['plain_text'] for chapter in chapters)):
+        raise RuntimeError('fixture generated fictional enterprise achievements or example prices')
     export_part_code = 'combined_body' if bid_type == 'combined' else 'tech'
     parts = api_call(base, f'/bids/{bid}/parts', token=token)['items']
     export_part_id = next(part['id'] for part in parts if part['code'] == export_part_code)

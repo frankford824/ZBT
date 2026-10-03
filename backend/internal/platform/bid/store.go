@@ -589,6 +589,7 @@ type chapterGenerateRequest struct {
 	BidPartID              string                  `json:"bid_part_id"`
 	ChapterID              string                  `json:"chapter_id"`
 	ChapterTitle           string                  `json:"chapter_title"`
+	ProjectContext         map[string]string       `json:"project_context,omitempty"`
 	TenderRequirements     []string                `json:"tender_requirements"`
 	RequirementRefs        []tenderRequirementRef  `json:"requirement_refs"`
 	SelectedKnowledgeRefs  []string                `json:"selected_knowledge_refs"`
@@ -2339,7 +2340,7 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 		if err != nil {
 			return err
 		}
-		requirementRefs, err := requirementRefsForChapter(ctx, tx, tenantID, chapter)
+		requirementRefs, projectContext, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
 		if err != nil {
 			return err
 		}
@@ -2348,6 +2349,7 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 			selectedRefs = append(selectedRefs, ref.ChunkID)
 		}
 		requestPayload = chapterGenerateRequest{
+			ProjectContext:         projectContext,
 			TaskID:                 "task-chapter-" + uuid.NewString(),
 			TenantID:               tenantID,
 			BidDocumentID:          chapter.BidDocumentID,
@@ -2429,7 +2431,7 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 		if err != nil {
 			return err
 		}
-		requirementRefs, err := requirementRefsForChapter(ctx, tx, tenantID, chapter)
+		requirementRefs, projectContext, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
 		if err != nil {
 			return err
 		}
@@ -2439,6 +2441,7 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 		}
 		requestPayload = chapterActionRequest{
 			chapterGenerateRequest: chapterGenerateRequest{
+				ProjectContext:         projectContext,
 				TaskID:                 "task-chapter-action-" + uuid.NewString(),
 				TenantID:               tenantID,
 				BidDocumentID:          chapter.BidDocumentID,
@@ -3273,7 +3276,7 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 		if err != nil {
 			return err
 		}
-		requirementRefs, err := requirementRefsForChapter(ctx, tx, tenantID, chapter)
+		requirementRefs, projectContext, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
 		if err != nil {
 			return err
 		}
@@ -3282,6 +3285,7 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 			selectedRefs = append(selectedRefs, ref.ChunkID)
 		}
 		requestPayload := chapterGenerateRequest{
+			ProjectContext:         projectContext,
 			TaskID:                 "task-chapter-" + uuid.NewString(),
 			TenantID:               tenantID,
 			BidDocumentID:          chapter.BidDocumentID,
@@ -5325,15 +5329,46 @@ func defaultMaterialRefs(structured map[string]any) []any {
 	return []any{}
 }
 
-func requirementRefsForChapter(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter) ([]tenderRequirementRef, error) {
+func chapterGenerationContext(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter) ([]tenderRequirementRef, map[string]string, error) {
 	parseResult, err := parseResultForBid(ctx, tx, tenantID, chapter.BidDocumentID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, map[string]string{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return requirementRefsFromStructuredResult(parseResult.StructuredResult, chapter.Title, 8), nil
+	if !confirmableParseResultStatus(parseResult.Status) {
+		return nil, map[string]string{}, nil
+	}
+	return requirementRefsFromStructuredResult(parseResult.StructuredResult, chapter.Title, 8), projectContextFromStructured(parseResult.StructuredResult), nil
+}
+
+func projectContextFromStructured(structured map[string]any) map[string]string {
+	context := map[string]string{}
+	modules, _ := structured["modules"].(map[string]any)
+	basic, _ := modules["basic"].(map[string]any)
+	fields, _ := basic["fields"].(map[string]any)
+	evidence, _ := basic["evidence"].([]any)
+	for _, key := range []string{"project_name", "purchaser", "project_code", "budget", "location", "deadline", "opening_time"} {
+		value, ok := fields[key].(string)
+		value = strings.TrimSpace(value)
+		if !ok || value == "" || utf8.RuneCountInString(value) > 1000 {
+			continue
+		}
+		for _, raw := range evidence {
+			item, _ := raw.(map[string]any)
+			field, _ := item["field"].(string)
+			quote, _ := item["source_text"].(string)
+			traceable, _ := item["traceable"].(bool)
+			review, _ := item["needs_review"].(bool)
+			confidence, _ := item["confidence"].(float64)
+			if field == key && traceable && !review && confidence >= 0.65 && strings.Contains(quote, value) {
+				context[key] = value
+				break
+			}
+		}
+	}
+	return context
 }
 
 func tenderRequirementTexts(refs []tenderRequirementRef) []string {

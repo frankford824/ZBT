@@ -749,6 +749,7 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
     return json.dumps(
         {
             "chapter_title": payload.chapter_title,
+            "project_context": payload.project_context,
             "tender_requirements": payload.tender_requirements,
             "requirement_refs": requirement_refs,
             "selected_knowledge_refs": payload.selected_knowledge_refs,
@@ -758,7 +759,12 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
                 "Generate bid chapter JSON with fields: tiptap_json, source_refs, "
                 "self_check, needs_human_input. self_check must include requirement_coverage "
                 "items with requirement_id, satisfied, evidence, source_refs. Keep unsupported "
-                "facts in needs_human_input."
+                "facts in needs_human_input. The project_context identifies THIS project: "
+                "stay in its actual industry and scope; do not substitute software/cloud projects for civil engineering. "
+                "If scope is absent, say it requires clarification rather than inventing scope. "
+                "Never invent example project names, certificate numbers, dates, prices or company achievements, "
+                "even as illustrative examples. Without supplied enterprise evidence, write proposed measures "
+                "and required evidence only; never claim we possess qualifications, experience or completed self-checks."
             ),
         },
         ensure_ascii=False,
@@ -772,6 +778,7 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
             "instruction": payload.instruction,
             "chapter_title": payload.chapter_title,
             "current_plain_text": payload.current_plain_text,
+            "project_context": payload.project_context,
             "current_tiptap_json": payload.current_tiptap_json,
             "tender_requirements": payload.tender_requirements,
             "requirement_refs": [ref.model_dump() for ref in payload.requirement_refs[:20]],
@@ -780,7 +787,10 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
             ],
             "output_contract": (
                 "Return JSON with tiptap_json, source_refs, self_check, needs_human_input. "
-                "self_check.requirement_coverage must review every requirement_ref."
+                "self_check.requirement_coverage must review every requirement_ref. "
+                "Stay in the industry of project_context; absent facts require clarification. "
+                "Never invent example company achievements, projects, dates or amounts. "
+                "Without supplied enterprise evidence, do not claim qualifications or past experience."
             ),
         },
         ensure_ascii=False,

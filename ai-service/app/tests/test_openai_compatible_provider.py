@@ -76,6 +76,16 @@ def test_chapter_ref_alias_is_resolved_only_against_known_input():
     assert response.source_refs[0].page_start == 2
 
 
+def test_generation_prompt_retains_real_project_and_forbids_fictional_examples():
+    payload = ChapterGenerateRequest(tenant_id='t', bid_document_id='b', bid_part_id='p',
+                                    chapter_id='c', chapter_title='项目理解',
+                                    project_context={'project_name': '城南雨水管道项目', 'budget': '100万元'})
+    prompt = json.loads(_chapter_prompt(payload))
+    assert prompt['project_context'] == payload.project_context
+    assert 'Never invent example project names' in prompt['instruction']
+    assert 'never claim we possess qualifications' in prompt['instruction']
+
+
 def test_unknown_or_requirement_id_is_not_accepted_as_fabricated_provenance():
     payload = ChapterGenerateRequest(
         tenant_id="tenant",

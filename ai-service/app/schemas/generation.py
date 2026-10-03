@@ -113,6 +113,7 @@ class TenderRequirementRef(BaseModel):
 
 
 class ChapterGenerateRequest(BaseModel):
+    project_context: dict[GenerationShortText, TenderRequirementText] = Field(default_factory=dict, max_length=10)
     task_id: GenerationOptionalID | None = None
     tenant_id: GenerationID
     bid_document_id: GenerationID
