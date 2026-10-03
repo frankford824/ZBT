@@ -104,7 +104,7 @@ type ApiErrorBody = {
 
 export function getApiErrorMessage(error: unknown, fallback = '操作失败'): string {
   if (!isAxiosError(error)) {
-    return fallback
+    return error instanceof Error ? userFacingMessageOrFallback(error.message, fallback) : fallback
   }
 
   if (!error.response) {
@@ -1915,9 +1915,17 @@ export async function uploadToPresignedUrl(
   upload: PresignUploadDTO,
   file: File,
 ): Promise<void> {
-  await axios.put(upload.upload_url, file, {
-    headers: upload.headers,
-  })
+  try {
+    await axios.put(upload.upload_url, file, {
+      headers: upload.headers,
+      timeout: 300_000,
+    })
+  } catch (error) {
+    if (axios.isAxiosError(error) && !error.response) {
+      throw new Error('文件未上传成功：上传连接不可用或已超时，请检查网络后重试；文件成功上传前无法开始解读。')
+    }
+    throw error
+  }
 }
 
 export async function confirmFileUpload(fileId: string): Promise<ConfirmUploadDTO> {

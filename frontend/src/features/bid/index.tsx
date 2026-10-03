@@ -1230,6 +1230,7 @@ export function BidWizardPage() {
                 <Button
                   type="primary"
                   icon={<SyncOutlined />}
+                  disabled={!parseResult.data?.file_asset_id || uploadTenderMutation.isPending}
                   loading={parseTenderMutation.isPending}
                   onClick={() => parseTenderMutation.mutate()}
                 >

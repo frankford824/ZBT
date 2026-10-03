@@ -28,7 +28,7 @@ services:
     environment:
       TZ: Asia/Shanghai
     ports: !override
-      - "0.0.0.0:19000:9000"
+      - "127.0.0.1:19000:9000"
       - "127.0.0.1:19001:9001"
 
   backend:
