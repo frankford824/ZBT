@@ -18,6 +18,7 @@ import (
 
 	"github.com/frankford824/ZBT/backend/internal/platform/aihttp"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
+	"github.com/frankford824/ZBT/backend/internal/platform/factualreview"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/taskstatus"
 	"github.com/google/uuid"
@@ -2287,6 +2288,9 @@ func (s *Store) UpdateChapterContent(ctx context.Context, tenantID, userID, chap
 		if err != nil {
 			return err
 		}
+		if err := invalidateChapterReviewGates(ctx, tx, tenantID, updated.BidDocumentID); err != nil {
+			return err
+		}
 		created, err := insertChapterVersion(ctx, tx, tenantID, userID, updated, "manual_edit", nil, nil)
 		if err != nil {
 			return err
@@ -2303,6 +2307,16 @@ func (s *Store) UpdateChapterContent(ctx context.Context, tenantID, userID, chap
 func (s *Store) AcceptChapter(ctx context.Context, tenantID, userID, chapterID string) (ChapterVersion, error) {
 	var version ChapterVersion
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		if err != nil {
+			return err
+		}
+		if err := factualreview.CheckText(chapter.PlainText); err != nil {
+			return err
+		}
+		if err := factualreview.CheckContent(chapter.Content); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			update bid_chapters
 			set status = 'accepted', updated_at = now()
@@ -2310,7 +2324,7 @@ func (s *Store) AcceptChapter(ctx context.Context, tenantID, userID, chapterID s
 		`, tenantID, chapterID); err != nil {
 			return err
 		}
-		chapter, err := chapterByID(ctx, tx, tenantID, chapterID)
+		chapter, err = chapterByID(ctx, tx, tenantID, chapterID)
 		if err != nil {
 			return err
 		}
@@ -2641,6 +2655,9 @@ func (s *Store) CreateExport(ctx context.Context, tenantID, userID, bidID string
 	var task Task
 	var payload map[string]any
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := factualreview.RequireClear(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
 		document, err := bidForExport(ctx, tx, tenantID, bidID)
 		if err != nil {
 			return err
@@ -3118,6 +3135,9 @@ func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID 
 	if changeReason == "" {
 		changeReason = "ai_regenerate"
 	}
+	if err := invalidateChapterReviewGates(ctx, tx, tenantID, updated.BidDocumentID); err != nil {
+		return err
+	}
 	if _, err := insertChapterVersion(ctx, tx, tenantID, "", updated, changeReason, chapterVersionModelMetadata(generation), generation.TokenUsage); err != nil {
 		return err
 	}
@@ -3125,6 +3145,13 @@ func applyChapterGeneration(ctx context.Context, tx pgx.Tx, tenantID, chapterID 
 		return err
 	}
 	return replaceKnowledgeReferences(ctx, tx, tenantID, updated, generation.SourceRefs, generation.TraceID)
+}
+
+func invalidateChapterReviewGates(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error {
+	_, err := tx.Exec(ctx, `update bid_pipeline_gates set status='needs_review',
+		reason='正文已变化，请重新进行合规复核和文件导出。', updated_at=now()
+		where tenant_id=$1 and bid_document_id=$2 and stage in ('check','format')`, tenantID, bidID)
+	return err
 }
 
 func chapterVersionModelMetadata(generation chapterGenerateResponse) map[string]any {

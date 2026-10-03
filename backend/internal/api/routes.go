@@ -32,6 +32,7 @@ import (
 	platformcost "github.com/frankford824/ZBT/backend/internal/platform/cost"
 	platformdashboard "github.com/frankford824/ZBT/backend/internal/platform/dashboard"
 	"github.com/frankford824/ZBT/backend/internal/platform/externaltool"
+	"github.com/frankford824/ZBT/backend/internal/platform/factualreview"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	platformproject "github.com/frankford824/ZBT/backend/internal/platform/project"
@@ -3173,6 +3174,14 @@ func respondInternal(c *gin.Context) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
+	if errors.Is(err, factualreview.ErrRequired) {
+		c.JSON(http.StatusConflict, apiError("factual_review_required", "正文仍有事实待核实提示，请补充依据并编辑确认后再定稿、导出或提交审批"))
+		return
+	}
+	if errors.Is(err, platformapproval.ErrNotReady) {
+		c.JSON(http.StatusConflict, apiError("approval_not_ready", "请先完成章节定稿、合规复核和文件导出，再提交审批"))
+		return
+	}
 	if errors.Is(err, tenderpool.ErrNotFound) {
 		c.JSON(http.StatusNotFound, apiError("not_found", "资源不存在"))
 		return

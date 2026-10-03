@@ -1062,6 +1062,9 @@ def _ground_module_facts(current, fields, evidence, requirements):
             item.get("field") == field and _fact_supported(candidate, item.get("source_text"))
             for item in accepted_evidence
         )]
+        if field == "qualification_requirements":
+            supported = [candidate for candidate in supported
+                         if not re.search(r"废标|否决|无效投标|投标无效", _fact_text(candidate))]
         if len(supported) != len(candidates):
             rejected = True
         if supported:
@@ -1079,6 +1082,10 @@ def _ground_module_facts(current, fields, evidence, requirements):
                 grounded[field] = supported[0]
     accepted_requirements = []
     for item in requirements:
+        if current.get("module") == "qualification" and re.search(
+                r"废标|否决|无效投标|投标无效", str(item.get("requirement") or "")):
+            rejected = True
+            continue
         source = item.get("source_ref") or {}
         if (source.get("traceable") and not source.get("needs_review")
                 and not item.get("needs_review") and float(source.get("confidence") or 0) >= 0.65
@@ -1991,6 +1998,10 @@ def _keyword_values_with_evidence(
     seen: set[str] = set()
     for record in records:
         value = str(record.get("text") or "").strip(" :：\t")
+        if field == "qualification_requirements" and re.search(r"废标|否决|无效投标|投标无效", value):
+            # Rejection clauses belong to invalid_risk even if they mention
+            # missing qualification evidence. Keep the original clause there.
+            continue
         if field == "qualification_requirements" and re.search(r"评分|\d+\s*分", value) and not re.search(r"资格|资质|证书|许可证", value):
             continue
         if len(value) < 4 or not any(keyword in value for keyword in keywords):

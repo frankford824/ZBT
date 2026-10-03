@@ -39,6 +39,22 @@ def test_missing_source_does_not_create_generic_requirements():
     assert result['modules']['annex']['requirement_items'] == []
 
 
+def test_rejection_clause_is_not_duplicated_as_qualification():
+    parsed, result = fixture('项目名称：排水采购\n资格要求：须具备市政三级资质。\n废标条款：资格证明材料缺失、逾期送达视为无效投标。')
+    assert any('市政三级资质' in item for item in result['qualification_requirements'])
+    assert not any('废标条款' in item for item in result['qualification_requirements'])
+    assert any('资格证明材料缺失' in item for item in result['invalid_clause_risks'])
+    clause = '废标条款：资格证明材料缺失、逾期送达视为无效投标。'
+    quote = {'field': 'qualification_requirements', 'value': clause, 'confidence': 0.99,
+             'source_text': clause, 'chunk_id': 'parse-chunk-0001'}
+    merged = merge_tender_module_result(result, 'qualification', {
+        'fields': {'qualification_requirements': [clause]}, 'evidence': [quote],
+        'requirement_items': [{'id': 'wrong-module', 'requirement': clause, 'source_ref': quote}]},
+        source_context_records=tender_module_source_context_records(parsed, 'qualification'))
+    assert not any('废标条款' in item for item in merged['qualification_requirements'])
+    assert not any(item['id'] == 'wrong-module' for item in merged['modules']['qualification']['requirement_items'])
+
+
 def test_scope_and_contract_duration_are_distinct_from_bid_submission_date():
     parsed, result = fixture('项目名称：城南雨水管道项目\n投标截止时间：2026-11-15 09:30\n采购范围：雨水管道改造\n交付期限：合同生效后30天')
     basic = result['modules']['basic']

@@ -22,6 +22,7 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/auth"
 	"github.com/frankford824/ZBT/backend/internal/platform/bid"
 	"github.com/frankford824/ZBT/backend/internal/platform/config"
+	"github.com/frankford824/ZBT/backend/internal/platform/factualreview"
 	platformfile "github.com/frankford824/ZBT/backend/internal/platform/file"
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	"github.com/frankford824/ZBT/backend/internal/platform/rbac"
@@ -29,6 +30,23 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/tenderpool"
 	"github.com/gin-gonic/gin"
 )
+
+func TestReviewAndApprovalReadinessErrorsAreActionable(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{factualreview.ErrRequired, "factual_review_required"},
+		{platformapproval.ErrNotReady, "approval_not_ready"},
+	} {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		respondStatus(ctx, http.StatusCreated, nil, tc.err)
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), tc.code) {
+			t.Fatalf("unexpected contract: %d %s", recorder.Code, recorder.Body.String())
+		}
+	}
+}
 
 func TestAITaskCallbackAcknowledgementIsSmallAndPreservesErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)

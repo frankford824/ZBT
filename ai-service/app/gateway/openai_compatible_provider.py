@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.schemas.common import SourceRef
+from app.gateway.factual_guard import guard_chapter_content
 from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
 from app.schemas.generation import (
     ChapterActionRequest,
@@ -810,6 +811,7 @@ def _chapter_response_from_json(
     model: str,
 ) -> ChapterGenerateResponse:
     _assert_project_deadline_semantics(result, payload)
+    result, factual_notes, factual_issues = guard_chapter_content(result, payload)
     tiptap_json = result.get("tiptap_json")
     if not isinstance(tiptap_json, dict):
         text = str(result.get("plain_text") or result.get("content") or "")
@@ -868,7 +870,10 @@ def _chapter_response_from_json(
         if isinstance(result.get("self_check"), dict)
         else {"status": "needs_review"}
     )
-    needs_human_input = _string_list(result.get("needs_human_input"))
+    needs_human_input = factual_notes + _string_list(result.get("needs_human_input"))
+    if factual_issues:
+        self_check = dict(self_check)
+        self_check.update(status="needs_review", factual_guard={"status": "needs_review", "issues": factual_issues})
     if not payload.retrieved_knowledge_refs:
         needs_human_input.append("未提供可引用的企业资料；企业资质、人员、业绩等事实需要人工补充，不得视为已验证。")
     coverage = self_check.get("requirement_coverage")
@@ -899,7 +904,7 @@ def _chapter_response_from_json(
                     invalid = True
                     rejected_refs += 1
             item["source_refs"] = verified
-            if invalid:
+            if invalid or factual_issues:
                 item.update(satisfied=False, needs_review=True)
             sanitized.append(item)
         self_check["requirement_coverage"] = sanitized
@@ -918,7 +923,7 @@ def _chapter_response_from_json(
         tiptap_json=tiptap_json,
         source_refs=source_refs,
         self_check=self_check,
-        needs_human_input=needs_human_input,
+        needs_human_input=list(dict.fromkeys(needs_human_input))[:20],
         model_metadata={
             "provider": provider,
             "model": model,

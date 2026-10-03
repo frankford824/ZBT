@@ -15,7 +15,7 @@ import urllib.request
 import uuid
 
 from chapter_generation_smoke import api_call
-from full_bid_smoke import run as full_run
+from full_bid_smoke import run as full_run, expect_rejection
 
 
 def expect_error(base, path, body, status, code):
@@ -67,6 +67,8 @@ def run(origin):
         persisted = api_call(base, '/bids/' + bid['id'], token=login['access_token'])
         if persisted.get('bid_type') != bid_type or persisted.get('project_name') != title or not persisted.get('project_id'):
             raise RuntimeError('bid type or project name did not survive reload')
+        expect_rejection(base, '/bids/' + bid['id'] + '/submit-for-approval', login['access_token'],
+                         {}, 409, 'approval_not_ready')
         api_call(base, '/bids/' + bid['id'], method='PATCH', token=login['access_token'], body={'status': 'archived'})
     pool = api_call(base, '/platform/tenders?limit=1', token=login['access_token'])
     if not pool.get('items'):
@@ -76,7 +78,7 @@ def run(origin):
     if detail.get('title') != listed['title'] or not detail.get('raw_content_preview'):
         raise RuntimeError('public announcement detail did not return saved content')
     os.environ.update(ZBT_SMOKE_EMAIL=email, ZBT_SMOKE_PASSWORD=password)
-    result = full_run(base, origin.rstrip('/'))
+    result = full_run(base, origin.rstrip('/'), verify_approval=True)
     result.update(origin=origin, tenant_id=tenant, public_login='passed', duplicate_email='passed',
                   wrong_password='passed', unauthorized_tenant_login='rejected',
                   public_announcement_detail='saved content returned',

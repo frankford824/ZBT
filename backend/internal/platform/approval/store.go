@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/factualreview"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,6 +21,7 @@ var (
 	ErrNotFound       = errors.New("approval resource not found")
 	ErrInvalidRequest = errors.New("invalid approval request")
 	ErrForbidden      = errors.New("approval action forbidden")
+	ErrNotReady       = errors.New("bid is not ready for approval")
 )
 
 const (
@@ -264,6 +267,21 @@ func (s *Store) SubmitBid(ctx context.Context, tenantID, userID, bidID string) (
 			where tenant_id = $1 and id = $2
 		`, tenantID, bidID).Scan(&bidTitle); err != nil {
 			return err
+		}
+		if err := factualreview.RequireClear(ctx, tx, tenantID, bidID); err != nil {
+			return err
+		}
+		var ready bool
+		if err := tx.QueryRow(ctx, `select
+			(select count(*) from bid_pipeline_gates where tenant_id=$1 and bid_document_id=$2
+			 and stage in ('generate','check','format') and status='passed') = 3
+			and exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2)
+			and not exists(select 1 from bid_chapters where tenant_id=$1 and bid_document_id=$2
+			 and (status <> 'accepted' or btrim(plain_text) = ''))`, tenantID, bidID).Scan(&ready); err != nil {
+			return err
+		}
+		if !ready {
+			return ErrNotReady
 		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `

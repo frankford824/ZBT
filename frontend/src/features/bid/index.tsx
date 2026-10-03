@@ -1363,7 +1363,7 @@ export function BidWizardPage() {
                                     ellipsis: true,
                                   },
                                   {
-                                    title: '可信度',
+                                    title: <Tooltip title="系统估计的置信度，不是事实正确率；请以原文和人工复核为准。">置信度（非正确率）</Tooltip>,
                                     width: 100,
                                     render: (_, row) => parseFieldConfidenceTag(row.confidence, row.needsReview, row.reviewStatus),
                                   },
@@ -2914,7 +2914,7 @@ function parseFieldConfidenceTag(confidence: number, needsReview: boolean, revie
   if (reviewStatus === 'needs_update') return <Tag color="gold">需要补充</Tag>
   if (reviewStatus === 'not_applicable') return <Tag>不适用</Tag>
   if (needsReview) return <Tag color="gold">待确认 {percent}%</Tag>
-  if (confidence >= 0.8) return <Tag color="green">可信 {percent}%</Tag>
+  if (confidence >= 0.8) return <Tag color="blue">参考 {percent}%</Tag>
   return <Tag color="blue">可参考 {percent}%</Tag>
 }
 

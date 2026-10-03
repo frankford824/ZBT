@@ -14,6 +14,9 @@ import os
 import re
 import subprocess
 import time
+import secrets
+import uuid
+import urllib.error
 import urllib.request
 import zipfile
 from xml.etree import ElementTree
@@ -34,7 +37,49 @@ def wait_for(base, path, token, field, timeout=1200):
     raise RuntimeError("workflow deadline exceeded: " + path)
 
 
-def run(base, origin, bid_type='combined'):
+def expect_rejection(base, path, token, body, status, code):
+    request = urllib.request.Request(base + path, data=json.dumps(body).encode(),
+        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token}, method='POST')
+    try:
+        with urllib.request.urlopen(request, timeout=20):
+            raise RuntimeError('expected workflow gate rejection: ' + path)
+    except urllib.error.HTTPError as error:
+        response = json.loads(error.read())
+        if error.code != status or response.get('code') != code:
+            raise RuntimeError('unexpected workflow gate error contract: ' + path) from None
+
+
+def review_fixture_text(text):
+    # ONLY our synthetic fixture: remove unsupported promises, do not assert
+    # new company facts or invent replacement numbers. Real bids need a human.
+    return re.sub(r'【事实待核实：[^】]*】', '相关承诺未作出；应由企业提供真实依据，经人工确认后另行编制。', text)
+
+
+def verify_second_reviewer(base, token, bid):
+    marker = uuid.uuid4().hex[:12]
+    password = secrets.token_urlsafe(24)
+    email = 'gray-reviewer-' + marker + '@example.com'
+    member = api_call(base, '/tenant/members/invite', method='POST', token=token, body={
+        'email': email, 'name': '灰度专用第二审批人', 'role_code': 'project_manager', 'initial_password': password})
+    api_call(base, '/approval-chains', method='POST', token=token, body={
+        'name': '灰度专用指定第二人-' + marker, 'resource_type': 'bid', 'enabled': True,
+        'steps': [{'order': 1, 'name': '第二审批人复核', 'user_id': member['user']['id'],
+                   'role_code': 'project_manager', 'required': True}]})
+    reviewer = api_call(base, '/auth/login', method='POST', body={'email': email, 'password': password})
+    started = api_call(base, f'/bids/{bid}/submit-for-approval', method='POST', token=token, body={})
+    instance = started['instance']['id']
+    expect_rejection(base, f'/approvals/{instance}/approve', token,
+        {'comment': '提交人不得代替指定审批人'}, 403, 'permission_denied')
+    approved = api_call(base, f'/approvals/{instance}/approve', method='POST', token=reviewer['access_token'],
+        body={'comment': '仅专用夹具：验证第二角色审批流；非真实项目合规认证。'})
+    persisted = api_call(base, f'/bids/{bid}', token=token)
+    if approved['instance']['status'] != 'approved' or persisted['status'] != 'approved':
+        raise RuntimeError('second reviewer approval did not persist')
+    return {'instance_id': instance, 'reviewer_user_id': member['user']['id'],
+            'submitter_approve': '403 rejected', 'second_reviewer_approve': 'passed'}
+
+
+def run(base, origin, bid_type='combined', verify_approval=False):
     if bid_type not in ('combined', 'separated'):
         raise ValueError('full workflow fixture supports combined or separated layouts')
     password = os.environ["ZBT_SMOKE_PASSWORD"]
@@ -61,8 +106,8 @@ def run(base, origin, bid_type='combined'):
     structured = parsed["structured_result"]
     # Bound model expense while still generating EVERY chapter of the fixture.
     fixture_chapters = [
-        {"title": "项目理解与交付方案", "plain_text": "根据真实上传的测试招标文件编写项目理解、实施计划、30天交付和技术评分响应。"},
-        {"title": "商务响应与人工核对事项", "plain_text": "根据文件编写预算、报价原则、营业执照核对事项；测试项目不提供真实企业证明，不得虚构资质。"}]
+        {"title": "项目理解与交付方案", "plain_text": "根据真实上传的测试招标文件编写项目理解、实施计划、原文工期和技术评分响应；未明确的期限不得猜测。"},
+        {"title": "商务响应与人工核对事项", "plain_text": "根据文件编写预算、报价原则和原文资格核对事项；测试项目不提供真实企业证明，不得虚构资质。"}]
     structured["outline"] = {"parts": (
         [{"code": "combined_body", "title": "验收测试综合标书", "chapters": fixture_chapters}]
         if bid_type == 'combined' else [
@@ -82,6 +127,19 @@ def run(base, origin, bid_type='combined'):
     if completed["job"]["completed_steps"] != 2 or any(step["status"] != "done" for step in completed["steps"]):
         raise RuntimeError("not every fixture chapter completed")
     chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
+    # Exercise all three backend fact gates even if the current model emits no
+    # risky claim. This canary is on a new fixture, never on an existing bid.
+    first = chapters[0]
+    canary = first['plain_text'] + '\n【事实待核实：灰度闸门专用夹具。】'
+    api_call(base, '/chapters/' + first['id'] + '/content', method='PUT', token=token,
+             body={'plain_text': canary})
+    for path, body in [('/chapters/' + first['id'] + '/accept', {}),
+                       (f'/bids/{bid}/exports', {'export_type': 'docx'}),
+                       (f'/bids/{bid}/submit-for-approval', {})]:
+        expect_rejection(base, path, token, body, 409, 'factual_review_required')
+    api_call(base, '/chapters/' + first['id'] + '/content', method='PUT', token=token,
+             body={'plain_text': first['plain_text'], 'content': first['content']})
+    factual_review_count = 0
     for chapter in chapters:
         if not chapter.get("plain_text") or not (chapter.get("content") or {}).get("content"):
             raise RuntimeError("generated chapter is missing persisted text or editor content")
@@ -90,7 +148,13 @@ def run(base, origin, bid_type='combined'):
         versions = api_call(base, "/chapters/" + chapter["id"] + "/versions", token=token)
         if not versions.get("items"):
             raise RuntimeError("chapter version was not persisted")
+        if '【事实待核实：' in chapter['plain_text']:
+            factual_review_count += 1
+            text = review_fixture_text(chapter['plain_text'])
+            api_call(base, '/chapters/' + chapter['id'] + '/content', method='PUT', token=token,
+                     body={'plain_text': text})
         api_call(base, "/chapters/" + chapter["id"] + "/accept", method="POST", token=token, body={})
+    chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
     content_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters]
     technical = next(chapter for chapter in chapters if chapter['title'] == fixture_chapters[0]['title'])['plain_text']
     if not re.search(r'雨水|排水|管道', technical) or re.search(r'云平台|云计算|软件许可', technical):
@@ -150,9 +214,13 @@ def run(base, origin, bid_type='combined'):
                     if len(documents) < 2 or not all(sample and sample in normalized for sample in content_samples):
                         raise RuntimeError('ZIP does not contain both persisted generated part bodies')
         exports[kind] = {"export_id": exported["id"], "bytes": len(content)}
+    approval = verify_second_reviewer(base, token, bid) if verify_approval else {'status': 'not_executed'}
     api_call(base, f"/bids/{bid}", method="PATCH", token=token, body={"status": "archived"})
     evidence = {"status": "passed", "bid_id": bid, "bid_type": bid_type, "chapters_generated": 2, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
             "review": "fixture-only acknowledgement; not semantic compliance certification",
+            "factual_gate_canary": "accept/export/approval rejected unresolved placeholder",
+            "factual_reviewed_chapters": factual_review_count,
+            "approval": approval,
             "source_sha": os.environ.get('GITHUB_SHA', '')}
     from pathlib import Path
     Path("/opt/zbt-private/full-acceptance.json").write_text(json.dumps(evidence, indent=2))
