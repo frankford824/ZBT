@@ -41,6 +41,8 @@ class RouteTarget(BaseModel):
     require_source_refs: bool = False
     timeout_s: int | None = None
     dimensions: int | None = None
+    enable_thinking: bool | None = None
+    max_tokens: int | None = None
     fallback_from: str | None = None
 
     @field_validator("provider", "model", mode="before")
@@ -66,7 +68,14 @@ class RouteTarget(BaseModel):
             raise ValueError("route temperature must be a number between 0 and 2")
         return number
 
-    @field_validator("timeout_s", "dimensions", mode="before")
+    @field_validator("enable_thinking", mode="before")
+    @classmethod
+    def _optional_boolean(cls, value: object) -> bool | None:
+        if value is not None and not isinstance(value, bool):
+            raise ValueError("route enable_thinking must be a boolean")
+        return value
+
+    @field_validator("timeout_s", "dimensions", "max_tokens", mode="before")
     @classmethod
     def _positive_int(cls, value: object, info: Any) -> int | None:
         if value is None or value == "":
@@ -292,6 +301,8 @@ class ModelRouter:
             require_source_refs=bool(route.get("require_source_refs", False)),
             timeout_s=route.get("timeout_s"),
             dimensions=route.get("dimensions"),
+            enable_thinking=route.get("enable_thinking"),
+            max_tokens=route.get("max_tokens"),
         )
 
     def _provider_for_target(self, target: RouteTarget) -> object:

@@ -6,6 +6,22 @@ from app.gateway.model_router import MAX_AI_ESTIMATED_COST, ModelRouter
 from app.schemas.generation import ChapterGenerateRequest, RetrievedKnowledgeRef, TenderRequirementRef
 
 
+@pytest.mark.parametrize('field,value', [('max_tokens', 0), ('max_tokens', True), ('max_tokens', 1.5), ('enable_thinking', 'false'), ('enable_thinking', 0)])
+def test_completion_budget_rejects_invalid_configuration(field, value):
+    from app.gateway.model_router import RouteTarget
+    with pytest.raises(ValueError):
+        RouteTarget(provider='test', model='model', **{field: value})
+
+
+def test_btjs_chapter_routes_have_explicit_non_thinking_output_budget():
+    router = ModelRouter.from_yaml(Path(__file__).parents[1] / 'config/model_routing.btjs.yaml')
+    targets = [router._route_target('chapter_generate', item, apply_environment_override=False)
+               for item in [router.config['routes']['chapter_generate']['primary'], *router.config['routes']['chapter_generate']['fallback']]]
+    assert len(targets) == 2
+    assert [target.model for target in targets] == ['deepseek-v4-flash-0731', 'qwen3.8-flash']
+    assert all(target.enable_thinking is False and target.max_tokens == 8192 and target.timeout_s == 120 for target in targets)
+
+
 @pytest.fixture(autouse=True)
 def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")

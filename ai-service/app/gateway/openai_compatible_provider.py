@@ -34,6 +34,8 @@ class OpenAICompatibleTarget:
     dimensions: int | None = None
     temperature: float | None = None
     timeout_s: int | None = None
+    enable_thinking: bool | None = None
+    max_tokens: int | None = None
 
 
 class OpenAICompatibleProvider:
@@ -75,6 +77,8 @@ class OpenAICompatibleProvider:
                 dimensions=target.dimensions,
                 temperature=target.temperature,
                 timeout_s=target.timeout_s,
+                enable_thinking=getattr(target, "enable_thinking", None),
+                max_tokens=getattr(target, "max_tokens", None),
             ),
         )
 
@@ -107,6 +111,7 @@ class OpenAICompatibleProvider:
                 "model": self._model(),
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": self._temperature(),
+                **self._completion_options(),
             },
         )
         return _choice_text(data)
@@ -125,6 +130,7 @@ class OpenAICompatibleProvider:
                 ],
                 "temperature": self._temperature(),
                 "response_format": {"type": "json_object"},
+                **self._completion_options(),
             },
         )
         return _json_from_text(_choice_text(data))
@@ -222,6 +228,16 @@ class OpenAICompatibleProvider:
         if self.target and self.target.temperature is not None:
             return self.target.temperature
         return 0.2
+
+    def _completion_options(self) -> dict[str, object]:
+        # Vendor-specific controls are opt-in per route, never sent to embeddings
+        # or unrelated OpenAI-compatible providers by default.
+        options: dict[str, object] = {}
+        if self.target and self.target.enable_thinking is not None:
+            options["enable_thinking"] = self.target.enable_thinking
+        if self.target and self.target.max_tokens is not None:
+            options["max_tokens"] = self.target.max_tokens
+        return options
 
     def _timeout(self) -> int:
         if self.target and self.target.timeout_s and self.target.timeout_s > 0:
@@ -339,6 +355,8 @@ class CloudflareAIGatewayProvider(OpenAICompatibleProvider):
                 dimensions=target.dimensions,
                 temperature=target.temperature,
                 timeout_s=target.timeout_s,
+                enable_thinking=getattr(target, "enable_thinking", None),
+                max_tokens=getattr(target, "max_tokens", None),
             ),
         )
 
@@ -556,6 +574,8 @@ def _choice_text(data: dict[str, Any]) -> str:
     choices = data.get("choices", [])
     if not choices:
         raise RuntimeError("chat completion returned no choices")
+    if choices[0].get("finish_reason") in {"length", "content_filter"}:
+        raise RuntimeError("chat completion was truncated or filtered; refusing incomplete content")
     message = choices[0].get("message", {})
     content = message.get("content", "")
     if not isinstance(content, str) or not content.strip():

@@ -21,6 +21,37 @@ from app.schemas.generation import (
 )
 
 
+@pytest.mark.parametrize('provider_class', [OpenAICompatibleProvider, CloudflareAIGatewayProvider])
+def test_completion_budget_is_bound_and_sent_only_when_configured(monkeypatch, provider_class):
+    from app.gateway.model_router import RouteTarget
+    if provider_class is CloudflareAIGatewayProvider:
+        provider = provider_class()
+    else:
+        provider = provider_class('test', base_url_env='TEST_BASE', api_key_env='TEST_KEY')
+    captured = []
+    def post(path, body):
+        captured.append((path, body))
+        return {'choices': [{'message': {'content': '{"ok":true}'}, 'finish_reason': 'stop'}]}
+    bound = provider.bind(RouteTarget(provider='test', model='model', enable_thinking=False, max_tokens=8192))
+    monkeypatch.setattr(bound, '_post_json', post)
+    assert bound.generate_json('prompt', 'Test') == {'ok': True}
+    bound.complete('prompt')
+    assert all(body['enable_thinking'] is False and body['max_tokens'] == 8192 for _, body in captured)
+    default = provider.bind(RouteTarget(provider='test', model='model'))
+    monkeypatch.setattr(default, '_post_json', post)
+    default.complete('prompt')
+    assert 'enable_thinking' not in captured[-1][1] and 'max_tokens' not in captured[-1][1]
+
+
+@pytest.mark.parametrize('finish_reason', ['length', 'content_filter'])
+def test_incomplete_completion_is_not_accepted_even_when_json_is_valid(monkeypatch, finish_reason):
+    provider = OpenAICompatibleProvider('test', base_url_env='TEST_BASE', api_key_env='TEST_KEY',
+                                        target=OpenAICompatibleTarget(model='model'))
+    monkeypatch.setattr(provider, '_post_json', lambda *_: {'choices': [{'message': {'content': '{"ok":true}'}, 'finish_reason': finish_reason}]})
+    with pytest.raises(RuntimeError, match='refusing incomplete content'):
+        provider.generate_json('prompt', 'Test')
+
+
 def test_chapter_ref_alias_is_resolved_only_against_known_input():
     payload = ChapterGenerateRequest(
         tenant_id="tenant",

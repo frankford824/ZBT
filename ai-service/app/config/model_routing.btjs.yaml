@@ -95,18 +95,24 @@ routes:
   chapter_generate:
     primary:
       provider: openai_compatible_primary
-      model: qwen3.8-flash
+      # Chapter-sized requests are latency-sensitive. Keep both real models,
+      # but prefer DeepSeek for this route rather than changing parse routing.
+      model: deepseek-v4-flash-0731
       temperature: 0.3
       stream: true
       require_source_refs: true
       timeout_s: 120
+      enable_thinking: false
+      max_tokens: 8192
     fallback:
       - provider: openai_compatible_primary
-        model: deepseek-v4-flash-0731
+        model: qwen3.8-flash
         temperature: 0.3
         stream: true
         require_source_refs: true
         timeout_s: 120
+        enable_thinking: false
+        max_tokens: 8192
   chapter_self_check:
     primary:
       provider: openai_compatible_primary
