@@ -4,6 +4,8 @@ FROM ${BASE_IMAGE_REGISTRY}node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be9
 WORKDIR /src
 ARG VITE_API_BASE_URL=/api/v1
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ARG VITE_ENABLE_REGISTRATION=true
+ENV VITE_ENABLE_REGISTRATION=$VITE_ENABLE_REGISTRATION
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN npm config set registry https://registry.npmmirror.com \
     && npm install -g pnpm@10.27.0 \

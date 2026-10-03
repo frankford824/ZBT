@@ -14,7 +14,61 @@ from app.gateway.openai_compatible_provider import (
     _chapter_response_from_json,
     _json_from_text,
 )
-from app.schemas.generation import ChapterGenerateRequest, TenderRequirementRef
+from app.schemas.generation import (
+    ChapterGenerateRequest,
+    RetrievedKnowledgeRef,
+    TenderRequirementRef,
+)
+
+
+def test_chapter_ref_alias_is_resolved_only_against_known_input():
+    payload = ChapterGenerateRequest(
+        tenant_id="tenant",
+        bid_document_id="bid",
+        bid_part_id="part",
+        chapter_id="chapter",
+        chapter_title="title",
+        retrieved_knowledge_refs=[
+            RetrievedKnowledgeRef(
+                chunk_id="known", document_id="document", title="Real title", page_start=2
+            )
+        ],
+    )
+    response = _chapter_response_from_json(
+        {"plain_text": "body", "source_refs": [{"id": "known", "page_start": 999}]},
+        payload,
+        "provider",
+        "model",
+    )
+    assert response.source_refs[0].chunk_id == "known"
+    assert response.source_refs[0].title == "Real title"
+    assert response.source_refs[0].page_start == 2
+
+
+def test_unknown_or_requirement_id_is_not_accepted_as_fabricated_provenance():
+    payload = ChapterGenerateRequest(
+        tenant_id="tenant",
+        bid_document_id="bid",
+        bid_part_id="part",
+        chapter_id="chapter",
+        chapter_title="title",
+    )
+    response = _chapter_response_from_json(
+        {
+            "plain_text": "body",
+            "source_refs": [
+                {"id": "evaluation-001"},
+                {"chunk_id": "invented", "document_id": "fake", "title": "fake"},
+            ],
+        },
+        payload,
+        "provider",
+        "model",
+    )
+    assert response.source_refs == []
+    assert response.self_check["status"] == "needs_review"
+    assert response.model_metadata["rejected_source_ref_count"] == 2
+    assert response.needs_human_input
 
 
 def test_openai_rerank_accepts_numeric_string_indexes(monkeypatch) -> None:
@@ -57,12 +111,16 @@ def test_openai_provider_normalizes_valid_base_url(monkeypatch) -> None:
         base_url_env="FAKE_OPENAI_BASE_URL",
         api_key_env="FAKE_OPENAI_API_KEY",
     )
-    monkeypatch.setenv("FAKE_OPENAI_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai/")
+    monkeypatch.setenv(
+        "FAKE_OPENAI_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai/"
+    )
 
     assert provider._base_url() == "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
 
 
-def test_cloudflare_ai_gateway_provider_builds_current_rest_base_url_and_headers(monkeypatch) -> None:
+def test_cloudflare_ai_gateway_provider_builds_current_rest_base_url_and_headers(
+    monkeypatch,
+) -> None:
     provider = CloudflareAIGatewayProvider()
     monkeypatch.delenv("CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", raising=False)
     monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "0123456789abcdef0123456789abcdef")
@@ -82,7 +140,10 @@ def test_cloudflare_ai_gateway_provider_builds_current_rest_base_url_and_headers
 
 def test_cloudflare_ai_gateway_provider_accepts_explicit_base_url_override(monkeypatch) -> None:
     provider = CloudflareAIGatewayProvider()
-    monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/compat/")
+    monkeypatch.setenv(
+        "CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
+        "https://gateway.ai.cloudflare.com/v1/acct/gateway/compat/",
+    )
     monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
     monkeypatch.setenv("CLOUDFLARE_AI_GATEWAY_TOKEN", "legacy-token")
 
@@ -290,7 +351,9 @@ def test_openai_embed_batch_reorders_indexed_embeddings_and_normalizes_numbers(m
         ({"data": [{"index": 0, "embedding": [float("nan")]}]}, "non-finite"),
     ],
 )
-def test_openai_embed_batch_rejects_invalid_embedding_response(monkeypatch, response, message) -> None:
+def test_openai_embed_batch_rejects_invalid_embedding_response(
+    monkeypatch, response, message
+) -> None:
     provider = _embedding_provider()
     monkeypatch.setattr(provider, "_post_json", lambda _path, _payload: response)
     response_data = response.get("data")
@@ -401,7 +464,9 @@ def test_openai_provider_supports_authenticated_gateway_without_provider_key(mon
         auth_header_env="FAKE_CF_GATEWAY_TOKEN",
         extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.delenv("FAKE_OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"cf-aig-metadata":"{\\"tenant\\":\\"demo\\"}"}')
@@ -422,7 +487,9 @@ def test_openai_provider_rejects_invalid_extra_gateway_headers(monkeypatch) -> N
         api_key_required=False,
         extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"Bad\\nHeader":"value"}')
 
     assert provider.health_check() is False
@@ -439,7 +506,9 @@ def test_openai_provider_rejects_extra_headers_that_override_auth(monkeypatch) -
         auth_header_env="FAKE_CF_GATEWAY_TOKEN",
         extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"Authorization":"Bearer override"}')
@@ -449,7 +518,9 @@ def test_openai_provider_rejects_extra_headers_that_override_auth(monkeypatch) -
         provider._headers()
 
 
-def test_openai_provider_rejects_gateway_auth_header_that_overrides_provider_auth(monkeypatch) -> None:
+def test_openai_provider_rejects_gateway_auth_header_that_overrides_provider_auth(
+    monkeypatch,
+) -> None:
     provider = OpenAICompatibleProvider(
         "cloudflare",
         base_url_env="FAKE_CF_GATEWAY_BASE_URL",
@@ -457,7 +528,9 @@ def test_openai_provider_rejects_gateway_auth_header_that_overrides_provider_aut
         auth_header_name="authorization",
         auth_header_env="FAKE_CF_GATEWAY_TOKEN",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
 
@@ -475,7 +548,9 @@ def test_openai_provider_rejects_invalid_gateway_auth_header_name(monkeypatch) -
         auth_header_name="bad header",
         auth_header_env="FAKE_CF_GATEWAY_TOKEN",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.setenv("FAKE_CF_GATEWAY_TOKEN", "gateway-token")
 
     assert provider.health_check() is False
@@ -490,7 +565,9 @@ def test_openai_provider_health_check_rejects_auth_header_without_env(monkeypatc
         api_key_env="FAKE_OPENAI_API_KEY",
         auth_header_name="cf-aig-authorization",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.setenv("FAKE_OPENAI_API_KEY", "provider-key")
 
     assert provider.health_check() is False
@@ -506,7 +583,9 @@ def test_openai_provider_rejects_duplicate_extra_headers_case_insensitively(monk
         api_key_required=False,
         extra_headers_env="FAKE_CF_GATEWAY_HEADERS",
     )
-    monkeypatch.setenv("FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai")
+    monkeypatch.setenv(
+        "FAKE_CF_GATEWAY_BASE_URL", "https://gateway.ai.cloudflare.com/v1/acct/gateway/openai"
+    )
     monkeypatch.setenv("FAKE_CF_GATEWAY_HEADERS", '{"cf-aig-metadata":"a","CF-AIG-METADATA":"b"}')
 
     assert provider.health_check() is False

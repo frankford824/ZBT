@@ -13,8 +13,11 @@ from typing import Any
 
 from app.schemas.common import SourceRef
 from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
-from app.schemas.generation import ChapterActionRequest, ChapterGenerateRequest, ChapterGenerateResponse
-
+from app.schemas.generation import (
+    ChapterActionRequest,
+    ChapterGenerateRequest,
+    ChapterGenerateResponse,
+)
 
 _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _CLOUDFLARE_ACCOUNT_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
@@ -146,7 +149,9 @@ class OpenAICompatibleProvider:
         data = self._post_json("/embeddings", payload)
         embeddings = _embedding_vectors_from_response(data, len(texts), self.name)
         if len(embeddings) != len(texts):
-            raise RuntimeError(f"{self.name} embedding count mismatch: got {len(embeddings)} want {len(texts)}")
+            raise RuntimeError(
+                f"{self.name} embedding count mismatch: got {len(embeddings)} want {len(texts)}"
+            )
         return embeddings
 
     def get_dimensions(self) -> int:
@@ -158,8 +163,11 @@ class OpenAICompatibleProvider:
     def rerank(self, query: str, documents: list[str]) -> list[int]:
         prompt = {
             "query": query,
-            "documents": [{"index": index, "content": content[:2400]} for index, content in enumerate(documents)],
-            "instruction": "Rank the documents by relevance to query. Return JSON: {\"indexes\":[...]} only.",
+            "documents": [
+                {"index": index, "content": content[:2400]}
+                for index, content in enumerate(documents)
+            ],
+            "instruction": 'Rank the documents by relevance to query. Return JSON: {"indexes":[...]} only.',
         }
         result = self.generate_json(json.dumps(prompt, ensure_ascii=False), "KnowledgeRerank")
         indexes = result.get("indexes", [])
@@ -273,7 +281,9 @@ class OpenAICompatibleProvider:
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
-                parsed = json.loads(_read_limited_response(response, self._max_response_bytes()).decode("utf-8"))
+                parsed = json.loads(
+                    _read_limited_response(response, self._max_response_bytes()).decode("utf-8")
+                )
                 if not isinstance(parsed, dict):
                     raise RuntimeError(f"{self.name} {path} returned non-object JSON")
                 return parsed
@@ -290,7 +300,9 @@ class OpenAICompatibleProvider:
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
-                parsed = json.loads(_read_limited_response(response, self._max_response_bytes()).decode("utf-8"))
+                parsed = json.loads(
+                    _read_limited_response(response, self._max_response_bytes()).decode("utf-8")
+                )
                 if not isinstance(parsed, dict):
                     raise RuntimeError(f"{self.name} {path} returned non-object JSON")
                 return parsed
@@ -307,7 +319,9 @@ class OpenAICompatibleProvider:
 
 
 class CloudflareAIGatewayProvider(OpenAICompatibleProvider):
-    def __init__(self, name: str = "cloudflare_ai_gateway", target: OpenAICompatibleTarget | None = None) -> None:
+    def __init__(
+        self, name: str = "cloudflare_ai_gateway", target: OpenAICompatibleTarget | None = None
+    ) -> None:
         super().__init__(
             name,
             base_url_env="CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL",
@@ -340,9 +354,7 @@ class CloudflareAIGatewayProvider(OpenAICompatibleProvider):
             return _safe_base_url(configured_base_url, self.name, self.base_url_env)
         account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
         if not _CLOUDFLARE_ACCOUNT_ID_RE.fullmatch(account_id):
-            raise RuntimeError(
-                f"{self.name} requires CLOUDFLARE_ACCOUNT_ID or {self.base_url_env}"
-            )
+            raise RuntimeError(f"{self.name} requires CLOUDFLARE_ACCOUNT_ID or {self.base_url_env}")
         return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
 
     def _headers(self) -> dict[str, str]:
@@ -386,7 +398,9 @@ class CloudflareAIGatewayProvider(OpenAICompatibleProvider):
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout()) as response:
-                parsed = json.loads(_read_limited_response(response, self._max_response_bytes()).decode("utf-8"))
+                parsed = json.loads(
+                    _read_limited_response(response, self._max_response_bytes()).decode("utf-8")
+                )
                 if not isinstance(parsed, dict):
                     raise RuntimeError(f"{self.name} /ai/run returned non-object JSON")
                 return _cloudflare_result(parsed, self.name)
@@ -432,26 +446,45 @@ def _cloudflare_result(data: dict[str, Any], provider_name: str) -> dict[str, An
     return data
 
 
-def _cloudflare_embedding_vectors(data: dict[str, Any], expected_count: int, provider_name: str) -> list[list[float]]:
+def _cloudflare_embedding_vectors(
+    data: dict[str, Any], expected_count: int, provider_name: str
+) -> list[list[float]]:
     items = data.get("data")
-    if isinstance(items, list) and len(items) == expected_count and all(isinstance(item, dict) for item in items):
+    if (
+        isinstance(items, list)
+        and len(items) == expected_count
+        and all(isinstance(item, dict) for item in items)
+    ):
         return _embedding_vectors_from_response(data, expected_count, provider_name)
-    if isinstance(items, list) and expected_count == 1 and items and all(isinstance(item, (int, float)) for item in items):
+    if (
+        isinstance(items, list)
+        and expected_count == 1
+        and items
+        and all(isinstance(item, (int, float)) for item in items)
+    ):
         return [_embedding_vector(items, provider_name)]
     if not isinstance(items, list) or len(items) != expected_count:
         raise RuntimeError(f"{provider_name} Workers AI embedding response data count mismatch")
     return [_embedding_vector(item, provider_name) for item in items]
 
 
-def _cloudflare_rerank_indexes(data: dict[str, Any], document_count: int, provider_name: str) -> list[int]:
+def _cloudflare_rerank_indexes(
+    data: dict[str, Any], document_count: int, provider_name: str
+) -> list[int]:
     items = data.get("response")
     if not isinstance(items, list):
         items = data.get("data")
     if not isinstance(items, list):
-        raise RuntimeError(f"{provider_name} Workers AI rerank response must include response or data")
+        raise RuntimeError(
+            f"{provider_name} Workers AI rerank response must include response or data"
+        )
     if all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in items):
-        scored = [(index, float(score), index) for index, score in enumerate(items[:document_count])]
-        return [index for index, _score, _order in sorted(scored, key=lambda item: (-item[1], item[2]))]
+        scored = [
+            (index, float(score), index) for index, score in enumerate(items[:document_count])
+        ]
+        return [
+            index for index, _score, _order in sorted(scored, key=lambda item: (-item[1], item[2]))
+        ]
 
     ranked: list[tuple[int, float, int]] = []
     for order, item in enumerate(items):
@@ -505,10 +538,14 @@ def _safe_base_url(value: str, provider_name: str, env_name: str) -> str:
         or parsed.query
         or parsed.fragment
     ):
-        raise RuntimeError(f"{provider_name} base URL env {env_name} must be an absolute HTTP(S) URL")
+        raise RuntimeError(
+            f"{provider_name} base URL env {env_name} must be an absolute HTTP(S) URL"
+        )
     if _contains_url_unsafe_character(parsed.netloc) or _contains_url_unsafe_character(parsed.path):
         raise RuntimeError(f"{provider_name} base URL env {env_name} is invalid")
-    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", ""))
+    return urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", "", "")
+    )
 
 
 def _contains_url_unsafe_character(value: str) -> bool:
@@ -535,7 +572,9 @@ def _embedding_vectors_from_response(
     if not isinstance(items, list):
         raise RuntimeError(f"{provider_name} embedding response data must be a list")
     if len(items) != expected_count:
-        raise RuntimeError(f"{provider_name} embedding count mismatch: got {len(items)} want {expected_count}")
+        raise RuntimeError(
+            f"{provider_name} embedding count mismatch: got {len(items)} want {expected_count}"
+        )
     has_indexes = any(isinstance(item, dict) and "index" in item for item in items)
     embeddings: list[list[float] | None] = [None] * expected_count
     seen_indexes: set[int] = set()
@@ -601,7 +640,9 @@ def _extra_headers_from_env(env_name: str, provider_name: str) -> dict[str, str]
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{provider_name} extra headers env {env_name} must be a JSON object") from exc
+        raise RuntimeError(
+            f"{provider_name} extra headers env {env_name} must be a JSON object"
+        ) from exc
     if not isinstance(parsed, dict):
         raise RuntimeError(f"{provider_name} extra headers env {env_name} must be a JSON object")
 
@@ -615,10 +656,14 @@ def _extra_headers_from_env(env_name: str, provider_name: str) -> dict[str, str]
         )
         normalized_name = header_name.lower()
         if normalized_name in seen_names:
-            raise RuntimeError(f"{provider_name} extra headers env {env_name} contains duplicate header {header_name}")
+            raise RuntimeError(
+                f"{provider_name} extra headers env {env_name} contains duplicate header {header_name}"
+            )
         seen_names.add(normalized_name)
         if not isinstance(value, str):
-            raise RuntimeError(f"{provider_name} extra headers env {env_name} values must be strings")
+            raise RuntimeError(
+                f"{provider_name} extra headers env {env_name} values must be strings"
+            )
         headers[header_name] = _safe_header_value(value)
     return headers
 
@@ -688,6 +733,7 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
             "requirement_refs": requirement_refs,
             "selected_knowledge_refs": payload.selected_knowledge_refs,
             "retrieved_knowledge_refs": refs,
+            "source_ref_contract": "source_refs entries must copy chunk_id, document_id, title, page_start, page_end from retrieved_knowledge_refs. A requirement id is NOT a chunk_id. Never invent identifiers.",
             "instruction": (
                 "Generate bid chapter JSON with fields: tiptap_json, source_refs, "
                 "self_check, needs_human_input. self_check must include requirement_coverage "
@@ -709,7 +755,9 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
             "current_tiptap_json": payload.current_tiptap_json,
             "tender_requirements": payload.tender_requirements,
             "requirement_refs": [ref.model_dump() for ref in payload.requirement_refs[:20]],
-            "retrieved_knowledge_refs": [ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]],
+            "retrieved_knowledge_refs": [
+                ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]
+            ],
             "output_contract": (
                 "Return JSON with tiptap_json, source_refs, self_check, needs_human_input. "
                 "self_check.requirement_coverage must review every requirement_ref."
@@ -732,10 +780,39 @@ def _chapter_response_from_json(
             "type": "doc",
             "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
         }
+    # Model output is not an authority for provenance. Resolve aliases ONLY
+    # against the exact chunks supplied in this request, and copy canonical
+    # titles/page locations rather than trusting model-generated metadata.
+    known = {
+        ref.chunk_id: SourceRef(
+            chunk_id=ref.chunk_id,
+            document_id=ref.document_id,
+            title=ref.title,
+            page_start=ref.page_start,
+            page_end=ref.page_end,
+        )
+        for ref in payload.retrieved_knowledge_refs[:8]
+    }
     source_refs = []
-    for ref in result.get("source_refs", []):
-        if isinstance(ref, dict):
-            source_refs.append(SourceRef(**ref))
+    rejected_refs = 0
+    raw_refs = result.get("source_refs")
+    raw_refs = raw_refs if isinstance(raw_refs, list) else []
+    for ref in raw_refs:
+        identifier = (
+            str(ref.get("chunk_id") or ref.get("id") or ref.get("reference_id") or "")
+            if isinstance(ref, dict)
+            else str(ref)
+        )
+        canonical = known.get(identifier)
+        if canonical and (
+            not isinstance(ref, dict)
+            or not ref.get("document_id")
+            or ref["document_id"] == canonical.document_id
+        ):
+            if canonical not in source_refs:
+                source_refs.append(canonical)
+        else:
+            rejected_refs += 1
     if not source_refs:
         source_refs = [
             SourceRef(
@@ -749,7 +826,18 @@ def _chapter_response_from_json(
         ]
     output_text = json.dumps(result, ensure_ascii=False)
     input_text = _chapter_prompt(payload)
-    self_check = result.get("self_check") if isinstance(result.get("self_check"), dict) else {"status": "needs_review"}
+    self_check = (
+        result.get("self_check")
+        if isinstance(result.get("self_check"), dict)
+        else {"status": "needs_review"}
+    )
+    needs_human_input = _string_list(result.get("needs_human_input"))
+    if rejected_refs:
+        self_check = dict(self_check)
+        self_check["status"] = "needs_review"
+        needs_human_input.append(
+            "模型返回的未知或不完整引用已剔除，请人工核对正文与所提供资料的一致性。"
+        )
     if payload.requirement_refs and not isinstance(self_check.get("requirement_coverage"), list):
         self_check = dict(self_check)
         self_check["requirement_coverage"] = _fallback_requirement_coverage(payload, source_refs)
@@ -759,11 +847,12 @@ def _chapter_response_from_json(
         tiptap_json=tiptap_json,
         source_refs=source_refs,
         self_check=self_check,
-        needs_human_input=_string_list(result.get("needs_human_input")),
+        needs_human_input=needs_human_input,
         model_metadata={
             "provider": provider,
             "model": model,
             "requirement_ref_count": len(payload.requirement_refs),
+            "rejected_source_ref_count": rejected_refs,
         },
         token_usage={
             "input_tokens": max(1, len(input_text) // 4),

@@ -19,24 +19,25 @@ const (
 )
 
 type Config struct {
-	HTTPAddr             string
-	DatabaseURL          string
-	MigrationDatabaseURL string
-	RedisURL             string
-	AIServiceURL         string
-	AIServiceHMACSecret  string
-	AICallbackURL        string
-	MinIOEndpoint        string
-	MinIOPublicEndpoint  string
-	MinIOAccessKey       string
-	MinIOSecretKey       string
-	MinIOUseSSL          bool
-	MinIORegion          string
-	MinIOBucket          string
-	MinIOEnsureBucket    bool
-	JWTSecret            string
-	JWTAccessTTL         time.Duration
-	DefaultTenantID      string
+	HTTPAddr                string
+	DatabaseURL             string
+	MigrationDatabaseURL    string
+	RedisURL                string
+	AIServiceURL            string
+	AIServiceHMACSecret     string
+	AICallbackURL           string
+	MinIOEndpoint           string
+	MinIOPublicEndpoint     string
+	MinIOAccessKey          string
+	MinIOSecretKey          string
+	MinIOUseSSL             bool
+	MinIORegion             string
+	MinIOBucket             string
+	MinIOEnsureBucket       bool
+	JWTSecret               string
+	JWTAccessTTL            time.Duration
+	DefaultTenantID         string
+	DisableSelfRegistration bool
 
 	// CollectorHMACSecret 为空表示未启用采集接入：POST /api/v1/platform/tenders/ingest
 	// 直接返回 503 且不做任何写入。故意不设开发默认值，没配密钥就等于没开这个入口。
@@ -53,24 +54,25 @@ type Config struct {
 
 func Load() Config {
 	return Config{
-		HTTPAddr:             env("HTTP_ADDR", ":8080"),
-		DatabaseURL:          env("DATABASE_URL", ""),
-		MigrationDatabaseURL: env("MIGRATION_DATABASE_URL", env("DATABASE_URL", "")),
-		RedisURL:             env("REDIS_URL", "redis://redis:6379/0"),
-		AIServiceURL:         env("AI_SERVICE_URL", "http://ai-service:8000"),
-		AIServiceHMACSecret:  env("AI_SERVICE_HMAC_SECRET", DefaultAIServiceHMACSecret),
-		AICallbackURL:        env("AI_CALLBACK_URL", "http://backend:8080/api/v1/ai/callbacks/tasks"),
-		MinIOEndpoint:        env("MINIO_ENDPOINT", "minio:9000"),
-		MinIOPublicEndpoint:  env("MINIO_PUBLIC_ENDPOINT", env("MINIO_ENDPOINT", "minio:9000")),
-		MinIOAccessKey:       env("MINIO_ACCESS_KEY", DefaultMinIOAccessKey),
-		MinIOSecretKey:       env("MINIO_SECRET_KEY", DefaultMinIOSecretKey),
-		MinIOUseSSL:          envBool("MINIO_USE_SSL", false),
-		MinIORegion:          env("MINIO_REGION", "us-east-1"),
-		MinIOBucket:          env("MINIO_BUCKET", "zbt-files"),
-		MinIOEnsureBucket:    envBool("MINIO_ENSURE_BUCKET", true),
-		JWTSecret:            env("JWT_SECRET", DefaultJWTSecret),
-		JWTAccessTTL:         envDuration("JWT_ACCESS_TTL", DefaultJWTAccessTTL, minJWTAccessTTL, maxJWTAccessTTL),
-		DefaultTenantID:      env("DEFAULT_TENANT_ID", "00000000-0000-4000-8000-000000000001"),
+		HTTPAddr:                env("HTTP_ADDR", ":8080"),
+		DatabaseURL:             env("DATABASE_URL", ""),
+		MigrationDatabaseURL:    env("MIGRATION_DATABASE_URL", env("DATABASE_URL", "")),
+		RedisURL:                env("REDIS_URL", "redis://redis:6379/0"),
+		AIServiceURL:            env("AI_SERVICE_URL", "http://ai-service:8000"),
+		AIServiceHMACSecret:     env("AI_SERVICE_HMAC_SECRET", DefaultAIServiceHMACSecret),
+		AICallbackURL:           env("AI_CALLBACK_URL", "http://backend:8080/api/v1/ai/callbacks/tasks"),
+		MinIOEndpoint:           env("MINIO_ENDPOINT", "minio:9000"),
+		MinIOPublicEndpoint:     env("MINIO_PUBLIC_ENDPOINT", env("MINIO_ENDPOINT", "minio:9000")),
+		MinIOAccessKey:          env("MINIO_ACCESS_KEY", DefaultMinIOAccessKey),
+		MinIOSecretKey:          env("MINIO_SECRET_KEY", DefaultMinIOSecretKey),
+		MinIOUseSSL:             envBool("MINIO_USE_SSL", false),
+		MinIORegion:             env("MINIO_REGION", "us-east-1"),
+		MinIOBucket:             env("MINIO_BUCKET", "zbt-files"),
+		MinIOEnsureBucket:       envBool("MINIO_ENSURE_BUCKET", true),
+		JWTSecret:               env("JWT_SECRET", DefaultJWTSecret),
+		JWTAccessTTL:            envDuration("JWT_ACCESS_TTL", DefaultJWTAccessTTL, minJWTAccessTTL, maxJWTAccessTTL),
+		DefaultTenantID:         env("DEFAULT_TENANT_ID", "00000000-0000-4000-8000-000000000001"),
+		DisableSelfRegistration: envBool("AUTH_DISABLE_SELF_REGISTRATION", false),
 
 		CollectorHMACSecret:      env("COLLECTOR_HMAC_SECRET", ""),
 		PlatformTenderPoolPublic: envBool("PLATFORM_TENDER_POOL_PUBLIC", false),

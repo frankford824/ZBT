@@ -43,6 +43,7 @@ services:
       TZ: Asia/Shanghai
       APP_ENV: development
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required for ECS}
+      AUTH_DISABLE_SELF_REGISTRATION: "true"
       MIGRATION_DATABASE_URL: postgres://zbt:${POSTGRES_SUPER_PASSWORD}@postgres:5432/zbt?sslmode=disable
       DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-00000000-0000-4000-8000-000000000001}
       ZIZHI_API_URL: ${ZIZHI_API_URL:-}
@@ -105,6 +106,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
+        VITE_ENABLE_REGISTRATION: "false"
         BASE_IMAGE_REGISTRY: docker.m.daocloud.io/library/
     container_name: zbt-dev-frontend
     restart: unless-stopped
