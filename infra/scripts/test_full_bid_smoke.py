@@ -1,8 +1,15 @@
 import unittest
-from full_bid_smoke import export_body_samples, review_fixture_text
+from full_bid_smoke import export_body_samples, review_fixture_text, submission_date_used_as_delivery
 
 
 class FixtureReviewTests(unittest.TestCase):
+    def test_delivery_check_does_not_cross_sentence_or_clause_boundaries(self):
+        for text in ('确保按期完工。投标截止时间为2026年11月15日09:30，仅作为投标文件递交的截止时间，并非施工交付时间。',
+                     '合同生效后30天交付，投标截止2026-11-15 09:30。'):
+            self.assertFalse(submission_date_used_as_delivery(text))
+        for text in ('承诺交付日期为2026-11-15。', '计划在完工日期2026年11月15日前完成施工。', '竣工：2026-11-15。'):
+            self.assertTrue(submission_date_used_as_delivery(text))
+
     def test_export_samples_allow_word_numbering_without_dropping_body_numbers(self):
         text = '5. 交付保障\n预算128万元，交付30天。\n6. 结语\n保证工程质量、安全、进度和成本控制，为采购单位提供优质服务。'
         samples = export_body_samples(text)

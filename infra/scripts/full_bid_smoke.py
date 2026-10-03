@@ -55,6 +55,12 @@ def review_fixture_text(text):
     return re.sub(r'【事实待核实：[^】]*】', '相关承诺未作出；应由企业提供真实依据，经人工确认后另行编制。', text)
 
 
+def submission_date_used_as_delivery(text):
+    # Do not join "确保按期完工。投标截止时间为..." into one claim.
+    # The fixed date is the test fixture's submission date, not its delivery date.
+    return bool(re.search(r'(交付|完工|竣工)[^。！？；;，,\n]{0,12}(2026[-年]11[-月]15|2026年11月15日)', text))
+
+
 def export_body_samples(text):
     # Word stores ordered-list labels in numbering.xml, not document.xml text.
     # Compare every source line's body separately, so an automatic label between
@@ -241,7 +247,7 @@ def run(base, origin, bid_type='combined', verify_approval=False):
     technical = next(chapter for chapter in chapters if chapter['title'] == fixture_chapters[0]['title'])['plain_text']
     if not re.search(r'雨水|排水|管道', technical) or re.search(r'云平台|云计算|软件许可', technical):
         raise RuntimeError('civil-engineering fixture generated unrelated software content')
-    if re.search(r'(交付|完工|竣工).{0,12}(2026[-年]11[-月]15|2026年11月15日)', technical):
+    if submission_date_used_as_delivery(technical):
         raise RuntimeError('bid submission deadline was misrepresented as project delivery date')
     if re.search(r'项目\s*[ABＡＢ]|500\s*万元|200\s*万元|我方拥有丰富|我司拥有丰富', ''.join(chapter['plain_text'] for chapter in chapters)):
         raise RuntimeError('fixture generated fictional enterprise achievements or example prices')
