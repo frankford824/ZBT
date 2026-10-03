@@ -33,6 +33,15 @@ def expect_error(base, path, body, status, code):
 def run(origin):
     os.umask(0o077)
     base = origin.rstrip('/') + '/api/v1'
+    with urllib.request.urlopen(origin.rstrip('/') + '/', timeout=20) as response:
+        if 'no-cache' not in response.headers.get('Cache-Control', ''):
+            raise RuntimeError('HTML entry must revalidate after a release')
+    try:
+        with urllib.request.urlopen(origin.rstrip('/') + '/assets/gray-nonexistent-chunk.js', timeout=20):
+            raise RuntimeError('missing JS chunk must not return the SPA HTML page')
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise RuntimeError('incorrect missing chunk response') from None
     marker = uuid.uuid4().hex[:12]
     password = secrets.token_urlsafe(24)
     email = 'gray-regression-' + marker + '@example.com'

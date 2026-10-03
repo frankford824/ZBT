@@ -8,9 +8,24 @@ import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/600.css'
 import './index.css'
 import App from './App.tsx'
+import { AppErrorBoundary } from './shared/components/AppErrorBoundary'
+import { shouldReloadAfterPreloadError } from './shared/preloadRecovery'
+
+window.addEventListener('vite:preloadError', (event) => {
+  let reload = false
+  try {
+    reload = shouldReloadAfterPreloadError(window.sessionStorage)
+  } catch {
+    // Browsers may disallow storage access; the visible fallback still works.
+  }
+  if (reload) {
+    event.preventDefault()
+    window.location.reload()
+  }
+})
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AppErrorBoundary><App /></AppErrorBoundary>
   </StrictMode>,
 )
