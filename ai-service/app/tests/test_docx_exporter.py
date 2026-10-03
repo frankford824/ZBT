@@ -50,6 +50,8 @@ def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
     assert "智慧交通平台" in paragraph_text
     assert "投标文件" in paragraph_text
     assert "目录" in paragraph_text
+    toc_heading = next(index for index, paragraph in enumerate(document.paragraphs) if paragraph.text == '目录')
+    assert document.paragraphs[toc_heading + 1].text == '技术标\n项目实施方案'
     assert "技术标" in paragraph_text
     assert "项目实施方案" in paragraph_text
     assert "总体安排" in paragraph_text
@@ -63,6 +65,34 @@ def test_export_bid_docx_applies_master_layout(tmp_path, monkeypatch) -> None:
     assert "NUMPAGES" in package_xml
     assert "内部评审" in package_xml
     assert "右键更新域以刷新目录" not in package_xml
+
+
+def test_toc_does_not_list_chapters_when_body_is_not_exported(tmp_path, monkeypatch):
+    monkeypatch.delenv('BID_EXPORT_TEMPLATE_PATH', raising=False)
+    output = tmp_path / 'cover-only.docx'
+    export_bid_docx('测试项目', '技术标', [ExportChapter(title='不可列出的章节', plain_text='正文')],
+                    output, layout=ExportLayoutOptions(render_body=False))
+    text = '\n'.join(paragraph.text for paragraph in Document(output).paragraphs)
+    assert '暂无可列出的章节' in text
+    assert '不可列出的章节' not in text
+
+
+def test_pdf_conversions_use_separate_libreoffice_profiles(tmp_path, monkeypatch):
+    monkeypatch.delenv('BID_EXPORT_TEMPLATE_PATH', raising=False)
+    monkeypatch.setenv('LIBREOFFICE_PATH', '/test/soffice')
+    commands = []
+
+    def unavailable(command, **kwargs):
+        commands.append(command)
+        raise OSError('test conversion unavailable')
+
+    monkeypatch.setattr('app.pipelines.export.docx_exporter.subprocess.run', unavailable)
+    for index in range(2):
+        with pytest.raises(RuntimeError, match='conversion failed'):
+            export_bid_pdf('测试项目', '技术标', [ExportChapter(title='章节', plain_text='正文')],
+                           tmp_path / f'test-{index}.pdf')
+    profiles = [next(argument for argument in command if argument.startswith('-env:UserInstallation=file:')) for command in commands]
+    assert len(set(profiles)) == 2
 
 
 def test_export_bid_docx_handles_empty_markdown_table_header_cell(tmp_path, monkeypatch) -> None:

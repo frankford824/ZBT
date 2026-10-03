@@ -7,6 +7,7 @@ Never changes user bids, tenant rules, or seed chapters.
 """
 from __future__ import annotations
 import argparse
+import base64
 import io
 import json
 import os
@@ -94,7 +95,8 @@ def run(base, origin, bid_type='combined'):
     export_part_code = 'combined_body' if bid_type == 'combined' else 'tech'
     parts = api_call(base, f'/bids/{bid}/parts', token=token)['items']
     export_part_id = next(part['id'] for part in parts if part['code'] == export_part_code)
-    docx_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in chapters if chapter['bid_part_id'] == export_part_id]
+    part_chapters = [chapter for chapter in chapters if chapter['bid_part_id'] == export_part_id]
+    docx_samples = [re.sub(r'\W+', '', chapter['plain_text'])[-60:] for chapter in part_chapters]
     check = api_call(base, "/compliance/checks", method="POST", token=token,
                      body={"name": "发布验收-仅测试项目", "bid_document_id": bid, "levels": ["L1", "L2", "L3"]})
     # Seed rules generate review flags. Exercise reviewer acknowledgement on the
@@ -116,8 +118,10 @@ def run(base, origin, bid_type='combined'):
             content = response.read()
         if kind == "pdf":
             # Validate PDF with the deployed parser, not only the magic bytes.
+            pdf_check = json.dumps({'content': base64.b64encode(content).decode(), 'samples': docx_samples,
+                                    'titles': [chapter['title'] for chapter in part_chapters]}).encode()
             subprocess.run(["docker", "exec", "-i", "zbt-dev-ai", "python", "-c",
-                            "import sys,fitz; d=fitz.open(stream=sys.stdin.buffer.read(),filetype='pdf'); assert len(d)>0; assert any(p.get_text().strip() for p in d)"], input=content, check=True)
+                "import sys,fitz,json,base64,re; p=json.load(sys.stdin); d=fitz.open(stream=base64.b64decode(p['content']),filetype='pdf'); assert len(d)>=3; t=re.sub(r'\\W+','',''.join(page.get_text() for page in d)); assert all(s and s in t for s in p['samples']), 'PDF chapter bodies missing'; toc=re.sub(r'\\W+','',d[1].get_text()); assert all(re.sub(r'\\W+','',title) in toc for title in p['titles']), 'PDF directory entries missing'"], input=pdf_check, check=True)
         else:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 if archive.testzip() is not None:

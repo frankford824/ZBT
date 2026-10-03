@@ -75,7 +75,8 @@ def export_bid_docx(
     else:
         _remove_anchor(anchors.get("cover"))
     if layout.include_toc:
-        _render_toc(document, layout, anchor=anchors.get("toc"))
+        _render_toc(document, layout, anchor=anchors.get("toc"),
+                    entries=(part_title, *(chapter.title for chapter in chapters)) if layout.render_body else ())
     else:
         _remove_anchor(anchors.get("toc"))
     if layout.render_body:
@@ -181,6 +182,7 @@ def export_bid_pdf(
             completed = subprocess.run(
                 [
                     soffice,
+                    f"-env:UserInstallation={(tmp_path / 'lo-profile').as_uri()}",
                     "--headless",
                     "--convert-to",
                     "pdf",
@@ -189,8 +191,7 @@ def export_bid_pdf(
                     str(docx_path),
                 ],
                 check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=90,
             )
@@ -618,10 +619,11 @@ def _render_toc(
     document: DocxDocument,
     layout: ExportLayoutOptions,
     anchor: Paragraph | None = None,
+    entries: tuple[str, ...] = (),
 ) -> None:
     if anchor is not None:
         section = _section_document()
-        _render_toc(section, layout)
+        _render_toc(section, layout, entries=entries)
         _insert_document_after(anchor, section)
         return
     if not layout.include_toc:
@@ -630,7 +632,11 @@ def _render_toc(
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     paragraph = document.add_paragraph()
     paragraph.paragraph_format.first_line_indent = None
-    _add_field(paragraph, r'TOC \o "1-3" \h \z \u', "目录")
+    # LibreOffice's headless conversion does not refresh Word's TOC fields.
+    # Cache real headings so the PDF has a usable directory immediately; Word
+    # can still rebuild the field and calculate page numbers when opened.
+    cached_entries = "\n".join(entries) if entries else "暂无可列出的章节"
+    _add_field(paragraph, r'TOC \o "1-3" \h \z \u', cached_entries)
     document.add_page_break()
 
 
