@@ -20,11 +20,16 @@ RUN sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g; s|https://deb.debian.org
 
 COPY pyproject.toml ./
 COPY requirements.lock ./
-COPY app ./app
 ARG INSTALL_DEV_DEPS=true
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --index-url "$PIP_INDEX_URL" --only-binary=:all: --no-deps -r requirements.lock
+    for attempt in 1 2 3; do \
+      if pip install --timeout 60 --retries 4 --index-url "$PIP_INDEX_URL" --only-binary=:all: --no-deps -r requirements.lock; then exit 0; fi; \
+    done; exit 1
+
+# Source-only fixes must not redownload every dependency. Keep the pinned
+# dependency layer reusable across application changes and mirror outages.
+COPY app ./app
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
