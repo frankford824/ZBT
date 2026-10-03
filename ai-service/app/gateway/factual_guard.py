@@ -20,10 +20,11 @@ _CATEGORIES = {
     "质保承诺": r"质保|保修",
     "响应时限": r"响应|到场|修复|故障处理|应急处理|恢复",
     "投标报价": r"投标报价|我方报价|报价金额|投标总价|报价总价",
-    "交付工期": r"交付周期|交付期限|施工工期|总工期|工期|履约期限",
+    "交付工期": r"交付周期|交付期限|交付|施工工期|总工期|工期|履约期限",
 }
 _OWNERSHIP = re.compile(_SUBJECT + r".{0,12}(?:拥有|具备|持有|取得|已获|曾|已完成|已承接|已承担|积累|承诺(?:已)?(?:满足|符合))")
 _HISTORY_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:将|拟)?提供.{0,24}(?:近.{0,4}年|承接|完成|承担).{0,24}(?:业绩|项目|工程)")
+_SUBMISSION_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:承诺|保证|将).{0,24}(" + _NUMBER + r"\s*(?:工作日|天|日|小时|个月|月))\s*(?:内|后)?.{0,6}(?:提交|报送)")
 _CLAUSE_SPLIT = re.compile(r"(?<=[。！？；;\n])")
 
 
@@ -85,6 +86,14 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
                 pairs = _numeric_pairs(clause, category)
                 if pairs - supported[category]:
                     kinds.append(category)
+            submission = _SUBMISSION_PROMISE.search(clause)
+            if submission:
+                # A newly promised post-award submission period is not a plan
+                # default. Require a source with the same duration and action.
+                duration = _normalized(submission.group(1))
+                if not any(duration in _normalized(source_clause) and re.search(r"提交|报送", source_clause)
+                           for source in sources for source_clause in _CLAUSE_SPLIT.split(source)):
+                    kinds.append("提交时限")
             ownership = _OWNERSHIP.search(clause) or _HISTORY_PROMISE.search(clause)
             if ownership:
                 # Ownership must be evidenced by enterprise records, not by a

@@ -15,6 +15,8 @@ def request(**kwargs):
     "我方投标报价为128万元。", "我方拥有丰富的施工经验。", "我司已完成排水工程项目A。",
     "我方具备市政施工总承包三级资质。", "我方将提供近三年内承接的类似工程业绩。",
     "我方承诺满足该资质要求，并提供有效的市政公用工程施工总承包三级证书。",
+    "我方承诺在中标后7天内提交详细的施工组织设计。",
+    "我方将在合同生效后30天交付。",
 ])
 def test_unsupported_commitment_or_enterprise_fact_is_not_saved_as_body_fact(text):
     result, notes, issues = guard_chapter_content({"plain_text": text}, request())
@@ -39,7 +41,7 @@ def test_budget_is_not_supplier_bid_price_and_tender_qualification_not_company_o
 
 
 def test_grounded_commitments_and_proposed_plan_survive_without_mutating_input():
-    payload = request(requirement_refs=[TenderRequirementRef(id="r", requirement="保修", source_text="质量保修期12个月；故障响应时间2小时。")])
+    payload = request(project_context={"delivery_period": "合同生效后30天"}, requirement_refs=[TenderRequirementRef(id="r", requirement="保修", source_text="质量保修期12个月；故障响应时间2小时。")])
     source = {"plain_text": "质量保修期12个月；故障响应时间2小时。拟在第5天完成拆除，合同生效后30天交付。"}
     result, notes, issues = guard_chapter_content(source, payload)
     assert result == source and not notes and not issues
@@ -55,6 +57,14 @@ def test_delivery_period_is_grounded_in_context_not_a_model_default():
     payload = request(project_context={"delivery_period": "合同生效后30天"})
     assert not guard_chapter_content({"plain_text": "交付期限为合同生效后30天。"}, payload)[2]
     assert guard_chapter_content({"plain_text": "施工工期为60天。"}, payload)[2]
+
+
+def test_submission_promise_cannot_reuse_unrelated_warranty_duration():
+    text = "我方承诺在中标后7天内提交详细施工组织设计。"
+    wrong = request(requirement_refs=[TenderRequirementRef(id="r", requirement="售后", source_text="质保期7天。")])
+    assert guard_chapter_content({"plain_text": text}, wrong)[2]
+    grounded = request(requirement_refs=[TenderRequirementRef(id="r", requirement="施工方案", source_text="中标后7天内提交施工组织设计。")])
+    assert not guard_chapter_content({"plain_text": text}, grounded)[2]
 
 
 def test_enterprise_quote_supports_literal_claim_not_other_claims():
