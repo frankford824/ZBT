@@ -211,7 +211,7 @@ def run(base, origin, bid_type='combined', verify_approval=False):
     # Exercise all three backend fact gates even if the current model emits no
     # risky claim. This canary is on a new fixture, never on an existing bid.
     first = chapters[0]
-    for marker in ('【事实待核实：灰度闸门专用夹具。】', '[待澄清]年保修'):
+    for marker in ('【事实待核实：灰度闸门专用夹具。】', '[待澄清]年保修', '施工工期XX日历天，业绩合同金额XX万元'):
         canary = first['plain_text'] + '\n' + marker
         api_call(base, '/chapters/' + first['id'] + '/content', method='PUT', token=token,
                  body={'plain_text': canary})

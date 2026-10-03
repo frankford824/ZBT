@@ -15,7 +15,7 @@ REVIEW_MARKER = "【事实待核实："
 _NUMBER = r"(?:\d+(?:\.\d+)?|[一二三四五六七八九十百零两]+)"
 _DURATION = re.compile(_NUMBER + r"\s*(?:个\s*)?(?:工作日|小时|分钟|个月|月|年|天|日)")
 _AMOUNT = re.compile(_NUMBER + r"\s*(?:亿|万)?\s*(?:元|万元|亿元)")
-_SUBJECT = r"(?:我方|我司|我公司|本公司|本企业|我们|我单位|我团队|本单位|本团队)"
+_SUBJECT = r"(?:我方|我司|我公司|本公司|本企业|我们|我单位|我团队|本单位|本团队|本投标人)"
 _CATEGORIES = {
     "质保承诺": r"质保|保修",
     "响应时限": r"响应|到场|修复|故障处理|应急处理|恢复",
@@ -35,6 +35,10 @@ _CALENDAR_LABELS = {
 _COPY_DETAIL = re.compile(r"(?:正本|副本|电子版|书面版)\s*" + _NUMBER + r"\s*份|" + _NUMBER + r"正" + _NUMBER + r"副|U\s*盘", re.IGNORECASE)
 _BOQ_ASSERTION = re.compile(r"招标文件(?:中|的).{0,6}工程量清单")
 _UNRESOLVED = re.compile(r"[\[【（(](?:待澄清|待填写|待补充|待确认|待核实)[\]】）)]")
+_UNRESOLVED_NUMBER = re.compile(r"x{2,}\s*(?:日历天|工作日|小时|分钟|个月|万元|亿元|天|日|月|年|元)", re.IGNORECASE)
+_OPENING_AS_SUBMISSION_LIMIT = re.compile(
+    r"开标.{0,70}(?:前|之前).{0,35}(?:递交|提交|送达)|(?:递交|提交|送达).{0,35}开标.{0,70}(?:前|之前)"
+)
 _CLAUSE_SPLIT = re.compile(r"(?<=[。！？；;\n])")
 
 
@@ -74,6 +78,14 @@ def _numeric_pairs(text: str, category: str) -> set[str]:
 
 def _calendar_mismatch(text: str, context: dict[str, str]) -> bool:
     text = _normalized(text)
+    if any(_OPENING_AS_SUBMISSION_LIMIT.search(part) for part in re.split(r"[，,]", text)):
+        # A correctly quoted opening time still cannot serve as the delivery
+        # deadline. Permit this phrasing only when both sourced timestamps match.
+        for pattern in (_DATE, _TIME):
+            deadline = pattern.search(_normalized(context.get("submission_deadline", "")))
+            opening = pattern.search(_normalized(context.get("bid_opening_time", "")))
+            if not deadline or not opening or tuple(map(int, deadline.groups())) != tuple(map(int, opening.groups())):
+                return True
     labels = sorted((match.start(), match.end(), key)
                     for key, pattern in _CALENDAR_LABELS.items() for match in re.finditer(pattern, text))
     for pattern in (_DATE, _TIME):
@@ -112,7 +124,7 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
         clauses = []
         for clause in _CLAUSE_SPLIT.split(text):
             kinds = []
-            if _UNRESOLVED.search(clause):
+            if _UNRESOLVED.search(clause) or _UNRESOLVED_NUMBER.search(clause):
                 kinds.append("生成占位")
             if _calendar_mismatch(clause, payload.project_context):
                 kinds.append("截止或开标时间")

@@ -16,10 +16,11 @@ const Marker = "【事实待核实："
 
 var ErrRequired = errors.New("generated facts require human review")
 var unresolvedPlaceholder = regexp.MustCompile(`[\[【（(](待澄清|待填写|待补充|待确认|待核实)[\]】）)]`)
+var unresolvedNumber = regexp.MustCompile(`(?i)x{2,}(日历天|工作日|小时|分钟|个月|万元|亿元|天|日|月|年|元)`)
 
 func CheckText(text string) error {
 	compact := strings.Join(strings.Fields(text), "")
-	if strings.Contains(compact, Marker) || unresolvedPlaceholder.MatchString(compact) {
+	if strings.Contains(compact, Marker) || unresolvedPlaceholder.MatchString(compact) || unresolvedNumber.MatchString(compact) {
 		return ErrRequired
 	}
 	return nil

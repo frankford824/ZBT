@@ -79,6 +79,12 @@ def test_submission_promise_cannot_reuse_unrelated_warranty_duration():
     '工程量需以招标文件中的工程量清单和图纸为准。',
     '我方提供[待澄清]年的质量保修期。',
     '计划合同签订后【待确认】天完成。',
+    '确保在开标时间（2026-11-15 10:00）前完成所有递交手续。',
+    '投标文件须递交至采购中心，确保在开标前送达。',
+    '完成递交手续的时限为开标时间（2026-11-15 10:00）之前。',
+    '建议施工工期为XX日历天（需人工确认）。',
+    '业绩1：某市工程（合同金额约XX万元，完工时间XXXX年）。',
+    '本投标人将提供近三年已完成的类似市政工程业绩。',
 ])
 def test_actual_original_file_export_false_claims_require_review(text):
     payload = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'2026-11-15 10:00'})
@@ -90,6 +96,18 @@ def test_submission_and_opening_times_can_share_date_but_not_time():
     text = '开标时间为2026年11月15日10:00，投标截止时间为2026年11月15日09:30。'
     payload = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'开标时间：2026-11-15 10:00'})
     assert not guard_chapter_content({'plain_text':text},payload)[2]
+
+
+def test_delivery_before_correct_deadline_not_confused_with_opening_in_next_clause():
+    text = '开标时间2026-11-15 10:00，投标文件须在投标截止时间2026-11-15 09:30前递交。'
+    payload = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'2026-11-15 10:00'})
+    assert not guard_chapter_content({'plain_text':text},payload)[2]
+    same = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'2026-11-15 09:30'})
+    assert not guard_chapter_content({'plain_text':'在开标时间2026-11-15 09:30前完成递交手续。'},same)[2]
+
+
+def test_numeric_placeholders_do_not_reject_legitimate_ascii_identifiers():
+    assert not guard_chapter_content({'plain_text':'型号XX-300，编号GRAY-PS-2026-001。'},request())[2]
 
 
 def test_literal_tender_copy_requirements_are_preserved():
