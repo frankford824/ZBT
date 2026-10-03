@@ -1070,6 +1070,21 @@ def _ground_module_facts(current, fields, evidence, requirements):
         if (source.get("traceable") and not source.get("needs_review")
                 and not item.get("needs_review") and float(source.get("confidence") or 0) >= 0.65
                 and _fact_supported(item.get("requirement"), source.get("source_text"))):
+            item = dict(item)
+            if item.get('score') is not None and item['score'] != _score_value(str(item['requirement'])):
+                # Correct quoted wording must not conceal an incorrect numeric
+                # score in the requirement metadata consumed by planning.
+                rejected = True
+                continue
+            original = next((old for old in current.get('requirement_items', [])
+                             if _fact_supported(item['requirement'], old.get('requirement'))), None)
+            source_mandatory = bool(re.search(r'须|必须|应当|不得|必备|\bmust\b|\brequired\b',
+                                              str(item['requirement']), re.IGNORECASE))
+            if item.get('mandatory') and not source_mandatory and not (original or {}).get('mandatory'):
+                item['mandatory'] = False
+                rejected = True
+            if (original or {}).get('mandatory'):
+                item['mandatory'] = True
             accepted_requirements.append(item)
         else:
             rejected = True

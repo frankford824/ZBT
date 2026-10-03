@@ -80,3 +80,23 @@ def test_grounded_model_requirement_is_preserved():
         source_context_records=tender_module_source_context_records(parsed, 'annex'))
     assert '须提交报价表' in result['modules']['annex']['fields']['annex_items']
     assert any(item['requirement'] == '须提交报价表' and item['mandatory'] for item in result['requirement_items'])
+
+
+def test_exact_quote_cannot_hide_a_wrong_score_metadata():
+    parsed, base = fixture('项目名称：城南雨水管道项目\n评分：技术方案40分；类似业绩30分；报价30分')
+    quote = {'field': 'scoring_points', 'value': '类似业绩30分', 'confidence': 0.99,
+             'source_text': '评分：技术方案40分；类似业绩30分；报价30分', 'chunk_id': 'parse-chunk-0001'}
+    result = merge_tender_module_result(base, 'evaluation', {
+        'requirement_items': [{'id': 'evaluation-wrong', 'requirement': '类似业绩30分', 'score': 40, 'source_ref': quote}]},
+        source_context_records=tender_module_source_context_records(parsed, 'evaluation'))
+    assert all(item['id'] != 'evaluation-wrong' for item in result['requirement_items'])
+
+
+def test_mentioning_an_annex_does_not_make_it_mandatory():
+    parsed, base = fixture('项目名称：城南雨水管道项目\n附件格式：报价表')
+    quote = {'field': 'annex_items', 'value': '报价表', 'confidence': 0.99,
+             'source_text': '附件格式：报价表', 'chunk_id': 'parse-chunk-0001'}
+    result = merge_tender_module_result(base, 'annex', {
+        'requirement_items': [{'id': 'annex-model', 'requirement': '报价表', 'mandatory': True, 'source_ref': quote}]},
+        source_context_records=tender_module_source_context_records(parsed, 'annex'))
+    assert not next(item for item in result['requirement_items'] if item['id'] == 'annex-model')['mandatory']
