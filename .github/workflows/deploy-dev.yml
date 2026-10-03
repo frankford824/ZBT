@@ -22,7 +22,28 @@ jobs:
 
     steps:
       - name: Check out the release commit
+        id: checkout
+        timeout-minutes: 3
+        continue-on-error: true
         uses: actions/checkout@v7
+
+      # Some ECS networks can reach GitHub's API/codeload but not github.com.
+      # Fetch the exact release SHA from GitHub itself, never a third-party mirror.
+      - name: Fetch release archive if Git transport is unavailable
+        if: steps.checkout.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_dir="$(mktemp -d)"
+          curl --fail --silent --show-error --location --retry 3 \
+            --connect-timeout 10 --max-time 120 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/tarball/$GITHUB_SHA" \
+            --output "$release_dir/release.tar.gz"
+          mkdir "$release_dir/source"
+          tar -xzf "$release_dir/release.tar.gz" --strip-components=1 -C "$release_dir/source"
+          test -f "$release_dir/source/docker-compose.ecs.yml"
+          rsync -a --delete --exclude '.git/' --exclude '.env' "$release_dir/source/" "$GITHUB_WORKSPACE/"
 
       - name: Prepare deployment directory and environment
         env:
