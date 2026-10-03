@@ -49,6 +49,11 @@ def test_scope_and_contract_duration_are_distinct_from_bid_submission_date():
     merged = merge_tender_module_result(result, 'basic', {'fields': {'delivery_period': '2026-11-15'}, 'evidence': []},
                                         source_context_records=tender_module_source_context_records(parsed, 'basic'))
     assert merged['modules']['basic']['fields']['delivery_period'] == '合同生效后30天'
+    shortened = merge_tender_module_result(result, 'basic', {'fields': {'delivery_period': '30天'},
+        'evidence': [{'field': 'delivery_period', 'value': '30天', 'confidence': 0.99,
+                      'source_text': '交付期限：合同生效后30天', 'chunk_id': 'parse-chunk-0001'}]},
+        source_context_records=tender_module_source_context_records(parsed, 'basic'))
+    assert shortened['modules']['basic']['fields']['delivery_period'] == '合同生效后30天'
 
 
 def test_user_layout_is_not_changed_by_technical_and_business_text():

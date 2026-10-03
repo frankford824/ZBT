@@ -38,6 +38,8 @@ routes:
       output: json
       schema: TenderParseModuleResult
       timeout_s: 180
+      enable_thinking: false
+      max_tokens: 16384
     fallback:
       - provider: openai_compatible_primary
         model: deepseek-v4-flash-0731
@@ -45,6 +47,8 @@ routes:
         output: json
         schema: TenderParseModuleResult
         timeout_s: 180
+        enable_thinking: false
+        max_tokens: 16384
   outline_generate:
     primary:
       provider: openai_compatible_primary

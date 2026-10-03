@@ -1072,8 +1072,9 @@ def _ground_module_facts(current, fields, evidence, requirements):
                         originals.append(candidate)
                 grounded[field] = originals
             else:
-                if field == 'deadline' and grounded.get(field) and _fact_supported(supported[0], grounded[field]):
-                    # Date-only model output must not erase an original clock.
+                if grounded.get(field) and _fact_supported(supported[0], grounded[field]):
+                    # Preserve original clocks, units and contract-relative
+                    # start conditions when the model returns only a subset.
                     continue
                 grounded[field] = supported[0]
     accepted_requirements = []

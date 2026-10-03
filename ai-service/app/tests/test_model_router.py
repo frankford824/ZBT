@@ -22,6 +22,14 @@ def test_btjs_chapter_routes_have_explicit_non_thinking_output_budget():
     assert all(target.enable_thinking is False and target.max_tokens == 8192 and target.timeout_s == 120 for target in targets)
 
 
+def test_btjs_extractive_parse_routes_disable_reasoning_with_separate_budget():
+    router = ModelRouter.from_yaml(Path(__file__).parents[1] / 'config/model_routing.btjs.yaml')
+    routes = router.config['routes']['tender_parse']
+    targets = [router._route_target('tender_parse', item, apply_environment_override=False)
+               for item in [routes['primary'], *routes['fallback']]]
+    assert all(target.enable_thinking is False and target.max_tokens == 16384 and target.timeout_s == 180 for target in targets)
+
+
 @pytest.fixture(autouse=True)
 def _default_mock_provider_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "true")
