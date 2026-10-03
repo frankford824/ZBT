@@ -112,7 +112,7 @@ import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../..
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 import { openSse } from '../../shared/sse/client'
-import { canGenerateOutline, parseConfirmationPayload } from './workflowState'
+import { canGenerateOutline, parseConfirmationPayload, shouldRefreshGenerationChapters } from './workflowState'
 
 const bidSchema = z.object({
   projectName: z.string().min(1, '项目名称必填'),
@@ -709,8 +709,7 @@ export function BidWizardPage() {
     },
   })
   useEffect(() => {
-    const active = (generationJobs.data ?? []).some((item) => item.status === 'queued' || item.status === 'running')
-    if (!active) return
+    if (!shouldRefreshGenerationChapters(generationJobs.data)) return
     void queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] })
   }, [generationJobs.data, queryClient, bidId])
   const uploadTenderMutation = useMutation({

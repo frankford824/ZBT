@@ -2,6 +2,11 @@ export function canGenerateOutline(parse: { status: string; confirmed_at?: strin
   return !pending && parse?.status === 'confirmed' && Boolean(parse.confirmed_at)
 }
 
+export function shouldRefreshGenerationChapters(jobs: readonly { status: string }[] | undefined) {
+  // Final/paused snapshots can contain newly persisted chapter results too.
+  return Boolean(jobs?.some(job => ['queued', 'running', 'paused', 'done', 'failed', 'cancelled'].includes(job.status)))
+}
+
 export function parseConfirmationPayload(
   updatedAt: string,
   hasEdits: boolean,

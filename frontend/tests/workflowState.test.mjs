@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { canGenerateOutline, parseConfirmationPayload } from '../src/features/bid/workflowState.ts'
+import { canGenerateOutline, parseConfirmationPayload, shouldRefreshGenerationChapters } from '../src/features/bid/workflowState.ts'
+
+test('terminal generation result refreshes chapters after the polling loop stops', () => {
+  assert.equal(shouldRefreshGenerationChapters(undefined), false)
+  assert.equal(shouldRefreshGenerationChapters([]), false)
+  for (const status of ['queued', 'running', 'paused', 'done', 'failed', 'cancelled']) {
+    assert.equal(shouldRefreshGenerationChapters([{ status }]), true, status)
+  }
+})
 
 test('outline requires persisted confirmation and cannot race a pending save', () => {
   assert.equal(canGenerateOutline(undefined, false), false)
