@@ -1922,7 +1922,7 @@ export async function uploadToPresignedUrl(
     })
   } catch (error) {
     if (axios.isAxiosError(error) && !error.response) {
-      throw new Error('文件未上传成功：上传连接不可用或已超时，请检查网络后重试；文件成功上传前无法开始解读。')
+      throw new Error('文件未上传成功：上传连接不可用或已超时，请检查网络后重试；文件成功上传前无法开始解读。', { cause: error })
     }
     throw error
   }
