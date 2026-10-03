@@ -112,6 +112,7 @@ import { formatBytes, isUploadFileTooLarge, uploadSizeLimitMessage } from '../..
 import { formatDateTime } from '../../shared/format/date'
 import { useCanAccess } from '../../shared/permissions/permissions'
 import { openSse } from '../../shared/sse/client'
+import { canGenerateOutline, parseConfirmationPayload } from './workflowState'
 
 const bidSchema = z.object({
   projectName: z.string().min(1, '项目名称必填'),
@@ -749,16 +750,21 @@ export function BidWizardPage() {
   })
   const confirmParseMutation = useMutation({
     mutationFn: () => {
-      const structuredResult = applyParseConfirmDraft(
+      if (!parseResult.data) throw new Error('请等待文件解读完成')
+      const hasEdits = parseConfirmEditedFields.length > 0 || parseModuleFieldEditedCount > 0
+        || JSON.stringify(parseFieldReviewDraft) !== JSON.stringify(parseFieldReviewServerDraft)
+      const payload = parseConfirmationPayload(parseResult.data.updated_at, hasEdits, () => applyParseConfirmDraft(
         parseResult.data?.structured_result,
         parseConfirmServerDraft,
         parseConfirmDraft,
         parseModuleFieldsDraft,
         parseFieldReviewDraft,
-      )
-      return confirmBidParseResult(bidId, { structured_result: structuredResult })
+      ))
+      return confirmBidParseResult(bidId, payload)
     },
-    onSuccess: async () => {
+    onSuccess: async (confirmed) => {
+      await queryClient.cancelQueries({ queryKey: ['bid-parse-result', bidId] })
+      queryClient.setQueryData(['bid-parse-result', bidId], confirmed)
       message.success('解析结果已确认')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] }),
@@ -766,12 +772,15 @@ export function BidWizardPage() {
         queryClient.invalidateQueries({ queryKey: ['bid-material-selection', bidId] }),
       ])
     },
-    onError: (error) => message.error(getApiErrorMessage(error, '确认文件信息失败，请重新解读后再试')),
+    onError: async (error) => {
+      message.error(getApiErrorMessage(error, '确认未完成，请重试，无需重新解读'))
+      await queryClient.invalidateQueries({ queryKey: ['bid-parse-result', bidId] })
+    },
   })
   const generateOutlineMutation = useMutation({
     mutationFn: () => generateBidOutline(bidId),
     onSuccess: async () => {
-      message.success('目录大纲已生成')
+      message.success('目录已补充，已有章节及正文保持不变')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['bid-parts', bidId] }),
         queryClient.invalidateQueries({ queryKey: ['bid-chapters', bidId] }),
@@ -1184,8 +1193,10 @@ export function BidWizardPage() {
       <Space direction="vertical" size={20} className="full-width">
         <Steps
           current={current}
-          items={steps.map((title) => ({ title }))}
-          onChange={(next) => setSearchParams({ step: String(next + 1) })}
+          items={steps.map((title) => ({ title, disabled: confirmParseMutation.isPending }))}
+          onChange={(next) => {
+            if (!confirmParseMutation.isPending) setSearchParams({ step: String(next + 1) })
+          }}
         />
         <Card title={steps[current]}>
           {current === 0 ? (
@@ -1233,7 +1244,7 @@ export function BidWizardPage() {
                 <Button
                   type="primary"
                   icon={<SyncOutlined />}
-                  disabled={!parseResult.data?.file_asset_id || uploadTenderMutation.isPending}
+                  disabled={!parseResult.data?.file_asset_id || uploadTenderMutation.isPending || confirmParseMutation.isPending}
                   loading={parseTenderMutation.isPending}
                   onClick={() => parseTenderMutation.mutate()}
                 >
@@ -1251,6 +1262,8 @@ export function BidWizardPage() {
                   {parseStatusLabel(parseResult.data?.status ?? 'queued')}
                 </Tag>
               </Space>
+              {confirmParseMutation.isPending ? <Alert type="info" showIcon message="正在保存确认，请勿离开或刷新页面；成功后可继续生成目录。" /> : null}
+              {confirmParseMutation.isError && parseResult.data?.status !== 'confirmed' ? <Alert type="error" showIcon message={getApiErrorMessage(confirmParseMutation.error, '确认未完成，请重试，无需重新解读')} /> : null}
               {parseFailureMessage ? <Alert type="error" showIcon message={parseFailureMessage} /> : null}
               {parseResult.data && ['queued', 'processing'].includes(parseResult.data.status) ? (
                 <Alert type="info" showIcon message="正在解读招标文件" description="尚未得到文件事实；日期、资格、评分及要求清单将在解读完成后显示。" />
@@ -1692,12 +1705,14 @@ export function BidWizardPage() {
                   type="primary"
                   icon={<SyncOutlined />}
                   loading={generateOutlineMutation.isPending}
+                  disabled={!canWrite || !canGenerateOutline(parseResult.data, confirmParseMutation.isPending)}
                   onClick={() => generateOutlineMutation.mutate()}
                 >
                   生成目录大纲
                 </Button>
-                <Typography.Text type="secondary">目录保存后会同步到标书编辑器章节树</Typography.Text>
+                <Typography.Text type="secondary">仅补充缺少的章节，保留已有正文、章节编号和历史版本。</Typography.Text>
               </Space>
+              {!canGenerateOutline(parseResult.data, confirmParseMutation.isPending) ? <Alert type="warning" showIcon message="请先在文件解读中确认文件信息，等待显示“已确认”后再生成目录。" action={<Button onClick={() => setSearchParams({ step: '2' })} disabled={confirmParseMutation.isPending}>返回文件解读</Button>} /> : null}
               <Tabs
                 items={(parts.data ?? []).map((part) => ({
                   key: part.id,

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,8 +28,10 @@ import (
 )
 
 var (
-	ErrNotFound       = errors.New("bid resource not found")
-	ErrInvalidRequest = errors.New("invalid bid request")
+	ErrNotFound                  = errors.New("bid resource not found")
+	ErrInvalidRequest            = errors.New("invalid bid request")
+	ErrParseConfirmationRequired = errors.New("parse confirmation required")
+	ErrParseResultChanged        = errors.New("parse result changed")
 )
 
 const (
@@ -491,7 +494,8 @@ type ParseTenderResponse struct {
 }
 
 type ConfirmParseResultRequest struct {
-	StructuredResult map[string]any `json:"structured_result"`
+	StructuredResult  map[string]any `json:"structured_result"`
+	ExpectedUpdatedAt *time.Time     `json:"expected_updated_at"`
 }
 
 type OutlineGenerateResponse struct {
@@ -1457,6 +1461,10 @@ func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID 
 		if _, err := bidForExport(ctx, tx, tenantID, bidID); err != nil {
 			return err
 		}
+		var parseID string
+		if err := tx.QueryRow(ctx, `select id::text from bid_parse_results where tenant_id=$1 and bid_document_id=$2 for update`, tenantID, bidID).Scan(&parseID); err != nil {
+			return err
+		}
 		current, err := parseResultForBid(ctx, tx, tenantID, bidID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidRequest
@@ -1465,7 +1473,10 @@ func (s *Store) ConfirmParseResult(ctx context.Context, tenantID, userID, bidID 
 			return err
 		}
 		if !confirmableParseResultStatus(current.Status) {
-			return ErrInvalidRequest
+			return ErrParseConfirmationRequired
+		}
+		if req.ExpectedUpdatedAt != nil && !req.ExpectedUpdatedAt.Equal(current.UpdatedAt) {
+			return ErrParseResultChanged
 		}
 		structured := req.StructuredResult
 		if structured == nil {
@@ -1521,35 +1532,47 @@ func (s *Store) GenerateOutline(ctx context.Context, tenantID, userID, bidID str
 		}
 		parseResult, err := parseResultForBid(ctx, tx, tenantID, bidID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrInvalidRequest
+			return ErrParseConfirmationRequired
 		}
 		if err != nil {
 			return err
 		}
+		if parseResult.Status != "confirmed" || parseResult.ConfirmedAt == nil {
+			return ErrParseConfirmationRequired
+		}
 		if err := requirePipelineGatePassed(ctx, tx, tenantID, bidID, "interpret"); err != nil {
+			if errors.Is(err, ErrInvalidRequest) {
+				return ErrParseConfirmationRequired
+			}
 			return err
 		}
 		specs := outlineSpecsFromStructuredResult(document, parseResult.StructuredResult)
 		if err := applyOutlineSpecs(ctx, tx, tenantID, bidID, specs); err != nil {
 			return err
 		}
+		var partsCount, chaptersCount int
+		if err := tx.QueryRow(ctx, `select count(distinct p.id)::int, count(c.id)::int
+			from bid_parts p left join bid_chapters c on c.tenant_id=p.tenant_id and c.bid_part_id=p.id
+			where p.tenant_id=$1 and p.bid_document_id=$2`, tenantID, bidID).Scan(&partsCount, &chaptersCount); err != nil {
+			return err
+		}
 		if err := upsertPipelineGate(ctx, tx, tenantID, bidID, "plan", "passed", userID, "响应大纲已生成。", map[string]any{
 			"parse_result_id": parseResult.ID,
-			"parts_count":     len(specs),
-			"chapters_count":  outlineChapterCount(specs),
+			"parts_count":     partsCount,
+			"chapters_count":  chaptersCount,
 		}); err != nil {
 			return err
 		}
 		resultPayload := map[string]any{
 			"bid_document_id": bidID,
-			"parts_count":     len(specs),
-			"chapters_count":  outlineChapterCount(specs),
+			"parts_count":     partsCount,
+			"chapters_count":  chaptersCount,
 		}
 		payloadJSON, err := marshalBidTaskJSON(map[string]any{
 			"tenant_id":       tenantID,
 			"bid_document_id": bidID,
 			"parse_result_id": parseResult.ID,
-			"mode":            "deterministic_bootstrap",
+			"mode":            "non_destructive_merge",
 		}, maxBidTaskPayloadJSONBytes)
 		if err != nil {
 			return err
@@ -5274,7 +5297,20 @@ func outlineChaptersFromAny(value any) []outlineChapterSpec {
 	return chapters
 }
 
+var outlineNumberPrefix = regexp.MustCompile(`^(?:第[一二三四五六七八九十百0-9]+[章节][、.．：: ]*|[一二三四五六七八九十百0-9]+[、.．)）:：]\s*)`)
+
+func outlineTitleKey(title string) string {
+	return strings.TrimSpace(outlineNumberPrefix.ReplaceAllString(strings.TrimSpace(title), ""))
+}
+
 func applyOutlineSpecs(ctx context.Context, tx pgx.Tx, tenantID, bidID string, specs []outlinePartSpec) error {
+	// Serialize repeated outline requests. Never delete chapters: their IDs own
+	// version history, generation steps and evidence links, not just their text.
+	var lockedID string
+	if err := tx.QueryRow(ctx, `select id::text from bid_documents where tenant_id=$1 and id=$2 for update`, tenantID, bidID).Scan(&lockedID); err != nil {
+		return err
+	}
+	added := false
 	for _, spec := range specs {
 		code := normalizePartCode(spec.Code)
 		title := strings.TrimSpace(spec.Title)
@@ -5293,29 +5329,35 @@ func applyOutlineSpecs(ctx context.Context, tx pgx.Tx, tenantID, bidID string, s
 			insert into bid_parts (tenant_id, bid_document_id, code, title, sort_order, status, metadata)
 			values ($1, $2, $3, $4, $5, 'generated', $6)
 			on conflict (tenant_id, bid_document_id, code) do update
-			set title = excluded.title,
-				sort_order = excluded.sort_order,
-				status = 'generated',
-				metadata = bid_parts.metadata || excluded.metadata,
+			set metadata = bid_parts.metadata || excluded.metadata,
 				updated_at = now()
 			returning id::text
 		`, tenantID, bidID, code, title, spec.SortOrder, metadataJSON).Scan(&partID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			delete from bid_chapters
-			where tenant_id = $1 and bid_document_id = $2 and bid_part_id = $3
-		`, tenantID, bidID, partID); err != nil {
+		existing, err := chaptersForPart(ctx, tx, tenantID, bidID, partID)
+		if err != nil {
 			return err
+		}
+		titles := map[string]bool{}
+		maxOrder := 0
+		for _, chapter := range existing {
+			titles[outlineTitleKey(chapter.Title)] = true
+			if chapter.SortOrder > maxOrder {
+				maxOrder = chapter.SortOrder
+			}
 		}
 		for index, chapter := range spec.Chapters {
 			chapterTitle := strings.TrimSpace(chapter.Title)
-			if chapterTitle == "" {
+			if chapterTitle == "" || titles[outlineTitleKey(chapterTitle)] {
 				continue
 			}
 			sortOrder := chapter.SortOrder
 			if sortOrder <= 0 {
 				sortOrder = (index + 1) * 10
+			}
+			if sortOrder <= maxOrder {
+				sortOrder = maxOrder + 10
 			}
 			plainText := strings.TrimSpace(chapter.PlainText)
 			if plainText == "" {
@@ -5334,7 +5376,16 @@ func applyOutlineSpecs(ctx context.Context, tx pgx.Tx, tenantID, bidID string, s
 			`, tenantID, bidID, partID, chapterTitle, contentJSON, plainText, sortOrder); err != nil {
 				return err
 			}
+			titles[outlineTitleKey(chapterTitle)] = true
+			maxOrder = sortOrder
+			added = true
 		}
+	}
+	if added {
+		_, err := tx.Exec(ctx, `update bid_pipeline_gates set status='needs_review',
+			reason='目录新增章节，请完成正文、合规复核及导出。', updated_at=now()
+			where tenant_id=$1 and bid_document_id=$2 and stage in ('generate','check','format')`, tenantID, bidID)
+		return err
 	}
 	return nil
 }
@@ -5908,10 +5959,10 @@ func createDefaultParts(ctx context.Context, tx pgx.Tx, tenantID, bidID, bidType
 			return err
 		}
 		if _, err := tx.Exec(ctx, `
-			insert into bid_chapters (tenant_id, bid_document_id, bid_part_id, title, plain_text, sort_order)
+			insert into bid_chapters (tenant_id, bid_document_id, bid_part_id, title, plain_text, sort_order, status)
 			values
-				($1, $2, $3, '一、项目理解', '请在编辑器中补充项目理解、响应范围和关键约束。', 10),
-				($1, $2, $3, '二、实施方案', '请在编辑器中补充实施方案、人员安排和交付计划。', 20)
+				($1, $2, $3, '一、项目理解', '请在编辑器中补充项目理解、响应范围和关键约束。', 10, 'pending'),
+				($1, $2, $3, '二、实施方案', '请在编辑器中补充实施方案、人员安排和交付计划。', 20, 'pending')
 		`, tenantID, bidID, partID); err != nil {
 			return err
 		}

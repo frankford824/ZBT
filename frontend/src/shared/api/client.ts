@@ -2230,9 +2230,9 @@ export async function fetchBidPipelineGates(bidId: string): Promise<BidPipelineG
 
 export async function confirmBidParseResult(
   bidId: string,
-  payload: { structured_result?: Record<string, unknown> },
+  payload: { structured_result?: Record<string, unknown>; expected_updated_at?: string },
 ): Promise<BidParseResultDTO> {
-  const { data } = await apiClient.put<BidParseResultDTO>(`/bids/${bidId}/parse-result`, payload)
+  const { data } = await apiClient.put<BidParseResultDTO>(`/bids/${bidId}/parse-result`, payload, { timeout: 60_000 })
   return data
 }
 

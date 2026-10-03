@@ -37,9 +37,9 @@ def wait_for(base, path, token, field, timeout=1200):
     raise RuntimeError("workflow deadline exceeded: " + path)
 
 
-def expect_rejection(base, path, token, body, status, code):
+def expect_rejection(base, path, token, body, status, code, method='POST'):
     request = urllib.request.Request(base + path, data=json.dumps(body).encode(),
-        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token}, method='POST')
+        headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token}, method=method)
     try:
         with urllib.request.urlopen(request, timeout=20):
             raise RuntimeError('expected workflow gate rejection: ' + path)
@@ -120,6 +120,26 @@ def verify_second_reviewer(base, token, bid):
             'post_submission_stale_review': '409 rejected; rechecked and reexported before approval'}
 
 
+def verify_outline_preservation(base, bid, token):
+    before = api_call(base, f'/bids/{bid}/chapters', token=token)['items']
+    versions = {c['id']: api_call(base, '/chapters/' + c['id'] + '/versions', token=token) for c in before}
+    jobs = api_call(base, f'/bids/{bid}/generation-jobs', token=token)
+    job_details = {job['id']: api_call(base, '/generation-jobs/' + job['id'], token=token) for job in jobs['items']}
+    for _ in range(2):
+        api_call(base, f'/bids/{bid}/outline/generate', method='POST', token=token, body={})
+        after = api_call(base, f'/bids/{bid}/chapters', token=token)['items']
+        if before != after:
+            raise RuntimeError('outline regeneration changed existing chapter identity, content or metadata')
+        for c in after:
+            if versions[c['id']] != api_call(base, '/chapters/' + c['id'] + '/versions', token=token):
+                raise RuntimeError('outline regeneration changed chapter version history')
+        if jobs != api_call(base, f'/bids/{bid}/generation-jobs', token=token):
+            raise RuntimeError('outline regeneration changed generation history')
+        for job_id, detail in job_details.items():
+            if detail != api_call(base, '/generation-jobs/' + job_id, token=token):
+                raise RuntimeError('outline regeneration lost generation steps')
+
+
 def run(base, origin, bid_type='combined', verify_approval=False):
     if bid_type not in ('combined', 'separated'):
         raise ValueError('full workflow fixture supports combined or separated layouts')
@@ -144,30 +164,46 @@ def run(base, origin, bid_type='combined', verify_approval=False):
             raise RuntimeError('persisted interpretation callback was not durably acknowledged')
         time.sleep(2)
     parsed = api_call(base, f"/bids/{bid}/parse-result", token=token)
+    expect_rejection(base, f'/bids/{bid}/outline/generate', token, {}, 409, 'parse_confirmation_required')
+    confirmed = api_call(base, f'/bids/{bid}/parse-result', method='PUT', token=token,
+                         body={'expected_updated_at': parsed['updated_at']})
+    if confirmed['status'] != 'confirmed' or not confirmed.get('confirmed_at'):
+        raise RuntimeError('small confirmation request did not persist confirmation')
+    expect_rejection(base, f'/bids/{bid}/parse-result', token,
+                     {'expected_updated_at': parsed['updated_at']}, 409, 'parse_result_changed', method='PUT')
     structured = parsed["structured_result"]
     # Bound model expense while still generating EVERY chapter of the fixture.
     fixture_chapters = [
-        {"title": "项目理解与交付方案", "plain_text": "根据真实上传的测试招标文件编写项目理解、实施计划、原文工期和技术评分响应；未明确的期限不得猜测。"},
-        {"title": "商务响应与人工核对事项", "plain_text": "根据文件编写预算、报价原则和原文资格核对事项；测试项目不提供真实企业证明，不得虚构资质。"}]
+        {"title": "一、项目理解", "plain_text": "根据真实上传的测试招标文件编写项目理解、实施计划、原文工期和技术评分响应；未明确的期限不得猜测。"},
+        {"title": "二、实施方案", "plain_text": "根据文件编写预算、报价原则和原文资格核对事项；测试项目不提供真实企业证明，不得虚构资质。"}]
     structured["outline"] = {"parts": (
         [{"code": "combined_body", "title": "验收测试综合标书", "chapters": fixture_chapters}]
         if bid_type == 'combined' else [
-            {"code": "tech", "title": "验收测试技术标", "chapters": fixture_chapters[:1]},
-            {"code": "business", "title": "验收测试商务标", "chapters": fixture_chapters[1:]},
+            {"code": "tech", "title": "验收测试技术标", "chapters": fixture_chapters},
+            {"code": "business", "title": "验收测试商务标", "chapters": fixture_chapters},
         ])}
     api_call(base, f"/bids/{bid}/parse-result", method="PUT", token=token, body={"structured_result": structured})
     api_call(base, f"/bids/{bid}/material-selection", method="PUT", token=token,
              body={"selected_refs": [], "notes": "专用工作流测试：仅引用招标文件，企业证明待人工提供，不用于实际投标。"})
     api_call(base, f"/bids/{bid}/outline/generate", method="POST", token=token, body={})
     chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
-    if len(chapters) != 2:
-        raise RuntimeError("fixture outline did not persist exactly two chapters")
+    expected_chapters = 2 if bid_type == 'combined' else 4
+    if len(chapters) != expected_chapters:
+        raise RuntimeError("fixture outline did not preserve the expected chapters")
+    # Seed explicit fixture instructions by the editor API; outline generation
+    # must not overwrite existing text (including a manually edited draft).
+    for chapter in chapters:
+        prompt = next(item['plain_text'] for item in fixture_chapters if item['title'] == chapter['title'])
+        api_call(base, '/chapters/' + chapter['id'] + '/content', method='PUT', token=token,
+                 body={'plain_text': prompt})
+    verify_outline_preservation(base, bid, token)
     generated = api_call(base, f"/bids/{bid}/generate", method="POST", token=token, body={"scope": "full"})
     print("Acceptance: full generation for dedicated bid " + bid, flush=True)
     completed = wait_for(base, "/generation-jobs/" + generated["job"]["id"], token, "job")
-    if completed["job"]["completed_steps"] != 2 or any(step["status"] != "done" for step in completed["steps"]):
+    if completed["job"]["completed_steps"] != expected_chapters or any(step["status"] != "done" for step in completed["steps"]):
         raise RuntimeError("not every fixture chapter completed")
     chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
+    verify_outline_preservation(base, bid, token)
     # Exercise all three backend fact gates even if the current model emits no
     # risky claim. This canary is on a new fixture, never on an existing bid.
     first = chapters[0]
@@ -258,7 +294,7 @@ def run(base, origin, bid_type='combined', verify_approval=False):
         exports[kind] = {"export_id": exported["id"], "bytes": len(content)}
     approval = verify_second_reviewer(base, token, bid) if verify_approval else {'status': 'not_executed'}
     api_call(base, f"/bids/{bid}", method="PATCH", token=token, body={"status": "archived"})
-    evidence = {"status": "passed", "bid_id": bid, "bid_type": bid_type, "chapters_generated": 2, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
+    evidence = {"status": "passed", "bid_id": bid, "bid_type": bid_type, "chapters_generated": expected_chapters, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
             "review": "fixture-only acknowledgement; not semantic compliance certification",
             "factual_gate_canary": "accept/export/approval rejected unresolved placeholder",
             "factual_reviewed_chapters": factual_review_count,

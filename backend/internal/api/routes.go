@@ -3178,6 +3178,14 @@ func respondInternal(c *gin.Context) {
 }
 
 func respondStatus(c *gin.Context, status int, payload any, err error) {
+	if errors.Is(err, bid.ErrParseResultChanged) {
+		c.JSON(http.StatusConflict, apiError("parse_result_changed", "解读结果已更新，请刷新核对后重新确认"))
+		return
+	}
+	if errors.Is(err, bid.ErrParseConfirmationRequired) {
+		c.JSON(http.StatusConflict, apiError("parse_confirmation_required", "请先在文件解读步骤点击“确认文件信息”，等待显示“已确认”后再生成目录大纲"))
+		return
+	}
 	if errors.Is(err, factualreview.ErrRequired) {
 		c.JSON(http.StatusConflict, apiError("factual_review_required", "正文仍有事实待核实提示，请补充依据并编辑确认后再定稿、导出或提交审批"))
 		return

@@ -38,6 +38,8 @@ func TestReviewAndApprovalReadinessErrorsAreActionable(t *testing.T) {
 	}{
 		{factualreview.ErrRequired, "factual_review_required"},
 		{platformapproval.ErrNotReady, "approval_not_ready"},
+		{bid.ErrParseConfirmationRequired, "parse_confirmation_required"},
+		{bid.ErrParseResultChanged, "parse_result_changed"},
 	} {
 		recorder := httptest.NewRecorder()
 		ctx, _ := gin.CreateTestContext(recorder)
