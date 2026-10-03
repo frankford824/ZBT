@@ -145,9 +145,13 @@ def run(base, origin, bid_type='combined'):
         exports[kind] = {"export_id": exported["id"], "bytes": len(content)}
     api_call(base, f"/bids/{bid}", method="PATCH", token=token, body={"status": "archived"})
     evidence = {"status": "passed", "bid_id": bid, "bid_type": bid_type, "chapters_generated": 2, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
-            "review": "fixture-only acknowledgement; not semantic compliance certification"}
+            "review": "fixture-only acknowledgement; not semantic compliance certification",
+            "source_sha": os.environ.get('GITHUB_SHA', '')}
     from pathlib import Path
     Path("/opt/zbt-private/full-acceptance.json").write_text(json.dumps(evidence, indent=2))
+    # The following fresh-enterprise run must not overwrite evidence for the
+    # earlier split-part DOCX/PDF/ZIP acceptance.
+    Path(f"/opt/zbt-private/full-acceptance-{bid_type}.json").write_text(json.dumps(evidence, indent=2))
     return evidence
 
 
