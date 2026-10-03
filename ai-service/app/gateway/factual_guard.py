@@ -24,7 +24,7 @@ _CATEGORIES = {
 }
 _OWNERSHIP = re.compile(_SUBJECT + r".{0,12}(?:拥有|具备|持有|取得|已获|曾|已完成|已承接|已承担|积累|承诺(?:已)?(?:满足|符合))")
 _HISTORY_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:将|拟)?提供.{0,24}(?:近.{0,4}年|承接|完成|承担).{0,24}(?:业绩|项目|工程)")
-_CERT_ASSERTION = re.compile(_SUBJECT + r".{0,8}(?:承诺|保证).{0,15}(?:许可证|证书|资质).{0,15}(?:有效|符合|满足)")
+_CERT_ASSERTION = re.compile(_SUBJECT + r"(?:.{0,8}(?:承诺|保证).{0,15}(?:许可证|证书|资质).{0,15}(?:有效|符合|满足)|.{0,6}(?:安全生产许可证|资格证书|资质证书|资质).{0,16}(?:在有效期内|有效期为|有效至|符合|满足))")
 _SUBMISSION_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:承诺|保证|将).{0,24}(" + _NUMBER + r"\s*(?:工作日|天|日|小时|个月|月))\s*(?:内|后)?.{0,6}(?:提交|报送)")
 _DATE = re.compile(r"(\d{4})[-年/](\d{1,2})[-月/](\d{1,2})(?:日)?")
 _TIME = re.compile(r"(\d{1,2})[:：时](\d{1,2})(?:分)?")
@@ -34,6 +34,7 @@ _CALENDAR_LABELS = {
 }
 _COPY_DETAIL = re.compile(r"(?:正本|副本|电子版|书面版)\s*" + _NUMBER + r"\s*份|" + _NUMBER + r"正" + _NUMBER + r"副|U\s*盘", re.IGNORECASE)
 _BOQ_ASSERTION = re.compile(r"招标文件(?:中|的).{0,6}工程量清单")
+_UNRESOLVED = re.compile(r"[\[【（(](?:待澄清|待填写|待补充|待确认|待核实)[\]】）)]")
 _CLAUSE_SPLIT = re.compile(r"(?<=[。！？；;\n])")
 
 
@@ -111,6 +112,8 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
         clauses = []
         for clause in _CLAUSE_SPLIT.split(text):
             kinds = []
+            if _UNRESOLVED.search(clause):
+                kinds.append("生成占位")
             if _calendar_mismatch(clause, payload.project_context):
                 kinds.append("截止或开标时间")
             details = _COPY_DETAIL.findall(clause)

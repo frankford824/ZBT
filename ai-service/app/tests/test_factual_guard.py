@@ -75,7 +75,10 @@ def test_submission_promise_cannot_reuse_unrelated_warranty_duration():
     '投标文件正本一份、副本四份，电子版一份（U盘）。',
     '投标文件一正四副。',
     '我方承诺安全生产许可证在有效期内。',
+    '我方安全生产许可证在有效期内（证书编号及有效期需人工核对后填写）。',
     '工程量需以招标文件中的工程量清单和图纸为准。',
+    '我方提供[待澄清]年的质量保修期。',
+    '计划合同签订后【待确认】天完成。',
 ])
 def test_actual_original_file_export_false_claims_require_review(text):
     payload = request(project_context={'submission_deadline':'2026-11-15 09:30','bid_opening_time':'2026-11-15 10:00'})

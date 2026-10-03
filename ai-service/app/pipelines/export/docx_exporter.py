@@ -674,7 +674,7 @@ def _render_plain_text(document: DocxDocument, text: str) -> None:
         heading_level, heading_text = _markdown_heading(stripped)
         if heading_level:
             document.add_heading(heading_text, level=min(3, heading_level + 2))
-        elif ordered := re.match(r"^\d+[.)、]\s+(.+)$", stripped):
+        elif ordered := re.match(r"^(?:\d+[.)、]|\d+(?:\.\d+)+)\s+(.+)$", stripped):
             # These labels may be subsection numbers, not a single continuous
             # list. Word's List Number would silently renumber a later chapter.
             paragraph = document.add_paragraph(stripped)
@@ -683,7 +683,9 @@ def _render_plain_text(document: DocxDocument, text: str) -> None:
         elif bullet := re.match(r"^[-*•]\s+(.+)$", stripped):
             document.add_paragraph(bullet.group(1), style=_style_or_normal(document, "List Bullet"))
         else:
-            document.add_paragraph(stripped)
+            paragraph = document.add_paragraph(stripped)
+            if re.fullmatch(r"[一二三四五六七八九十]+[、.]\s*.{1,40}", stripped):
+                paragraph.paragraph_format.keep_with_next = True
         index += 1
 
 

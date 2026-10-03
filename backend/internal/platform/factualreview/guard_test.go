@@ -3,7 +3,7 @@ package factualreview
 import "testing"
 
 func TestGeneratedReviewPlaceholderCannotBeFinalized(t *testing.T) {
-	for _, text := range []string{Marker + "质保承诺缺少依据。】", "【事实待核实：\n企业事实待补充。】", "【事实 待核实：响应时间】"} {
+	for _, text := range []string{Marker + "质保承诺缺少依据。】", "【事实待核实：\n企业事实待补充。】", "【事实 待核实：响应时间】", "提供[待澄清]年保修", "【待确认】天交付", "[待 填写]"} {
 		if CheckText(text) != ErrRequired {
 			t.Fatalf("expected review to block %q", text)
 		}

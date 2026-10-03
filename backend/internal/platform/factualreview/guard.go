@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -14,9 +15,11 @@ import (
 const Marker = "【事实待核实："
 
 var ErrRequired = errors.New("generated facts require human review")
+var unresolvedPlaceholder = regexp.MustCompile(`[\[【（(](待澄清|待填写|待补充|待确认|待核实)[\]】）)]`)
 
 func CheckText(text string) error {
-	if strings.Contains(strings.Join(strings.Fields(text), ""), Marker) {
+	compact := strings.Join(strings.Fields(text), "")
+	if strings.Contains(compact, Marker) || unresolvedPlaceholder.MatchString(compact) {
 		return ErrRequired
 	}
 	return nil
