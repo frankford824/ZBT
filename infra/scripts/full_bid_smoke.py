@@ -94,7 +94,7 @@ def run(base, origin):
     for kind in ("docx", "pdf", "zip"):
         print("Acceptance: validate " + kind + " export", flush=True)
         started = api_call(base, f"/bids/{bid}/exports", method="POST", token=token,
-                           body={"export_type": kind, "part_code": "combined_body"})
+                           body={"export_type": kind, "part_code": "all" if kind == "zip" else "combined_body"})
         exported = wait_for(base, "/bid-exports/" + started["export"]["id"], token, "export")["export"]
         download = api_call(base, "/files/" + exported["file_asset_id"] + "/download-url", token=token)
         require_origin(download["url"], origin)
