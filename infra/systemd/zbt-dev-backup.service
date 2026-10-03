@@ -1,0 +1,11 @@
+[Unit]
+Description=Consistent ZBT development snapshot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=github-runner
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/zbt-maintenance/backup_dev.py
+TimeoutStartSec=10min

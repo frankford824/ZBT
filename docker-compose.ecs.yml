@@ -3,7 +3,7 @@
 #   docker compose -p zbt-dev -f docker-compose.yml -f docker-compose.ecs.yml up -d --build
 services:
   postgres:
-    image: docker.m.daocloud.io/pgvector/pgvector:pg16
+    image: docker.m.daocloud.io/pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     container_name: zbt-dev-db
     restart: unless-stopped
     environment:
@@ -13,7 +13,7 @@ services:
       - "127.0.0.1:15432:5432"
 
   redis:
-    image: docker.m.daocloud.io/library/redis:7
+    image: docker.m.daocloud.io/library/redis:7@sha256:71da9275c5f3fcb97d0fa0c8c5b36cc995327265420f17a04bfd544f458059f7
     container_name: zbt-dev-redis
     restart: unless-stopped
     environment:
@@ -22,7 +22,7 @@ services:
       - "127.0.0.1:16379:6379"
 
   minio:
-    image: docker.m.daocloud.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: docker.m.daocloud.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     container_name: zbt-dev-minio
     restart: unless-stopped
     environment:
@@ -32,6 +32,7 @@ services:
       - "127.0.0.1:19001:9001"
 
   backend:
+    image: zbt-dev-backend:${ZBT_RELEASE_TAG:-latest}
     build:
       context: ./backend
       args:
@@ -41,6 +42,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       APP_ENV: development
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required for ECS}
       MIGRATION_DATABASE_URL: postgres://zbt:${POSTGRES_SUPER_PASSWORD}@postgres:5432/zbt?sslmode=disable
       DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID:-00000000-0000-4000-8000-000000000001}
       ZIZHI_API_URL: ${ZIZHI_API_URL:-}
@@ -49,6 +51,7 @@ services:
       - "127.0.0.1:18080:8080"
 
   ai-service:
+    image: zbt-dev-ai-service:${ZBT_RELEASE_TAG:-latest}
     build:
       context: ./ai-service
       args:
@@ -61,15 +64,19 @@ services:
       TZ: Asia/Shanghai
       APP_ENV: development
       OCR_PROVIDER: http_ocr
+      AI_DURABLE_QUEUE_PATH: /var/lib/zbt-ai/tasks.sqlite3
+      AI_TASK_OBJECT_MAX_BYTES: 20971520
+      OCR_HTTP_TIMEOUT_S: 1800
       OCR_HTTP_ENDPOINT: http://ocr-service:8001/parse
       OCR_API_KEY: ${OCR_API_KEY}
     volumes:
       - ./ai-service/app/config/model_routing.btjs.yaml:/app/app/config/model_routing.yaml:ro
+      - ai_tasks_data:/var/lib/zbt-ai
     ports: !override
       - "127.0.0.1:18000:8000"
 
   ocr-service:
-    image: zbt-dev-ai-service:latest
+    image: zbt-dev-ai-service:${ZBT_RELEASE_TAG:-latest}
     container_name: zbt-dev-ocr
     command: uvicorn app.ocr_bridge:app --host 0.0.0.0 --port 8001
     restart: unless-stopped
@@ -79,9 +86,10 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
       OCR_BRIDGE_API_KEY: ${OCR_API_KEY}
       OCR_BRIDGE_MODEL: qwen-vl-ocr
-      OCR_BRIDGE_TIMEOUT_S: 120
+      OCR_BRIDGE_TIMEOUT_S: 60
       OCR_BRIDGE_MAX_BYTES: 20971520
-      OCR_BRIDGE_MAX_PAGES: 20
+      OCR_BRIDGE_MAX_PAGES: 100
+      OCR_BRIDGE_CONCURRENCY: 4
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=5)"]
       interval: 10s
@@ -91,6 +99,7 @@ services:
       - "127.0.0.1:18001:8001"
 
   frontend:
+    image: zbt-dev-frontend:${ZBT_RELEASE_TAG:-latest}
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -103,3 +112,6 @@ services:
       TZ: Asia/Shanghai
     ports: !override
       - "0.0.0.0:8080:80"
+
+volumes:
+  ai_tasks_data:

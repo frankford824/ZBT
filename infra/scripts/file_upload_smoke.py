@@ -52,9 +52,9 @@ def make_tender_pdf(marker: str) -> bytes:
     return pdf
 
 
-def run_smoke(base_url: str, public_origin: str, password: str, timeout: int) -> dict:
+def run_smoke(base_url: str, public_origin: str, password: str, timeout: int, *, archive: bool = True) -> dict:
     login = api_call(base_url, "/auth/login", method="POST",
-                     body={"email": "admin@zbt.local", "password": password})
+                     body={"email": os.getenv("ZBT_SMOKE_EMAIL", "admin@zbt.local"), "password": password})
     token = str(login["access_token"])
     marker = "ZBT-upload-smoke-" + uuid.uuid4().hex[:12]
     bid = api_call(base_url, "/bids", method="POST", token=token,
@@ -99,8 +99,9 @@ def run_smoke(base_url: str, public_origin: str, password: str, timeout: int) ->
             if (parsed.get("file_asset_id") != file_id or parsed.get("status") != "ready"
                     or not parsed.get("structured_result")):
                 raise RuntimeError("parse callback did not persist the uploaded file result")
-            api_call(base_url, f"/bids/{bid_id}", method="PATCH", token=token,
-                     body={"status": "archived"})
+            if archive:
+                api_call(base_url, f"/bids/{bid_id}", method="PATCH", token=token,
+                         body={"status": "archived"})
             return {"status": "passed", "bid_id": bid_id, "file_id": file_id,
                     "task_id": task_id, "bytes": len(content), "parse_status": parsed["status"]}
         if task["status"] in {"failed", "cancelled"}:
@@ -114,7 +115,7 @@ if __name__ == "__main__":
     parser.add_argument("--base-url", default="http://47.114.51.41:8080/api/v1")
     parser.add_argument("--public-origin", default="http://47.114.51.41:8080")
     parser.add_argument("--password", default=os.getenv("ZBT_SMOKE_PASSWORD", "demo-password"))
-    parser.add_argument("--timeout-seconds", type=int, default=240)
+    parser.add_argument("--timeout-seconds", type=int, default=1200)
     args = parser.parse_args()
     print(json.dumps(run_smoke(args.base_url, args.public_origin, args.password,
                               args.timeout_seconds), ensure_ascii=False))

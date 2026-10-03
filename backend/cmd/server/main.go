@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/frankford824/ZBT/backend/internal/api"
+	"github.com/frankford824/ZBT/backend/internal/company/qualification"
 	"github.com/frankford824/ZBT/backend/internal/db/migrations"
 	"github.com/frankford824/ZBT/backend/internal/platform/aicall"
 	"github.com/frankford824/ZBT/backend/internal/platform/aiconfig"
@@ -27,8 +28,8 @@ import (
 	"github.com/frankford824/ZBT/backend/internal/platform/knowledge"
 	"github.com/frankford824/ZBT/backend/internal/platform/project"
 	"github.com/frankford824/ZBT/backend/internal/platform/saas"
+	"github.com/frankford824/ZBT/backend/internal/platform/taskstatus"
 	"github.com/frankford824/ZBT/backend/internal/platform/tender"
-	"github.com/frankford824/ZBT/backend/internal/company/qualification"
 	"github.com/frankford824/ZBT/backend/internal/platform/tenderpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -49,6 +50,7 @@ func main() {
 	if err := migrations.Up(sqlDB); err != nil {
 		log.Fatal(err)
 	}
+	go taskstatus.RunRecovery(ctx, sqlDB)
 
 	pool, err := platformdb.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {

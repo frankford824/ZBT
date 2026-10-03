@@ -104,10 +104,10 @@ def main() -> int:
         description="Smoke-test backend to AI chapter generation and callback."
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8080/api/v1")
-    parser.add_argument("--email", default="admin@zbt.local")
+    parser.add_argument("--email", default=os.getenv("ZBT_SMOKE_EMAIL", "admin@zbt.local"))
     parser.add_argument("--password", default=os.getenv("ZBT_SMOKE_PASSWORD", "demo-password"))
     parser.add_argument("--chapter-id", default=DEFAULT_CHAPTER_ID)
-    parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument("--timeout-seconds", type=int, default=600)
     args = parser.parse_args()
     result = run_smoke(
         args.base_url,

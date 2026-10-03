@@ -37,6 +37,10 @@ class OCRResponseTooLargeError(Exception):
     pass
 
 
+class DocumentCompletenessError(ValueError):
+    """Safe user-facing rejection instead of accepting partial source text."""
+
+
 @dataclass(frozen=True)
 class OCRProviderConfig:
     provider: str
@@ -185,6 +189,12 @@ def parse_document(payload: KnowledgeProcessRequest, content: bytes) -> Knowledg
 
 
 def _merge_ocr_parse_metadata(metadata: dict[str, object], ocr_result: dict[str, object]) -> None:
+    provider_metadata = ocr_result.get("provider_metadata") or ocr_result.get("metadata") or {}
+    if isinstance(provider_metadata, dict) and provider_metadata.get("truncated_after_page_limit"):
+        raise DocumentCompletenessError("OCR 结果不完整：存在被截断的页，请拆分文件后重试")
+    pages = ocr_result.get("pages")
+    if isinstance(pages, list):
+        metadata["ocr_page_count"] = len(pages)
     table_blocks = ocr_result.get("table_blocks")
     if isinstance(table_blocks, list) and table_blocks:
         metadata["table_blocks"] = table_blocks[:50]
@@ -209,6 +219,8 @@ def _parse_pdf(payload: KnowledgeProcessRequest, content: bytes) -> tuple[str, i
     doc = fitz.open(stream=content, filetype="pdf")
     try:
         page_limit = _env_int("KNOWLEDGE_PARSE_MAX_PDF_PAGES", 300)
+        if doc.page_count > page_limit:
+            raise DocumentCompletenessError(f"PDF 超过 {page_limit} 页处理限制，请拆分后上传；不会截断处理")
         parsed_page_count = min(doc.page_count, page_limit)
         page_texts: list[str] = []
         layout_blocks: list[dict[str, object]] = []

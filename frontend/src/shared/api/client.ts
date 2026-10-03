@@ -1904,6 +1904,9 @@ export async function createPresignedUpload(payload: {
   biz_type?: string
   biz_id?: string
 }): Promise<PresignUploadDTO> {
+  if (payload.size_bytes > 20 * 1024 * 1024) {
+    throw new Error('文件超过 20MB 处理限制，请压缩或拆分后上传')
+  }
   const { data } = await apiClient.post<PresignUploadDTO>('/files/presign-upload', {
     biz_type: 'knowledge',
     ...payload,

@@ -31,7 +31,7 @@ const presignTTL = 15 * time.Minute
 const (
 	defaultUploadBizType    = "knowledge"
 	defaultGeneratedBizType = "generated"
-	maxUploadSizeBytes      = 200 * 1024 * 1024
+	maxUploadSizeBytes      = 20 * 1024 * 1024
 	maxContentTypeBytes     = 255
 	maxFilenameRunes        = 255
 )

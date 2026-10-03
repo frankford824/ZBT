@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse
 
 from app.gateway.model_router import ModelRouter, RouteTarget
 from app.pipelines.export.docx_exporter import export_bid_docx, export_bid_pdf, export_bid_zip
-from app.pipelines.parse.document_parser import ocr_provider_readiness_issues, parse_document
+from app.pipelines.parse.document_parser import DocumentCompletenessError, ocr_provider_readiness_issues, parse_document
 from app.pipelines.parse.tender_parser import (
     MODULE_ORDER,
     build_tender_module_prompt,
@@ -49,6 +49,7 @@ from app.schemas.knowledge import (
     KnowledgeRerankResult,
 )
 from app.schemas.tender import TenderParseModule, TenderParseRequest, TenderParseStructuredResult
+from app.task_queue import DurableQueue
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,20 @@ CONFIG_PATH = routing_config_path()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     validate_production_config()
-    yield
+    global durable_queue
+    if os.getenv("AI_DURABLE_QUEUE_PATH"):
+        durable_queue = DurableQueue(
+            os.environ["AI_DURABLE_QUEUE_PATH"],
+            {name: value for name, value in globals().items() if name.startswith("process_") and callable(value)},
+            deliver_callback,
+        )
+        durable_queue.start()
+    try:
+        yield
+    finally:
+        if durable_queue:
+            durable_queue.close()
+            durable_queue = None
 
 
 app = FastAPI(title="ZhiBiaoTong AI Service", version="0.1.0", lifespan=lifespan)
@@ -85,11 +99,19 @@ DEFAULT_AI_SERVICE_MAX_BODY_BYTES = 96 * 1024 * 1024
 MIN_AI_SERVICE_MAX_BODY_BYTES = 1024 * 1024
 MAX_AI_SERVICE_MAX_BODY_BYTES = 256 * 1024 * 1024
 DEFAULT_EMBEDDING_BATCH_SIZE = 32
-DEFAULT_TASK_OBJECT_MAX_BYTES = 128 * 1024 * 1024
+DEFAULT_TASK_OBJECT_MAX_BYTES = 20 * 1024 * 1024
 MAX_TASK_OBJECT_MAX_BYTES = 256 * 1024 * 1024
 MINIO_READ_CHUNK_BYTES = 1024 * 1024
 DEFAULT_TENDER_PARSE_MODULE_CONCURRENCY = 3
 MAX_TENDER_PARSE_MODULE_CONCURRENCY = len(MODULE_ORDER)
+durable_queue: DurableQueue | None = None
+
+
+def enqueue_background_task(background_tasks, handler, task_id, payload, *extra):
+    if durable_queue is None:
+        background_tasks.add_task(handler, task_id, payload, *extra)
+    else:
+        durable_queue.enqueue(handler.__name__, task_id, payload, extra)
 
 
 class CallbackResponseTooLargeError(RuntimeError):
@@ -365,7 +387,7 @@ async def tender_parse(
     route = router.resolve("tender_parse", tenant_id=payload.tenant_id)
     task_suffix = (payload.bid_id or payload.file_id).replace("-", "")[:12]
     task_id = payload.task_id or f"task-tender-parse-{task_suffix}-{uuid.uuid4().hex[:8]}"
-    background_tasks.add_task(process_tender_parse, task_id, payload)
+    enqueue_background_task(background_tasks, process_tender_parse, task_id, payload)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
@@ -388,6 +410,7 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
             content_type=payload.content_type,
         )
         parsed = parse_document(parse_payload, content)
+        ensure_parse_complete(parsed.metadata)
         structured = build_tender_structured_result(payload, parsed)
         module_calls: list[dict[str, object]] = []
         input_tokens = 0
@@ -500,12 +523,13 @@ def process_tender_parse(task_id: str, payload: TenderParseRequest) -> None:
                 "estimated_cost": estimated_cost,
             },
         }
-    except Exception:  # pragma: no cover - defensive task boundary
+    except Exception as exc:  # pragma: no cover - defensive task boundary
         callback_payload = task_failure_callback(
             payload.tenant_id,
             task_id,
-            "招标文件解读失败，请检查文件后重试",
+            str(exc) if isinstance(exc, DocumentCompletenessError) else "招标文件解读失败，请检查文件后重试",
             {"bid_id": payload.bid_id, "file_id": payload.file_id},
+            cause=exc,
         )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
@@ -582,7 +606,7 @@ async def knowledge_process(
     route = router.resolve("knowledge_process", tenant_id=payload.tenant_id)
     task_suffix = payload.document_id.replace("-", "")[:12]
     task_id = payload.task_id or f"task-knowledge-{task_suffix}"
-    background_tasks.add_task(process_knowledge_document, task_id, payload)
+    enqueue_background_task(background_tasks, process_knowledge_document, task_id, payload)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
@@ -693,6 +717,7 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
             limit_name="task source object",
         )
         parsed = parse_document(payload, content)
+        ensure_parse_complete(parsed.metadata)
         embedding_inputs = [
             f"{chunk.title}\n{chunk.section_path}\n{chunk.content}" for chunk in parsed.chunks
         ]
@@ -751,12 +776,13 @@ def process_knowledge_document(task_id: str, payload: KnowledgeProcessRequest) -
                 "estimated_cost": accounting["estimated_cost"],
             },
         }
-    except Exception:  # pragma: no cover - defensive task boundary
+    except Exception as exc:  # pragma: no cover - defensive task boundary
         callback_payload = task_failure_callback(
             payload.tenant_id,
             task_id,
-            "知识库文档整理失败，请稍后重试",
+            str(exc) if isinstance(exc, DocumentCompletenessError) else "知识库文档整理失败，请稍后重试",
             {},
+            cause=exc,
         )
     if payload.callback_url:
         post_callback(payload.callback_url, callback_payload)
@@ -808,6 +834,13 @@ def tender_parse_module_concurrency() -> int:
 
 
 def post_callback(callback_url: str, payload: dict[str, object]) -> None:
+    ensure_callback_url_allowed(callback_url)
+    if durable_queue:
+        durable_queue.save_callback(callback_url, payload)
+    deliver_callback(callback_url, payload)
+
+
+def deliver_callback(callback_url: str, payload: dict[str, object]) -> None:
     ensure_callback_url_allowed(callback_url)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     attempts = callback_max_attempts()
@@ -1131,7 +1164,7 @@ async def chapter_generate(
     route = router.resolve("chapter_generate", tenant_id=payload.tenant_id)
     task_suffix = payload.chapter_id.replace("-", "")[:8]
     task_id = payload.task_id or f"task-chapter-{task_suffix}-{uuid.uuid4().hex[:8]}"
-    background_tasks.add_task(process_chapter_generate, task_id, payload)
+    enqueue_background_task(background_tasks, process_chapter_generate, task_id, payload)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
@@ -1178,7 +1211,7 @@ async def chapter_action(
     task_suffix = payload.chapter_id.replace("-", "")[:8]
     action_suffix = payload.action.replace("_", "-")[:16]
     task_id = payload.task_id or f"task-chapter-action-{task_suffix}-{action_suffix}-{uuid.uuid4().hex[:8]}"
-    background_tasks.add_task(process_chapter_action, task_id, payload, route_name, route.model)
+    enqueue_background_task(background_tasks, process_chapter_action, task_id, payload, route_name, route.model)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
@@ -1224,7 +1257,7 @@ async def cost_advice(
     route = router.resolve("cost_advice", tenant_id=payload.tenant_id)
     task_suffix = payload.cost_project_id.replace("-", "")[:8]
     task_id = payload.task_id or f"task-cost-advice-{task_suffix}-{uuid.uuid4().hex[:8]}"
-    background_tasks.add_task(process_cost_advice, task_id, payload, route.model)
+    enqueue_background_task(background_tasks, process_cost_advice, task_id, payload, route.model)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
@@ -1295,7 +1328,7 @@ def enqueue_document_export(
     route = router.resolve("document_export", tenant_id=payload.tenant_id)
     task_suffix = payload.export_id.replace("-", "")[:12]
     task_id = payload.task_id or f"task-export-{task_suffix}"
-    background_tasks.add_task(process_document_export, task_id, payload, export_type)
+    enqueue_background_task(background_tasks, process_document_export, task_id, payload, export_type)
     return TaskAccepted(task_id=task_id, status="queued", route=route.model_dump())
 
 
@@ -1525,6 +1558,13 @@ def ensure_tenant_object_key_allowed(tenant_id: str, object_key: str) -> None:
 
 def _contains_object_key_control_char(value: str) -> bool:
     return any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+
+
+def ensure_parse_complete(metadata: dict) -> None:
+    if metadata.get("ocr_required") or any(
+        value is True for key, value in metadata.items() if key.startswith("truncated")
+    ):
+        raise DocumentCompletenessError("文件未完整识别，请检查 OCR 配置或拆分文件后重试")
 
 
 def task_object_max_bytes() -> int:

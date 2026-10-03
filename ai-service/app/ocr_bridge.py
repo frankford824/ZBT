@@ -6,13 +6,14 @@ import hmac
 import io
 import json
 import os
+import math
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import fitz
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
-
 
 app = FastAPI(title="ZBT OCR Bridge", version="0.1.0")
 
@@ -35,7 +36,9 @@ def _positive_int(name: str, default: int) -> int:
 
 
 def _configured() -> bool:
-    return bool(os.getenv("OPENAI_API_KEY", "").strip() and os.getenv("OPENAI_BASE_URL", "").strip())
+    return bool(
+        os.getenv("OPENAI_API_KEY", "").strip() and os.getenv("OPENAI_BASE_URL", "").strip()
+    )
 
 
 def _authorize(authorization: str) -> None:
@@ -70,10 +73,23 @@ def _image_payloads(content: bytes, content_type: str) -> tuple[list[tuple[str, 
     except Exception as exc:
         raise HTTPException(status_code=422, detail="PDF is invalid") from exc
     try:
+        if document.page_count > max_pages:
+            raise HTTPException(
+                status_code=413,
+                detail=f"扫描 PDF 超过 OCR 页数限制 {max_pages}，请拆分后上传；不会截断处理",
+            )
         pages: list[tuple[str, bytes]] = []
-        for page_index in range(min(document.page_count, max_pages)):
-            pixmap = document[page_index].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-            pages.append(("image/png", pixmap.tobytes("png")))
+        rendered_bytes = 0
+        for page_index in range(document.page_count):
+            page = document[page_index]
+            area = max(1, page.rect.width * page.rect.height)
+            scale = min(2, math.sqrt(4_000_000 / area))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            image = pixmap.tobytes("png")
+            rendered_bytes += len(image)
+            if rendered_bytes > 128 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="扫描文件展开后过大，请拆分后上传；不会截断处理")
+            pages.append(("image/png", image))
         return pages, document.page_count > max_pages
     finally:
         document.close()
@@ -112,7 +128,9 @@ def _recognize_image(content_type: str, content: bytes) -> str:
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=_positive_int("OCR_BRIDGE_TIMEOUT_S", 120)) as response:
+        with urllib.request.urlopen(
+            request, timeout=_positive_int("OCR_BRIDGE_TIMEOUT_S", 120)
+        ) as response:
             payload = json.load(io.TextIOWrapper(response, encoding="utf-8"))
         text = payload["choices"][0]["message"]["content"]
     except (urllib.error.URLError, KeyError, IndexError, TypeError, ValueError) as exc:
@@ -138,10 +156,15 @@ def parse_ocr(payload: OCRRequest, authorization: str = Header(default="")) -> d
     images, truncated = _image_payloads(content, payload.content_type)
     if not images:
         return {"status": "done", "text": "", "pages": [], "provider_metadata": {"page_count": 0}}
-    pages = [
-        {"page": index, "text": _recognize_image(content_type, image)}
-        for index, (content_type, image) in enumerate(images, start=1)
-    ]
+
+    def recognize(item):
+        index, (content_type, image) = item
+        return {"page": index, "text": _recognize_image(content_type, image)}
+
+    with ThreadPoolExecutor(
+        max_workers=min(4, _positive_int("OCR_BRIDGE_CONCURRENCY", 4))
+    ) as executor:
+        pages = list(executor.map(recognize, enumerate(images, start=1)))
     return {
         "status": "done",
         "text": "\n\n".join(page["text"] for page in pages),

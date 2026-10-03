@@ -1121,7 +1121,7 @@ def test_pptx_parser_stops_at_configured_slide_limit(monkeypatch) -> None:
     assert result.metadata["truncated_after_parse_limit"] is True
 
 
-def test_pdf_parser_stops_at_configured_page_limit(monkeypatch) -> None:
+def test_pdf_parser_rejects_incomplete_document_at_configured_page_limit(monkeypatch) -> None:
     monkeypatch.setenv("KNOWLEDGE_PARSE_MAX_PDF_PAGES", "1")
     pdf = fitz.open()
     first = pdf.new_page()
@@ -1131,14 +1131,8 @@ def test_pdf_parser_stops_at_configured_page_limit(monkeypatch) -> None:
     content = pdf.tobytes()
     pdf.close()
 
-    result = parse_document(_request("multi.pdf"), content)
-    text = "\n".join(chunk.content for chunk in result.chunks)
-
-    assert "first page content" in text
-    assert "second page content" not in text
-    assert result.metadata["page_count"] == 2
-    assert result.metadata["parsed_page_count"] == 1
-    assert result.metadata["truncated_after_page_limit"] is True
+    with pytest.raises(ValueError, match="不会截断处理"):
+        parse_document(_request("multi.pdf"), content)
 
 
 def test_parse_document_marks_chunk_limit_truncation(monkeypatch) -> None:
