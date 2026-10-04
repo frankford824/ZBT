@@ -44,6 +44,7 @@ def test_proof_gap_disclosure_is_not_an_enterprise_ownership_claim():
 @pytest.mark.parametrize('text', [
     '本次提供资料中未见企业资质证书，故不承诺我方已具备该资质，需补充企业真实材料。',
     '本次资料中未见相关业绩，故不承诺我方具备类似业绩。',
+    '我方不具备或未提供类似业绩证明，需由企业提供真实业绩材料，经核验后确认是否满足评分要求。',
 ])
 def test_withheld_ownership_claim_is_not_a_positive_assertion(text):
     assert guard_chapter_content({'plain_text':text},request())[2] == []
@@ -52,6 +53,10 @@ def test_withheld_ownership_claim_is_not_a_positive_assertion(text):
 def test_disclaimer_does_not_excuse_a_later_positive_assertion():
     text = '不承诺我方具备类似业绩，但我方具备一级施工资质。'
     assert guard_chapter_content({'plain_text':text},request())[2]
+
+
+def test_double_negation_is_not_a_withheld_claim():
+    assert guard_chapter_content({'plain_text':'我方并非不具备一级资质。'},request())[2]
 
 
 def test_budget_is_not_supplier_bid_price_and_tender_qualification_not_company_ownership():

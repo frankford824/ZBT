@@ -27,6 +27,7 @@ _HISTORY_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:将|拟)?提供.{0,24}(?:�
 _CERT_ASSERTION = re.compile(_SUBJECT + r"(?:.{0,8}(?:承诺|保证).{0,15}(?:许可证|证书|资质).{0,15}(?:有效|符合|满足)|.{0,6}(?:安全生产许可证|资格证书|资质证书|资质).{0,16}(?:在有效期内|有效期为|有效至|符合|满足))")
 _CERT_PROVISION = re.compile(_SUBJECT + r".{0,12}(?:将|拟|承诺|保证).{0,8}提供.{0,45}(?:资质证书|资格证书|安全生产许可证|人员证书|建造师证|资质.{0,8}证书)")
 _UNCONFIRMED_PREFIX = re.compile(r"(?:不|未|不能|无法|尚未|尚不能)(?:承诺|保证|确认|认定|断言|声称)\s*$")
+_NEGATIVE_OWNERSHIP = re.compile(_SUBJECT + r"(?:尚未|并未|没有|不|未|未曾)(?:拥有|具备|持有|取得|曾|完成|承接|承担|积累)")
 _SUBMISSION_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:承诺|保证|将).{0,24}(" + _NUMBER + r"\s*(?:工作日|天|日|小时|个月|月))\s*(?:内|后)?.{0,6}(?:提交|报送)")
 _DATE = re.compile(r"(\d{4})[-年/](\d{1,2})[-月/](\d{1,2})(?:日)?")
 _TIME = re.compile(r"(\d{1,2})[:：时](\d{1,2})(?:分)?")
@@ -151,6 +152,7 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
             # "不承诺我方已具备" explicitly withholds the claim. Inspect each
             # occurrence so this disclaimer cannot excuse a later positive one.
             ownership = any(not _UNCONFIRMED_PREFIX.search(clause[:match.start()])
+                            and not _NEGATIVE_OWNERSHIP.fullmatch(match.group())
                             for pattern in (_OWNERSHIP, _HISTORY_PROMISE, _CERT_ASSERTION, _CERT_PROVISION)
                             for match in pattern.finditer(clause))
             if ownership:
