@@ -170,6 +170,27 @@ def test_long_review_keeps_sources_and_separately_checks_all_requirements():
     assert audit['requirement_coverage'][0]['evidence']=='技术方案40分。'
 
 
+@pytest.mark.parametrize('omit_required', [False, True])
+def test_batch_empty_fields_may_be_absent_but_required_rows_cannot(omit_required):
+    from app.gateway.evidence_audit import review
+    payload,_,_=fixture()
+    lines=['拟核验现场条件。']*20
+    lines[15]='技术方案40分。'
+    class Reviewer:
+        def generate_json(self,prompt,schema):
+            data=json.loads(prompt)
+            if data['requirement_refs']:
+                return {} if omit_required else {'requirements':[{'requirement_id':'r1','status':'covered','paragraph_index':15}]}
+            return {'paragraphs':[{'index':r['index'],'kind':'proposal','status':'supported','evidence':[]}
+                                  for r in data['paragraphs']]}
+    if omit_required:
+        with pytest.raises(ValueError):
+            review(Reviewer(),{'plain_text':'\n'.join(lines)},payload)
+    else:
+        audit=review(Reviewer(),{'plain_text':'\n'.join(lines)},payload)
+        assert audit['status']=='pass' and len(audit['paragraphs'])==20
+
+
 @pytest.mark.parametrize('body,expected', [('拟进行现场条件核验。','pass'),('我方已拥有一级施工资质。','needs_review')])
 def test_review_contract_retry_does_not_rewrite_or_override_factual_guards(body,expected):
     from app.gateway.evidence_audit import review

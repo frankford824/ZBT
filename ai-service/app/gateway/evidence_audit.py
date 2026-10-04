@@ -419,9 +419,19 @@ def review(provider, result: dict, payload: ChapterGenerateRequest) -> dict:
         with ThreadPoolExecutor(max_workers=2) as pool:
             responses = list(pool.map(lambda value: provider.generate_json(value, 'EvidenceAudit'), requests))
     raw = {'paragraphs': [], 'requirements': []}
-    for response in responses:
+    for request, response in zip(requests, responses, strict=True):
+        expected = json.loads(request)
+        if isinstance(response, dict):
+            response = deepcopy(response)
+            # Only normalize fields that this request explicitly did NOT ask
+            # the model to review. Never fill missing actual review rows.
+            if not expected['requirement_refs'] and response.get('requirements') is None:
+                response['requirements'] = []
+            if not expected['output_example_shape']['paragraphs'] and response.get('paragraphs') is None:
+                response['paragraphs'] = []
         if not isinstance(response, dict) or not isinstance(response.get('paragraphs'), list) or not isinstance(response.get('requirements'), list):
-            raise ValueError('invalid evidence batch response')
+            shapes = {key: type(response.get(key)).__name__ for key in ('paragraphs','requirements')} if isinstance(response,dict) else {'response':type(response).__name__}
+            raise ValueError('invalid evidence batch response: ' + json.dumps(shapes))
         raw['paragraphs'].extend(response['paragraphs'])
         raw['requirements'].extend(response['requirements'])
     audit = validate_audit(raw, result, payload)
