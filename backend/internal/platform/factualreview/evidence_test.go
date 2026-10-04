@@ -9,6 +9,7 @@ func TestEvidenceIsBoundToCurrentBodyAndSource(t *testing.T) {
 	revision := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
 	valid := func() map[string]any {
 		return map[string]any{
+			"policy_version": EvidencePolicyVersion,
 			"status": "pass", "content_sha256": textHash("技术方案40分。"), "source_revision": revision.Format(time.RFC3339Nano),
 			"paragraphs": []any{map[string]any{"status": "supported"}},
 		}
@@ -16,12 +17,16 @@ func TestEvidenceIsBoundToCurrentBodyAndSource(t *testing.T) {
 	if reason := AuditProblem("技术方案 40分。", valid(), revision); reason != "" {
 		t.Fatal(reason)
 	}
-	for _, test := range []string{"changed_body", "changed_source", "missing_audit", "failed_audit", "missing_paragraphs"} {
+	for _, test := range []string{"changed_body", "changed_source", "missing_audit", "failed_audit", "missing_paragraphs", "old_policy", "missing_policy"} {
 		t.Run(test, func(t *testing.T) {
 			audit := valid()
 			text := "技术方案40分。"
 			source := revision
 			switch test {
+			case "old_policy":
+				audit["policy_version"] = "old-policy"
+			case "missing_policy":
+				delete(audit, "policy_version")
 			case "changed_body":
 				text = "技术方案30分。"
 			case "changed_source":

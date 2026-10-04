@@ -366,6 +366,7 @@ def validate_audit(raw: dict, result: dict, payload: ChapterGenerateRequest) -> 
     )
     return {
         "version": 1,
+        "policy_version": "source-bound-20261005-v2",
         "status": "pass" if passed else "needs_review",
         "method": "independent_model_review_with_verified_quotations",
         "content_sha256": content_hash("".join(blocks)),

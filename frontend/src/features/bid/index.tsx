@@ -3801,7 +3801,7 @@ export function BidEditorPage() {
   const requirementCoverageRows = latestRequirementCoverageRows(versions.data)
   const latestEvidenceAudit = (versions.data ?? []).map((version) => objectRecord(objectRecord(version.model_metadata?.self_check)?.evidence_audit)).find(Boolean)
   const evidenceParagraphs = arrayValue(latestEvidenceAudit?.paragraphs).map(objectRecord).filter((row): row is Record<string, unknown> => Boolean(row))
-  const evidenceCurrent = evidenceParagraphs.map((row) => String(row.text ?? '')).join('').replace(/\s/g, '') === (currentChapter?.plain_text ?? '').replace(/\s/g, '')
+  const evidenceCurrent = latestEvidenceAudit?.policy_version === 'source-bound-20261005-v2' && evidenceParagraphs.map((row) => String(row.text ?? '')).join('').replace(/\s/g, '') === (currentChapter?.plain_text ?? '').replace(/\s/g, '')
   const requirementCoverageSummary = summarizeRequirementCoverage(requirementCoverageRows)
 
   const switchPart = (code: string) => {
@@ -3975,9 +3975,9 @@ export function BidEditorPage() {
             ) : null}
             <Alert type={latestEvidenceAudit?.status === 'pass' && evidenceCurrent ? 'info' : 'warning'} showIcon
               message={latestEvidenceAudit?.status === 'pass' && evidenceCurrent ? '独立事实复核已完成' : '当前正文需要事实复核'}
-              description="保存修改后请重新自检。逐段复核及原句引用用于辅助判断，不是事实正确率或合规认证；定稿时还会核对招标文件版本。" />
+              description="正文或复核规则更新后请重新自检。逐段复核及原句引用用于辅助判断，不是事实正确率或合规认证；定稿时还会核对招标文件版本。" />
             {evidenceParagraphs.length > 0 && <details>
-              <summary>查看逐段事实依据（{evidenceParagraphs.length} 段）{!evidenceCurrent ? ' · 旧正文记录' : ''}</summary>
+              <summary>查看逐段事实依据（{evidenceParagraphs.length} 段）{!evidenceCurrent ? ' · 旧正文或旧规则记录' : ''}</summary>
               {evidenceParagraphs.map((row, index) => <div key={index} style={{ marginTop: 12 }}>
                 <Tag color={row.status === 'supported' ? 'blue' : 'gold'}>第 {index + 1} 段 · {row.status === 'supported' ? '有据 / 方案建议' : '待复核'}</Tag>
                 <p>{String(row.text ?? '')}</p>

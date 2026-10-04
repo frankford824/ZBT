@@ -49,6 +49,7 @@ def test_exact_quote_and_entire_current_body_are_bound():
     payload, result, raw = fixture()
     audit = validate_audit(raw, result, payload)
     assert audit["status"] == "pass"
+    assert audit['policy_version'] == 'source-bound-20261005-v2'
     assert audit["content_sha256"] == content_hash(result["plain_text"])
     assert audit["source_revision"] == payload.source_revision
     assert audit["paragraphs"][1]["evidence"][0]["quote"] == "技术方案40分。"

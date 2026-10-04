@@ -19,6 +19,8 @@ type Finding struct {
 	Evidence      string `json:"evidence"`
 }
 
+const EvidencePolicyVersion = "source-bound-20261005-v2"
+
 func textHash(text string) string {
 	sum := sha256.Sum256([]byte(strings.Join(strings.Fields(text), "")))
 	return hex.EncodeToString(sum[:])
@@ -27,6 +29,9 @@ func textHash(text string) string {
 func AuditProblem(text string, audit map[string]any, revision time.Time) string {
 	if len(audit) == 0 {
 		return "当前正文没有独立事实复核，请在编辑器执行自检"
+	}
+	if audit["policy_version"] != EvidencePolicyVersion {
+		return "事实复核规则已更新，旧复核记录失效，请重新自检"
 	}
 	if audit["content_sha256"] != textHash(text) {
 		return "正文已变化，旧事实复核失效，请重新自检"
