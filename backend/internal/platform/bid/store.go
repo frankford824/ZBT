@@ -5510,14 +5510,13 @@ func tenderRequirementTexts(refs []tenderRequirementRef) []string {
 	}
 	requirements := make([]string, 0, len(refs)+2)
 	for _, ref := range refs {
-		text := strings.TrimSpace(ref.Requirement)
+		// Parser drafting hints are not tender facts. Legacy records may contain
+		// generic qualification/attachment promises, so never merge them here.
+		text := strings.TrimSpace(ref.SourceText)
 		if text == "" {
 			continue
 		}
 		label := tenderRequirementModuleLabel(ref.Module)
-		if ref.ExpectedResponse != "" {
-			text = text + "；响应要点：" + ref.ExpectedResponse
-		}
 		if label != "" {
 			text = label + "：" + text
 		}

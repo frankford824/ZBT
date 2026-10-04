@@ -54,6 +54,20 @@ def test_exact_quote_and_entire_current_body_are_bound():
     assert audit["paragraphs"][1]["evidence"][0]["quote"] == "技术方案40分。"
 
 
+def test_legacy_drafting_hints_are_not_sent_to_writer_or_reviewer():
+    from app.gateway.evidence_audit import audit_prompt
+    from app.gateway.openai_compatible_provider import _chapter_prompt, _chapter_action_prompt
+    from app.schemas.generation import ChapterActionRequest
+
+    payload, result, _ = fixture()
+    payload.requirement_refs[0].expected_response = 'UNVERIFIED-DEFAULT-投标函承诺函近三年业绩'
+    payload.tender_requirements = ['技术方案40分；响应要点：UNVERIFIED-DEFAULT-投标函承诺函近三年业绩']
+    action = ChapterActionRequest(**payload.model_dump(),action='expand',current_plain_text='草稿')
+    for prompt in (_chapter_prompt(payload),_chapter_action_prompt(action),audit_prompt(result,payload)):
+        assert 'UNVERIFIED-DEFAULT' not in prompt
+        assert json.loads(prompt)['requirement_refs'][0]['source_text'] == '技术方案40分。'
+
+
 def test_reviewer_order_cannot_make_current_evidence_look_stale():
     payload,result,raw=fixture()
     raw['paragraphs'].reverse()

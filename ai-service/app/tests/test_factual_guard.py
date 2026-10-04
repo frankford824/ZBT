@@ -36,6 +36,17 @@ def test_same_number_in_delivery_or_different_semantics_does_not_support_warrant
     assert {issue["kind"] for issue in issues} == {"质保承诺", "响应时限"}
 
 
+def test_budget_and_calendar_date_are_not_borrowed_by_nearby_commitments():
+    payload = request(project_context={'delivery_period':'合同生效后30天',
+        'project_budget':'100万元','submission_deadline':'2026-11-15 09:30'})
+    for text in (
+        '合同生效后30天为施工工期，项目预算为100万元，投标截止时间为2026年11月15日09:30。',
+        '项目预算为100万元，投标报价需结合实际成本编制。',
+    ):
+        assert not guard_chapter_content({'plain_text':text},payload)[2]
+    assert guard_chapter_content({'plain_text':'项目预算为100万元，我方投标报价为100万元。'},payload)[2]
+
+
 def test_proof_gap_disclosure_is_not_an_enterprise_ownership_claim():
     text = "需由企业提供真实资质证书和安全生产许可证，经核验后决定是否具备投标条件。"
     assert guard_chapter_content({'plain_text': text}, request())[2] == []
@@ -173,3 +184,38 @@ def test_sanitized_body_cannot_keep_model_self_check_as_pass():
     assert response.self_check["status"] == "needs_review"
     assert response.self_check["requirement_coverage"][0]["satisfied"] is False
     assert response.needs_human_input
+
+
+@pytest.mark.parametrize('text', [
+    '投标文件将按招标文件附件格式准备投标函、报价表、承诺函和清单文件。',
+    '技术方案评分点包括但不限于：施工方案合理性、进度计划可行性、应急预案等。',
+])
+def test_old_drafting_hints_cannot_be_tender_facts(text):
+    payload = request(requirement_refs=[TenderRequirementRef(
+        id='r',requirement='附件及评分',source_text='附件格式：报价表。技术方案40分。',
+        expected_response=text)])
+    assert guard_chapter_content({'plain_text':text},payload)[2]
+
+
+@pytest.mark.parametrize('text', [
+    '投标文件将按招标文件附件格式准备报价表。',
+    '技术方案评分点包括施工方案合理性、进度计划可行性。',
+    '拟从施工方法、进度和应急措施等方面组织方案；具体评分细则需补充核对。',
+    '本次资料未见投标函、承诺函和清单文件，需补充核对。',
+])
+def test_actual_annex_scoring_and_proposed_structure_are_preserved(text):
+    payload = request(requirement_refs=[TenderRequirementRef(
+        id='r',requirement='附件及评分',source_text='附件格式：报价表。评分细则：施工方案合理性、进度计划可行性。')])
+    assert not guard_chapter_content({'plain_text':text},payload)[2]
+
+
+def test_optional_default_experience_window_is_not_source_evidence():
+    text = '类似业绩需提供近三年（或招标文件要求的年限）的同类项目合同或验收证明。'
+    assert guard_chapter_content({'plain_text':text},request())[2]
+    payload = request(requirement_refs=[TenderRequirementRef(
+        id='r',requirement='业绩',source_text='类似业绩须为近三年同类项目。')])
+    assert not guard_chapter_content({'plain_text':text},payload)[2]
+    gap = '本次提供资料中未见近三年业绩要求，需补充核对。'
+    assert not guard_chapter_content({'plain_text':gap},request())[2]
+    contradiction = '本次资料未见近三年业绩要求，但类似业绩需提供近三年合同。'
+    assert guard_chapter_content({'plain_text':contradiction},request())[2]

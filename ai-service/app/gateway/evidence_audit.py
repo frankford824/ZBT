@@ -145,6 +145,15 @@ def source_catalog(payload: ChapterGenerateRequest) -> dict[str, dict]:
     return sources
 
 
+def grounded_requirements(payload: ChapterGenerateRequest) -> list[dict]:
+    """Keep unverified drafting hints out of writer AND reviewer context.
+
+    Older parser records may contain generic default promises. Telling a model
+    to ignore them is insufficient: do not send them to the model at all.
+    """
+    return [ref.model_dump(exclude={'expected_response', 'status'}) for ref in payload.requirement_refs]
+
+
 def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
     return json.dumps(
         {
@@ -220,7 +229,7 @@ def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
             },
             "paragraphs": [{"index": i, "text": text} for i, text in enumerate(paragraphs(result))],
             "sources": source_catalog(payload),
-            "requirement_refs": [r.model_dump() for r in payload.requirement_refs],
+            "requirement_refs": grounded_requirements(payload),
         },
         ensure_ascii=False,
     )

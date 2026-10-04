@@ -22,6 +22,7 @@ _CATEGORIES = {
     "投标报价": r"投标报价|我方报价|报价金额|投标总价|报价总价",
     "交付工期": r"交付周期|交付期限|交付|施工工期|总工期|工期|履约期限",
 }
+_OTHER_NUMERIC_CONTEXT = r"预算|最高(?:投标)?限价|招标控制价|截止(?:时间|日期)?|开标(?:时间|日期)?|项目编号"
 _OWNERSHIP = re.compile(_SUBJECT + r".{0,12}?(?:拥有|具有|具备|持有|取得|已获|曾|已完成|已承接|已承担|积累|承诺(?:已)?(?:满足|符合))")
 _HISTORY_PROMISE = re.compile(_SUBJECT + r".{0,12}(?:将|拟)?提供.{0,24}(?:近.{0,4}年|承接|完成|承担).{0,24}(?:业绩|项目|工程)")
 _CERT_ASSERTION = re.compile(_SUBJECT + r"(?:.{0,8}(?:承诺|保证).{0,15}(?:许可证|证书|资质).{0,15}(?:有效|符合|满足)|.{0,6}(?:安全生产许可证|资格证书|资质证书|资质).{0,16}(?:在有效期内|有效期为|有效至|符合|满足))")
@@ -37,6 +38,11 @@ _CALENDAR_LABELS = {
 }
 _COPY_DETAIL = re.compile(r"(?:正本|副本|电子版|书面版)\s*" + _NUMBER + r"\s*份|" + _NUMBER + r"正" + _NUMBER + r"副|U\s*盘", re.IGNORECASE)
 _BOQ_ASSERTION = re.compile(r"招标文件(?:中|的).{0,6}工程量清单")
+_ANNEX_LIST = re.compile(r"(?:按|按照|依据|根据)(?:招标文件|原文|附件).{0,14}(?:格式|要求).{0,18}(?:准备|编制|提交|提供)|(?:附件格式|招标文件附件)(?:为|包括|包含|要求|[：:])")
+_ANNEX_NAMES = re.compile(r"投标函|承诺函|工程量清单|清单文件|授权委托书|报价表")
+_SCORING_DETAILS = re.compile(r"(?:评分点|评分细则|评审细则|评分标准)(?:包括(?:但不限于)?|包含|为|[：:])[：:]?(.*)")
+_EXPERIENCE_WINDOW = re.compile(r"(?:近|最近|过去)" + _NUMBER + r"\s*年")
+_EXPERIENCE_CONTEXT = re.compile(r"业绩|同类项目|类似项目|同类工程|类似工程")
 _UNRESOLVED = re.compile(r"[\[【（(](?:待澄清|待填写|待补充|待确认|待核实)[\]】）)]")
 _UNRESOLVED_NUMBER = re.compile(r"x{2,}\s*(?:日历天|工作日|小时|分钟|个月|万元|亿元|天|日|月|年|元)", re.IGNORECASE)
 _OPENING_AS_SUBMISSION_LIMIT = re.compile(
@@ -69,6 +75,9 @@ def _numeric_pairs(text: str, category: str) -> set[str]:
     pairs: set[str] = set()
     numbers = _AMOUNT if category == "投标报价" else _DURATION
     labels = [(kind, match) for kind, pattern in _CATEGORIES.items() for match in re.finditer(pattern, text)]
+    # A nearby budget/date label must prevent its number being borrowed by a
+    # preceding duration or following bid-price phrase in the same sentence.
+    labels.extend(('other', match) for match in re.finditer(_OTHER_NUMERIC_CONTEXT, text))
     for number in numbers.finditer(text):
         preceding = [(kind, label) for kind, label in labels if 0 <= number.start() - label.end() <= 22]
         following = [(kind, label) for kind, label in labels if 0 <= label.start() - number.end() <= 10]
@@ -137,6 +146,26 @@ def guard_chapter_content(result: dict[str, object], payload: ChapterGenerateReq
                 kinds.append("递交份数或介质")
             if _BOQ_ASSERTION.search(clause) and not any("工程量清单" in source for source in tender_sources):
                 kinds.append("原文附件")
+            annex = _ANNEX_LIST.search(clause)
+            if annex and any(not any(name in source for source in tender_sources)
+                             for name in _ANNEX_NAMES.findall(clause[annex.start():])):
+                kinds.append("原文附件")
+            scoring = _SCORING_DETAILS.search(clause)
+            if scoring:
+                details = [part.strip('：:。等 ') for part in re.split(r'[、，,；;]', scoring.group(1))]
+                if any(part and not any(_normalized(part) in _normalized(source) for source in tender_sources)
+                       for part in details):
+                    kinds.append("评分细则")
+            if _EXPERIENCE_CONTEXT.search(clause) and re.search(r"需|须|应|要求|提供", clause):
+                for window in _EXPERIENCE_WINDOW.finditer(clause):
+                    if re.search(r"(?:本次(?:提供)?资料(?:中)?|所给资料).{0,6}(?:未见|未提供|未明确)[^，,。；;]{0,8}$",
+                                 clause[:window.start()]):
+                        continue
+                    if not any(_normalized(window.group()) in _normalized(source_clause)
+                               and _EXPERIENCE_CONTEXT.search(source_clause)
+                               for source in tender_sources for source_clause in _CLAUSE_SPLIT.split(source)):
+                        kinds.append("业绩年限")
+                        break
             for category in _CATEGORIES:
                 pairs = _numeric_pairs(clause, category)
                 if pairs - supported[category]:

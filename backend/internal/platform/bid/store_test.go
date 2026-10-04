@@ -826,6 +826,7 @@ func TestTenderRequirementTextsKeepsCoverageInstruction(t *testing.T) {
 		{
 			Module:           "qualification",
 			Requirement:      "提供企业资质证书",
+			SourceText:       "提供企业资质证书",
 			ExpectedResponse: "附证书编号和有效期",
 		},
 	})
@@ -833,11 +834,20 @@ func TestTenderRequirementTextsKeepsCoverageInstruction(t *testing.T) {
 	if len(texts) != 3 {
 		t.Fatalf("expected requirement plus two guardrails, got %#v", texts)
 	}
-	if !strings.Contains(texts[0], "资格要求：提供企业资质证书") || !strings.Contains(texts[0], "响应要点：附证书编号和有效期") {
+	if !strings.Contains(texts[0], "资格要求：提供企业资质证书") || strings.Contains(texts[0], "附证书编号和有效期") {
 		t.Fatalf("expected labeled requirement text, got %#v", texts)
 	}
 	if !strings.Contains(texts[2], "逐条完成自检") {
 		t.Fatalf("expected self-check guardrail, got %#v", texts)
+	}
+}
+
+func TestTenderRequirementTextsDoesNotPromoteUnsourcedSummary(t *testing.T) {
+	texts := tenderRequirementTexts([]tenderRequirementRef{{
+		Requirement: "UNVERIFIED-未核实资质要求", ExpectedResponse: "UNVERIFIED-提供证书",
+	}})
+	if len(texts) != 2 || strings.Contains(strings.Join(texts, "\n"), "UNVERIFIED") {
+		t.Fatalf("unsourced summaries must not become tender facts: %#v", texts)
 	}
 }
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.gateway.evidence_audit import review as review_evidence
-from app.gateway.evidence_audit import apply_targeted_repair, repair_scope
+from app.gateway.evidence_audit import apply_targeted_repair, grounded_requirements, repair_scope
 from app.gateway.factual_guard import guard_chapter_content
 from app.schemas.common import SourceRef
 from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
@@ -797,12 +797,12 @@ def _parse_rank_index(value: object, document_count: int) -> int | None:
 
 def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
     refs = [ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]]
-    requirement_refs = [ref.model_dump() for ref in payload.requirement_refs]
+    requirement_refs = grounded_requirements(payload)
     return json.dumps(
         {
             "chapter_title": payload.chapter_title,
             "project_context": payload.project_context,
-            "tender_requirements": payload.tender_requirements,
+            "tender_requirements": [ref.source_text for ref in payload.requirement_refs if ref.source_text.strip()],
             "requirement_refs": requirement_refs,
             "selected_knowledge_refs": payload.selected_knowledge_refs,
             "retrieved_knowledge_refs": refs,
@@ -853,8 +853,8 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
             "current_plain_text": payload.current_plain_text,
             "project_context": payload.project_context,
             "current_tiptap_json": payload.current_tiptap_json,
-            "tender_requirements": payload.tender_requirements,
-            "requirement_refs": [ref.model_dump() for ref in payload.requirement_refs],
+            "tender_requirements": [ref.source_text for ref in payload.requirement_refs if ref.source_text.strip()],
+            "requirement_refs": grounded_requirements(payload),
             "retrieved_knowledge_refs": [
                 ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]
             ],

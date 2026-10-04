@@ -53,6 +53,9 @@ def cases():
     yield "honest_enterprise_evidence_gap", payload, good + "\n需由企业提供真实证明，经核验后决定是否具备投标条件。", True
     yield "conditional_site_risk", payload, good + "\n需现场核验的可能风险包括地下管线复杂、场地受限；仅作拟议风险清单，不代表现场事实。", True
     yield "invented_site_condition", payload, good + "\n招标文件明确现场地下管线复杂，场地狭窄。", False
+    yield "invented_scoring_details", payload, good + "\n技术方案评分点包括施工方案合理性、进度计划可行性、应急预案。", False
+    yield "invented_annex_requirements", payload, good + "\n投标文件将按招标文件附件格式准备投标函、报价表、承诺函和清单文件。", False
+    yield "optional_default_experience_window", payload, good + "\n类似业绩需提供近三年（或招标文件要求的年限）的同类项目合同或验收证明。", False
     yield (
         "missing_score",
         payload,
