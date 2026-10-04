@@ -53,6 +53,28 @@ def test_exact_quote_and_entire_current_body_are_bound():
     assert audit["paragraphs"][1]["evidence"][0]["quote"] == "技术方案40分。"
 
 
+def test_requirement_paragraph_reference_uses_actual_body_not_model_transcription():
+    payload, result, raw = fixture()
+    raw['requirements'][0].update(paragraph_index=1, evidence='技术...40分')
+    audit=validate_audit(raw,result,payload)
+    assert audit['status']=='pass'
+    assert audit['requirement_coverage'][0]['evidence']=='技术方案40分。'
+
+
+@pytest.mark.parametrize('index', [-1, 2, True, None, '1'])
+def test_invalid_requirement_paragraph_reference_cannot_pass(index):
+    payload, result, raw = fixture()
+    raw['requirements'][0]['paragraph_index']=index
+    assert validate_audit(raw,result,payload)['status']=='needs_review'
+
+
+def test_heading_reference_is_not_requirement_response_evidence():
+    payload, result, raw = fixture()
+    raw['paragraphs'][0]['kind']='heading'
+    raw['requirements'][0]['paragraph_index']=0
+    assert validate_audit(raw,result,payload)['status']=='needs_review'
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["missing_paragraph", "duplicate_index", "missing_requirement", "unknown_requirement"],
