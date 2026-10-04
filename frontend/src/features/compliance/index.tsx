@@ -73,14 +73,14 @@ const severityOptions: Array<{ label: string; value: ComplianceSeverity }> = [
   { label: '通过', value: 'pass' },
   { label: '警告', value: 'warn' },
   { label: '待人工确认', value: 'fail_candidate' },
-  { label: '废标项', value: 'fail' },
+  { label: '阻断项', value: 'fail' },
 ]
 
 const severityLabels: Record<string, string> = {
   pass: '通过',
   warn: '警告',
   fail_candidate: '待确认',
-  fail: '废标项',
+  fail: '阻断项',
 }
 
 const statusLabels: Record<string, string> = {
@@ -95,10 +95,10 @@ const statusLabels: Record<string, string> = {
 }
 
 const verdictText: Record<string, string> = {
-  pass: '可以提交，未发现废标风险',
+  pass: '本轮已配置检查通过；仍需人工核对原文、企业证明和投标条件',
   warn: '可以提交，但有警告项建议先处理',
   fail_candidate: '存在待人工确认的风险项，确认前不建议提交',
-  fail: '存在废标项，必须修复后再提交',
+  fail: '存在阻断项，须补齐事实复核或处理问题后重新检查；不等同于已判定废标',
 }
 
 function verdictColor(result: string) {
@@ -518,7 +518,7 @@ export function ComplianceDetailPage() {
       scroll={{ x: 960 }}
       columns={[
         { title: '问题', dataIndex: 'title', width: 220, ellipsis: true },
-        { title: '分类', dataIndex: 'category', width: 110 },
+        { title: '分类', dataIndex: 'category', width: 110, render: (category: string) => category === 'source_evidence' ? '事实依据' : category },
         { title: '严重度', dataIndex: 'severity', width: 96, render: severityTag },
         { title: '状态', dataIndex: 'status', width: 96, render: statusTag },
         {
@@ -629,7 +629,7 @@ export function ComplianceDetailPage() {
         </div>
         <div className="severity-strip">
           <span className="severity-pill fail">
-            <span className="data-mono">{severityCounts.fail ?? 0}</span>废标项
+            <span className="data-mono">{severityCounts.fail ?? 0}</span>阻断项
           </span>
           <span className="severity-pill pending">
             <span className="data-mono">{severityCounts.fail_candidate ?? 0}</span>待确认
@@ -651,7 +651,7 @@ export function ComplianceDetailPage() {
       <Tabs
         items={categories.map((category) => ({
           key: category,
-          label: category,
+          label: category === 'source_evidence' ? '事实依据' : category,
           children: renderIssueTable(category === '全部' ? issueRows : issueRows.filter((issue) => issue.category === category)),
         }))}
       />
