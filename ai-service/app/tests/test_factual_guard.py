@@ -59,6 +59,12 @@ def test_double_negation_is_not_a_withheld_claim():
     assert guard_chapter_content({'plain_text':'我方并非不具备一级资质。'},request())[2]
 
 
+@pytest.mark.parametrize('prefix', ['不预设已', '未确认已', '不能保证已经', '无法认定已', '尚未确认', '未声称'])
+def test_explicitly_unconfirmed_capability_is_not_a_positive_claim(prefix):
+    assert not guard_chapter_content({'plain_text':'我方'+prefix+'具备该资质，需核验真实证明。'},request())[2]
+    assert guard_chapter_content({'plain_text':'我方'+prefix+'具备该资质，但我方具有一级资质。'},request())[2]
+
+
 def test_budget_is_not_supplier_bid_price_and_tender_qualification_not_company_ownership():
     payload = request(project_context={"project_budget": "128万元"}, requirement_refs=[
         TenderRequirementRef(id="r", requirement="资格", source_text="须具备三级资质")])

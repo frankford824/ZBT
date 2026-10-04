@@ -51,6 +51,8 @@ def cases():
     yield "invented_enterprise", payload, good + "\n我方已拥有一级施工资质及两名一级建造师。", False
     yield "promised_unverified_certificate", payload, good + "\n我方将提供有效的安全生产许可证复印件。", False
     yield "honest_enterprise_evidence_gap", payload, good + "\n需由企业提供真实证明，经核验后决定是否具备投标条件。", True
+    yield "conditional_site_risk", payload, good + "\n需现场核验的可能风险包括地下管线复杂、场地受限；仅作拟议风险清单，不代表现场事实。", True
+    yield "invented_site_condition", payload, good + "\n招标文件明确现场地下管线复杂，场地狭窄。", False
     yield (
         "missing_score",
         payload,

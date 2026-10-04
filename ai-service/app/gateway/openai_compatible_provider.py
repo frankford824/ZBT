@@ -825,6 +825,7 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
                 "If scope details are absent, describe a proposed approach and explicitly leave the scope for clarification."
                 " Express missing inputs as 本次提供资料未见...，需补充核对, never assert the entire tender lacks a condition. "
                 "Do not assert drawings or an engineering quantities attachment exist unless actually provided."
+                " Site risks not in the sources must be explicitly conditional: 需现场核验的可能风险...，仅作拟议风险清单，不代表现场事实. "
                 " For 项目理解 or 项目概况 chapters, include a concise cross-document response summary for EVERY supplied "
                 "mandatory or scored requirement, including disqualification risks; do not omit these as another chapter's job."
             ),
