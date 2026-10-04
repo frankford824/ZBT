@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 
 from app.gateway.factual_guard import guard_chapter_content
 from app.schemas.generation import ChapterGenerateRequest
@@ -20,6 +21,63 @@ def compact(text: str) -> str:
 
 def content_hash(text: str) -> str:
     return hashlib.sha256(compact(text).encode()).hexdigest()
+
+
+def repair_scope(audit: dict) -> tuple[set[int], list[dict]]:
+    issues = audit.get('deterministic_issues', [])
+    indexes = {p['index'] for p in audit['paragraphs'] if p['status'] != 'supported'
+               or any(issue.get('original_text') and issue['original_text'] in p['text'] for issue in issues)}
+    return indexes, [r for r in audit['requirement_coverage'] if r['status'] == 'missing']
+
+
+def apply_targeted_repair(result: dict, audit: dict, patch: dict) -> dict:
+    """Only permit changes to rejected paragraphs; preserve all other nodes."""
+    allowed, missing = repair_scope(audit)
+    replacements = patch.get('replacements', [])
+    additions = patch.get('append_paragraphs', [])
+    if not isinstance(replacements, list) or not isinstance(additions, list):
+        raise ValueError('invalid evidence repair shape')
+    if len(additions) > min(10, len(missing)):
+        raise ValueError('repair may only append missing requirement responses')
+    changes = {}
+    for row in replacements:
+        if (not isinstance(row, dict) or type(row.get('index')) is not int
+                or row['index'] not in allowed or row['index'] in changes):
+            raise ValueError('repair tried to alter an approved paragraph')
+        text = row.get('text')
+        if not isinstance(text, str) or not text.strip() or len(text) > 8000:
+            raise ValueError('invalid replacement paragraph')
+        changes[row['index']] = text.strip()
+    if any(not isinstance(text, str) or not text.strip() or len(text) > 8000 for text in additions):
+        raise ValueError('invalid additional paragraph')
+    updated = deepcopy(result)
+    nodes = []
+
+    def visit(node):
+        if not isinstance(node, dict):
+            return
+        if node.get('type') in ('paragraph', 'heading', 'codeBlock'):
+            try:
+                paragraphs({'tiptap_json': {'type':'doc', 'content':[node]}})
+                nodes.append(node)
+            except ValueError:
+                pass  # Empty paragraphs are not part of the review index.
+        else:
+            for child in node.get('content', []):
+                visit(child)
+
+    visit(updated.get('tiptap_json'))
+    if not nodes:
+        nodes = [{'type':'paragraph', 'content':[{'type':'text','text':text}]} for text in paragraphs(result)]
+        updated['tiptap_json'] = {'type':'doc','content':nodes}
+    for index, text in changes.items():
+        nodes[index]['content'] = [{'type':'text','text':text}]
+    updated['tiptap_json']['content'].extend(
+        {'type':'paragraph','content':[{'type':'text','text':text.strip()}]} for text in additions)
+    updated['plain_text'] = '\n'.join(paragraphs(updated))
+    if isinstance(updated.get('content'), str):
+        updated['content'] = updated['plain_text']
+    return updated
 
 
 def paragraphs(result: dict) -> list[str]:
@@ -113,6 +171,8 @@ def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
                 "Every evidence object MUST contain nonempty string keys source_id and quote. Empty objects {} are INVALID. "
                 "any unsupported claim makes the whole paragraph unsupported. Enterprise ownership requires enterprise evidence. "
                 "Headings and genuinely proposed measures need no factual citation. Missing evidence is unsupported, not pass. "
+                "A chapter preview listing categories represented by the supplied requirements is organizational framing, "
+                "not a claim that requires one single source quotation. Supported synthesis may combine multiple supplied sources. "
                 "The sources catalog is the ONLY available evidence, not the complete tender. Never invent that the tender "
                 "contains scope, drawings, quantities or warranty terms absent from this catalog. A statement limited to "
                 "the supplied materials (本次提供资料未见...) or a request to clarify missing inputs is an input-gap disclosure, "

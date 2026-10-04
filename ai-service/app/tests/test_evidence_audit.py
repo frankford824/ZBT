@@ -2,7 +2,7 @@ import copy
 
 import pytest
 
-from app.gateway.evidence_audit import content_hash, validate_audit
+from app.gateway.evidence_audit import apply_targeted_repair, content_hash, validate_audit
 from app.schemas.generation import ChapterGenerateRequest, TenderRequirementRef
 
 
@@ -73,6 +73,39 @@ def test_heading_reference_is_not_requirement_response_evidence():
     raw['paragraphs'][0]['kind']='heading'
     raw['requirements'][0]['paragraph_index']=0
     assert validate_audit(raw,result,payload)['status']=='needs_review'
+
+
+def test_targeted_repair_preserves_approved_paragraph_and_formatting():
+    payload, result, raw = fixture()
+    result['tiptap_json']={'type':'doc','content':[
+        {'type':'paragraph','content':[{'type':'text','text':line,'marks':[{'type':'bold'}]}]}
+        for line in result['plain_text'].splitlines()]}
+    raw['paragraphs'][0]['status']='unsupported'
+    audit=validate_audit(raw,result,payload)
+    saved=copy.deepcopy(result)
+    repaired=apply_targeted_repair(result,audit,{'replacements':[{'index':0,'text':'投标截止为2026-11-15 09:30。'}]})
+    assert result==saved
+    assert repaired['tiptap_json']['content'][1]==saved['tiptap_json']['content'][1]
+    assert repaired['tiptap_json']['content'][0]['content'][0]['text']=='投标截止为2026-11-15 09:30。'
+
+
+def test_repair_cannot_change_good_paragraph_or_append_unrequested_content():
+    payload,result,raw=fixture()
+    raw['paragraphs'][0]['status']='unsupported'
+    audit=validate_audit(raw,result,payload)
+    with pytest.raises(ValueError):
+        apply_targeted_repair(result,audit,{'replacements':[{'index':1,'text':'错误改写'}]})
+    with pytest.raises(ValueError):
+        apply_targeted_repair(result,audit,{'append_paragraphs':['未请求内容']})
+
+
+def test_repair_can_append_a_missing_response_without_rewriting_body():
+    payload,result,raw=fixture()
+    raw['requirements'][0]['status']='missing'
+    audit=validate_audit(raw,result,payload)
+    repaired=apply_targeted_repair(result,audit,{'append_paragraphs':['拟按评分要求编制技术方案。']})
+    assert repaired['plain_text'].startswith(result['plain_text'])
+    assert repaired['plain_text'].endswith('拟按评分要求编制技术方案。')
 
 
 @pytest.mark.parametrize(

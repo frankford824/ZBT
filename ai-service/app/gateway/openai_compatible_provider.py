@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.gateway.evidence_audit import review as review_evidence
+from app.gateway.evidence_audit import apply_targeted_repair, repair_scope
 from app.gateway.factual_guard import guard_chapter_content
 from app.schemas.common import SourceRef
 from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
@@ -203,17 +204,26 @@ class OpenAICompatibleProvider:
         audit = review_evidence(reviewer, result, payload)
         review_usage = dict(audit['estimated_token_usage'])
         review_calls = 1
-        if audit['status'] != 'pass' and allow_repair:
+        for _ in range(2 if allow_repair else 0):
+            if audit['status'] == 'pass':
+                break
+            allowed, missing = repair_scope(audit)
             repair_prompt = json.dumps({
                 'original_request': json.loads(_chapter_prompt(payload)),
                 'draft': result, 'independent_review': audit,
-                'instruction': 'Repair the unsupported claims and missing applicable responses. Preserve all sourced requirements. '
-                'Remove invented mandatory requirements and ownership claims; use clearly proposed measures where appropriate. '
-                'Do not hide gaps by declaring all requirements not applicable. Return the original ChapterGenerateResponse schema.'
+                'allowed_paragraph_indices': sorted(allowed), 'missing_requirements': missing,
+                'instruction': 'Return ONLY JSON {replacements:[{index,text}],append_paragraphs:[text]}. '
+                'Repair rejected paragraphs ONLY, using their exact allowed index; do NOT regenerate the entire chapter. '
+                'Keep sourced facts, remove unsupported claims, and explicitly disclose missing enterprise evidence. '
+                'Never promise to provide owned qualifications or past achievements without supplied proof. '
+                'Append at most one concise response paragraph per missing requirement; otherwise append nothing. '
+                'A drafting hint is not a source. Do not introduce new time windows, requirements or numeric commitments. '
+                'Preserve each supplied factual requirement; hypothetical plans must be clearly conditional.'
             }, ensure_ascii=False)
-            result = self.generate_json(repair_prompt, 'ChapterGenerateResponse')
+            patch = self.generate_json(repair_prompt, 'EvidenceRepairPatch')
+            result = apply_targeted_repair(result, audit, patch)
             review_usage['input_tokens'] += max(1, len(repair_prompt)//4)
-            review_usage['output_tokens'] += max(1, len(json.dumps(result,ensure_ascii=False))//4)
+            review_usage['output_tokens'] += max(1, len(json.dumps(patch,ensure_ascii=False))//4)
             audit = review_evidence(reviewer, result, payload)
             review_calls += 1
             for key, value in audit['estimated_token_usage'].items(): review_usage[key] += value

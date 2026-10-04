@@ -59,7 +59,7 @@ def test_double_negation_is_not_a_withheld_claim():
     assert guard_chapter_content({'plain_text':'我方并非不具备一级资质。'},request())[2]
 
 
-@pytest.mark.parametrize('prefix', ['不预设已', '未确认已', '不能保证已经', '无法认定已', '尚未确认', '未声称'])
+@pytest.mark.parametrize('prefix', ['不预设已', '未确认已', '不能保证已经', '无法认定已', '尚未确认', '未声称', '目前未', '在核验前不预设已'])
 def test_explicitly_unconfirmed_capability_is_not_a_positive_claim(prefix):
     assert not guard_chapter_content({'plain_text':'我方'+prefix+'具备该资质，需核验真实证明。'},request())[2]
     assert guard_chapter_content({'plain_text':'我方'+prefix+'具备该资质，但我方具有一级资质。'},request())[2]
