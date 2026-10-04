@@ -153,6 +153,8 @@ def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
                 "Return JSON {paragraphs:[{index,kind,status,reason,evidence:[{source_id,quote}]}],"
                 "requirements:[{requirement_id,status,paragraph_index}]}. Review EVERY paragraph index exactly once. "
                 "kind is tender_fact, enterprise_fact, proposal, mixed, or heading. status is supported or unsupported. "
+                "mixed means a paragraph containing BOTH factual assertions and proposals. A paragraph combining only "
+                "prospective plans, input-gap disclosures and conditional risks is proposal, NOT mixed. "
                 "Check dates, deadlines versus opening time, prices, scoring, qualification levels, experience years, "
                 "personnel and certificate ownership, and negative assertions that a requirement is absent. "
                 "Tender requirements are NOT evidence that this enterprise meets them. Never treat a generic license "
@@ -178,6 +180,11 @@ def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
                 "contains scope, drawings, quantities or warranty terms absent from this catalog. A statement limited to "
                 "the supplied materials (本次提供资料未见...) or a request to clarify missing inputs is an input-gap disclosure, "
                 "not an unsupported claim of enterprise ownership; classify it as proposal if consistent with this catalog. "
+                "For example 本次提供资料未见企业资质证书 describes the provided evidence set, NOT whether the enterprise "
+                "actually possesses a certificate. Do not demand an enterprise certificate to prove that no certificate "
+                "was provided in this input. Contrast 我方没有资质证书, an assertion about the enterprise itself. "
+                "If a paragraph combines a quoted tender qualification with an input-gap disclosure, classify mixed "
+                "and cite the tender qualification; the input-gap clause requires no additional enterprise citation. "
                 "An absolute assertion about the entire tender (招标文件未要求...) still needs support. "
                 "For each requirement_ref, status is covered, missing, or not_applicable. For covered, paragraph_index must "
                 "be the integer index of the supplied draft paragraph that actually responds to that requirement. "
@@ -249,6 +256,7 @@ def validate_audit(raw: dict, result: dict, payload: ChapterGenerateRequest) -> 
             raise ValueError("invalid evidence verdict")
         verified = []
         rejected = False
+        validation_errors = []
         refs = row.get("evidence", [])
         if not isinstance(refs, list) or len(refs) > 30:
             raise ValueError("invalid evidence references")
@@ -262,6 +270,7 @@ def validate_audit(raw: dict, result: dict, payload: ChapterGenerateRequest) -> 
                 or compact(quote) not in compact(source["text"])
             ):
                 rejected = True
+                validation_errors.append('来源编号或原句无法在所给来源中核验')
                 continue
             verified.append(
                 {
@@ -271,17 +280,21 @@ def validate_audit(raw: dict, result: dict, payload: ChapterGenerateRequest) -> 
                     "source_sha256": content_hash(source["text"]),
                 }
             )
-        if rejected or (kind in ("tender_fact", "enterprise_fact", "mixed") and not verified):
+        if kind in ("tender_fact", "enterprise_fact", "mixed") and not verified:
+            validation_errors.append('复核标注为事实或混合段落，却未提供有效来源；纯拟议方案和资料缺口应标为 proposal')
+        if rejected or validation_errors:
             status = "unsupported"
         if kind == "enterprise_fact" and not any(ref["kind"] == "enterprise" for ref in verified):
             status = "unsupported"
+            validation_errors.append('企业事实必须有企业资料依据，不能引用招标要求代替')
         reviewed.append(
             {
                 "index": index,
                 "text": blocks[index],
                 "kind": kind,
                 "status": status,
-                "reason": str(row.get("reason", ""))[:500],
+                "reason": ('；'.join([str(row.get("reason", "")), *validation_errors]))[:800],
+                "validation_errors": validation_errors,
                 "evidence": verified,
             }
         )
@@ -402,6 +415,33 @@ def review(provider, result: dict, payload: ChapterGenerateRequest) -> dict:
         raw['paragraphs'].extend(response['paragraphs'])
         raw['requirements'].extend(response['requirements'])
     audit = validate_audit(raw, result, payload)
+    invalid = [row for row in audit['paragraphs'] if row['validation_errors']]
+    if 0 < len(invalid) <= 8:
+        # Repair the review contract, not the body, once. Do not reinterpret an
+        # unsupported verdict locally or turn missing evidence into a pass.
+        retry = deepcopy(data)
+        indices = {row['index'] for row in invalid}
+        retry['paragraphs'] = [row for row in data['paragraphs'] if row['index'] in indices]
+        retry['requirement_refs'] = []
+        retry['output_example_shape']['requirements'] = []
+        retry['output_example_shape']['paragraphs'][0]['index'] = min(indices)
+        retry['previous_review_validation_errors'] = invalid
+        retry['instruction'] += (' Re-evaluate ONLY these supplied original paragraph indexes. The previous review had invalid '
+                                 'citations or inconsistent kind classification. Return requirements:[] and all supplied indexes. '
+                                 'If the paragraph is purely proposal/input-gap, classify proposal; if it asserts facts, supply '
+                                 'real exact citations or mark unsupported. Do not force a pass and do not rewrite the body.')
+        retry_prompt = json.dumps(retry,ensure_ascii=False)
+        corrected = provider.generate_json(retry_prompt,'EvidenceAudit')
+        if (not isinstance(corrected,dict) or corrected.get('requirements') != []
+                or not isinstance(corrected.get('paragraphs'),list)
+                or len(corrected['paragraphs']) != len(indices)
+                or any(not isinstance(row,dict) or type(row.get('index')) is not int for row in corrected['paragraphs'])
+                or {row['index'] for row in corrected['paragraphs']} != indices):
+            raise ValueError('invalid corrective evidence review')
+        raw['paragraphs'] = [row for row in raw['paragraphs'] if row['index'] not in indices] + corrected['paragraphs']
+        requests.append(retry_prompt)
+        responses.append(corrected)
+        audit = validate_audit(raw,result,payload)
     # Semantic review supplements, never overrides, deterministic numeric and
     # ownership controls. Inspect only: self-check must not rewrite the draft.
     _, _, issues = guard_chapter_content(result, payload)

@@ -155,6 +155,40 @@ def test_long_review_keeps_sources_and_separately_checks_all_requirements():
     assert audit['requirement_coverage'][0]['evidence']=='技术方案40分。'
 
 
+@pytest.mark.parametrize('body,expected', [('拟进行现场条件核验。','pass'),('我方已拥有一级施工资质。','needs_review')])
+def test_review_contract_retry_does_not_rewrite_or_override_factual_guards(body,expected):
+    from app.gateway.evidence_audit import review
+    payload,_,_=fixture()
+    payload.requirement_refs=[]
+    source={'plain_text':body}
+    class Reviewer:
+        calls=0
+        def generate_json(self,prompt,schema):
+            self.calls+=1
+            correction='previous_review_validation_errors' in json.loads(prompt)
+            return {'paragraphs':[{'index':0,'kind':'proposal' if correction else 'mixed','status':'supported','evidence':[]}], 'requirements':[]}
+    provider=Reviewer()
+    audit=review(provider,source,payload)
+    assert audit['status']==expected and provider.calls==2
+    assert source=={'plain_text':body}
+
+
+def test_bad_review_citations_stay_rejected_after_one_contract_retry():
+    from app.gateway.evidence_audit import review
+    payload,result,raw=fixture()
+    raw['paragraphs'][0]['evidence'][0]['quote']='伪造的来源内容'
+    class Reviewer:
+        calls=0
+        def generate_json(self,prompt,schema):
+            self.calls+=1
+            if 'previous_review_validation_errors' in json.loads(prompt):
+                return {'paragraphs':[raw['paragraphs'][0]],'requirements':[]}
+            return raw
+    provider=Reviewer()
+    assert review(provider,result,payload)['status']=='needs_review'
+    assert provider.calls==2
+
+
 @pytest.mark.parametrize(
     "mutation",
     ["missing_paragraph", "duplicate_index", "missing_requirement", "unknown_requirement"],
