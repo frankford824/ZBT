@@ -203,7 +203,7 @@ class OpenAICompatibleProvider:
         reviewer = getattr(self, 'evidence_reviewer', self)
         audit = review_evidence(reviewer, result, payload)
         review_usage = dict(audit['estimated_token_usage'])
-        review_calls = 1
+        review_calls = audit.get('review_request_count', 1)
         for _ in range(2 if allow_repair else 0):
             if audit['status'] == 'pass':
                 break
@@ -225,7 +225,7 @@ class OpenAICompatibleProvider:
             review_usage['input_tokens'] += max(1, len(repair_prompt)//4)
             review_usage['output_tokens'] += max(1, len(json.dumps(patch,ensure_ascii=False))//4)
             audit = review_evidence(reviewer, result, payload)
-            review_calls += 1
+            review_calls += audit.get('review_request_count', 1)
             for key, value in audit['estimated_token_usage'].items(): review_usage[key] += value
         response = _chapter_response_from_json(result, payload, self.name, self._model(), apply_guard=allow_repair)
         # Deterministic guard may replace text. Invalidate the earlier audit;

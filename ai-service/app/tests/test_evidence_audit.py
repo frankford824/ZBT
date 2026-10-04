@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -51,6 +52,12 @@ def test_exact_quote_and_entire_current_body_are_bound():
     assert audit["content_sha256"] == content_hash(result["plain_text"])
     assert audit["source_revision"] == payload.source_revision
     assert audit["paragraphs"][1]["evidence"][0]["quote"] == "技术方案40分。"
+
+
+def test_reviewer_order_cannot_make_current_evidence_look_stale():
+    payload,result,raw=fixture()
+    raw['paragraphs'].reverse()
+    assert [row['index'] for row in validate_audit(raw,result,payload)['paragraphs']]==[0,1]
 
 
 def test_requirement_paragraph_reference_uses_actual_body_not_model_transcription():
@@ -106,6 +113,46 @@ def test_repair_can_append_a_missing_response_without_rewriting_body():
     repaired=apply_targeted_repair(result,audit,{'append_paragraphs':['拟按评分要求编制技术方案。']})
     assert repaired['plain_text'].startswith(result['plain_text'])
     assert repaired['plain_text'].endswith('拟按评分要求编制技术方案。')
+
+
+@pytest.mark.parametrize('omit', [False, True])
+def test_long_review_batches_preserve_global_indexes_and_fail_on_missing_rows(omit):
+    from app.gateway.evidence_audit import review
+    payload,_,_=fixture()
+    payload.requirement_refs=[]
+    result={'plain_text':'\n'.join(f'拟核验现场条件，计划步骤{index}。' for index in range(20))}
+    class Reviewer:
+        def generate_json(self,prompt,schema):
+            batch=json.loads(prompt)
+            assert len(batch['paragraphs'])<=8
+            return {'paragraphs':[{'index':row['index'],'kind':'proposal','status':'supported','evidence':[]}
+                                  for row in batch['paragraphs'] if not (omit and row['index']==12)],'requirements':[]}
+    if omit:
+        with pytest.raises(ValueError):
+            review(Reviewer(),result,payload)
+    else:
+        audit=review(Reviewer(),result,payload)
+        assert audit['status']=='pass'
+        assert [p['index'] for p in audit['paragraphs']]==list(range(20))
+        assert audit['review_request_count']==3
+
+
+def test_long_review_keeps_sources_and_separately_checks_all_requirements():
+    from app.gateway.evidence_audit import review
+    payload,_,_=fixture()
+    lines=['拟核验现场条件。']*20
+    lines[15]='技术方案40分。'
+    class Reviewer:
+        def generate_json(self,prompt,schema):
+            data=json.loads(prompt)
+            assert 'requirement:r1' in data['sources']
+            if data['requirement_refs']:
+                return {'paragraphs':[],'requirements':[{'requirement_id':'r1','status':'covered','paragraph_index':15}]}
+            return {'paragraphs':[{'index':r['index'],'kind':'proposal','status':'supported','evidence':[]}
+                                  for r in data['paragraphs']],'requirements':[]}
+    audit=review(Reviewer(),{'plain_text':'\n'.join(lines)},payload)
+    assert audit['status']=='pass' and audit['review_request_count']==4
+    assert audit['requirement_coverage'][0]['evidence']=='技术方案40分。'
 
 
 @pytest.mark.parametrize(
