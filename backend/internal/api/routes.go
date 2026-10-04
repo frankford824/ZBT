@@ -3191,7 +3191,7 @@ func respondStatus(c *gin.Context, status int, payload any, err error) {
 		return
 	}
 	if errors.Is(err, factualreview.ErrRequired) {
-		c.JSON(http.StatusConflict, apiError("factual_review_required", "正文仍有事实待核实提示，请补充依据并编辑确认后再定稿、导出或提交审批"))
+		c.JSON(http.StatusConflict, apiError("factual_review_required", "当前正文或招标文件缺少有效事实复核，请核对来源、补齐强制及评分要求，保存后重新自检和合规检查，再定稿、导出或提交审批"))
 		return
 	}
 	if errors.Is(err, platformapproval.ErrNotReady) {

@@ -555,7 +555,7 @@ export function ComplianceDetailPage() {
                 <Button
                   size="small"
                   icon={<ToolOutlined />}
-                  disabled={!canWrite || closed}
+                  disabled={!canWrite || closed || row.category === 'source_evidence'}
                   loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'autofix', issueId: row.id })}
                 >
@@ -563,7 +563,7 @@ export function ComplianceDetailPage() {
                 </Button>
                 <Button
                   size="small"
-                  disabled={!canWrite || closed}
+                  disabled={!canWrite || closed || row.category === 'source_evidence'}
                   loading={actionMutation.isPending}
                   onClick={() => actionMutation.mutate({ action: 'ignore', issueId: row.id })}
                 >

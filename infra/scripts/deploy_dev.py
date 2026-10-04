@@ -15,7 +15,7 @@ import subprocess
 import time
 import urllib.request
 
-from backup_dev import ACTIVE, active_directory, compose, snapshot
+from backup_dev import ACTIVE, active_directory, compose, rehearse, snapshot
 
 
 def execute(args, **kwargs):
@@ -86,6 +86,16 @@ def deploy(directory, force_failure=False):
             # Tests must NEVER mount the live task queue or use live credentials.
             execute(["docker", "run", "--rm", "--network", "none", "--entrypoint", "python",
                      config["services"]["ai-service"]["image"], "-m", "pytest", "-q"])
+            # Real-model negative controls run in an isolated candidate container
+            # BEFORE stopping public services. No live queue or database mounts.
+            evidence_dir = private / "release-evidence"
+            evidence_dir.mkdir(mode=0o700, exist_ok=True)
+            execute(["docker", "run", "--rm", "--entrypoint", "python",
+                     "--env-file", str(directory / ".env"),
+                     "-v", str(directory / "ai-service/app/config/model_routing.btjs.yaml") + ":/app/app/config/model_routing.yaml:ro",
+                     "-v", str(evidence_dir) + ":/evidence",
+                     config["services"]["ai-service"]["image"],
+                     "-m", "app.evaluation.evidence_canary_eval", "--output", "/evidence/evidence-canary.json"])
         # For the first move away from the old in-memory worker, refuse to kill
         # active user work. New versions have a persistent queue for restart.
         pending = subprocess.check_output(["docker", "exec", "zbt-dev-db", "psql", "-U", "zbt", "-d", "zbt", "-At", "-c", "select count(*) from ai_tasks where status in ('queued','running');"], text=True).strip()
@@ -110,6 +120,7 @@ def deploy(directory, force_failure=False):
             current_accounts = tester_accounts()
             if any(current_accounts.get(user) != fingerprint for user, fingerprint in existing_accounts.items()):
                 raise RuntimeError('Existing tester passwords or memberships changed during acceptance; investigate before release')
+            rehearse(backup)
             state = {"directory": str(directory), "pre_deploy_backup": str(backup), "verified_at": time.time(),
                      "preserved_account_count": len(existing_accounts)}
             temporary = ACTIVE.with_suffix(".tmp")

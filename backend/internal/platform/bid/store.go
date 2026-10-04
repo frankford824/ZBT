@@ -589,6 +589,7 @@ func normalizeAcceptedTask(accepted aiTaskAccepted) (aiTaskAccepted, error) {
 }
 
 type chapterGenerateRequest struct {
+	SourceRevision         string                  `json:"source_revision"`
 	TaskID                 string                  `json:"task_id,omitempty"`
 	TenantID               string                  `json:"tenant_id"`
 	BidDocumentID          string                  `json:"bid_document_id"`
@@ -2369,6 +2370,9 @@ func (s *Store) AcceptChapter(ctx context.Context, tenantID, userID, chapterID s
 		if err := factualreview.CheckContent(chapter.Content); err != nil {
 			return err
 		}
+		if err := factualreview.RequireChapter(ctx, tx, tenantID, chapter.BidDocumentID, chapterID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			update bid_chapters
 			set status = 'accepted', updated_at = now()
@@ -2406,7 +2410,7 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 		if err != nil {
 			return err
 		}
-		requirementRefs, projectContext, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
+		requirementRefs, projectContext, sourceRevision, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
 		if err != nil {
 			return err
 		}
@@ -2415,6 +2419,7 @@ func (s *Store) RegenerateChapter(ctx context.Context, tenantID, userID, chapter
 			selectedRefs = append(selectedRefs, ref.ChunkID)
 		}
 		requestPayload = chapterGenerateRequest{
+			SourceRevision:         sourceRevision,
 			ProjectContext:         projectContext,
 			TaskID:                 "task-chapter-" + uuid.NewString(),
 			TenantID:               tenantID,
@@ -2497,7 +2502,7 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 		if err != nil {
 			return err
 		}
-		requirementRefs, projectContext, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
+		requirementRefs, projectContext, sourceRevision, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
 		if err != nil {
 			return err
 		}
@@ -2507,6 +2512,7 @@ func (s *Store) ChapterAIAction(ctx context.Context, tenantID, userID, chapterID
 		}
 		requestPayload = chapterActionRequest{
 			chapterGenerateRequest: chapterGenerateRequest{
+				SourceRevision:         sourceRevision,
 				ProjectContext:         projectContext,
 				TaskID:                 "task-chapter-action-" + uuid.NewString(),
 				TenantID:               tenantID,
@@ -3050,6 +3056,16 @@ func (s *Store) ApplyCallback(ctx context.Context, payload CallbackPayload) (Tas
 				changeReason := "ai_regenerate"
 				if task.TaskType == "chapter_ai_action" {
 					changeReason = "ai_action"
+					if task.Payload["action"] == "self_check" {
+						current, err := chapterByID(ctx, tx, payload.TenantID, task.ResourceID)
+						if err != nil {
+							return err
+						}
+						// A late read-only review must not restore an older draft.
+						if strings.Join(strings.Fields(current.PlainText), "") != strings.Join(strings.Fields(plainTextFromTiptap(generation.TiptapJSON)), "") {
+							applyChapterSideEffects = false
+						}
+					}
 				}
 				if applyChapterSideEffects {
 					if err := applyChapterGeneration(ctx, tx, payload.TenantID, task.ResourceID, generation, changeReason); err != nil {
@@ -3355,7 +3371,7 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 		if err != nil {
 			return err
 		}
-		requirementRefs, projectContext, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
+		requirementRefs, projectContext, sourceRevision, err := chapterGenerationContext(ctx, tx, tenantID, chapter)
 		if err != nil {
 			return err
 		}
@@ -3364,6 +3380,7 @@ func (s *Store) dispatchNextGenerationStep(ctx context.Context, tenantID, jobID 
 			selectedRefs = append(selectedRefs, ref.ChunkID)
 		}
 		requestPayload := chapterGenerateRequest{
+			SourceRevision:         sourceRevision,
 			ProjectContext:         projectContext,
 			TaskID:                 "task-chapter-" + uuid.NewString(),
 			TenantID:               tenantID,
@@ -5276,13 +5293,13 @@ func defaultOutlineChapters(partCode string) []outlineChapterSpec {
 	case "business":
 		return []outlineChapterSpec{
 			{Title: "一、投标函", PlainText: "响应招标文件商务条款，确认投标有效期、报价和签章要求。", SortOrder: 10},
-			{Title: "二、资格证明文件", PlainText: "整理营业执照、授权书、资质证书和承诺函。", SortOrder: 20},
+			{Title: "二、资格证明文件", PlainText: "仅按本项目原文明确的资格要求整理真实证明资料，不默认增加证照或业绩年限。", SortOrder: 20},
 			{Title: "三、商务偏离表", PlainText: "逐条核对付款、服务期、验收和违约责任条款。", SortOrder: 30},
 		}
 	case "tech":
 		return []outlineChapterSpec{
 			{Title: "一、项目理解", PlainText: "提炼建设目标、范围边界、关键约束和响应策略。", SortOrder: 10},
-			{Title: "二、总体技术方案", PlainText: "描述系统架构、数据流程、安全设计和集成方式。", SortOrder: 20},
+			{Title: "二、总体技术方案", PlainText: "依据本项目所属行业和实际范围提出技术措施，不预设为软件系统或施工工程。", SortOrder: 20},
 			{Title: "三、实施计划与保障", PlainText: "说明项目组织、里程碑、质量控制和运维服务。", SortOrder: 30},
 		}
 	default:
@@ -5436,18 +5453,18 @@ func defaultMaterialRefs(structured map[string]any) []any {
 	return []any{}
 }
 
-func chapterGenerationContext(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter) ([]tenderRequirementRef, map[string]string, error) {
+func chapterGenerationContext(ctx context.Context, tx pgx.Tx, tenantID string, chapter Chapter) ([]tenderRequirementRef, map[string]string, string, error) {
 	parseResult, err := parseResultForBid(ctx, tx, tenantID, chapter.BidDocumentID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, map[string]string{}, nil
+		return nil, map[string]string{}, "", nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	if !confirmableParseResultStatus(parseResult.Status) {
-		return nil, map[string]string{}, nil
+		return nil, map[string]string{}, "", nil
 	}
-	return requirementRefsFromStructuredResult(parseResult.StructuredResult, chapter.Title, 8), projectContextFromStructured(parseResult.StructuredResult), nil
+	return requirementRefsFromStructuredResult(parseResult.StructuredResult, chapter.Title, 48), projectContextFromStructured(parseResult.StructuredResult), parseResult.UpdatedAt.UTC().Format(time.RFC3339Nano), nil
 }
 
 func projectContextFromStructured(structured map[string]any) map[string]string {
@@ -5528,6 +5545,28 @@ func requirementRefsFromStructuredResult(structured map[string]any, chapterTitle
 	}
 	if len(refs) == 0 {
 		return nil
+	}
+	if strings.Contains(chapterTitle, "项目理解") || strings.Contains(chapterTitle, "项目概况") {
+		// The overview owns a cross-document critical-response summary. Do not
+		// drop mandatory risks merely because its title lacks the word 风险.
+		selected := make([]tenderRequirementRef, 0, min(limit, len(refs)))
+		for _, ref := range refs {
+			if ref.Mandatory || (ref.Score != nil && *ref.Score > 0) {
+				selected = append(selected, ref)
+			}
+			if len(selected) == limit {
+				return selected
+			}
+		}
+		for _, ref := range refs {
+			if !ref.Mandatory && (ref.Score == nil || *ref.Score <= 0) {
+				selected = append(selected, ref)
+			}
+			if len(selected) == limit {
+				return selected
+			}
+		}
+		return selected
 	}
 	type rankedRequirementRef struct {
 		ref   tenderRequirementRef

@@ -51,25 +51,40 @@ func RequireClear(ctx context.Context, tx pgx.Tx, tenantID, bidID string) error 
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var text string
 		var content []byte
 		if err := rows.Scan(&text, &content); err != nil {
+			rows.Close()
 			return err
 		}
 		if err := CheckText(text); err != nil {
+			rows.Close()
 			return err
 		}
 		var document map[string]any
 		if len(content) > 0 {
 			if err := json.Unmarshal(content, &document); err != nil {
+				rows.Close()
 				return err
 			}
 		}
 		if err := CheckContent(document); err != nil {
+			rows.Close()
 			return err
 		}
 	}
-	return rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	findings, err := Findings(ctx, tx, tenantID, bidID)
+	if err != nil {
+		return err
+	}
+	if len(findings) > 0 {
+		return ErrRequired
+	}
+	return nil
 }

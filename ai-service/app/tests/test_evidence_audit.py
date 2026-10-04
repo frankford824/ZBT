@@ -1,0 +1,184 @@
+import copy
+
+import pytest
+
+from app.gateway.evidence_audit import content_hash, validate_audit
+from app.schemas.generation import ChapterGenerateRequest, TenderRequirementRef
+
+
+def fixture():
+    payload = ChapterGenerateRequest(
+        tenant_id="t",
+        bid_document_id="b",
+        bid_part_id="p",
+        chapter_id="c",
+        chapter_title="项目理解",
+        source_revision="2026-10-05T00:00:00Z",
+        project_context={"submission_deadline": "2026-11-15 09:30"},
+        requirement_refs=[
+            TenderRequirementRef(id="r1", requirement="技术40分", source_text="技术方案40分。")
+        ],
+    )
+    result = {"plain_text": "投标截止为2026-11-15 09:30。\n技术方案40分。"}
+    raw = {
+        "paragraphs": [
+            {
+                "index": 0,
+                "kind": "tender_fact",
+                "status": "supported",
+                "evidence": [
+                    {"source_id": "project:submission_deadline", "quote": "2026-11-15 09:30"}
+                ],
+            },
+            {
+                "index": 1,
+                "kind": "tender_fact",
+                "status": "supported",
+                "evidence": [{"source_id": "requirement:r1", "quote": "技术方案40分。"}],
+            },
+        ],
+        "requirements": [
+            {"requirement_id": "r1", "status": "covered", "evidence": "技术方案40分。"}
+        ],
+    }
+    return payload, result, raw
+
+
+def test_exact_quote_and_entire_current_body_are_bound():
+    payload, result, raw = fixture()
+    audit = validate_audit(raw, result, payload)
+    assert audit["status"] == "pass"
+    assert audit["content_sha256"] == content_hash(result["plain_text"])
+    assert audit["source_revision"] == payload.source_revision
+    assert audit["paragraphs"][1]["evidence"][0]["quote"] == "技术方案40分。"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_paragraph", "duplicate_index", "missing_requirement", "unknown_requirement"],
+)
+def test_incomplete_or_wrong_review_fails_closed(mutation):
+    payload, result, raw = fixture()
+    if mutation == "missing_paragraph":
+        raw["paragraphs"].pop()
+    if mutation == "duplicate_index":
+        raw["paragraphs"][1]["index"] = 0
+    if mutation == "missing_requirement":
+        raw["requirements"] = []
+    if mutation == "unknown_requirement":
+        raw["requirements"][0]["requirement_id"] = "fake"
+    with pytest.raises(ValueError):
+        validate_audit(raw, result, payload)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "fake_quote",
+        "fake_source",
+        "enterprise_from_tender",
+        "fake_coverage",
+        "missing_coverage",
+        "reviewer_rejects",
+    ],
+)
+def test_unsupported_claims_cannot_become_pass(mutation):
+    payload, result, raw = fixture()
+    if mutation == "fake_quote":
+        raw["paragraphs"][0]["evidence"][0]["quote"] = "2026-11-16"
+    if mutation == "fake_source":
+        raw["paragraphs"][0]["evidence"][0]["source_id"] = "fake"
+    if mutation == "enterprise_from_tender":
+        raw["paragraphs"][0]["kind"] = "enterprise_fact"
+    if mutation == "fake_coverage":
+        raw["requirements"][0]["evidence"] = "没有写入正文的响应"
+    if mutation == "missing_coverage":
+        raw["requirements"][0]["status"] = "missing"
+    if mutation == "reviewer_rejects":
+        raw["paragraphs"][0]["status"] = "unsupported"
+    assert validate_audit(raw, result, payload)["status"] == "needs_review"
+
+
+def test_self_check_preserves_saved_body_and_does_not_call_writer(monkeypatch):
+    from app.gateway.openai_compatible_provider import (
+        OpenAICompatibleProvider,
+        OpenAICompatibleTarget,
+    )
+    from app.schemas.generation import ChapterActionRequest
+
+    payload, result, raw = fixture()
+    provider = OpenAICompatibleProvider(
+        "test",
+        base_url_env="TEST_BASE",
+        api_key_env="TEST_KEY",
+        target=OpenAICompatibleTarget(model="m"),
+    )
+    calls = []
+
+    def generate(prompt, schema):
+        calls.append(schema)
+        return copy.deepcopy(raw)
+
+    monkeypatch.setattr(provider, "generate_json", generate)
+    request = ChapterActionRequest(
+        **payload.model_dump(),
+        action="self_check",
+        current_plain_text=result["plain_text"],
+        current_tiptap_json={
+            "type": "doc",
+            "content": [
+                {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+                for line in result["plain_text"].splitlines()
+            ],
+        },
+    )
+    response = provider.chapter_action(request)
+    assert response.tiptap_json == request.current_tiptap_json
+    assert calls == ["EvidenceAudit"]
+    assert response.self_check["evidence_audit"]["status"] == "pass"
+
+
+def test_reviewer_unavailable_does_not_fall_back_to_writer_self_score(monkeypatch):
+    from app.gateway.openai_compatible_provider import (
+        OpenAICompatibleProvider,
+        OpenAICompatibleTarget,
+    )
+
+    payload, result, raw = fixture()
+    provider = OpenAICompatibleProvider(
+        "test",
+        base_url_env="TEST_BASE",
+        api_key_env="TEST_KEY",
+        target=OpenAICompatibleTarget(model="m"),
+    )
+
+    def generate(prompt, schema):
+        if schema == "EvidenceAudit":
+            raise TimeoutError("reviewer unavailable")
+        return result
+
+    monkeypatch.setattr(provider, "generate_json", generate)
+    with pytest.raises(TimeoutError):
+        provider.generate_chapter(payload)
+
+
+def test_reviewer_cannot_approve_budget_as_supplier_price():
+    from app.gateway.evidence_audit import review
+
+    payload, result, raw = fixture()
+    payload.project_context = {"project_budget": "55万元"}
+    payload.requirement_refs = []
+    result = {"plain_text": "我方报价为55万元。"}
+
+    class MisleadingReviewer:
+        def generate_json(self, *args):
+            return {
+                "paragraphs": [
+                    {"index": 0, "kind": "proposal", "status": "supported", "evidence": []}
+                ],
+                "requirements": [],
+            }
+
+    audit = review(MisleadingReviewer(), result, payload)
+    assert audit["status"] == "needs_review"
+    assert audit["deterministic_issues"][0]["kind"] == "投标报价"

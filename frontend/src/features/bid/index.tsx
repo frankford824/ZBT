@@ -3799,6 +3799,9 @@ export function BidEditorPage() {
   const humanInputItems = currentChapter?.needs_human_input ?? []
   const latestChapterTaskFailure = taskFailureMessage(latestChapterTask, '本章处理失败')
   const requirementCoverageRows = latestRequirementCoverageRows(versions.data)
+  const latestEvidenceAudit = (versions.data ?? []).map((version) => objectRecord(objectRecord(version.model_metadata?.self_check)?.evidence_audit)).find(Boolean)
+  const evidenceParagraphs = arrayValue(latestEvidenceAudit?.paragraphs).map(objectRecord).filter((row): row is Record<string, unknown> => Boolean(row))
+  const evidenceCurrent = evidenceParagraphs.map((row) => String(row.text ?? '')).join('').replace(/\s/g, '') === (currentChapter?.plain_text ?? '').replace(/\s/g, '')
   const requirementCoverageSummary = summarizeRequirementCoverage(requirementCoverageRows)
 
   const switchPart = (code: string) => {
@@ -3970,6 +3973,20 @@ export function BidEditorPage() {
                 ))}
               </ul>
             ) : null}
+            <Alert type={latestEvidenceAudit?.status === 'pass' && evidenceCurrent ? 'info' : 'warning'} showIcon
+              message={latestEvidenceAudit?.status === 'pass' && evidenceCurrent ? '独立事实复核已完成' : '当前正文需要事实复核'}
+              description="保存修改后请重新自检。逐段复核及原句引用用于辅助判断，不是事实正确率或合规认证；定稿时还会核对招标文件版本。" />
+            {evidenceParagraphs.length > 0 && <details>
+              <summary>查看逐段事实依据（{evidenceParagraphs.length} 段）{!evidenceCurrent ? ' · 旧正文记录' : ''}</summary>
+              {evidenceParagraphs.map((row, index) => <div key={index} style={{ marginTop: 12 }}>
+                <Tag color={row.status === 'supported' ? 'blue' : 'gold'}>第 {index + 1} 段 · {row.status === 'supported' ? '有据 / 方案建议' : '待复核'}</Tag>
+                <p>{String(row.text ?? '')}</p>
+                {Boolean(row.reason) && <p>{String(row.reason)}</p>}
+                {arrayValue(row.evidence).map((raw, refIndex) => { const ref = objectRecord(raw); return ref ? <blockquote key={refIndex}>
+                  {String(ref.quote ?? '')}<br />来源：{String(ref.source_id ?? '')}{ref.page_start != null ? ` · 第 ${String(ref.page_start)} 页` : ''}
+                </blockquote> : null })}
+              </div>)}
+            </details>}
             {requirementCoverageRows.length ? (
               <div className="requirement-coverage">
                 <div className="requirement-coverage-head">

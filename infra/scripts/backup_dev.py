@@ -159,4 +159,7 @@ if __name__ == "__main__":
         Path("/opt/zbt-private").mkdir(mode=0o700, exist_ok=True)
         with open("/opt/zbt-private/deploy.lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            snapshot()
+            path = snapshot()
+            # A successful archive alone is not recovery evidence. Rehearse in
+            # disposable isolated containers after the public services resume.
+            rehearse(path)

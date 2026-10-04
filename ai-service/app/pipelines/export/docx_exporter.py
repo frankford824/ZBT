@@ -655,6 +655,12 @@ def _render_bid_body(
     for chapter in chapters:
         document.add_heading(chapter.title, level=2)
         text = chapter.plain_text.strip() or "本章节暂无内容，需要人工补充。"
+        # The exporter already emits this heading. Remove only an identical
+        # leading standalone title; never delete a later paragraph or a prefix
+        # match such as "项目理解是本章重点".
+        lines = text.splitlines()
+        if lines and re.sub(r'^#{1,6}\s+', '', lines[0].strip()) == chapter.title.strip():
+            text = '\n'.join(lines[1:]).strip()
         _render_plain_text(document, text)
 
 

@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/frankford824/ZBT/backend/internal/platform/factualreview"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -552,6 +554,13 @@ func (s *Store) updateIssueStatus(ctx context.Context, tenantID, issueID, status
 		return Issue{}, err
 	}
 	err := s.withTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		var category string
+		if err := tx.QueryRow(ctx, `select category from compliance_issues where tenant_id=$1 and id=$2 for update`, tenantID, issueID).Scan(&category); err != nil {
+			return err
+		}
+		if category == "source_evidence" {
+			return ErrInvalidRequest
+		}
 		tag, err := tx.Exec(ctx, `update compliance_issues set status = $3, updated_at = now() where tenant_id = $1 and id = $2`, tenantID, issueID, status)
 		if err != nil {
 			return err
@@ -578,6 +587,25 @@ func (s *Store) updateIssueStatus(ctx context.Context, tenantID, issueID, status
 }
 
 func (s *Store) generateIssues(ctx context.Context, tx pgx.Tx, tenantID, checkID, bidID string, levels []string) error {
+	if bidID != "" {
+		findings, err := factualreview.Findings(ctx, tx, tenantID, bidID)
+		if err != nil {
+			return err
+		}
+		for _, finding := range findings {
+			location, err := json.Marshal(map[string]any{"module": "bid_editor", "bid_document_id": bidID, "chapter_id": finding.ChapterID, "requirement_item_id": finding.RequirementID, "non_waivable": true})
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `insert into compliance_issues
+                (tenant_id,check_id,category,severity,status,title,evidence,suggestion,location)
+                values ($1,$2,'source_evidence','fail','open',$3,$4,$5,$6)`,
+				tenantID, checkID, finding.Title, boundedComplianceText(finding.Evidence, maxComplianceIssueEvidenceRunes),
+				"请核对招标原文及企业资料，修订正文并重新自检、合规检查；不能用忽略问题替代事实复核。", location); err != nil {
+				return err
+			}
+		}
+	}
 	selectedLevels := map[string]bool{}
 	for _, level := range levels {
 		selectedLevels[level] = true

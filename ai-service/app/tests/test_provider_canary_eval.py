@@ -92,7 +92,7 @@ def test_provider_canary_can_call_openai_compatible_llm(
         captured["authorization"] = req.get_header("Authorization")
         content = json.dumps(
             {
-                "tiptap_json": {"type": "doc", "content": [{"type": "paragraph"}]},
+                "tiptap_json": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "拟编制项目目标说明。"}]}]},
                 "source_refs": [],
                 "self_check": {
                     "requirement_coverage": [
@@ -102,6 +102,9 @@ def test_provider_canary_can_call_openai_compatible_llm(
                 "needs_human_input": [],
             }
         )
+        if 'Independently audit this bid draft' in req.data.decode():
+            content = json.dumps({'paragraphs':[{'index':0,'kind':'proposal','status':'supported','evidence':[]}],
+                                  'requirements':[{'requirement_id':'provider-canary-requirement','status':'covered','evidence':'拟编制项目目标说明。'}]})
         return _FakeHTTPResponse(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
 
     monkeypatch.setenv("USE_MOCK_PROVIDERS", "false")
@@ -158,7 +161,7 @@ def test_provider_canary_can_call_cloudflare_workers_ai_embedding_and_rerank(
             assert body["model"] == "openai/gpt-4.1"
             content = json.dumps(
                 {
-                    "tiptap_json": {"type": "doc", "content": [{"type": "paragraph"}]},
+                    "tiptap_json": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "拟编制项目目标说明。"}]}]},
                     "source_refs": [],
                     "self_check": {
                         "requirement_coverage": [
@@ -168,6 +171,9 @@ def test_provider_canary_can_call_cloudflare_workers_ai_embedding_and_rerank(
                     "needs_human_input": [],
                 }
             )
+            if 'Independently audit this bid draft' in req.data.decode():
+                content = json.dumps({'paragraphs':[{'index':0,'kind':'proposal','status':'supported','evidence':[]}],
+                                      'requirements':[{'requirement_id':'provider-canary-requirement','status':'covered','evidence':'拟编制项目目标说明。'}]})
             return _FakeHTTPResponse(json.dumps({"choices": [{"message": {"content": content}}]}).encode())
         if req.full_url.endswith("/ai/run/@cf/baai/bge-large-en-v1.5"):
             assert body["text"] == ["ZBT provider canary embedding sample"]

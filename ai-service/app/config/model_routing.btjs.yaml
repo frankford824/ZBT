@@ -124,12 +124,18 @@ routes:
       temperature: 0.0
       output: json
       schema: ChapterSelfCheckResult
+      timeout_s: 120
+      enable_thinking: false
+      max_tokens: 8192
     fallback:
       - provider: openai_compatible_primary
         model: qwen3.8-27b
         temperature: 0.0
         output: json
         schema: ChapterSelfCheckResult
+        timeout_s: 120
+        enable_thinking: false
+        max_tokens: 8192
   compliance_check:
     primary:
       provider: openai_compatible_primary

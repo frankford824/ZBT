@@ -11,8 +11,9 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from app.schemas.common import SourceRef
+from app.gateway.evidence_audit import review as review_evidence
 from app.gateway.factual_guard import guard_chapter_content
+from app.schemas.common import SourceRef
 from app.schemas.cost import CostAdviceRequest, CostAdviceResponse
 from app.schemas.generation import (
     ChapterActionRequest,
@@ -186,12 +187,52 @@ class OpenAICompatibleProvider:
     def generate_chapter(self, payload: ChapterGenerateRequest) -> ChapterGenerateResponse:
         prompt = _chapter_prompt(payload)
         result = self.generate_json(prompt, "ChapterGenerateResponse")
-        return _chapter_response_from_json(result, payload, self.name, self._model())
+        return self._review_chapter(result, payload, allow_repair=True)
 
     def chapter_action(self, payload: ChapterActionRequest) -> ChapterGenerateResponse:
+        if payload.action == 'self_check':
+            # A review must inspect the saved draft, never silently rewrite it.
+            result = {'tiptap_json': payload.current_tiptap_json, 'plain_text': payload.current_plain_text}
+            return self._review_chapter(result, payload, allow_repair=False)
         prompt = _chapter_action_prompt(payload)
         result = self.generate_json(prompt, "ChapterGenerateResponse")
-        return _chapter_response_from_json(result, payload, self.name, self._model())
+        return self._review_chapter(result, payload, allow_repair=True)
+
+    def _review_chapter(self, result, payload, *, allow_repair):
+        reviewer = getattr(self, 'evidence_reviewer', self)
+        audit = review_evidence(reviewer, result, payload)
+        review_usage = dict(audit['estimated_token_usage'])
+        review_calls = 1
+        if audit['status'] != 'pass' and allow_repair:
+            repair_prompt = json.dumps({
+                'original_request': json.loads(_chapter_prompt(payload)),
+                'draft': result, 'independent_review': audit,
+                'instruction': 'Repair the unsupported claims and missing applicable responses. Preserve all sourced requirements. '
+                'Remove invented mandatory requirements and ownership claims; use clearly proposed measures where appropriate. '
+                'Do not hide gaps by declaring all requirements not applicable. Return the original ChapterGenerateResponse schema.'
+            }, ensure_ascii=False)
+            result = self.generate_json(repair_prompt, 'ChapterGenerateResponse')
+            review_usage['input_tokens'] += max(1, len(repair_prompt)//4)
+            review_usage['output_tokens'] += max(1, len(json.dumps(result,ensure_ascii=False))//4)
+            audit = review_evidence(reviewer, result, payload)
+            review_calls += 1
+            for key, value in audit['estimated_token_usage'].items(): review_usage[key] += value
+        response = _chapter_response_from_json(result, payload, self.name, self._model(), apply_guard=allow_repair)
+        # Deterministic guard may replace text. Re-review that final saved body;
+        # an audit for an earlier version must never authorize modified output.
+        from app.gateway.evidence_audit import content_hash, paragraphs
+        if content_hash(''.join(paragraphs({'tiptap_json': response.tiptap_json}))) != audit['content_sha256']:
+            audit['status'] = 'needs_review'
+        response.self_check['evidence_audit'] = audit
+        response.self_check['requirement_coverage'] = audit['requirement_coverage']
+        response.self_check['status'] = audit['status']
+        for key, value in review_usage.items(): response.token_usage[key] = response.token_usage.get(key,0) + value
+        response.model_metadata['evidence_review_calls'] = review_calls
+        response.model_metadata['evidence_review_model'] = reviewer._model()
+        response.model_metadata['token_usage_basis'] = 'estimated writer, review and bounded repair calls; not provider billing'
+        if audit['status'] != 'pass':
+            response.needs_human_input = ['独立事实复核未通过，请按段落来源修订后重新自检；当前正文不能定稿。'] + response.needs_human_input[:19]
+        return ChapterGenerateResponse.model_validate(response.model_dump())
 
     def cost_advice(self, payload: CostAdviceRequest) -> CostAdviceResponse:
         prompt = {
@@ -746,7 +787,7 @@ def _parse_rank_index(value: object, document_count: int) -> int | None:
 
 def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
     refs = [ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]]
-    requirement_refs = [ref.model_dump() for ref in payload.requirement_refs[:20]]
+    requirement_refs = [ref.model_dump() for ref in payload.requirement_refs]
     return json.dumps(
         {
             "chapter_title": payload.chapter_title,
@@ -771,7 +812,16 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
                 "If scope is absent, say it requires clarification rather than inventing scope. "
                 "Never invent example project names, certificate numbers, dates, prices or company achievements, "
                 "even as illustrative examples. Without supplied enterprise evidence, write proposed measures "
-                "and required evidence only; never claim we possess qualifications, experience or completed self-checks."
+                "and required evidence only; never claim we possess qualifications, experience or completed self-checks. "
+                "Separate sourced facts under 原文要求 from prospective measures under 拟议方案. "
+                "Only repeat explicit supplied qualification and experience conditions, never default business licenses, "
+                "three-year experience windows or staff counts. Do not guarantee we fully meet qualification conditions. "
+                "Do not broaden a project title into an authoritative scope or add 配套服务 as a tender requirement. "
+                "If scope details are absent, describe a proposed approach and explicitly leave the scope for clarification."
+                " Express missing inputs as 本次提供资料未见...，需补充核对, never assert the entire tender lacks a condition. "
+                "Do not assert drawings or an engineering quantities attachment exist unless actually provided."
+                " For 项目理解 or 项目概况 chapters, include a concise cross-document response summary for EVERY supplied "
+                "mandatory or scored requirement, including disqualification risks; do not omit these as another chapter's job."
             ),
         },
         ensure_ascii=False,
@@ -788,7 +838,7 @@ def _chapter_action_prompt(payload: ChapterActionRequest) -> str:
             "project_context": payload.project_context,
             "current_tiptap_json": payload.current_tiptap_json,
             "tender_requirements": payload.tender_requirements,
-            "requirement_refs": [ref.model_dump() for ref in payload.requirement_refs[:20]],
+            "requirement_refs": [ref.model_dump() for ref in payload.requirement_refs],
             "retrieved_knowledge_refs": [
                 ref.model_dump() for ref in payload.retrieved_knowledge_refs[:8]
             ],
@@ -813,9 +863,12 @@ def _chapter_response_from_json(
     payload: ChapterGenerateRequest,
     provider: str,
     model: str,
+    *, apply_guard: bool = True,
 ) -> ChapterGenerateResponse:
-    _assert_project_deadline_semantics(result, payload)
-    result, factual_notes, factual_issues = guard_chapter_content(result, payload)
+    factual_notes, factual_issues = [], []
+    if apply_guard:
+        _assert_project_deadline_semantics(result, payload)
+        result, factual_notes, factual_issues = guard_chapter_content(result, payload)
     tiptap_json = result.get("tiptap_json")
     if not isinstance(tiptap_json, dict):
         text = str(result.get("plain_text") or result.get("content") or "")
@@ -856,17 +909,6 @@ def _chapter_response_from_json(
                 source_refs.append(canonical)
         else:
             rejected_refs += 1
-    if not source_refs:
-        source_refs = [
-            SourceRef(
-                chunk_id=ref.chunk_id,
-                document_id=ref.document_id,
-                title=ref.title,
-                page_start=ref.page_start,
-                page_end=ref.page_end,
-            )
-            for ref in payload.retrieved_knowledge_refs[:5]
-        ]
     output_text = json.dumps(result, ensure_ascii=False)
     input_text = _chapter_prompt(payload)
     self_check = (

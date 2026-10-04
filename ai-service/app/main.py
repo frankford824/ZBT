@@ -1172,6 +1172,8 @@ def process_chapter_generate(task_id: str, payload: ChapterGenerateRequest) -> N
     try:
         def generate(route: RouteTarget, provider: object) -> object:
             payload.model_hint = route.model
+            if hasattr(provider, '_review_chapter'):
+                provider.evidence_reviewer = router.get_llm('chapter_self_check', tenant_id=payload.tenant_id)
             return provider.generate_chapter(payload)
 
         route, provider, generation = run_llm_task("chapter_generate", payload.tenant_id, generate)
@@ -1221,6 +1223,8 @@ def process_chapter_action(task_id: str, payload: ChapterActionRequest, route_na
 
         def generate(route: RouteTarget, provider: object) -> object:
             payload.model_hint = route.model
+            if payload.action != 'self_check' and hasattr(provider, '_review_chapter'):
+                provider.evidence_reviewer = router.get_llm('chapter_self_check', tenant_id=payload.tenant_id)
             return provider.chapter_action(payload)
 
         route, provider, generation = run_llm_task(route_name, payload.tenant_id, generate)

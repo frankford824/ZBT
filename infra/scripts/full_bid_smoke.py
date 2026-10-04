@@ -237,10 +237,11 @@ def run(base, origin, bid_type='combined', verify_approval=False):
         if not versions.get("items"):
             raise RuntimeError("chapter version was not persisted")
         if '【事实待核实：' in chapter['plain_text']:
-            factual_review_count += 1
-            text = review_fixture_text(chapter['plain_text'])
-            api_call(base, '/chapters/' + chapter['id'] + '/content', method='PUT', token=token,
-                     body={'plain_text': text})
+            raise RuntimeError('raw generated draft contains unresolved facts; do not clean it to manufacture acceptance')
+        audit = next((v.get('model_metadata', {}).get('self_check', {}).get('evidence_audit')
+                      for v in versions['items'] if v.get('model_metadata', {}).get('self_check', {}).get('evidence_audit')), None)
+        if not audit or audit.get('status') != 'pass':
+            raise RuntimeError('raw generated draft failed independent evidence review: ' + chapter['id'])
         api_call(base, "/chapters/" + chapter["id"] + "/accept", method="POST", token=token, body={})
     chapters = api_call(base, f"/bids/{bid}/chapters", token=token)["items"]
     content_samples = [sample for chapter in chapters for sample in export_body_samples(chapter['plain_text'])]
@@ -261,6 +262,8 @@ def run(base, origin, bid_type='combined', verify_approval=False):
     # Seed rules generate review flags. Exercise reviewer acknowledgement on the
     # fixture without disabling rules globally or bypassing gates through SQL.
     for issue in check.get("issues", []):
+        if issue.get('category') == 'source_evidence':
+            raise RuntimeError('source evidence acceptance failed: ' + issue['title'])
         api_call(base, "/compliance/issues/" + issue["id"] + "/ignore", method="POST", token=token,
                  body={"reason": "自动化工作流夹具，不是真实投标；验证人工审核动作与导出闸门。"})
     exports = {}
@@ -305,7 +308,7 @@ def run(base, origin, bid_type='combined', verify_approval=False):
     approval = verify_second_reviewer(base, token, bid) if verify_approval else {'status': 'not_executed'}
     api_call(base, f"/bids/{bid}", method="PATCH", token=token, body={"status": "archived"})
     evidence = {"status": "passed", "bid_id": bid, "bid_type": bid_type, "chapters_generated": expected_chapters, "chapter_ids": [chapter["id"] for chapter in chapters], "exports": exports,
-            "review": "fixture-only acknowledgement; not semantic compliance certification",
+            "review": "unmodified generated draft; independent evidence review passed; not legal compliance certification",
             "factual_gate_canary": "accept/export/approval rejected unresolved placeholder",
             "factual_reviewed_chapters": factual_review_count,
             "approval": approval,

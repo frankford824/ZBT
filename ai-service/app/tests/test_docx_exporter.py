@@ -21,6 +21,16 @@ from app.pipelines.export.docx_exporter import (
 from app.schemas.export import ExportAttachment, ExportChapter, ExportLayoutOptions, ExportPart
 
 
+def test_export_removes_only_duplicate_leading_chapter_heading(tmp_path, monkeypatch):
+    monkeypatch.delenv('BID_EXPORT_TEMPLATE_PATH', raising=False)
+    output=tmp_path/'dedup.docx'
+    export_bid_docx('测试','综合标书',[ExportChapter(title='项目理解',plain_text='# 项目理解\n项目理解是本章重点。\n项目理解')],output,
+                    layout=ExportLayoutOptions(include_cover=False,include_toc=False))
+    texts=[p.text for p in Document(output).paragraphs]
+    assert texts.count('项目理解')==2  # exporter heading plus intentional later paragraph
+    assert '项目理解是本章重点。' in texts
+
+
 def test_export_preserves_numbered_subheadings_across_chapters(tmp_path, monkeypatch):
     monkeypatch.delenv('BID_EXPORT_TEMPLATE_PATH', raising=False)
     output = tmp_path / 'numbered-chapters.docx'
