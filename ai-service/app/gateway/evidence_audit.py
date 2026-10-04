@@ -104,6 +104,8 @@ def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
                 "or claim of current enterprise capability. Do not reject ordinary proposed construction methods simply "
                 "because the tender does not prescribe those methods. A promise to meet qualification prerequisites "
                 "without enterprise proof is still unsupported. "
+                "Examples: 我方将提供有效资质证书 and 我方将提供近年承接的业绩 are unsupported enterprise claims, "
+                "NOT proposals. 需由企业提供真实证明，经核验后决定是否具备投标条件 is an allowed input-gap disclosure. "
                 "For factual/mixed paragraphs, quote exact source text with its exact source_id for EVERY factual claim; "
                 "Every evidence object MUST contain nonempty string keys source_id and quote. Empty objects {} are INVALID. "
                 "any unsupported claim makes the whole paragraph unsupported. Enterprise ownership requires enterprise evidence. "
@@ -115,7 +117,9 @@ def audit_prompt(result: dict, payload: ChapterGenerateRequest) -> str:
                 "An absolute assertion about the entire tender (招标文件未要求...) still needs support. "
                 "For each requirement_ref, status is covered, missing, or not_applicable; evidence must quote the current draft "
                 "verbatim as a STRING (not an array) for covered, otherwise an empty string. Use not_applicable only if genuinely outside this chapter scope; do not require every "
-                "chapter to repeat all requirements. Do not rewrite the draft. Reasons must be concise Chinese."
+                "chapter to repeat all requirements. Quotes MUST be one contiguous exact substring; NEVER use ... or … "
+                "to abbreviate, merge separate sentences, paraphrase, or insert your explanation. Prefer one short complete sentence. "
+                "Do not rewrite the draft. Reasons must be concise Chinese."
             ),
             "chapter_title": payload.chapter_title,
             "output_example_shape": {

@@ -49,6 +49,8 @@ def cases():
         False,
     )
     yield "invented_enterprise", payload, good + "\n我方已拥有一级施工资质及两名一级建造师。", False
+    yield "promised_unverified_certificate", payload, good + "\n我方将提供有效的安全生产许可证复印件。", False
+    yield "honest_enterprise_evidence_gap", payload, good + "\n需由企业提供真实证明，经核验后决定是否具备投标条件。", True
     yield (
         "missing_score",
         payload,
@@ -86,7 +88,7 @@ def cases():
     )
 
 
-def evaluate(provider):
+def evaluate(provider, writer=None):
     rows = []
     for name, payload, text, expected in cases():
         audit = review(provider, {"plain_text": text}, payload)
@@ -116,6 +118,27 @@ def evaluate(provider):
             json.dumps({"case": name, "passed": passed, "audit_status": audit["status"]}),
             flush=True,
         )
+    if writer is not None:
+        # Exercise the writer as well as the reviewer before public services
+        # are switched. Use the same source categories as full deployment QA.
+        payload = next(cases())[1].model_copy(deep=True)
+        payload.project_context.update(project_budget='100万元', purchaser='灰度测试采购单位',
+                                       project_scope='雨水管道改造及排水导流施工。', delivery_period='合同生效后30天。')
+        payload.requirement_refs.extend([
+            TenderRequirementRef(id='submit', requirement='按要求签章并按时提交', mandatory=True,
+                                 source_text='投标文件须按要求签章并在截止时间前提交。'),
+            TenderRequirementRef(id='reject', requirement='资格证明缺失将被否决', mandatory=True,
+                                 source_text='资格证明材料缺失的投标文件将被否决。'),
+            TenderRequirementRef(id='annex', requirement='报价表', source_text='附件格式：报价表。'),
+        ])
+        writer.evidence_reviewer = provider
+        result = writer.generate_chapter(payload)
+        audit = result.self_check['evidence_audit']
+        required = {r.id for r in payload.requirement_refs if r.mandatory or (r.score or 0) > 0}
+        covered = {r['requirement_id'] for r in audit['requirement_coverage'] if r['status']=='covered'}
+        passed = audit['status']=='pass' and required <= covered
+        rows.append({'case':'unedited_generated_civil_draft','passed':passed,'audit':audit})
+        print(json.dumps({'case':'unedited_generated_civil_draft','passed':passed}),flush=True)
     return {
         "status": "passed" if all(row["passed"] for row in rows) else "failed",
         "cases": rows,
@@ -129,6 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     router = ModelRouter.from_yaml(args.routing)
-    result = evaluate(router.get_llm("chapter_self_check", tenant_id="evidence-canary"))
+    result = evaluate(router.get_llm("chapter_self_check", tenant_id="evidence-canary"),
+                      router.get_llm("chapter_generate", tenant_id="evidence-canary"))
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(0 if result["status"] == "passed" else 1)

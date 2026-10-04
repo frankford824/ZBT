@@ -39,6 +39,17 @@ def test_missing_source_does_not_create_generic_requirements():
     assert result['modules']['annex']['requirement_items'] == []
 
 
+def test_response_hints_do_not_invent_proof_documents_or_annexes():
+    _, result = fixture('项目名称：排水采购\n资格要求：市政三级资质。\n附件格式：报价表。\n递交要求：截止时间前提交。')
+    modules = result['modules']
+    assert modules['qualification']['requirement_items']
+    assert modules['annex']['requirement_items']
+    for module in ('qualification', 'submission', 'annex'):
+        for item in modules[module]['requirement_items']:
+            assert all(term not in item['expected_response'] for term in ('人员证书', '投标函', '承诺函', '清单文件'))
+    assert '不预设已具备资格' in modules['qualification']['requirement_items'][0]['expected_response']
+
+
 def test_rejection_clause_is_not_duplicated_as_qualification():
     parsed, result = fixture('项目名称：排水采购\n资格要求：须具备市政三级资质。\n废标条款：资格证明材料缺失、逾期送达视为无效投标。')
     assert any('市政三级资质' in item for item in result['qualification_requirements'])

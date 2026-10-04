@@ -17,6 +17,9 @@ def request(**kwargs):
     "我方承诺满足该资质要求，并提供有效的市政公用工程施工总承包三级证书。",
     "我方承诺在中标后7天内提交详细的施工组织设计。",
     "我方将在合同生效后30天交付。",
+    "拟议方案：我方将在投标文件中提供有效的市政公用工程施工总承包三级及以上资质证书复印件。",
+    "我方将提供有效的安全生产许可证复印件。",
+    "我方拟提供人员证书。",
 ])
 def test_unsupported_commitment_or_enterprise_fact_is_not_saved_as_body_fact(text):
     result, notes, issues = guard_chapter_content({"plain_text": text}, request())
@@ -31,6 +34,24 @@ def test_same_number_in_delivery_or_different_semantics_does_not_support_warrant
     result, _, issues = guard_chapter_content({"plain_text": "质保期12个月，响应时间2小时。"}, payload)
     assert result["plain_text"].startswith(REVIEW_MARKER)
     assert {issue["kind"] for issue in issues} == {"质保承诺", "响应时限"}
+
+
+def test_proof_gap_disclosure_is_not_an_enterprise_ownership_claim():
+    text = "需由企业提供真实资质证书和安全生产许可证，经核验后决定是否具备投标条件。"
+    assert guard_chapter_content({'plain_text': text}, request())[2] == []
+
+
+@pytest.mark.parametrize('text', [
+    '本次提供资料中未见企业资质证书，故不承诺我方已具备该资质，需补充企业真实材料。',
+    '本次资料中未见相关业绩，故不承诺我方具备类似业绩。',
+])
+def test_withheld_ownership_claim_is_not_a_positive_assertion(text):
+    assert guard_chapter_content({'plain_text':text},request())[2] == []
+
+
+def test_disclaimer_does_not_excuse_a_later_positive_assertion():
+    text = '不承诺我方具备类似业绩，但我方具备一级施工资质。'
+    assert guard_chapter_content({'plain_text':text},request())[2]
 
 
 def test_budget_is_not_supplier_bid_price_and_tender_qualification_not_company_ownership():

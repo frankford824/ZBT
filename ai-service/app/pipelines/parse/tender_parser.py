@@ -523,7 +523,7 @@ MODEL_REQUIREMENT_CONFIGS: dict[str, tuple[TenderParseModule, str, bool, str, st
         "qualification",
         True,
         "high",
-        "提供资质、业绩、人员、证书等资格响应材料。",
+        "仅核对本条原文明确的资质或资格要求；企业证明需由企业提供并核验，不预设已具备资格。",
     ),
     "invalid_clause_risks": (
         "invalid_risk",
@@ -1737,7 +1737,7 @@ def _build_module_results(
                 qualification_evidence,
                 mandatory=True,
                 priority="high",
-                expected_response="提供资质、业绩、人员、证书等资格响应材料。",
+                expected_response="仅核对本条原文明确的资质或资格要求；企业证明需由企业提供并核验，不预设已具备资格。",
             ),
         ),
         "evaluation": _module_result(
@@ -1765,7 +1765,7 @@ def _build_module_results(
                 submission_evidence,
                 mandatory=True,
                 priority="high",
-                expected_response="按文件格式、签章、份数、密封和递交要求准备响应文件。",
+                expected_response="仅按本条原文明确的递交条件准备响应，不补充未提供的格式或份数。",
             ),
         ),
         "invalid_risk": _module_result(
@@ -1793,7 +1793,7 @@ def _build_module_results(
                 annex_evidence,
                 mandatory=False,
                 priority="medium",
-                expected_response="按附件格式准备投标函、报价表、承诺函和清单文件。",
+                expected_response="仅准备本条原文明确列出的附件，不增加其他附件要求。",
             ),
         ),
     }

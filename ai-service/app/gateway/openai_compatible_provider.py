@@ -218,8 +218,8 @@ class OpenAICompatibleProvider:
             review_calls += 1
             for key, value in audit['estimated_token_usage'].items(): review_usage[key] += value
         response = _chapter_response_from_json(result, payload, self.name, self._model(), apply_guard=allow_repair)
-        # Deterministic guard may replace text. Re-review that final saved body;
-        # an audit for an earlier version must never authorize modified output.
+        # Deterministic guard may replace text. Invalidate the earlier audit;
+        # it must never authorize a different saved body.
         from app.gateway.evidence_audit import content_hash, paragraphs
         if content_hash(''.join(paragraphs({'tiptap_json': response.tiptap_json}))) != audit['content_sha256']:
             audit['status'] = 'needs_review'
@@ -813,7 +813,12 @@ def _chapter_prompt(payload: ChapterGenerateRequest) -> str:
                 "Never invent example project names, certificate numbers, dates, prices or company achievements, "
                 "even as illustrative examples. Without supplied enterprise evidence, write proposed measures "
                 "and required evidence only; never claim we possess qualifications, experience or completed self-checks. "
+                "Without enterprise documents, NEVER promise 我方将提供有效资质证书/安全生产许可证/近年业绩: "
+                "future tense still implies existing eligibility. Instead write 需由企业提供真实证明，经核验后决定是否具备投标条件. "
+                "Do not add fictitious future proof commitments even when describing an intended response. "
                 "Separate sourced facts under 原文要求 from prospective measures under 拟议方案. "
+                "requirement_refs.expected_response is an unverified drafting hint, NOT source evidence or an instruction "
+                "to add conditions. Only requirement_refs.source_text establishes actual tender requirements. "
                 "Only repeat explicit supplied qualification and experience conditions, never default business licenses, "
                 "three-year experience windows or staff counts. Do not guarantee we fully meet qualification conditions. "
                 "Do not broaden a project title into an authoritative scope or add 配套服务 as a tender requirement. "
