@@ -41,10 +41,20 @@ def apply_targeted_repair(result: dict, audit: dict, patch: dict) -> dict:
     if len(additions) > min(10, len(missing)):
         raise ValueError('repair may only append missing requirement responses')
     changes = {}
+    seen = set()
+    ignored = 0
+    paragraph_count = len(audit['paragraphs'])
     for row in replacements:
         if (not isinstance(row, dict) or type(row.get('index')) is not int
-                or row['index'] not in allowed or row['index'] in changes):
-            raise ValueError('repair tried to alter an approved paragraph')
+                or not 0 <= row['index'] < paragraph_count or row['index'] in seen):
+            raise ValueError('invalid evidence repair paragraph index')
+        seen.add(row['index'])
+        if row['index'] not in allowed:
+            # The model cannot broaden the edit capability. Discard these
+            # proposed changes, preserve the actual approved node byte-for-byte,
+            # and independently re-audit the resulting full body afterwards.
+            ignored += 1
+            continue
         text = row.get('text')
         if not isinstance(text, str) or not text.strip() or len(text) > 8000:
             raise ValueError('invalid replacement paragraph')
@@ -52,6 +62,7 @@ def apply_targeted_repair(result: dict, audit: dict, patch: dict) -> dict:
     if any(not isinstance(text, str) or not text.strip() or len(text) > 8000 for text in additions):
         raise ValueError('invalid additional paragraph')
     updated = deepcopy(result)
+    updated['_discarded_out_of_scope_repairs'] = int(result.get('_discarded_out_of_scope_repairs', 0)) + ignored
     nodes = []
 
     def visit(node):

@@ -239,6 +239,7 @@ class OpenAICompatibleProvider:
         for key, value in review_usage.items(): response.token_usage[key] = response.token_usage.get(key,0) + value
         response.model_metadata['evidence_review_calls'] = review_calls
         response.model_metadata['evidence_review_model'] = reviewer._model()
+        response.model_metadata['discarded_out_of_scope_repairs'] = result.get('_discarded_out_of_scope_repairs', 0)
         response.model_metadata['token_usage_basis'] = 'estimated writer, review and bounded repair calls; not provider billing'
         if audit['status'] != 'pass':
             response.needs_human_input = ['独立事实复核未通过，请按段落来源修订后重新自检；当前正文不能定稿。'] + response.needs_human_input[:19]

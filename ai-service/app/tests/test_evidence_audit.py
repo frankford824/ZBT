@@ -115,10 +115,21 @@ def test_repair_cannot_change_good_paragraph_or_append_unrequested_content():
     payload,result,raw=fixture()
     raw['paragraphs'][0]['status']='unsupported'
     audit=validate_audit(raw,result,payload)
-    with pytest.raises(ValueError):
-        apply_targeted_repair(result,audit,{'replacements':[{'index':1,'text':'错误改写'}]})
+    repaired=apply_targeted_repair(result,audit,{'replacements':[{'index':1,'text':'错误改写'}]})
+    assert repaired['plain_text']==result['plain_text']
+    assert repaired['_discarded_out_of_scope_repairs']==1
+    assert validate_audit(raw,repaired,payload)['status']=='needs_review'
     with pytest.raises(ValueError):
         apply_targeted_repair(result,audit,{'append_paragraphs':['未请求内容']})
+
+
+@pytest.mark.parametrize('index', [-1, 2, True, '0'])
+def test_repair_rejects_invalid_indices_without_retargeting(index):
+    payload,result,raw=fixture()
+    raw['paragraphs'][0]['status']='unsupported'
+    audit=validate_audit(raw,result,payload)
+    with pytest.raises(ValueError):
+        apply_targeted_repair(result,audit,{'replacements':[{'index':index,'text':'修正'}]})
 
 
 def test_repair_can_append_a_missing_response_without_rewriting_body():
